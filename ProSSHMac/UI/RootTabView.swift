@@ -122,6 +122,7 @@ private struct RootTabPreview: View {
             .environmentObject(dependencies.certificatesViewModel)
             .environmentObject(dependencies.portForwardingManager)
             .environmentObject(dependencies.navigationCoordinator)
+            .environmentObject(dependencies.idleScreensaverManager)
     }
 }
 

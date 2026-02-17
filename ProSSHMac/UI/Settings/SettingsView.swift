@@ -79,6 +79,24 @@ struct SettingsView: View {
                     }
                 }
 
+                NavigationLink {
+                    MatrixScreensaverSettingsView()
+                } label: {
+                    HStack {
+                        Label("Matrix Screensaver", systemImage: "sparkles.tv")
+                        Spacer()
+                        if MatrixScreensaverConfiguration.load().isEnabled {
+                            Text("\(MatrixScreensaverConfiguration.load().idleTimeoutMinutes) min")
+                                .font(.subheadline)
+                                .foregroundStyle(.green)
+                        } else {
+                            Text("Off")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
                         Text("Background Opacity")

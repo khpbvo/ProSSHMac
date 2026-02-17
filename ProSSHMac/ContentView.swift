@@ -1,8 +1,21 @@
 import SwiftUI
 
 struct ContentView: View {
+    @EnvironmentObject private var idleScreensaverManager: IdleScreensaverManager
+
     var body: some View {
-        RootTabView()
+        ZStack {
+            RootTabView()
+
+            if idleScreensaverManager.isActive {
+                MatrixScreensaverView(
+                    config: idleScreensaverManager.config,
+                    onDismiss: { idleScreensaverManager.dismiss() }
+                )
+                .transition(.opacity.animation(.easeInOut(duration: 0.5)))
+                .zIndex(1000)
+            }
+        }
     }
 }
 
@@ -23,5 +36,6 @@ private struct ContentViewPreview: View {
             .environmentObject(dependencies.certificatesViewModel)
             .environmentObject(dependencies.portForwardingManager)
             .environmentObject(dependencies.navigationCoordinator)
+            .environmentObject(dependencies.idleScreensaverManager)
     }
 }

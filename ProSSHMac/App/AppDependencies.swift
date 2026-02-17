@@ -11,6 +11,7 @@ final class AppDependencies: ObservableObject {
     let transferManager: TransferManager
     let keyForgeViewModel: KeyForgeViewModel
     let certificatesViewModel: CertificatesViewModel
+    let idleScreensaverManager: IdleScreensaverManager
 
     init() {
         self.navigationCoordinator = AppNavigationCoordinator()
@@ -53,5 +54,7 @@ final class AppDependencies: ObservableObject {
                 secureEnclaveKeyManager: SecureEnclaveKeyManager()
             )
         )
+
+        self.idleScreensaverManager = IdleScreensaverManager()
     }
 }
