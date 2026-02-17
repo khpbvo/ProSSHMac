@@ -214,11 +214,12 @@ actor LocalShellChannel: SSHShellChannel {
         guard !data.isEmpty else { return }
 
         // For signal-generating characters (Ctrl-C, Ctrl-Z, Ctrl-\),
-        // temporarily re-enable ISIG on the PTY so the kernel's line
-        // discipline delivers the correct signal to the foreground
-        // process group.  Shells like zsh disable ISIG during their
-        // line-editor; we flip it on just for this write and restore
-        // immediately after.
+        // temporarily force ISIG on and ensure the correct control
+        // character mappings (VINTR, VQUIT, VSUSP) on the slave PTY
+        // so the kernel's line discipline delivers the correct signal
+        // to the foreground process group.  Shells like zsh may
+        // disable ISIG or remap these characters during their
+        // line-editor; we fix both and restore immediately after.
         let isSignalChar = data.count == 1
             && (data[0] == 0x03 || data[0] == 0x1A || data[0] == 0x1C)
         var savedTermios: Darwin.termios?
@@ -231,12 +232,36 @@ actor LocalShellChannel: SSHShellChannel {
             if termiosFD >= 0 {
                 var tio = Darwin.termios()
                 if tcgetattr(termiosFD, &tio) == 0 {
-                    if (tio.c_lflag & tcflag_t(ISIG)) == 0 {
-                        savedTermios = tio
-                        tio.c_lflag |= tcflag_t(ISIG)
-                        _ = tcsetattr(termiosFD, TCSANOW, &tio)
+                    savedTermios = tio
+                    // Always force ISIG on and set the standard control
+                    // character mappings.  The shell may have disabled
+                    // ISIG or remapped VINTR/VQUIT/VSUSP.
+                    tio.c_lflag |= tcflag_t(ISIG)
+                    withUnsafeMutablePointer(to: &tio.c_cc) { ccPtr in
+                        let cc = UnsafeMutableRawPointer(ccPtr)
+                            .assumingMemoryBound(to: cc_t.self)
+                        cc[Int(VINTR)] = 0x03  // Ctrl-C  -> SIGINT
+                        cc[Int(VQUIT)] = 0x1C  // Ctrl-\  -> SIGQUIT
+                        cc[Int(VSUSP)] = 0x1A  // Ctrl-Z  -> SIGTSTP
                     }
+                    _ = tcsetattr(termiosFD, TCSANOW, &tio)
                 }
+            }
+
+            // Use TIOCSIG to ask the kernel to deliver the signal
+            // directly to the PTY's foreground process group.  This
+            // is the most reliable mechanism as it bypasses the line
+            // discipline entirely.
+            let sig: Int32
+            switch data[0] {
+            case 0x03: sig = SIGINT
+            case 0x1A: sig = SIGTSTP
+            case 0x1C: sig = SIGQUIT
+            default:   sig = 0
+            }
+            if sig != 0 {
+                var sigValue = sig
+                _ = ioctl(masterFD, TIOCSIG, &sigValue)
             }
         }
 
@@ -260,7 +285,7 @@ actor LocalShellChannel: SSHShellChannel {
         }
 
         // Additional safety net: also send the signal directly to the
-        // terminal's foreground process group.
+        // terminal's foreground process group via kill().
         if isSignalChar {
             switch data[0] {
             case 0x03: sendSignalToForegroundGroup(SIGINT)
