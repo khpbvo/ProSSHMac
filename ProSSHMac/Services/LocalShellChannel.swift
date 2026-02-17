@@ -23,7 +23,6 @@ actor LocalShellChannel: SSHShellChannel {
 
     private let masterFD: Int32
     private let childPID: pid_t
-    private let slaveDevicePath: String
     private var rawContinuation: AsyncStream<Data>.Continuation
     private var textContinuation: AsyncStream<String>.Continuation
     private var readerTask: Task<Void, Never>?
@@ -120,10 +119,6 @@ actor LocalShellChannel: SSHShellChannel {
             _exit(127)
         }
 
-        let slaveDevicePath = slaveName.withUnsafeBufferPointer {
-            String(decoding: $0.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }, as: UTF8.self)
-        }
-
         // Non-blocking mode for async reads with coalescing
         let flags = fcntl(master, F_GETFL)
         if flags >= 0 {
@@ -150,7 +145,6 @@ actor LocalShellChannel: SSHShellChannel {
         let channel = LocalShellChannel(
             masterFD: master,
             childPID: pid,
-            slaveDevicePath: slaveDevicePath,
             rawContinuation: rawCont,
             textContinuation: textCont,
             rawOutput: rawStream,
@@ -171,7 +165,6 @@ actor LocalShellChannel: SSHShellChannel {
     private init(
         masterFD: Int32,
         childPID: pid_t,
-        slaveDevicePath: String,
         rawContinuation: AsyncStream<Data>.Continuation,
         textContinuation: AsyncStream<String>.Continuation,
         rawOutput: AsyncStream<Data>,
@@ -179,7 +172,6 @@ actor LocalShellChannel: SSHShellChannel {
     ) {
         self.masterFD = masterFD
         self.childPID = childPID
-        self.slaveDevicePath = slaveDevicePath
         self.rawContinuation = rawContinuation
         self.textContinuation = textContinuation
         self.rawOutput = rawOutput
@@ -193,76 +185,6 @@ actor LocalShellChannel: SSHShellChannel {
         let data = Array(input.utf8)
         guard !data.isEmpty else { return }
 
-        // For signal-generating characters (Ctrl-C, Ctrl-Z, Ctrl-\),
-        // temporarily force ISIG on and ensure the correct control
-        // character mappings (VINTR, VQUIT, VSUSP) on the slave PTY
-        // so the kernel's line discipline delivers the correct signal
-        // to the foreground process group.  Shells like zsh may
-        // disable ISIG or remap these characters during their
-        // line-editor; we fix both and restore immediately after.
-        let isSignalChar = data.count == 1
-            && (data[0] == 0x03 || data[0] == 0x1A || data[0] == 0x1C)
-        var savedTermios: Darwin.termios?
-        var termiosFD: Int32 = -1
-
-        if isSignalChar {
-            // Line discipline and signal-generating control chars are owned
-            // by the slave side of the PTY, not the master side.
-            termiosFD = open(slaveDevicePath, O_RDWR | O_NOCTTY)
-            if termiosFD >= 0 {
-                var tio = Darwin.termios()
-                if tcgetattr(termiosFD, &tio) == 0 {
-                    savedTermios = tio
-                    // Always force ISIG on and set the standard control
-                    // character mappings.  The shell may have disabled
-                    // ISIG or remapped VINTR/VQUIT/VSUSP.
-                    tio.c_lflag |= tcflag_t(ISIG)
-                    withUnsafeMutablePointer(to: &tio.c_cc) { ccPtr in
-                        let cc = UnsafeMutableRawPointer(ccPtr)
-                            .assumingMemoryBound(to: cc_t.self)
-                        cc[Int(VINTR)] = 0x03  // Ctrl-C  -> SIGINT
-                        cc[Int(VQUIT)] = 0x1C  // Ctrl-\  -> SIGQUIT
-                        cc[Int(VSUSP)] = 0x1A  // Ctrl-Z  -> SIGTSTP
-                    }
-                    _ = tcsetattr(termiosFD, TCSANOW, &tio)
-                }
-            }
-
-            // Use TIOCSIG to ask the kernel to deliver the signal
-            // directly to the PTY's foreground process group.  This
-            // is the most reliable mechanism as it bypasses the line
-            // discipline entirely.
-            let sig: Int32
-            switch data[0] {
-            case 0x03: sig = SIGINT
-            case 0x1A: sig = SIGTSTP
-            case 0x1C: sig = SIGQUIT
-            default:   sig = 0
-            }
-            var delivered = false
-            if sig != 0 {
-                // Preferred path: ask kernel to signal the PTY foreground group
-                // via the slave endpoint.
-                if termiosFD >= 0 {
-                    var sigValue = sig
-                    delivered = ioctl(termiosFD, TIOCSIG, &sigValue) == 0
-                }
-
-                // Secondary path: some systems accept TIOCSIG on master side.
-                if !delivered {
-                    var sigValue = sig
-                    delivered = ioctl(masterFD, TIOCSIG, &sigValue) == 0
-                }
-
-                // Final fallback: explicit kill() targeting foreground jobs.
-                if !delivered {
-                    delivered = sendSignalToForegroundGroup(sig)
-                }
-            }
-
-            _ = delivered
-        }
-
         data.withUnsafeBufferPointer { buffer in
             guard let ptr = buffer.baseAddress else { return }
             var offset = 0
@@ -274,66 +196,6 @@ actor LocalShellChannel: SSHShellChannel {
                 offset += written
             }
         }
-
-        if var restore = savedTermios, termiosFD >= 0 {
-            _ = tcsetattr(termiosFD, TCSANOW, &restore)
-        }
-        if termiosFD >= 0 {
-            Darwin.close(termiosFD)
-        }
-
-        // No-op here: signal fallback is handled above.
-    }
-
-    /// Send a signal to the foreground process group of the terminal.
-    @discardableResult
-    private func sendSignalToForegroundGroup(_ sig: Int32) -> Bool {
-        var targetedGroups = Set<pid_t>()
-        var delivered = false
-
-        func signalProcessGroup(_ pgrp: pid_t) {
-            guard pgrp > 0, !targetedGroups.contains(pgrp) else { return }
-            if kill(-pgrp, sig) == 0 {
-                delivered = true
-            }
-            targetedGroups.insert(pgrp)
-        }
-
-        // 1) Foreground group reported by master side.
-        signalProcessGroup(tcgetpgrp(masterFD))
-
-        // 2) Foreground group reported by slave side.
-        let slaveFD = open(slaveDevicePath, O_RDONLY | O_NOCTTY)
-        if slaveFD >= 0 {
-            signalProcessGroup(tcgetpgrp(slaveFD))
-            Darwin.close(slaveFD)
-        }
-
-        // 3) Shell process group as baseline.
-        signalProcessGroup(getpgid(childPID))
-
-        // 4) Child jobs and their process groups.
-        var childPIDs = [pid_t](repeating: 0, count: 128)
-        let bufSize = Int32(childPIDs.count * MemoryLayout<pid_t>.stride)
-        let filled = proc_listchildpids(childPID, &childPIDs, bufSize)
-        if filled > 0 {
-            let count = Int(filled) / MemoryLayout<pid_t>.stride
-            for i in 0..<count {
-                let pid = childPIDs[i]
-                guard pid > 0 else { continue }
-                if kill(pid, sig) == 0 {
-                    delivered = true
-                }
-                signalProcessGroup(getpgid(pid))
-            }
-        }
-
-        // 5) Last resort: direct shell signal.
-        if kill(childPID, sig) == 0 {
-            delivered = true
-        }
-
-        return delivered
     }
 
     func resizePTY(columns: Int, rows: Int) async throws {
