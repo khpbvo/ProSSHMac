@@ -12,6 +12,8 @@
 build/
 Build/
 DerivedData/
+*.dmg
+*.xcarchive
 *.moved-aside
 *.pbxuser
 !default.pbxuser

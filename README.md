@@ -64,6 +64,26 @@ xcodebuild -project ProSSHMac.xcodeproj \
   test
 ```
 
+## Installation
+
+Download the latest `.dmg` from the [Releases](https://github.com/khpbvo/ProSSHMac/releases) page, open it, and drag **ProSSHMac** into your **Applications** folder.
+
+### Building a DMG Yourself
+
+```bash
+# Unsigned (development / testing)
+./scripts/create-dmg.sh
+
+# Signed + notarized (release distribution)
+export DEVELOPER_ID_APP="Developer ID Application: Your Name (TEAMID)"
+export APPLE_ID="you@example.com"
+export APPLE_TEAM_ID="YOURTEAMID"
+export APPLE_APP_PASSWORD="xxxx-xxxx-xxxx-xxxx"
+./scripts/create-dmg.sh --sign
+```
+
+The DMG will be written to `build/ProSSHMac-<version>.dmg`.
+
 ## Architecture
 
 ProSSHMac follows the **MVVM** (Model-View-ViewModel) pattern with dependency injection.

@@ -79,7 +79,6 @@ xcodebuild archive \
     -destination 'generic/platform=macOS' \
     -archivePath "$ARCHIVE_PATH" \
     SKIP_INSTALL=NO \
-    BUILD_LIBRARY_FOR_DISTRIBUTION=YES \
     | tail -5
 
 [[ -d "$ARCHIVE_PATH" ]] || error "Archive failed — ${ARCHIVE_PATH} not found"
