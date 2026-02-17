@@ -46,7 +46,6 @@ actor LocalShellChannel: SSHShellChannel {
 
         // Create PTY pair
         var master: Int32 = -1
-        var slave: Int32 = -1
         var slaveName = [CChar](repeating: 0, count: 128)
         var size = winsize(
             ws_row: UInt16(rows),
@@ -82,66 +81,47 @@ actor LocalShellChannel: SSHShellChannel {
             cc[Int(VTIME)]   = 0
         }
 
-        guard openpty(&master, &slave, &slaveName, &tio, &size) == 0 else {
-            throw LocalShellError.ptyAllocationFailed
-        }
-
-        let slaveDevicePath = slaveName.withUnsafeBufferPointer {
-            String(decoding: $0.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }, as: UTF8.self)
-        }
-
-        // Close slave in parent -- child will open it by path via posix_spawn
-        Darwin.close(slave)
-
         // Build environment for child
         let childEnv = buildChildEnvironment(base: environment)
-        let envStrings = childEnv.map { "\($0.key)=\($0.value)" }
-
-        // Set up posix_spawn file actions:
-        // - close master in child
-        // - open slave device as stdin (also sets controlling terminal)
-        // - dup stdin to stdout and stderr
-        var fileActions: posix_spawn_file_actions_t?
-        posix_spawn_file_actions_init(&fileActions)
-        posix_spawn_file_actions_addclose(&fileActions, master)
-        posix_spawn_file_actions_addopen(&fileActions, STDIN_FILENO, slaveDevicePath, O_RDWR, 0)
-        posix_spawn_file_actions_adddup2(&fileActions, STDIN_FILENO, STDOUT_FILENO)
-        posix_spawn_file_actions_adddup2(&fileActions, STDIN_FILENO, STDERR_FILENO)
-
-        // Set up posix_spawn attributes: start a new session (like setsid())
-        var spawnAttr: posix_spawnattr_t?
-        posix_spawnattr_init(&spawnAttr)
-        posix_spawnattr_setflags(&spawnAttr, Int16(POSIX_SPAWN_SETSID))
-
         // Change working directory -- use real home, not sandbox container
         let cwd = workingDirectory ?? childEnv["HOME"] ?? realHome
-        if #available(macOS 26.0, *) {
-            posix_spawn_file_actions_addchdir(&fileActions, cwd)
-        } else {
-            posix_spawn_file_actions_addchdir_np(&fileActions, cwd)
-        }
 
         // Build argv -- login shell (prefix with -)
         let shellName = (resolvedShell as NSString).lastPathComponent
         let loginName = "-" + shellName
 
-        // Build C string arrays for argv and envp
-        let cArgv: [UnsafeMutablePointer<CChar>?] = [strdup(loginName), nil]
-        let cEnvp: [UnsafeMutablePointer<CChar>?] = envStrings.map { strdup($0) } + [nil]
-
-        defer {
-            posix_spawn_file_actions_destroy(&fileActions)
-            posix_spawnattr_destroy(&spawnAttr)
-            for ptr in cArgv { free(ptr) }
-            for ptr in cEnvp { free(ptr) }
+        let pid = forkpty(&master, &slaveName, &tio, &size)
+        guard pid >= 0 else {
+            Darwin.close(master)
+            throw LocalShellError.ptyAllocationFailed
         }
 
-        var pid: pid_t = 0
-        let spawnResult = posix_spawn(&pid, resolvedShell, &fileActions, &spawnAttr, cArgv, cEnvp)
+        if pid == 0 {
+            _ = chdir(cwd)
 
-        guard spawnResult == 0 else {
-            Darwin.close(master)
-            throw LocalShellError.forkFailed
+            for (key, value) in childEnv {
+                key.withCString { keyPtr in
+                    value.withCString { valuePtr in
+                        _ = setenv(keyPtr, valuePtr, 1)
+                    }
+                }
+            }
+
+            var childArgv: [UnsafeMutablePointer<CChar>?] = [strdup(loginName), nil]
+            resolvedShell.withCString { shellPtr in
+                childArgv.withUnsafeMutableBufferPointer { argvBuffer in
+                    _ = execv(shellPtr, argvBuffer.baseAddress)
+                }
+            }
+
+            for ptr in childArgv where ptr != nil {
+                free(ptr)
+            }
+            _exit(127)
+        }
+
+        let slaveDevicePath = slaveName.withUnsafeBufferPointer {
+            String(decoding: $0.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }, as: UTF8.self)
         }
 
         // Non-blocking mode for async reads with coalescing
@@ -259,10 +239,28 @@ actor LocalShellChannel: SSHShellChannel {
             case 0x1C: sig = SIGQUIT
             default:   sig = 0
             }
+            var delivered = false
             if sig != 0 {
-                var sigValue = sig
-                _ = ioctl(masterFD, TIOCSIG, &sigValue)
+                // Preferred path: ask kernel to signal the PTY foreground group
+                // via the slave endpoint.
+                if termiosFD >= 0 {
+                    var sigValue = sig
+                    delivered = ioctl(termiosFD, TIOCSIG, &sigValue) == 0
+                }
+
+                // Secondary path: some systems accept TIOCSIG on master side.
+                if !delivered {
+                    var sigValue = sig
+                    delivered = ioctl(masterFD, TIOCSIG, &sigValue) == 0
+                }
+
+                // Final fallback: explicit kill() targeting foreground jobs.
+                if !delivered {
+                    delivered = sendSignalToForegroundGroup(sig)
+                }
             }
+
+            _ = delivered
         }
 
         data.withUnsafeBufferPointer { buffer in
@@ -284,25 +282,20 @@ actor LocalShellChannel: SSHShellChannel {
             Darwin.close(termiosFD)
         }
 
-        // Additional safety net: also send the signal directly to the
-        // terminal's foreground process group via kill().
-        if isSignalChar {
-            switch data[0] {
-            case 0x03: sendSignalToForegroundGroup(SIGINT)
-            case 0x1A: sendSignalToForegroundGroup(SIGTSTP)
-            case 0x1C: sendSignalToForegroundGroup(SIGQUIT)
-            default: break
-            }
-        }
+        // No-op here: signal fallback is handled above.
     }
 
     /// Send a signal to the foreground process group of the terminal.
-    private func sendSignalToForegroundGroup(_ sig: Int32) {
+    @discardableResult
+    private func sendSignalToForegroundGroup(_ sig: Int32) -> Bool {
         var targetedGroups = Set<pid_t>()
+        var delivered = false
 
         func signalProcessGroup(_ pgrp: pid_t) {
             guard pgrp > 0, !targetedGroups.contains(pgrp) else { return }
-            _ = kill(-pgrp, sig)
+            if kill(-pgrp, sig) == 0 {
+                delivered = true
+            }
             targetedGroups.insert(pgrp)
         }
 
@@ -328,13 +321,19 @@ actor LocalShellChannel: SSHShellChannel {
             for i in 0..<count {
                 let pid = childPIDs[i]
                 guard pid > 0 else { continue }
-                _ = kill(pid, sig)
+                if kill(pid, sig) == 0 {
+                    delivered = true
+                }
                 signalProcessGroup(getpgid(pid))
             }
         }
 
         // 5) Last resort: direct shell signal.
-        _ = kill(childPID, sig)
+        if kill(childPID, sig) == 0 {
+            delivered = true
+        }
+
+        return delivered
     }
 
     func resizePTY(columns: Int, rows: Int) async throws {
