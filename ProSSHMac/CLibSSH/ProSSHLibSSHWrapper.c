@@ -1901,11 +1901,22 @@ int prossh_libssh_open_shell(
     }
 
     const char *term = (terminal_type != NULL && terminal_type[0] != '\0') ? terminal_type : "xterm-256color";
-    unsigned char pty_modes[64];
+    unsigned char pty_modes[128];
     size_t pty_modes_len = 0;
 
     // RFC 4254 PTY mode opcodes:
+    // VINTR=1, VQUIT=2, VERASE=3, VKILL=4, VEOF=5, VSTART=8, VSTOP=9, VSUSP=10,
     // ISIG=50, ICANON=51, ECHO=53, ECHOE=54, ECHOK=55, ICRNL=36, OPOST=70, ONLCR=72.
+    // Some servers zero out unspecified control chars when modes are explicitly sent.
+    // Set the common control-byte defaults so Ctrl-C/Ctrl-Z/Ctrl-\ keep generating signals.
+    prossh_append_pty_mode(pty_modes, &pty_modes_len, sizeof(pty_modes), 1, 3);   // VINTR  = Ctrl-C
+    prossh_append_pty_mode(pty_modes, &pty_modes_len, sizeof(pty_modes), 2, 28);  // VQUIT  = Ctrl-\
+    prossh_append_pty_mode(pty_modes, &pty_modes_len, sizeof(pty_modes), 3, 127); // VERASE = DEL
+    prossh_append_pty_mode(pty_modes, &pty_modes_len, sizeof(pty_modes), 4, 21);  // VKILL  = Ctrl-U
+    prossh_append_pty_mode(pty_modes, &pty_modes_len, sizeof(pty_modes), 5, 4);   // VEOF   = Ctrl-D
+    prossh_append_pty_mode(pty_modes, &pty_modes_len, sizeof(pty_modes), 8, 17);  // VSTART = Ctrl-Q
+    prossh_append_pty_mode(pty_modes, &pty_modes_len, sizeof(pty_modes), 9, 19);  // VSTOP  = Ctrl-S
+    prossh_append_pty_mode(pty_modes, &pty_modes_len, sizeof(pty_modes), 10, 26); // VSUSP  = Ctrl-Z
     prossh_append_pty_mode(pty_modes, &pty_modes_len, sizeof(pty_modes), 50, 1); // ISIG
     prossh_append_pty_mode(pty_modes, &pty_modes_len, sizeof(pty_modes), 51, 1); // ICANON
     prossh_append_pty_mode(pty_modes, &pty_modes_len, sizeof(pty_modes), 53, 1); // ECHO

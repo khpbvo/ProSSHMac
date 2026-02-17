@@ -222,14 +222,20 @@ actor LocalShellChannel: SSHShellChannel {
         let isSignalChar = data.count == 1
             && (data[0] == 0x03 || data[0] == 0x1A || data[0] == 0x1C)
         var savedTermios: Darwin.termios?
+        var termiosFD: Int32 = -1
 
         if isSignalChar {
-            var tio = Darwin.termios()
-            if tcgetattr(masterFD, &tio) == 0 {
-                if (tio.c_lflag & tcflag_t(ISIG)) == 0 {
-                    savedTermios = tio
-                    tio.c_lflag |= tcflag_t(ISIG)
-                    tcsetattr(masterFD, TCSANOW, &tio)
+            // Line discipline and signal-generating control chars are owned
+            // by the slave side of the PTY, not the master side.
+            termiosFD = open(slaveDevicePath, O_RDWR | O_NOCTTY)
+            if termiosFD >= 0 {
+                var tio = Darwin.termios()
+                if tcgetattr(termiosFD, &tio) == 0 {
+                    if (tio.c_lflag & tcflag_t(ISIG)) == 0 {
+                        savedTermios = tio
+                        tio.c_lflag |= tcflag_t(ISIG)
+                        _ = tcsetattr(termiosFD, TCSANOW, &tio)
+                    }
                 }
             }
         }
@@ -246,8 +252,11 @@ actor LocalShellChannel: SSHShellChannel {
             }
         }
 
-        if var restore = savedTermios {
-            tcsetattr(masterFD, TCSANOW, &restore)
+        if var restore = savedTermios, termiosFD >= 0 {
+            _ = tcsetattr(termiosFD, TCSANOW, &restore)
+        }
+        if termiosFD >= 0 {
+            Darwin.close(termiosFD)
         }
 
         // Additional safety net: also send the signal directly to the
@@ -264,53 +273,43 @@ actor LocalShellChannel: SSHShellChannel {
 
     /// Send a signal to the foreground process group of the terminal.
     private func sendSignalToForegroundGroup(_ sig: Int32) {
-        // 1. Try tcgetpgrp on master fd.
-        let pgrp = tcgetpgrp(masterFD)
-        if pgrp > 0, pgrp != childPID {
-            kill(-pgrp, sig)
-            return
+        var targetedGroups = Set<pid_t>()
+
+        func signalProcessGroup(_ pgrp: pid_t) {
+            guard pgrp > 0, !targetedGroups.contains(pgrp) else { return }
+            _ = kill(-pgrp, sig)
+            targetedGroups.insert(pgrp)
         }
 
-        // 2. Try tcgetpgrp on slave fd.
+        // 1) Foreground group reported by master side.
+        signalProcessGroup(tcgetpgrp(masterFD))
+
+        // 2) Foreground group reported by slave side.
         let slaveFD = open(slaveDevicePath, O_RDONLY | O_NOCTTY)
         if slaveFD >= 0 {
-            let slavePgrp = tcgetpgrp(slaveFD)
+            signalProcessGroup(tcgetpgrp(slaveFD))
             Darwin.close(slaveFD)
-            if slavePgrp > 0, slavePgrp != childPID {
-                kill(-slavePgrp, sig)
-                return
-            }
         }
 
-        // 3. Enumerate child processes of the shell to find the foreground
-        //    job's process group.
-        let shellPgrp = getpgid(childPID)
-        var childPIDs = [pid_t](repeating: 0, count: 64)
+        // 3) Shell process group as baseline.
+        signalProcessGroup(getpgid(childPID))
+
+        // 4) Child jobs and their process groups.
+        var childPIDs = [pid_t](repeating: 0, count: 128)
         let bufSize = Int32(childPIDs.count * MemoryLayout<pid_t>.stride)
         let filled = proc_listchildpids(childPID, &childPIDs, bufSize)
         if filled > 0 {
             let count = Int(filled) / MemoryLayout<pid_t>.stride
-            var sentToGroups: Set<pid_t> = []
             for i in 0..<count {
                 let pid = childPIDs[i]
                 guard pid > 0 else { continue }
-                let pg = getpgid(pid)
-                if pg > 0, pg != shellPgrp, !sentToGroups.contains(pg) {
-                    kill(-pg, sig)
-                    sentToGroups.insert(pg)
-                }
-            }
-            if !sentToGroups.isEmpty {
-                return
+                _ = kill(pid, sig)
+                signalProcessGroup(getpgid(pid))
             }
         }
 
-        // 4. Fall back to the shell's own process group.
-        if pgrp > 0 {
-            kill(-pgrp, sig)
-        } else {
-            kill(-childPID, sig)
-        }
+        // 5) Last resort: direct shell signal.
+        _ = kill(childPID, sig)
     }
 
     func resizePTY(columns: Int, rows: Int) async throws {
