@@ -41,7 +41,17 @@ enum EncryptedStorage {
         var plaintext: Data
 
         if isEncryptedEnvelope(persisted) {
-            plaintext = try decryptEnvelope(persisted)
+            do {
+                plaintext = try decryptEnvelope(persisted)
+            } catch {
+                // Decryption failed — the master key is no longer accessible (e.g. app
+                // was migrated to a new bundle/keychain identity). Back up the old file
+                // and start fresh so the user isn't permanently locked out.
+                let backupURL = fileURL.deletingPathExtension()
+                    .appendingPathExtension("unreadable-backup.json")
+                try? fileManager.moveItem(at: fileURL, to: backupURL)
+                return nil
+            }
         } else {
             // Migrate legacy plaintext JSON to encrypted storage on first read.
             plaintext = persisted

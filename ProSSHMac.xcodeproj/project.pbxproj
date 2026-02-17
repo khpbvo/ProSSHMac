@@ -270,7 +270,7 @@
 					"$(PROJECT_DIR)/Vendor/OpenSSL/libcrypto.xcframework/macos-arm64_x86_64",
 					"$(PROJECT_DIR)/Vendor/OpenSSL/libssl.xcframework/macos-arm64_x86_64",
 				);
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
@@ -320,7 +320,7 @@
 					"$(PROJECT_DIR)/Vendor/OpenSSL/libcrypto.xcframework/macos-arm64_x86_64",
 					"$(PROJECT_DIR)/Vendor/OpenSSL/libssl.xcframework/macos-arm64_x86_64",
 				);
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",

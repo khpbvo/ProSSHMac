@@ -23,7 +23,7 @@ enum SecureEnclaveKeyManagerError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .unavailableOnSimulator:
-            return "Secure Enclave is unavailable on the iOS Simulator. Use a physical device."
+            return "Secure Enclave is unavailable in this environment. Requires Apple Silicon."
         case .accessControlCreationFailed:
             return "Failed to configure Secure Enclave access control."
         case let .keyGenerationFailed(message):
