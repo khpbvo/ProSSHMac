@@ -159,7 +159,7 @@ final class MetalTerminalSurfaceModel: ObservableObject {
     }
 
     func updateFPS(isFocused: Bool) {
-        renderer?.setPreferredFPS(isFocused ? 120 : 30)
+        renderer?.setPreferredFPS(isFocused ? 0 : 30)
     }
 
     // MARK: - Selection

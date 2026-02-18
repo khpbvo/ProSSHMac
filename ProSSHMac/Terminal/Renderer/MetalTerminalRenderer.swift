@@ -13,6 +13,7 @@ import Foundation
 import Metal
 import MetalKit
 import QuartzCore
+import AppKit
 import simd
 
 // MARK: - MetalTerminalRenderer
@@ -136,6 +137,10 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
 
     /// Weak reference to the configured MTKView for frame rate and pause control.
     private weak var configuredMTKView: MTKView?
+
+    /// True when frame pacing should follow the active screen's native refresh
+    /// rate rather than a fixed value.
+    private var usesNativeRefreshRate: Bool = false
 
     // MARK: - In-Flight Buffering (B.8.7)
 
@@ -859,6 +864,10 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
         viewportSize = size
 
+        if usesNativeRefreshRate {
+            setPreferredFPS(0)
+        }
+
         // Detect screen scale factor from drawable-to-bounds ratio.
         let pointSize = view.bounds.size
         let hasValidBounds = pointSize.width > 0 && pointSize.height > 0
@@ -927,9 +936,10 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         view.device = device
         view.delegate = self
         view.colorPixelFormat = .bgra8Unorm
+        configuredMTKView = view
 
-        // B.8.6: ProMotion support — request 120 Hz frame rate on capable devices.
-        view.preferredFramesPerSecond = 120
+        // B.8.6: ProMotion support — use native display refresh (60 Hz or 120 Hz).
+        setPreferredFPS(0)
 
         // Dark terminal background.
         view.clearColor = MTLClearColor(red: 0.0, green: 0.0, blue: 0.0, alpha: 1.0)
@@ -938,8 +948,6 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         view.isPaused = false
         view.enableSetNeedsDisplay = false
         selectionRenderer.refreshSelectionColorFromSystemAccent()
-
-        configuredMTKView = view
     }
 
     // MARK: - Frame Rate Control (2.2.9 / 2.2.10)
@@ -950,10 +958,27 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         configuredMTKView?.isPaused = paused
     }
 
-    /// Set the preferred frames per second. Use 120 for focused panes
-    /// and 30 for unfocused-but-visible panes to conserve GPU.
+    /// Set the preferred frames per second.
+    /// Pass 0 to follow the current screen's native refresh rate.
     func setPreferredFPS(_ fps: Int) {
-        configuredMTKView?.preferredFramesPerSecond = fps
+        guard let view = configuredMTKView else { return }
+        let nativeFPS = max(30, currentScreenMaximumFPS())
+        usesNativeRefreshRate = fps <= 0
+        if usesNativeRefreshRate {
+            view.preferredFramesPerSecond = nativeFPS
+        } else {
+            view.preferredFramesPerSecond = min(max(1, fps), nativeFPS)
+        }
+    }
+
+    private func currentScreenMaximumFPS() -> Int {
+        if let screenFPS = configuredMTKView?.window?.screen?.maximumFramesPerSecond {
+            return screenFPS
+        }
+        if let mainFPS = NSScreen.main?.maximumFramesPerSecond {
+            return mainFPS
+        }
+        return 60
     }
 
     // MARK: - Font Change
