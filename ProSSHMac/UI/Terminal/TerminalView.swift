@@ -47,6 +47,8 @@ struct TerminalView: View {
     @State private var terminalContentOffset: CGFloat = 0
     @State private var terminalViewportSize: CGSize = .zero
     @State private var directInputBufferBySessionID: [UUID: String] = [:]
+    @State private var expandedMetadataSessions: Set<UUID> = []
+    @State private var hoveredTabID: UUID?
     private let linkDetector = LinkDetector()
 
     var body: some View {
@@ -135,9 +137,14 @@ struct TerminalView: View {
             if supportsMultitaskingControls {
                 ToolbarItem(placement: newWindowToolbarPlacement) {
                     Button {
-                        openWindow(id: ProSSHMacApp.externalTerminalWindowID)
+                        navigationCoordinator.toggleTerminalMaximize()
                     } label: {
-                        Label("New Window", systemImage: "rectangle.on.rectangle")
+                        Label(
+                            navigationCoordinator.isTerminalMaximized ? "Restore Sidebar" : "Maximize Terminal",
+                            systemImage: navigationCoordinator.isTerminalMaximized
+                                ? "arrow.down.right.and.arrow.up.left"
+                                : "arrow.up.left.and.arrow.down.right"
+                        )
                     }
                 }
             }
@@ -181,7 +188,9 @@ struct TerminalView: View {
     }
 
     private var macOSBody: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let terminalOnlyMode = navigationCoordinator.isTerminalMaximized
+
+        return VStack(alignment: .leading, spacing: 0) {
             if sessionManager.sessions.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("No Active Sessions")
@@ -200,8 +209,10 @@ struct TerminalView: View {
                 .padding()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if paneManager.paneCount > 1 || paneManager.maximizedPaneId != nil {
-                sessionTabs
-                    .padding(.vertical, 8)
+                if !terminalOnlyMode {
+                    sessionTabs
+                        .padding(.vertical, 8)
+                }
 
                 SplitNodeView(
                     node: paneManager.displayNode,
@@ -219,28 +230,51 @@ struct TerminalView: View {
                 ) { pane in
                     if let session = sessionForPane(pane) {
                         let paneFocused = pane.id == paneManager.focusedPaneId
-                        sessionPanel(for: session, includeSearch: paneFocused, isFocused: paneFocused)
-                            .padding(.horizontal)
-                            .padding(.bottom, 8)
+                        if terminalOnlyMode {
+                            terminalSurface(for: session, isFocused: paneFocused, paneID: pane.id)
+                                .overlay {
+                                    directTerminalInputOverlay(for: session)
+                                }
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        } else {
+                            sessionPanel(for: session, paneID: pane.id, includeSearch: paneFocused, isFocused: paneFocused)
+                                .padding(.horizontal)
+                                .padding(.bottom, 8)
+                        }
                     } else {
                         noSessionPlaceholder
                     }
                 }
             } else {
-                sessionTabs
-                    .padding(.vertical, 8)
+                if !terminalOnlyMode {
+                    sessionTabs
+                        .padding(.vertical, 8)
+                }
 
                 if let session = selectedSession {
-                    sessionPanel(for: session, includeSearch: true)
-                    .padding(.horizontal)
-                    .padding(.bottom, 8)
+                    if terminalOnlyMode {
+                        terminalSurface(for: session)
+                            .overlay {
+                                directTerminalInputOverlay(for: session)
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        sessionPanel(for: session, includeSearch: true)
+                            .padding(.horizontal)
+                            .padding(.bottom, 8)
+                    }
                 }
             }
         }
     }
 
     @ViewBuilder
-    private func sessionPanel(for session: Session, includeSearch: Bool, isFocused: Bool = true) -> some View {
+    private func sessionPanel(
+        for session: Session,
+        paneID: UUID? = nil,
+        includeSearch: Bool,
+        isFocused: Bool = true
+    ) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             header(for: session)
 
@@ -251,7 +285,7 @@ struct TerminalView: View {
             }
 
             if session.state == .connected {
-                terminalSurface(for: session, isFocused: isFocused)
+                terminalSurface(for: session, isFocused: isFocused, paneID: paneID)
                     .overlay {
                         directTerminalInputOverlay(for: session)
                     }
@@ -278,10 +312,41 @@ struct TerminalView: View {
                let cipher = session.negotiatedCipher,
                let hostKey = session.negotiatedHostKeyType {
                 let fingerprint = session.negotiatedHostFingerprint ?? "unknown"
-                Text("KEX: \(kex)  |  Cipher: \(cipher)  |  Host Key: \(hostKey)  |  FP: \(fingerprint)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(3)
+                let isExpanded = expandedMetadataSessions.contains(session.id)
+                let isLegacy = session.usesLegacyCrypto
+
+                HStack(spacing: 4) {
+                    Image(systemName: isLegacy ? "lock.trianglebadge.exclamationmark" : "lock.fill")
+                        .font(.caption)
+                        .foregroundStyle(isLegacy ? .orange : .green)
+                    Text(isLegacy ? "Legacy Crypto" : "Secure")
+                        .font(.caption)
+                        .foregroundStyle(isLegacy ? .orange : .secondary)
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            if isExpanded {
+                                expandedMetadataSessions.remove(session.id)
+                            } else {
+                                expandedMetadataSessions.insert(session.id)
+                            }
+                        }
+                    } label: {
+                        Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                if isExpanded {
+                    VStack(alignment: .leading, spacing: 2) {
+                        metadataRow(label: "KEX", value: kex)
+                        metadataRow(label: "Cipher", value: cipher)
+                        metadataRow(label: "Host Key", value: hostKey)
+                        metadataRow(label: "FP", value: fingerprint)
+                    }
+                    .padding(.leading, 4)
+                }
             }
 
             if let advisory = session.securityAdvisory {
@@ -330,6 +395,20 @@ struct TerminalView: View {
         }
     }
 
+    @ViewBuilder
+    private func metadataRow(label: String, value: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Text(label + ":")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .frame(width: 60, alignment: .trailing)
+            Text(value)
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+        }
+    }
+
     private var selectedSession: Session? {
         if let selectedSessionID = tabManager.selectedSessionID {
             return tabManager.tabs.first(where: { $0.id == selectedSessionID })?.session
@@ -343,112 +422,121 @@ struct TerminalView: View {
                 HStack(spacing: 8) {
                     ForEach(tabManager.tabs) { tab in
                         let session = tab.session
-                        HStack(spacing: 6) {
-                            Button {
-                                tabManager.select(sessionID: session.id)
-                            } label: {
-                                HStack(spacing: 6) {
-                                    if tab.isPinned {
-                                        Image(systemName: "pin.fill")
-                                            .foregroundStyle(.orange)
+                        let isSelected = tabManager.selectedSessionID == session.id
+                        let isTabHovered = hoveredTabID == session.id
+                        Button {
+                            tabManager.select(sessionID: session.id)
+                        } label: {
+                            HStack(spacing: 6) {
+                                if tab.isPinned {
+                                    Image(systemName: "pin.fill")
+                                        .foregroundStyle(.orange)
+                                        .font(.caption2)
+                                }
+                                Circle()
+                                    .fill(tab.statusColor)
+                                    .frame(width: 8, height: 8)
+                                if session.usesLegacyCrypto {
+                                    Image(systemName: "shield.lefthalf.filled")
+                                        .foregroundStyle(.orange)
+                                        .font(.caption2)
+                                }
+                                if session.usesAgentForwarding {
+                                    Image(systemName: "arrow.triangle.branch")
+                                        .foregroundStyle(.teal)
+                                        .font(.caption2)
+                                }
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(sessionManager.windowTitleBySessionID[session.id] ?? tab.label)
+                                        .font(isSelected ? .caption.weight(.medium) : .caption)
+                                        .lineLimit(1)
+                                    if session.isLocal, let cwd = sessionManager.workingDirectoryBySessionID[session.id] {
+                                        let homePath = ProcessInfo.processInfo.environment["HOME"] ?? ""
+                                        let displayCwd = cwd.replacingOccurrences(of: homePath, with: "~")
+                                        Text(displayCwd)
                                             .font(.caption2)
-                                    }
-                                    Circle()
-                                        .fill(tab.statusColor)
-                                        .frame(width: 7, height: 7)
-                                    if session.usesLegacyCrypto {
-                                        Image(systemName: "shield.lefthalf.filled")
-                                            .foregroundStyle(.orange)
-                                            .font(.caption2)
-                                    }
-                                    if session.usesAgentForwarding {
-                                        Image(systemName: "arrow.triangle.branch")
-                                            .foregroundStyle(.teal)
-                                            .font(.caption2)
-                                    }
-                                    VStack(alignment: .leading, spacing: 1) {
-                                        Text(sessionManager.windowTitleBySessionID[session.id] ?? tab.label)
-                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
                                             .lineLimit(1)
-                                        if session.isLocal, let cwd = sessionManager.workingDirectoryBySessionID[session.id] {
-                                            let homePath = ProcessInfo.processInfo.environment["HOME"] ?? ""
-                                            let displayCwd = cwd.replacingOccurrences(of: homePath, with: "~")
-                                            Text(displayCwd)
-                                                .font(.caption2)
-                                                .foregroundStyle(.secondary)
-                                                .lineLimit(1)
-                                        }
                                     }
                                 }
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 7)
-                                .background(
-                                    tabBackground(for: session),
-                                    in: Capsule()
-                                )
-                            }
-                            .buttonStyle(.plain)
-                            .id(session.id)
-                            .draggable(session.id.uuidString)
-                            .dropDestination(for: String.self) { items, _ in
-                                guard let sourceIDString = items.first,
-                                      let sourceID = UUID(uuidString: sourceIDString) else { return false }
-                                tabManager.moveTab(from: sourceID, before: session.id)
-                                return true
-                            }
-                            .contextMenu {
-                                Button("Move Left") {
-                                    tabManager.moveTab(sessionID: session.id, by: -1)
+                                if !tab.isPinned {
+                                    Button(role: .destructive) {
+                                        requestCloseSession(session)
+                                    } label: {
+                                        Image(systemName: "xmark.circle.fill")
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .opacity(isSelected || isTabHovered ? 1 : 0)
                                 }
-                                .disabled(!tabManager.canMoveTab(sessionID: session.id, direction: -1))
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 7)
+                            .background(
+                                tabBackground(for: session),
+                                in: Capsule()
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .id(session.id)
+                        .onHover { hovering in
+                            hoveredTabID = hovering ? session.id : nil
+                        }
+                        .draggable(session.id.uuidString)
+                        .dropDestination(for: String.self) { items, _ in
+                            guard let sourceIDString = items.first,
+                                  let sourceID = UUID(uuidString: sourceIDString) else { return false }
+                            tabManager.moveTab(from: sourceID, before: session.id)
+                            return true
+                        }
+                        .contextMenu {
+                            Button("Move Left") {
+                                tabManager.moveTab(sessionID: session.id, by: -1)
+                            }
+                            .disabled(!tabManager.canMoveTab(sessionID: session.id, direction: -1))
 
-                                Button("Move Right") {
-                                    tabManager.moveTab(sessionID: session.id, by: 1)
+                            Button("Move Right") {
+                                tabManager.moveTab(sessionID: session.id, by: 1)
+                            }
+                            .disabled(!tabManager.canMoveTab(sessionID: session.id, direction: 1))
+
+                            Divider()
+
+                            Button {
+                                Task {
+                                    try? await sessionManager.duplicateSession(session.id)
                                 }
-                                .disabled(!tabManager.canMoveTab(sessionID: session.id, direction: 1))
+                            } label: {
+                                Label("Duplicate", systemImage: "doc.on.doc")
+                            }
 
+                            Button {
+                                openWindow(id: ProSSHMacApp.externalTerminalWindowID, value: session.id)
+                            } label: {
+                                Label("Pop Out to Window", systemImage: "rectangle.portrait.and.arrow.right")
+                            }
+
+                            Button {
+                                tabManager.togglePin(sessionID: session.id)
+                            } label: {
+                                Label(tab.isPinned ? "Unpin" : "Pin", systemImage: tab.isPinned ? "pin.slash" : "pin")
+                            }
+
+                            if paneManager.canSplit(paneManager.focusedPaneId),
+                               session.id != paneManager.focusedSessionID {
                                 Divider()
 
                                 Button {
-                                    Task {
-                                        try? await sessionManager.duplicateSession(session.id)
-                                    }
+                                    splitWithExistingSession(session.id, beside: paneManager.focusedPaneId, direction: .vertical)
                                 } label: {
-                                    Label("Duplicate", systemImage: "doc.on.doc")
+                                    Label("Split Right", systemImage: "rectangle.split.2x1")
                                 }
 
                                 Button {
-                                    tabManager.togglePin(sessionID: session.id)
+                                    splitWithExistingSession(session.id, beside: paneManager.focusedPaneId, direction: .horizontal)
                                 } label: {
-                                    Label(tab.isPinned ? "Unpin" : "Pin", systemImage: tab.isPinned ? "pin.slash" : "pin")
+                                    Label("Split Down", systemImage: "rectangle.split.1x2")
                                 }
-
-                                if paneManager.canSplit(paneManager.focusedPaneId),
-                                   session.id != paneManager.focusedSessionID {
-                                    Divider()
-
-                                    Button {
-                                        splitWithExistingSession(session.id, beside: paneManager.focusedPaneId, direction: .vertical)
-                                    } label: {
-                                        Label("Split Right", systemImage: "rectangle.split.2x1")
-                                    }
-
-                                    Button {
-                                        splitWithExistingSession(session.id, beside: paneManager.focusedPaneId, direction: .horizontal)
-                                    } label: {
-                                        Label("Split Down", systemImage: "rectangle.split.1x2")
-                                    }
-                                }
-                            }
-
-                            if !tab.isPinned {
-                                Button(role: .destructive) {
-                                    requestCloseSession(session)
-                                } label: {
-                                    Image(systemName: "xmark.circle.fill")
-                                        .foregroundStyle(.secondary)
-                                }
-                                .buttonStyle(.plain)
                             }
                         }
                     }
@@ -532,6 +620,19 @@ struct TerminalView: View {
     private func sessionForPane(_ pane: TerminalPane) -> Session? {
         guard let sessionID = pane.sessionID else { return nil }
         return tabManager.tabs.first(where: { $0.id == sessionID })?.session
+    }
+
+    private func focusSessionAndPane(_ sessionID: UUID, paneID: UUID? = nil) {
+        focusedSessionID = sessionID
+        if tabManager.selectedSessionID != sessionID {
+            tabManager.select(sessionID: sessionID)
+        }
+
+        let targetPaneID = paneID
+            ?? paneManager.allPanes.first(where: { $0.sessionID == sessionID })?.id
+        if let targetPaneID, targetPaneID != paneManager.focusedPaneId {
+            paneManager.focusPane(targetPaneID)
+        }
     }
 
     private var noSessionPlaceholder: some View {
@@ -1019,15 +1120,22 @@ struct TerminalView: View {
         }
     }
 
-    @ViewBuilder
-    private func terminalSurface(for session: Session, isFocused: Bool = true) -> some View {
-        if isMacOSTerminalSafetyModeEnabled {
-            safeTerminalBuffer(for: session)
-        } else if supportsMetalTerminalSurface {
-            metalTerminalBuffer(for: session, isFocused: isFocused)
-        } else {
-            terminalBuffer(for: session)
+    private func terminalSurface(for session: Session, isFocused: Bool = true, paneID: UUID? = nil) -> some View {
+        Group {
+            if isMacOSTerminalSafetyModeEnabled {
+                safeTerminalBuffer(for: session)
+            } else if supportsMetalTerminalSurface {
+                metalTerminalBuffer(for: session, isFocused: isFocused, paneID: paneID)
+            } else {
+                terminalBuffer(for: session)
+            }
         }
+        .contentShape(Rectangle())
+        .simultaneousGesture(
+            TapGesture().onEnded {
+                focusSessionAndPane(session.id, paneID: paneID)
+            }
+        )
     }
 
     @ViewBuilder
@@ -1087,7 +1195,7 @@ struct TerminalView: View {
     }
 
     @ViewBuilder
-    private func metalTerminalBuffer(for session: Session, isFocused: Bool = true) -> some View {
+    private func metalTerminalBuffer(for session: Session, isFocused: Bool = true, paneID: UUID? = nil) -> some View {
         let snapshot = sessionManager.gridSnapshotsBySessionID[session.id]
         let snapshotNonce = sessionManager.gridSnapshotNonceBySessionID[session.id, default: 0]
 
@@ -1097,7 +1205,7 @@ struct TerminalView: View {
             snapshotNonce: snapshotNonce,
             backgroundOpacityPercent: terminalBackgroundOpacityPercent,
             onTap: { _ in
-                focusedSessionID = session.id
+                focusSessionAndPane(session.id, paneID: paneID)
             },
             onTerminalResize: { columns, rows in
                 Task {
@@ -1165,6 +1273,12 @@ struct TerminalView: View {
             pasteClipboardToSession(session.id)
         } label: {
             Label("Paste", systemImage: "doc.on.clipboard")
+        }
+
+        Button {
+            openWindow(id: ProSSHMacApp.externalTerminalWindowID, value: session.id)
+        } label: {
+            Label("Pop Out to Window", systemImage: "rectangle.portrait.and.arrow.right")
         }
 
         Divider()
@@ -1554,18 +1668,33 @@ struct TerminalView: View {
 
         HStack {
             if session.state == .connected {
-                Button("Clear") {
+                Button {
                     sessionManager.clearShellBuffer(sessionID: session.id)
+                } label: {
+                    Label("Clear", systemImage: "trash")
                 }
                 .buttonStyle(.bordered)
 
-                Button(isRecording ? "Stop Rec" : "Record") {
-                    Task {
-                        await sessionManager.toggleRecording(sessionID: session.id)
+                if isRecording {
+                    Button {
+                        Task {
+                            await sessionManager.toggleRecording(sessionID: session.id)
+                        }
+                    } label: {
+                        Label("Stop Rec", systemImage: "stop.circle.fill")
                     }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.red)
+                } else {
+                    Button {
+                        Task {
+                            await sessionManager.toggleRecording(sessionID: session.id)
+                        }
+                    } label: {
+                        Label("Record", systemImage: "record.circle")
+                    }
+                    .buttonStyle(.bordered)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(isRecording ? .red : .accentColor)
             }
 
             Menu {
@@ -1611,10 +1740,12 @@ struct TerminalView: View {
             Spacer()
 
             if session.state == .connected {
-                Button("Disconnect", role: .destructive) {
+                Button(role: .destructive) {
                     Task {
                         await sessionManager.disconnect(sessionID: session.id)
                     }
+                } label: {
+                    Label("Disconnect", systemImage: "xmark.circle")
                 }
                 .buttonStyle(.bordered)
             } else {
@@ -1627,10 +1758,12 @@ struct TerminalView: View {
                     .buttonStyle(.bordered)
                 }
 
-                Button("Close", role: .destructive) {
+                Button(role: .destructive) {
                     Task {
                         await sessionManager.closeSession(sessionID: session.id)
                     }
+                } label: {
+                    Label("Close", systemImage: "xmark.circle")
                 }
                 .buttonStyle(.bordered)
             }
@@ -1667,7 +1800,7 @@ struct TerminalView: View {
     }
 
     private var terminalSurfaceBorderColor: Color {
-        colorScheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.08)
+        colorScheme == .dark ? Color.white.opacity(0.14) : Color.black.opacity(0.12)
     }
 
     private var supportsMultitaskingControls: Bool {
@@ -1797,6 +1930,11 @@ struct TerminalView: View {
                 selectAllInFocusedTerminal()
             }
             .keyboardShortcut("a", modifiers: [.command])
+
+            Button("Toggle Maximize") {
+                navigationCoordinator.toggleTerminalMaximize()
+            }
+            .keyboardShortcut("f", modifiers: [.command, .shift])
         }
     }
 
@@ -2188,7 +2326,7 @@ private struct SafeTerminalRenderedLine: Identifiable {
     let text: String
 }
 
-private struct DirectTerminalInputCaptureView: NSViewRepresentable {
+struct DirectTerminalInputCaptureView: NSViewRepresentable {
     let isEnabled: Bool
     let sessionID: UUID
     let keyEncoderOptions: () -> KeyEncoderOptions
@@ -2213,7 +2351,7 @@ private struct DirectTerminalInputCaptureView: NSViewRepresentable {
     }
 }
 
-private final class DirectTerminalInputNSView: NSView {
+final class DirectTerminalInputNSView: NSView {
     var isEnabled = false
     var sessionID: UUID?
     var keyEncoderOptions: (() -> KeyEncoderOptions)?

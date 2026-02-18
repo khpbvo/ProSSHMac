@@ -5,11 +5,12 @@ struct RootTabView: View {
     @EnvironmentObject private var navigationCoordinator: AppNavigationCoordinator
     @State private var selectedTab: AppNavigationSection = .hosts
     @State private var selectedSidebarDestination: AppNavigationSection? = .hosts
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     var body: some View {
         ZStack {
             if useSplitLayout {
-                NavigationSplitView {
+                NavigationSplitView(columnVisibility: $columnVisibility) {
                     List(AppNavigationSection.allCases, selection: $selectedSidebarDestination) { destination in
                         Label(destination.title, systemImage: destination.systemImage)
                             .tag(destination)
@@ -27,6 +28,16 @@ struct RootTabView: View {
                 .onAppear {
                     if selectedSidebarDestination == nil {
                         selectedSidebarDestination = .hosts
+                    }
+                }
+                .onChange(of: navigationCoordinator.isTerminalMaximized) { _, maximized in
+                    withAnimation {
+                        columnVisibility = maximized ? .detailOnly : .all
+                    }
+                }
+                .onChange(of: selectedSidebarDestination) { _, newDestination in
+                    if newDestination != .terminal {
+                        navigationCoordinator.restoreTerminalMaximize()
                     }
                 }
             } else {

@@ -49,8 +49,8 @@ struct ProSSHMacApp: App {
         }
         .defaultSize(width: 1100, height: 750)
 
-        WindowGroup("Terminal Display", id: Self.externalTerminalWindowID) {
-            configuredRoot(content: ExternalTerminalWindowView())
+        WindowGroup("Terminal", id: Self.externalTerminalWindowID, for: UUID.self) { $sessionID in
+            configuredRoot(content: ExternalTerminalWindowView(sessionID: sessionID))
         }
         .defaultSize(width: 900, height: 600)
     }
