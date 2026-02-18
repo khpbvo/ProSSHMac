@@ -102,6 +102,8 @@ actor VTParser {
     /// Queue of data waiting to be processed. Reentrant calls to feed()
     /// append here instead of interleaving with the in-progress parse.
     private var feedQueue: [Data] = []
+    /// Read head for `feedQueue`. Avoids `removeFirst()` in hot paths.
+    private var feedQueueHead: Int = 0
 
     /// True while processByte() is running. Guards against Swift actor
     /// reentrancy: when feed() awaits a cross-actor grid call, the actor
@@ -137,13 +139,26 @@ actor VTParser {
         feedQueue.append(data)
         guard !isFeeding else { return false }
         isFeeding = true
-        while !feedQueue.isEmpty {
-            let next = feedQueue.removeFirst()
+        defer {
+            isFeeding = false
+            // Queue is fully drained at this point; keep capacity for future bursts.
+            feedQueue.removeAll(keepingCapacity: true)
+            feedQueueHead = 0
+        }
+
+        while feedQueueHead < feedQueue.count {
+            let next = feedQueue[feedQueueHead]
+            feedQueueHead += 1
             for byte in next {
                 await processByte(byte)
             }
+
+            // Compact occasionally so long bursts don't retain a large head offset.
+            if feedQueueHead >= 64, feedQueueHead * 2 >= feedQueue.count {
+                feedQueue.removeFirst(feedQueueHead)
+                feedQueueHead = 0
+            }
         }
-        isFeeding = false
         return true
     }
 

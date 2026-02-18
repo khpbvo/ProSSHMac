@@ -57,7 +57,10 @@ final class SessionManager: ObservableObject {
     private var pendingResizeTasks: [UUID: Task<Void, Never>] = [:]
     /// Per-session scroll offset (0 = live view, >0 = scrolled back N lines).
     private var scrollOffsetBySessionID: [UUID: Int] = [:]
+    /// Throttles expensive visible-text extraction/publishing during heavy output.
+    private var lastShellBufferPublishAtBySessionID: [UUID: Date] = [:]
     private var keepaliveTask: Task<Void, Never>?
+    private let shellBufferPublishInterval: TimeInterval = 1.0 / 30.0
 
     private var keepaliveEnabled: Bool {
         UserDefaults.standard.bool(forKey: "ssh.keepalive.enabled")
@@ -913,7 +916,9 @@ final class SessionManager: ObservableObject {
                 gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
 
                 // Derive text lines from grid for fallback view, search, and password detection.
-                shellBuffers[sessionID] = await grid.visibleText()
+                if shouldPublishShellBuffer(for: sessionID) {
+                    shellBuffers[sessionID] = await grid.visibleText()
+                }
 
                 // F.8: Propagate bell events from VTParser → grid → UI.
                 let bellCount = await grid.consumeBellCount()
@@ -1098,6 +1103,7 @@ final class SessionManager: ObservableObject {
         inputModeActors.removeValue(forKey: sessionID)
         desiredPTYBySessionID.removeValue(forKey: sessionID)
         shellBuffers.removeValue(forKey: sessionID)
+        lastShellBufferPublishAtBySessionID.removeValue(forKey: sessionID)
         bellEventNonceBySessionID.removeValue(forKey: sessionID)
         inputModeSnapshotsBySessionID.removeValue(forKey: sessionID)
         gridSnapshotsBySessionID.removeValue(forKey: sessionID)
@@ -1107,6 +1113,15 @@ final class SessionManager: ObservableObject {
         workingDirectoryBySessionID.removeValue(forKey: sessionID)
         bytesReceivedBySessionID.removeValue(forKey: sessionID)
         bytesSentBySessionID.removeValue(forKey: sessionID)
+    }
+
+    private func shouldPublishShellBuffer(for sessionID: UUID, now: Date = .now) -> Bool {
+        if let lastPublished = lastShellBufferPublishAtBySessionID[sessionID],
+           now.timeIntervalSince(lastPublished) < shellBufferPublishInterval {
+            return false
+        }
+        lastShellBufferPublishAtBySessionID[sessionID] = now
+        return true
     }
 
     // MARK: - SSH Keepalive

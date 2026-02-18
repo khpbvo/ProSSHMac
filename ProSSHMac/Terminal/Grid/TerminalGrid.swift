@@ -11,6 +11,12 @@ import Foundation
 
 actor TerminalGrid {
 
+    /// Reuse one-character ASCII strings to avoid per-character allocations
+    /// in the common shell-output fast path.
+    private static let asciiScalarStringCache: [String] = (0..<128).map {
+        String(UnicodeScalar($0)!)
+    }
+
     // MARK: - Dimensions
 
     private(set) var columns: Int
@@ -182,6 +188,15 @@ actor TerminalGrid {
         }
     }
 
+    /// Mutate the active screen buffer in place (primary or alternate).
+    private func withActiveCells(_ body: (inout [[TerminalCell]]) -> Void) {
+        if usingAlternateBuffer {
+            body(&alternateCells)
+        } else {
+            body(&primaryCells)
+        }
+    }
+
     // MARK: - A.6.1 Cell Read/Write
 
     /// Read the cell at the given position.
@@ -193,11 +208,11 @@ actor TerminalGrid {
     /// Write a cell at the given position and mark it dirty.
     func setCellAt(row: Int, col: Int, cell: TerminalCell) {
         guard row >= 0 && row < rows && col >= 0 && col < columns else { return }
-        var buf = cells
         var c = cell
         c.isDirty = true
-        buf[row][col] = c
-        cells = buf
+        withActiveCells { buffer in
+            buffer[row][col] = c
+        }
         markDirty(row: row)
     }
 
@@ -273,43 +288,54 @@ actor TerminalGrid {
             performWrap()
         }
 
-        let charStr = String(char)
+        let charStr: String
+        if let scalar = char.unicodeScalars.first,
+           char.unicodeScalars.count == 1,
+           scalar.value < 128 {
+            charStr = Self.asciiScalarStringCache[Int(scalar.value)]
+        } else {
+            charStr = String(char)
+        }
         let isWide = char.isWideCharacter
+        let row = cursor.row
+        let col = cursor.col
 
         // In insert mode, shift existing chars right
         if insertMode {
             let shiftCount = isWide ? 2 : 1
-            insertBlanks(count: shiftCount, atRow: cursor.row, col: cursor.col)
+            insertBlanks(count: shiftCount, atRow: row, col: col)
         }
 
-        // Write the cell
-        var buf = cells
-        buf[cursor.row][cursor.col] = TerminalCell(
-            graphemeCluster: charStr,
-            fgColor: currentFgColor,
-            bgColor: currentBgColor,
-            underlineColor: currentUnderlineColor,
-            attributes: currentAttributes.union(isWide ? .wideChar : []),
-            underlineStyle: currentUnderlineStyle,
-            width: isWide ? 2 : 1,
-            isDirty: true
-        )
+        let attributes = isWide ? currentAttributes.union(.wideChar) : currentAttributes
 
-        // For wide characters, write a continuation cell
-        if isWide && cursor.col + 1 < columns {
-            buf[cursor.row][cursor.col + 1] = TerminalCell(
-                graphemeCluster: "",
+        // Write the cell(s) in place.
+        withActiveCells { buffer in
+            buffer[row][col] = TerminalCell(
+                graphemeCluster: charStr,
                 fgColor: currentFgColor,
                 bgColor: currentBgColor,
                 underlineColor: currentUnderlineColor,
-                attributes: currentAttributes,
+                attributes: attributes,
                 underlineStyle: currentUnderlineStyle,
-                width: 0,  // continuation
+                width: isWide ? 2 : 1,
                 isDirty: true
             )
+
+            // For wide characters, write a continuation cell.
+            if isWide && col + 1 < columns {
+                buffer[row][col + 1] = TerminalCell(
+                    graphemeCluster: "",
+                    fgColor: currentFgColor,
+                    bgColor: currentBgColor,
+                    underlineColor: currentUnderlineColor,
+                    attributes: currentAttributes,
+                    underlineStyle: currentUnderlineStyle,
+                    width: 0,  // continuation
+                    isDirty: true
+                )
+            }
         }
-        cells = buf
-        markDirty(row: cursor.row)
+        markDirty(row: row)
 
         lastPrintedChar = char
 
@@ -340,13 +366,15 @@ actor TerminalGrid {
     /// Perform the actual line wrap: CR + LF, scrolling if needed.
     private func performWrap() {
         // Mark the current line as wrapped
-        var buf = cells
         if cursor.col < columns {
-            var lastCell = buf[cursor.row][columns - 1]
-            lastCell.attributes.insert(.wrapped)
-            lastCell.isDirty = true
-            buf[cursor.row][columns - 1] = lastCell
-            cells = buf
+            let row = cursor.row
+            let lastCol = columns - 1
+            withActiveCells { buffer in
+                var lastCell = buffer[row][lastCol]
+                lastCell.attributes.insert(.wrapped)
+                lastCell.isDirty = true
+                buffer[row][lastCol] = lastCell
+            }
         }
 
         cursor.col = 0
@@ -856,15 +884,6 @@ actor TerminalGrid {
         hasDirtyCells = false
         dirtyRowMin = Int.max
         dirtyRowMax = -1
-
-        // Clear per-cell dirty flags
-        var buf = cells
-        for row in 0..<rows {
-            for col in 0..<columns {
-                buf[row][col].isDirty = false
-            }
-        }
-        cells = buf
     }
 
     // MARK: - A.6.14 Grid Snapshot Generation
@@ -883,16 +902,22 @@ actor TerminalGrid {
             return cached
         }
 
+        let activeCells = cells
+        let hasDirtyRange = hasDirtyCells && dirtyRowMin <= dirtyRowMax
+        let dirtyMin = dirtyRowMin
+        let dirtyMax = dirtyRowMax
+
         var cellInstances = [CellInstance]()
         cellInstances.reserveCapacity(rows * columns)
 
         for row in 0..<rows {
+            let rowIsDirty = hasDirtyRange && row >= dirtyMin && row <= dirtyMax
             for col in 0..<columns {
-                let cell = cells[row][col]
+                let cell = activeCells[row][col]
                 let isCursor = (row == cursor.row && col == cursor.col && cursor.visible)
 
                 var flags: UInt8 = 0
-                if cell.isDirty { flags |= CellInstance.flagDirty }
+                if rowIsDirty { flags |= CellInstance.flagDirty }
                 if isCursor { flags |= CellInstance.flagCursor }
 
                 // Extract the first Unicode scalar as the codepoint for glyph lookup.
@@ -933,9 +958,9 @@ actor TerminalGrid {
 
         // Compute dirty range
         var dirtyRange: Range<Int>?
-        if hasDirtyCells && dirtyRowMin <= dirtyRowMax {
-            let startIdx = dirtyRowMin * columns
-            let endIdx = (dirtyRowMax + 1) * columns
+        if hasDirtyRange {
+            let startIdx = dirtyMin * columns
+            let endIdx = (dirtyMax + 1) * columns
             dirtyRange = startIdx..<endIdx
         }
 
@@ -964,6 +989,8 @@ actor TerminalGrid {
         guard scrollOffset > 0, scrollback.count > 0 else {
             return snapshot()
         }
+
+        let activeCells = cells
 
         // Clamp offset to available scrollback
         let clampedOffset = min(scrollOffset, scrollback.count)
@@ -1032,7 +1059,7 @@ actor TerminalGrid {
                 // This row comes from the live grid
                 let gridRow = scrollbackIndex - scrollback.count
                 for col in 0..<columns {
-                    let cell = cells[gridRow][col]
+                    let cell = activeCells[gridRow][col]
                     let isCursor = (gridRow == cursor.row && col == cursor.col && cursor.visible && clampedOffset == 0)
 
                     var flags: UInt8 = CellInstance.flagDirty
@@ -1091,12 +1118,14 @@ actor TerminalGrid {
     /// Extract visible rows as an array of strings (trailing whitespace trimmed).
     /// Used by the text-based fallback view, password detection, and search.
     func visibleText() -> [String] {
+        let activeCells = cells
+
         var lines = [String]()
         lines.reserveCapacity(rows)
         for row in 0..<rows {
             var line = ""
             for col in 0..<columns {
-                let cell = cells[row][col]
+                let cell = activeCells[row][col]
                 if cell.width == 0 { continue } // skip wide-char continuation
                 if cell.graphemeCluster.isEmpty {
                     line.append(" ")
@@ -1104,9 +1133,12 @@ actor TerminalGrid {
                     line.append(cell.graphemeCluster)
                 }
             }
-            // Trim trailing spaces
-            while line.hasSuffix(" ") { line.removeLast() }
-            lines.append(line)
+            // Trim trailing spaces with a single pass.
+            if let lastNonSpace = line.lastIndex(where: { $0 != " " }) {
+                lines.append(String(line[...lastNonSpace]))
+            } else {
+                lines.append("")
+            }
         }
         return lines
     }
