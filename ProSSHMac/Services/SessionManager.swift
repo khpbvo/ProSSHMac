@@ -1366,4 +1366,51 @@ final class SessionManager: ObservableObject {
             }
         }
     }
+
+    // MARK: - Screenshot Mode Support
+
+    func injectScreenshotSessions() async {
+        let sampleSessions = ScreenshotSampleData.sessions
+        sessions = sampleSessions
+
+        for session in sampleSessions {
+            let grid = TerminalGrid(
+                columns: 80, rows: 24,
+                maxScrollbackLines: 1000
+            )
+            await grid.setLineFeedMode(true)
+            terminalGrids[session.id] = grid
+
+            let parser = VTParser(grid: grid)
+            vtParsers[session.id] = parser
+
+            let modeState = InputModeState()
+            inputModeActors[session.id] = modeState
+            await parser.setInputModeState(modeState)
+
+            desiredPTYBySessionID[session.id] = .default
+            shellBuffers[session.id] = []
+            bellEventNonceBySessionID[session.id] = 0
+            isRecordingBySessionID[session.id] = false
+            hasRecordingBySessionID[session.id] = false
+            isPlaybackRunningBySessionID[session.id] = false
+
+            // Inject realistic traffic counters
+            bytesReceivedBySessionID[session.id] = Int64.random(in: 8_000...250_000)
+            bytesSentBySessionID[session.id] = Int64.random(in: 1_000...50_000)
+
+            // Feed realistic terminal output for the first (primary) session
+            if session.id == sampleSessions.first?.id {
+                let terminalText = ScreenshotSampleData.terminalOutput
+                let data = Data(terminalText.utf8)
+                await parser.feed(data)
+            }
+
+            let snapshot = await grid.snapshot()
+            gridSnapshotsBySessionID[session.id] = snapshot
+            gridSnapshotNonceBySessionID[session.id] = 1
+            inputModeSnapshotsBySessionID[session.id] = await modeState.snapshot()
+            shellBuffers[session.id] = await grid.visibleText()
+        }
+    }
 }

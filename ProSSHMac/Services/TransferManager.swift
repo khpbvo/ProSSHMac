@@ -314,4 +314,11 @@ final class TransferManager: ObservableObject {
         }
         return "\(normalizedBase)/\(component)"
     }
+
+    // MARK: - Screenshot Mode Support
+
+    func injectScreenshotTransfers(sessionID: UUID) {
+        activeSessionID = sessionID
+        transfers = ScreenshotSampleData.transfers(sessionID: sessionID)
+    }
 }

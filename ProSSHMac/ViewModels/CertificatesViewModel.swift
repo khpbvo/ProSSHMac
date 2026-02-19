@@ -423,4 +423,11 @@ final class CertificatesViewModel: ObservableObject {
     func clearError() {
         errorMessage = nil
     }
+
+    // MARK: - Screenshot Mode Support
+
+    func injectScreenshotData() {
+        authorities = ScreenshotSampleData.authorities
+        certificates = ScreenshotSampleData.certificates
+    }
 }
