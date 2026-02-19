@@ -565,25 +565,22 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     private func applyPendingSnapshotIfNeeded() {
         guard let snapshot = pendingRenderSnapshot else { return }
         pendingRenderSnapshot = nil
+        // Prioritize visual correctness over dirty-range optimization.
+        // Full uploads avoid residual stale-cell artifacts during rapid
+        // scrolling/rewrites (e.g. agent tool-call output beyond page 1).
+        forceFullUploadForPendingSnapshot = false
+        let fullSnapshot = GridSnapshot(
+            cells: snapshot.cells,
+            dirtyRange: nil,
+            cursorRow: snapshot.cursorRow,
+            cursorCol: snapshot.cursorCol,
+            cursorVisible: snapshot.cursorVisible,
+            cursorStyle: snapshot.cursorStyle,
+            columns: snapshot.columns,
+            rows: snapshot.rows
+        )
 
-        let snapshotToApply: GridSnapshot
-        if forceFullUploadForPendingSnapshot {
-            forceFullUploadForPendingSnapshot = false
-            snapshotToApply = GridSnapshot(
-                cells: snapshot.cells,
-                dirtyRange: nil,
-                cursorRow: snapshot.cursorRow,
-                cursorCol: snapshot.cursorCol,
-                cursorVisible: snapshot.cursorVisible,
-                cursorStyle: snapshot.cursorStyle,
-                columns: snapshot.columns,
-                rows: snapshot.rows
-            )
-        } else {
-            snapshotToApply = snapshot
-        }
-
-        cellBuffer.update(from: snapshotToApply) { [weak self] cell -> UInt32 in
+        cellBuffer.update(from: fullSnapshot) { [weak self] cell -> UInt32 in
             guard let self else { return Self.noGlyphIndex }
             return self.resolveGlyphIndex(for: cell)
         }
@@ -1042,6 +1039,13 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
 
         // Recalculate grid with new cell dimensions.
         self.recalculateGridDimensions()
+        // Re-apply the latest snapshot so the cell buffer gets updated glyph
+        // atlas indices that match the rebuilt atlas. Without this, the old
+        // (now-invalid) glyph positions remain in the cell buffer and the
+        // terminal appears blank until the next external snapshot arrives.
+        if let latestSnapshot {
+            updateSnapshot(latestSnapshot)
+        }
         // Reset effect history so post-processing doesn't blend stale geometry.
         self.hasCapturedPreviousFrame = false
         self.previousUniformTime = 0

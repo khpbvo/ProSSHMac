@@ -125,6 +125,9 @@ struct ExternalTerminalWindowView: View {
                     isEnabled: session.state == .connected,
                     sessionID: session.id,
                     keyEncoderOptions: { keyEncoderOptions(for: session.id) },
+                    onCommandShortcut: { action in
+                        handleHardwareCommandShortcut(action)
+                    },
                     onSendSequence: { sessionID, sequence in
                         Task {
                             await sessionManager.sendRawShellInput(sessionID: sessionID, input: sequence)
@@ -182,6 +185,25 @@ struct ExternalTerminalWindowView: View {
     private func keyEncoderOptions(for sessionID: UUID) -> KeyEncoderOptions {
         let modeSnapshot = sessionManager.inputModeSnapshotsBySessionID[sessionID] ?? .default
         return KeyEncoderOptions(applicationCursorKeys: modeSnapshot.applicationCursorKeys)
+    }
+
+    private func handleHardwareCommandShortcut(_ action: HardwareKeyCommandAction) {
+        switch action {
+        case .increaseFontSize:
+            adjustTerminalFontSize(by: 1)
+        case .decreaseFontSize:
+            adjustTerminalFontSize(by: -1)
+        case .resetFontSize:
+            terminalUIFontSize = 12.0
+        default:
+            break
+        }
+    }
+
+    private func adjustTerminalFontSize(by delta: Double) {
+        let minSize = 9.0
+        let maxSize = 28.0
+        terminalUIFontSize = min(maxSize, max(minSize, terminalUIFontSize + delta))
     }
 
     // MARK: - Helpers

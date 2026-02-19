@@ -1595,6 +1595,9 @@ struct TerminalView: View {
             isEnabled: shouldEnableDirectTerminalInput(for: session),
             sessionID: session.id,
             keyEncoderOptions: { hardwareKeyEncoderOptions() },
+            onCommandShortcut: { action in
+                handleHardwareCommandShortcut(action)
+            },
             onSendSequence: { sessionID, sequence in
                 handleDirectTerminalInput(sequence, sessionID: sessionID)
             }
@@ -2218,6 +2221,19 @@ struct TerminalView: View {
         terminalUIFontSize = 12.0
     }
 
+    private func handleHardwareCommandShortcut(_ action: HardwareKeyCommandAction) {
+        switch action {
+        case .increaseFontSize:
+            adjustTerminalFontSize(by: 1)
+        case .decreaseFontSize:
+            adjustTerminalFontSize(by: -1)
+        case .resetFontSize:
+            resetTerminalFontSize()
+        default:
+            break
+        }
+    }
+
     private func shouldUseSecureInput(for session: Session) -> Bool {
         if let override = secureInputOverride { return override }
         return detectsPasswordPrompt(for: session)
@@ -2346,6 +2362,7 @@ struct DirectTerminalInputCaptureView: NSViewRepresentable {
     let isEnabled: Bool
     let sessionID: UUID
     let keyEncoderOptions: () -> KeyEncoderOptions
+    var onCommandShortcut: ((HardwareKeyCommandAction) -> Void)?
     let onSendSequence: (UUID, String) -> Void
 
     func makeNSView(context: Context) -> DirectTerminalInputNSView {
@@ -2353,6 +2370,7 @@ struct DirectTerminalInputCaptureView: NSViewRepresentable {
         view.isEnabled = isEnabled
         view.sessionID = sessionID
         view.keyEncoderOptions = keyEncoderOptions
+        view.onCommandShortcut = onCommandShortcut
         view.onSendSequence = onSendSequence
         view.armForKeyboardInputIfNeeded()
         return view
@@ -2362,6 +2380,7 @@ struct DirectTerminalInputCaptureView: NSViewRepresentable {
         nsView.isEnabled = isEnabled
         nsView.sessionID = sessionID
         nsView.keyEncoderOptions = keyEncoderOptions
+        nsView.onCommandShortcut = onCommandShortcut
         nsView.onSendSequence = onSendSequence
         nsView.armForKeyboardInputIfNeeded()
     }
@@ -2371,6 +2390,7 @@ final class DirectTerminalInputNSView: NSView {
     var isEnabled = false
     var sessionID: UUID?
     var keyEncoderOptions: (() -> KeyEncoderOptions)?
+    var onCommandShortcut: ((HardwareKeyCommandAction) -> Void)?
     var onSendSequence: ((UUID, String) -> Void)?
 
     override var acceptsFirstResponder: Bool {
@@ -2387,6 +2407,13 @@ final class DirectTerminalInputNSView: NSView {
             guard let self, self.isEnabled else { return }
             _ = self.window?.makeFirstResponder(self)
         }
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if handleCommandShortcut(event) {
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
     }
 
     override func keyDown(with event: NSEvent) {
@@ -2498,6 +2525,57 @@ final class DirectTerminalInputNSView: NSView {
         if flags.contains(.option) { result.insert(.alt) }
         if flags.contains(.control) { result.insert(.ctrl) }
         return result
+    }
+
+    // MARK: - Command Shortcuts
+
+    private func handleCommandShortcut(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection([.shift, .control, .option, .command])
+        guard flags.contains(.command), !flags.contains(.control), !flags.contains(.option) else {
+            return false
+        }
+        guard let onCommandShortcut else {
+            return false
+        }
+
+        // Common keycodes:
+        // 24 = '=' / '+', 27 = '-' / '_', 29 = '0'
+        switch event.keyCode {
+        case 24:
+            onCommandShortcut(.increaseFontSize)
+            return true
+        case 27:
+            onCommandShortcut(.decreaseFontSize)
+            return true
+        case 29:
+            onCommandShortcut(.resetFontSize)
+            return true
+        case 69: // keypad '+'
+            onCommandShortcut(.increaseFontSize)
+            return true
+        case 78: // keypad '-'
+            onCommandShortcut(.decreaseFontSize)
+            return true
+        default:
+            break
+        }
+
+        // Fallback for non-US layouts.
+        let key = event.charactersIgnoringModifiers ?? ""
+        if key == "=" || key == "+" {
+            onCommandShortcut(.increaseFontSize)
+            return true
+        }
+        if key == "-" || key == "_" {
+            onCommandShortcut(.decreaseFontSize)
+            return true
+        }
+        if key == "0" {
+            onCommandShortcut(.resetFontSize)
+            return true
+        }
+
+        return false
     }
 }
 
