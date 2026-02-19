@@ -12,6 +12,7 @@ struct MetalTerminalSessionSurface: View {
     let sessionID: UUID
     let snapshot: GridSnapshot?
     let snapshotNonce: Int
+    let fontSize: Double
     let backgroundOpacityPercent: Double
     let onTap: ((CGPoint) -> Void)?
     var onTerminalResize: ((Int, Int) -> Void)?
@@ -48,6 +49,7 @@ struct MetalTerminalSessionSurface: View {
                 )
                 .onAppear {
                     model.renderer?.isLocalSession = isLocalSession
+                    model.updateFontSize(CGFloat(fontSize))
                     model.apply(snapshot: snapshot)
                     model.setRendererPaused(false)
                     model.updateFPS(isFocused: isFocused)
@@ -62,6 +64,9 @@ struct MetalTerminalSessionSurface: View {
                 }
                 .onChange(of: isFocused) { _, newValue in
                     model.updateFPS(isFocused: newValue)
+                }
+                .onChange(of: fontSize) { _, newValue in
+                    model.updateFontSize(CGFloat(newValue))
                 }
             } else {
                 VStack(alignment: .leading, spacing: 6) {
@@ -160,6 +165,10 @@ final class MetalTerminalSurfaceModel: ObservableObject {
 
     func updateFPS(isFocused: Bool) {
         renderer?.setPreferredFPS(isFocused ? 0 : 30)
+    }
+
+    func updateFontSize(_ size: CGFloat) {
+        renderer?.setFontSize(size)
     }
 
     // MARK: - Selection

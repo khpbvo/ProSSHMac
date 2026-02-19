@@ -1026,6 +1026,15 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         }
     }
 
+    /// Updates the base terminal font size and refreshes renderer metrics.
+    func setFontSize(_ size: CGFloat) {
+        Task { [weak self] in
+            guard let self else { return }
+            await self.fontManager.setFont(size: size)
+            self.handleFontChange()
+        }
+    }
+
     // MARK: - Pixel Alignment Helpers
 
     /// Store the raw (un-aligned) cell dimensions from FontManager so they

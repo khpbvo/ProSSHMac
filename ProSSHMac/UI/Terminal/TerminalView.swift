@@ -1203,6 +1203,7 @@ struct TerminalView: View {
             sessionID: session.id,
             snapshot: snapshot,
             snapshotNonce: snapshotNonce,
+            fontSize: terminalUIFontSize,
             backgroundOpacityPercent: terminalBackgroundOpacityPercent,
             onTap: { _ in
                 focusSessionAndPane(session.id, paneID: paneID)
@@ -1912,6 +1913,21 @@ struct TerminalView: View {
                 openLocalTerminal()
             }
             .keyboardShortcut("t", modifiers: [.command])
+
+            Button("Zoom In") {
+                adjustTerminalFontSize(by: 1)
+            }
+            .keyboardShortcut("+", modifiers: [.command])
+
+            Button("Zoom In (Alt Binding)") {
+                adjustTerminalFontSize(by: 1)
+            }
+            .keyboardShortcut("=", modifiers: [.command])
+
+            Button("Zoom Out") {
+                adjustTerminalFontSize(by: -1)
+            }
+            .keyboardShortcut("-", modifiers: [.command])
 
             Button("Copy") {
                 copyActiveContentToClipboard()
