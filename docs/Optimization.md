@@ -82,25 +82,29 @@ PTY read (LocalShellChannel) → AsyncStream<Data> → SessionManager (MainActor
 
 ### Parser Table
 
-- [ ] **`VTParserTables` uses `Dictionary` lookup per byte** — `VTParserTables.swift:55-58`
+- [x] **`VTParserTables` uses `Dictionary` lookup per byte** — `VTParserTables.swift:55-58`
   `tables[state]` hashes the ParserState key on every single byte of terminal input.
   **Fix:** Replace with a flat 2D array: `transitions[state.rawValue * 256 + byte]`.
   Only 14 states × 256 bytes = 3,584 entries (~7KB). Pure O(1) indexed access, no hashing.
+  **Done:** Flat `ContiguousArray<UInt16>` transition table with O(1) indexed access.
 
-- [ ] **Pack `VTTransition` into `UInt16`** — `VTParserTables.swift`
+- [x] **Pack `VTTransition` into `UInt16`** — `VTParserTables.swift`
   If `ParserAction` and `ParserState` are both `UInt8`-backed enums, pack them into one `UInt16`
   to halve the transition table size and improve cache line utilization.
+  **Done:** Transitions packed as `UInt16` — action in high byte, state in low byte.
 
 ### SGR / CSI Handler Actor Overhead
 
-- [ ] **6 actor hops per SGR sequence** — `SGRHandler.swift:45, 359-364`
+- [x] **6 actor hops per SGR sequence** — `SGRHandler.swift:45, 359-364`
   Reads state with `await grid.sgrState()`, then applies with 5 separate `await grid.set*()`
   calls.
   **Fix:** Add a single `grid.applySGRState(attrs, fg, bg, ulColor, ulStyle)` method. 6 hops → 1.
+  **Done:** `applySGRState()` batches all 5 writes into a single actor hop.
 
-- [ ] **`flatParams` allocates an Array on every CSI dispatch** — `CSIHandler.swift:25-27`
+- [x] **`flatParams` allocates an Array on every CSI dispatch** — `CSIHandler.swift:25-27`
   `params.map { $0.first ?? 0 }` creates a new `[Int]` for every cursor move, color change, etc.
   **Fix:** Access params inline: `params[safe: n]?.first ?? 0`. No allocation needed.
+  **Done:** Inline `param()` helper accesses `params[index].first ?? 0` directly.
 
 - [ ] **All CSI/ESC handlers are `async`** — `CSIHandler.swift`, `ESCHandler.swift`
   Every cursor move, erase, or mode change goes through async/await overhead even though
@@ -131,9 +135,10 @@ PTY read (LocalShellChannel) → AsyncStream<Data> → SessionManager (MainActor
 
 ### InputModeState
 
-- [ ] **`syncFromGrid` does 5 sequential `await` calls** — `InputModeState.swift:79-85`
+- [x] **`syncFromGrid` does 5 sequential `await` calls** — `InputModeState.swift:79-85`
   Five actor hops to read grid state.
   **Fix:** Single `grid.inputModeSnapshot()` returning all five values at once.
+  **Done:** Added `TerminalGrid.inputModeSnapshot()` returning `InputModeSnapshot`. 5 hops → 1.
 
 - [ ] **`InputModeState` is its own actor** — `InputModeState.swift:24`
   CSIHandler calls both `await grid.set*()` and `await inputModeState?.set*()`, doubling hops.
