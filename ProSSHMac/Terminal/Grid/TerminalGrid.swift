@@ -162,6 +162,17 @@ actor TerminalGrid {
     /// Cached snapshot returned during synchronized output (mode 2026).
     private var lastSnapshot: GridSnapshot?
 
+    // MARK: - Pre-allocated Snapshot Buffers
+
+    /// Double-buffered CellInstance storage for snapshot generation.
+    /// Alternating between two buffers ensures the active buffer is uniquely
+    /// owned (ref count 1) by the time we write to it, avoiding copy-on-write.
+    /// At 120fps with 10,000 cells (24 bytes each), this eliminates ~28.8 MB/s
+    /// of allocation churn in steady state.
+    private var snapshotBufferA = ContiguousArray<CellInstance>()
+    private var snapshotBufferB = ContiguousArray<CellInstance>()
+    private var useSnapshotBufferA = true
+
     // MARK: - Initialization
 
     init(columns: Int = TerminalDefaults.columns,
@@ -1062,10 +1073,29 @@ actor TerminalGrid {
         let hasDirtyRange = hasDirtyCells && dirtyRowMin <= dirtyRowMax
         let dirtyMin = dirtyRowMin
         let dirtyMax = dirtyRowMax
+        let totalCells = rows * columns
 
-        var cellInstances = [CellInstance]()
-        cellInstances.reserveCapacity(rows * columns)
+        // Swap the active pre-allocated buffer out to get unique ownership.
+        // With double buffering, the last snapshot sharing this buffer's
+        // storage has been dropped by the renderer, so ref count is 1 and
+        // indexed writes go directly into existing memory — zero allocation.
+        var buffer = ContiguousArray<CellInstance>()
+        if useSnapshotBufferA {
+            swap(&buffer, &snapshotBufferA)
+        } else {
+            swap(&buffer, &snapshotBufferB)
+        }
 
+        // Resize only when grid dimensions change (not every frame).
+        if buffer.count != totalCells {
+            buffer = ContiguousArray(repeating: CellInstance(
+                row: 0, col: 0, glyphIndex: 0, fgColor: 0, bgColor: 0,
+                underlineColor: 0, attributes: 0, flags: 0, underlineStyle: 0
+            ), count: totalCells)
+        }
+
+        // Fill by index — no append overhead (no bounds check + count increment per cell).
+        var idx = 0
         for row in 0..<rows {
             let rowIsDirty = hasDirtyRange && row >= dirtyMin && row <= dirtyMax
             for col in 0..<columns {
@@ -1098,7 +1128,7 @@ actor TerminalGrid {
                 // Pack underline color (0 = use fg)
                 let ulColorPacked = cell.underlineColor.packedRGBA()
 
-                cellInstances.append(CellInstance(
+                buffer[idx] = CellInstance(
                     row: UInt16(row),
                     col: UInt16(col),
                     glyphIndex: codepoint,
@@ -1108,7 +1138,8 @@ actor TerminalGrid {
                     attributes: cell.attributes.rawValue,
                     flags: flags,
                     underlineStyle: cell.underlineStyle.rawValue
-                ))
+                )
+                idx += 1
             }
         }
 
@@ -1121,7 +1152,7 @@ actor TerminalGrid {
         }
 
         let snap = GridSnapshot(
-            cells: cellInstances,
+            cells: buffer,
             dirtyRange: dirtyRange,
             cursorRow: cursor.row,
             cursorCol: cursor.col,
@@ -1130,6 +1161,14 @@ actor TerminalGrid {
             columns: columns,
             rows: rows
         )
+
+        // Store the buffer back for reuse on the next cycle.
+        if useSnapshotBufferA {
+            snapshotBufferA = buffer
+        } else {
+            snapshotBufferB = buffer
+        }
+        useSnapshotBufferA.toggle()
 
         clearDirtyState()
 
@@ -1150,9 +1189,12 @@ actor TerminalGrid {
 
         // Clamp offset to available scrollback
         let clampedOffset = min(scrollOffset, scrollback.count)
+        let totalCells = rows * columns
 
-        var cellInstances = [CellInstance]()
-        cellInstances.reserveCapacity(rows * columns)
+        // Scrollback snapshots are less frequent (only during scroll-back viewing),
+        // so we use a simple ContiguousArray without the double-buffer optimization.
+        var cellInstances = ContiguousArray<CellInstance>()
+        cellInstances.reserveCapacity(totalCells)
 
         for displayRow in 0..<rows {
             // Which logical row does this display row map to?

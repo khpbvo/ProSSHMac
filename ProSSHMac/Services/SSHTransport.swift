@@ -87,7 +87,6 @@ enum SSHTransportError: LocalizedError {
 }
 
 protocol SSHShellChannel: AnyObject, Sendable {
-    var output: AsyncStream<String> { get }
     var rawOutput: AsyncStream<Data> { get }
     func send(_ input: String) async throws
     func resizePTY(columns: Int, rows: Int) async throws
@@ -494,46 +493,32 @@ actor MockSSHTransport: SSHTransporting {
 }
 
 actor MockSSHShellChannel: SSHShellChannel {
-    nonisolated let output: AsyncStream<String>
     nonisolated let rawOutput: AsyncStream<Data>
 
-    private var continuation: AsyncStream<String>.Continuation
     private var rawContinuation: AsyncStream<Data>.Continuation
     private let prompt: String
     private let dateFormatter: DateFormatter
     private var isClosed = false
 
     init(host: Host, details: SSHConnectionDetails, pty: PTYConfiguration) {
-        var capturedContinuation: AsyncStream<String>.Continuation?
-        self.output = AsyncStream<String> { continuation in
-            capturedContinuation = continuation
-        }
         var capturedRawContinuation: AsyncStream<Data>.Continuation?
         self.rawOutput = AsyncStream<Data> { continuation in
             capturedRawContinuation = continuation
-        }
-        guard let continuation = capturedContinuation else {
-            fatalError("Failed to create shell continuation")
         }
         guard let rawContinuation = capturedRawContinuation else {
             fatalError("Failed to create shell raw continuation")
         }
 
-        self.continuation = continuation
         self.rawContinuation = rawContinuation
         self.prompt = "\(host.username)@\(host.hostname) $"
         self.dateFormatter = DateFormatter()
         self.dateFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
 
-        continuation.yield("Connected with \(details.negotiatedCipher) over \(details.negotiatedKEX)")
         rawContinuation.yield(Data("Connected with \(details.negotiatedCipher) over \(details.negotiatedKEX)".utf8))
-        continuation.yield("PTY allocated: \(pty.terminalType) \(pty.columns)x\(pty.rows)")
         rawContinuation.yield(Data("PTY allocated: \(pty.terminalType) \(pty.columns)x\(pty.rows)".utf8))
         if let advisory = details.securityAdvisory {
-            continuation.yield("SECURITY WARNING: \(advisory)")
             rawContinuation.yield(Data("SECURITY WARNING: \(advisory)".utf8))
         }
-        continuation.yield(prompt)
         rawContinuation.yield(Data(prompt.utf8))
     }
 
@@ -600,12 +585,10 @@ actor MockSSHShellChannel: SSHShellChannel {
         }
 
         isClosed = true
-        continuation.finish()
         rawContinuation.finish()
     }
 
     private func yield(_ text: String) {
-        continuation.yield(text)
         rawContinuation.yield(Data(text.utf8))
     }
 }
@@ -1404,25 +1387,19 @@ actor LibSSHTransport: SSHTransporting {
 }
 
 nonisolated actor LibSSHShellChannel: SSHShellChannel {
-    nonisolated let output: AsyncStream<String>
     nonisolated let rawOutput: AsyncStream<Data>
 
     private nonisolated(unsafe) let handle: OpaquePointer
-    private nonisolated(unsafe) var continuation: AsyncStream<String>.Continuation
     private nonisolated(unsafe) var rawContinuation: AsyncStream<Data>.Continuation
     private var readerTask: Task<Void, Never>?
     private var isClosed = false
 
     private init(
         handle: OpaquePointer,
-        continuation: AsyncStream<String>.Continuation,
-        output: AsyncStream<String>,
         rawContinuation: AsyncStream<Data>.Continuation,
         rawOutput: AsyncStream<Data>
     ) {
         self.handle = handle
-        self.continuation = continuation
-        self.output = output
         self.rawContinuation = rawContinuation
         self.rawOutput = rawOutput
     }
@@ -1432,16 +1409,9 @@ nonisolated actor LibSSHShellChannel: SSHShellChannel {
         pty: PTYConfiguration,
         enableAgentForwarding: Bool
     ) async throws -> LibSSHShellChannel {
-        var capturedContinuation: AsyncStream<String>.Continuation?
-        let output = AsyncStream<String> { continuation in
-            capturedContinuation = continuation
-        }
         var capturedRawContinuation: AsyncStream<Data>.Continuation?
         let rawOutput = AsyncStream<Data> { continuation in
             capturedRawContinuation = continuation
-        }
-        guard let continuation = capturedContinuation else {
-            throw SSHTransportError.transportFailure(message: "Failed to initialize shell output stream.")
         }
         guard let rawContinuation = capturedRawContinuation else {
             throw SSHTransportError.transportFailure(message: "Failed to initialize shell raw output stream.")
@@ -1466,8 +1436,6 @@ nonisolated actor LibSSHShellChannel: SSHShellChannel {
 
         let channel = LibSSHShellChannel(
             handle: handle.raw,
-            continuation: continuation,
-            output: output,
             rawContinuation: rawContinuation,
             rawOutput: rawOutput
         )
@@ -1531,7 +1499,6 @@ nonisolated actor LibSSHShellChannel: SSHShellChannel {
         readerTask?.cancel()
         readerTask = nil
         prossh_libssh_channel_close(handle)
-        continuation.finish()
         rawContinuation.finish()
     }
 
@@ -1555,7 +1522,7 @@ nonisolated actor LibSSHShellChannel: SSHShellChannel {
             if readResult != 0 {
                 let message = errorBuffer.asString
                 if !message.isEmpty {
-                    continuation.yield("I/O error: \(message)")
+                    rawContinuation.yield(Data("I/O error: \(message)".utf8))
                 }
                 break
             }
@@ -1563,8 +1530,6 @@ nonisolated actor LibSSHShellChannel: SSHShellChannel {
             if bytesRead > 0 {
                 let bytes = buffer.prefix(Int(bytesRead)).map { UInt8(bitPattern: $0) }
                 rawContinuation.yield(Data(bytes))
-                let chunk = String(decoding: bytes, as: UTF8.self)
-                continuation.yield(chunk)
             }
 
             if isEOF {

@@ -27,13 +27,13 @@ Prioritized roadmap based on competitive analysis against Termius, Prompt 3, Gho
 
 **What to fix (summary — full details in Optimization.md):**
 
-- [ ] **Grid COW traps** — `scrollUp()`, `eraseInLine()`, and 6 other methods trigger full copy-on-write array copies on every call. Use `withActiveCells { }` instead
-- [ ] **Bulk byte processing** — `printCharacter()` is called per-byte. Write a dedicated fast path in `printASCIIBytes` that processes entire runs: one `withActiveCells` call, one `markDirty`, inline cursor advance
+- [x] **Grid COW traps** — `scrollUp()`, `eraseInLine()`, and 6 other methods trigger full copy-on-write array copies on every call. Use `withActiveCells { }` instead
+- [x] **Bulk byte processing** — `printCharacter()` is called per-byte. Write a dedicated fast path in `printASCIIBytes` that processes entire runs: one `withActiveCells` call, one `markDirty`, inline cursor advance
 - [ ] **Eliminate Data → Array copy** — `VTParser.feed()` copies every chunk into `Array<UInt8>`. Iterate `Data` directly or use `withUnsafeBytes`
-- [ ] **Array-indexed parser tables** — Replace `Dictionary` lookup per byte with a flat `[UInt16]` array (14 states x 256 bytes = 3,584 entries). Pure O(1)
+- [x] **Array-indexed parser tables** — Replace `Dictionary` lookup per byte with a flat `[UInt16]` array (14 states x 256 bytes = 3,584 entries). Pure O(1)
 - [ ] **Reduce actor boundary overhead** — Parser and grid are always accessed sequentially. Batch post-feed grid queries or merge onto a single actor
-- [ ] **Pre-allocated snapshot buffers** — Reuse `[CellInstance]` between frames instead of allocating 10,000-element arrays at 120fps
-- [ ] **Remove redundant text stream** — `LocalShellChannel` decodes UTF-8 Strings that are never consumed by the parser pipeline
+- [x] **Pre-allocated snapshot buffers** — Reuse `[CellInstance]` between frames instead of allocating 10,000-element arrays at 120fps
+- [x] **Remove redundant text stream** — `LocalShellChannel` decodes UTF-8 Strings that are never consumed by the parser pipeline
 
 **Target:** `dd if=/dev/urandom bs=1024 count=100000 | base64` in under 2 seconds (~89 MB/s throughput).
 

@@ -48,7 +48,7 @@ enum RendererStressHarness {
 
     private static func makeFloodSnapshot(columns: Int, rows: Int, seed: Int) -> GridSnapshot {
         let count = max(1, columns * rows)
-        var cells: [CellInstance] = []
+        var cells = ContiguousArray<CellInstance>()
         cells.reserveCapacity(count)
 
         var state = UInt64(truncatingIfNeeded: seed) &+ 0x9E3779B97F4A7C15

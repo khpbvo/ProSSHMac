@@ -56,7 +56,7 @@ PTY read (LocalShellChannel) → AsyncStream<Data> → SessionManager (MainActor
 
 ### PTY Reader
 
-- [ ] **Redundant text stream** — `LocalShellChannel.swift:264-265`
+- [x] **Redundant text stream** — `LocalShellChannel.swift:264-265`
   ```swift
   let text = String(decoding: accumulated, as: UTF8.self)
   await self?.yieldOutput(data: accumulated, text: text)
@@ -64,6 +64,8 @@ PTY read (LocalShellChannel) → AsyncStream<Data> → SessionManager (MainActor
   The `output: AsyncStream<String>` is **never consumed** by the parser pipeline. This wastes a
   full UTF-8 decode + String allocation on 100% of PTY output.
   **Fix:** Remove the String decoding and `textContinuation.yield` call. Keep only `rawOutput`.
+  **Done:** Removed `output: AsyncStream<String>` from `SSHShellChannel` protocol and all
+  implementors. Eliminated UTF-8 `String(decoding:as:)` in `LibSSHShellChannel.readLoop()`.
 
 ### Actor Isolation Overhead
 
@@ -111,9 +113,11 @@ PTY read (LocalShellChannel) → AsyncStream<Data> → SessionManager (MainActor
 
 ### Snapshot Generation
 
-- [ ] **`snapshot()` allocates a new `[CellInstance]` every frame** — `TerminalGrid.swift:983`
+- [x] **`snapshot()` allocates a new `[CellInstance]` every frame** — `TerminalGrid.swift:983`
   At 125 fps × 10,000 cells × 24 bytes = ~30 MB/s allocation churn.
   **Fix:** Pre-allocate a reusable `[CellInstance]` buffer. Only reallocate on resize.
+  **Done:** Double-buffered `ContiguousArray<CellInstance>` with `swap()` for unique ownership.
+  Indexed writes instead of append. Zero allocation in steady state.
 
 - [ ] **3 `packedRGBA()` calls per cell in `snapshot()`** — `TerminalGrid.swift:1006-1023`
   Each goes through `resolvedRGB()` → switch → `ColorPalette.rgb()`. For `.default`

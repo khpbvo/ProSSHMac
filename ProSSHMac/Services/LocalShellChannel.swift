@@ -17,14 +17,12 @@ actor LocalShellChannel: SSHShellChannel {
     // MARK: - SSHShellChannel conformance
 
     nonisolated let rawOutput: AsyncStream<Data>
-    nonisolated let output: AsyncStream<String>
 
     // MARK: - Internal state
 
     private let masterFD: Int32
     private let childPID: pid_t
     private var rawContinuation: AsyncStream<Data>.Continuation
-    private var textContinuation: AsyncStream<String>.Continuation
     private var readerTask: Task<Void, Never>?
     private var isClosed = false
 
@@ -125,18 +123,13 @@ actor LocalShellChannel: SSHShellChannel {
             _ = fcntl(master, F_SETFL, flags | O_NONBLOCK)
         }
 
-        // Create streams
+        // Create raw output stream
         var capturedRawContinuation: AsyncStream<Data>.Continuation?
         let rawStream = AsyncStream<Data> { continuation in
             capturedRawContinuation = continuation
         }
-        var capturedTextContinuation: AsyncStream<String>.Continuation?
-        let textStream = AsyncStream<String> { continuation in
-            capturedTextContinuation = continuation
-        }
 
-        guard let rawCont = capturedRawContinuation,
-              let textCont = capturedTextContinuation else {
+        guard let rawCont = capturedRawContinuation else {
             Darwin.close(master)
             kill(pid, SIGHUP)
             throw LocalShellError.ptyAllocationFailed
@@ -146,9 +139,7 @@ actor LocalShellChannel: SSHShellChannel {
             masterFD: master,
             childPID: pid,
             rawContinuation: rawCont,
-            textContinuation: textCont,
-            rawOutput: rawStream,
-            output: textStream
+            rawOutput: rawStream
         )
 
         await channel.startReaderTask()
@@ -166,16 +157,12 @@ actor LocalShellChannel: SSHShellChannel {
         masterFD: Int32,
         childPID: pid_t,
         rawContinuation: AsyncStream<Data>.Continuation,
-        textContinuation: AsyncStream<String>.Continuation,
-        rawOutput: AsyncStream<Data>,
-        output: AsyncStream<String>
+        rawOutput: AsyncStream<Data>
     ) {
         self.masterFD = masterFD
         self.childPID = childPID
         self.rawContinuation = rawContinuation
-        self.textContinuation = textContinuation
         self.rawOutput = rawOutput
-        self.output = output
     }
 
     // MARK: - SSHShellChannel methods
@@ -222,7 +209,6 @@ actor LocalShellChannel: SSHShellChannel {
 
         Darwin.close(masterFD)
         rawContinuation.finish()
-        textContinuation.finish()
     }
 
     // MARK: - Reader
@@ -307,16 +293,10 @@ actor LocalShellChannel: SSHShellChannel {
 
     private func yieldOutput(data: Data) {
         rawContinuation.yield(data)
-        // Note: textContinuation is still yielded for protocol conformance
-        // (SSHShellChannel requires `output: AsyncStream<String>`), but
-        // the expensive UTF-8 decode is skipped. Yield an empty string
-        // to keep the stream technically alive for any future consumers.
-        textContinuation.yield("")
     }
 
     private func finishStreams() {
         rawContinuation.finish()
-        textContinuation.finish()
     }
 
     // MARK: - Environment

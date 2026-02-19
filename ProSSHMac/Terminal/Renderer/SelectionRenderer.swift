@@ -70,12 +70,12 @@ final class SelectionRenderer {
         guard var selection else {
             if needsFullRefresh {
                 needsFullRefresh = false
+                var cleared = snapshot.cells
+                for i in cleared.indices {
+                    cleared[i].flags &= ~CellInstance.flagSelected
+                }
                 return GridSnapshot(
-                    cells: snapshot.cells.map { cell in
-                        var c = cell
-                        c.flags &= ~CellInstance.flagSelected
-                        return c
-                    },
+                    cells: cleared,
                     dirtyRange: nil,
                     cursorRow: snapshot.cursorRow,
                     cursorCol: snapshot.cursorCol,

@@ -51,7 +51,8 @@ nonisolated struct CellInstance: Sendable {
 /// Produced by the TerminalGrid actor, consumed by the Metal renderer on @MainActor.
 nonisolated struct GridSnapshot: Sendable {
     /// Flattened cell data ready for GPU upload. Row-major order.
-    let cells: [CellInstance]
+    /// Uses ContiguousArray for cache-friendly iteration and zero NSArray bridging.
+    let cells: ContiguousArray<CellInstance>
 
     /// If non-nil, only this range of cells changed since the last snapshot.
     /// The renderer can do a partial MTLBuffer update for efficiency.
