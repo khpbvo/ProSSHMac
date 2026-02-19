@@ -630,6 +630,13 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     ///
     /// - Parameter view: The MTKView requesting a draw.
     func draw(in view: MTKView) {
+        if usesNativeRefreshRate {
+            let targetFPS = max(60, currentScreenMaximumFPS())
+            if view.preferredFramesPerSecond != targetFPS {
+                view.preferredFramesPerSecond = targetFPS
+            }
+        }
+
         // Wait on in-flight semaphore before reusing cell buffers.
         _ = inflightSemaphore.wait(timeout: .distantFuture)
 
@@ -962,11 +969,11 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     /// Pass 0 to follow the current screen's native refresh rate.
     func setPreferredFPS(_ fps: Int) {
         guard let view = configuredMTKView else { return }
-        let nativeFPS = max(30, currentScreenMaximumFPS())
         usesNativeRefreshRate = fps <= 0
         if usesNativeRefreshRate {
-            view.preferredFramesPerSecond = nativeFPS
+            view.preferredFramesPerSecond = max(60, currentScreenMaximumFPS())
         } else {
+            let nativeFPS = max(30, currentScreenMaximumFPS())
             view.preferredFramesPerSecond = min(max(1, fps), nativeFPS)
         }
     }
