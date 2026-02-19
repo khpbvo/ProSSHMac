@@ -55,12 +55,15 @@ final class SessionManager: ObservableObject {
     private let networkMonitorQueue = DispatchQueue(label: "prosshv2.network.monitor")
     private var isNetworkReachable = true
     private var pendingResizeTasks: [UUID: Task<Void, Never>] = [:]
+    /// Per-session coalesced snapshot publish task (max one publish per frame interval).
+    private var pendingSnapshotPublishTasksBySessionID: [UUID: Task<Void, Never>] = [:]
     /// Per-session scroll offset (0 = live view, >0 = scrolled back N lines).
     private var scrollOffsetBySessionID: [UUID: Int] = [:]
     /// Throttles expensive visible-text extraction/publishing during heavy output.
     private var lastShellBufferPublishAtBySessionID: [UUID: Date] = [:]
     private var keepaliveTask: Task<Void, Never>?
     private let shellBufferPublishInterval: TimeInterval = 1.0 / 30.0
+    private let snapshotPublishInterval: Duration = .milliseconds(8)
 
     private var keepaliveEnabled: Bool {
         UserDefaults.standard.bool(forKey: "ssh.keepalive.enabled")
@@ -886,8 +889,11 @@ final class SessionManager: ObservableObject {
                 lastActivityBySessionID[sessionID] = .now
                 bytesReceivedBySessionID[sessionID, default: 0] += Int64(chunk.count)
 
-                // Always record raw output regardless of render state.
-                sessionRecorder.recordOutput(sessionID: sessionID, text: String(decoding: chunk, as: UTF8.self))
+                // Only decode output text when recording is active.
+                // This avoids large per-chunk UTF-8 decode overhead during bulk output.
+                if sessionRecorder.isRecording(sessionID: sessionID) {
+                    sessionRecorder.recordOutput(sessionID: sessionID, text: String(decoding: chunk, as: UTF8.self))
+                }
 
                 // When the terminal is in synchronized output mode (DECSET 2026),
                 // the application has signaled that a batch update is in progress.
@@ -901,8 +907,13 @@ final class SessionManager: ObservableObject {
                 // and stale content ("ghost characters") persists on screen.
                 if let syncExitSnap = await grid.consumeSyncExitSnapshot() {
                     scrollOffsetBySessionID[sessionID] = 0
-                    gridSnapshotsBySessionID[sessionID] = syncExitSnap
-                    gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
+                    cancelPendingSnapshotPublish(for: sessionID)
+                    await publishGridState(
+                        for: sessionID,
+                        grid: grid,
+                        modeState: modeState,
+                        snapshotOverride: syncExitSnap
+                    )
                 }
 
                 let inSyncMode = await grid.synchronizedOutput
@@ -911,48 +922,27 @@ final class SessionManager: ObservableObject {
                 // Auto-reset scroll offset when new output arrives.
                 scrollOffsetBySessionID[sessionID] = 0
 
-                let snapshot = await grid.snapshot()
-                gridSnapshotsBySessionID[sessionID] = snapshot
-                gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
-
-                // Derive text lines from grid for fallback view, search, and password detection.
-                if shouldPublishShellBuffer(for: sessionID) {
-                    shellBuffers[sessionID] = await grid.visibleText()
-                }
-
-                // F.8: Propagate bell events from VTParser → grid → UI.
-                let bellCount = await grid.consumeBellCount()
-                if bellCount > 0 {
-                    bellEventNonceBySessionID[sessionID, default: 0] += bellCount
-                }
-
-                // F.5: Propagate input mode changes to published snapshots.
-                if let modeState {
-                    inputModeSnapshotsBySessionID[sessionID] = await modeState.snapshot()
-                }
-
-                // F.7: Propagate window title changes to published state.
-                let title = await grid.windowTitle
-                if !title.isEmpty {
-                    windowTitleBySessionID[sessionID] = title
-                }
-
-                // Propagate working directory from OSC 7.
-                let cwd = await grid.workingDirectory
-                if !cwd.isEmpty {
-                    workingDirectoryBySessionID[sessionID] = cwd
-                }
+                // Frame-coalesced publish: parse every chunk immediately,
+                // but publish at most once per display interval.
+                scheduleCoalescedGridPublish(
+                    for: sessionID,
+                    grid: grid,
+                    modeState: modeState
+                )
             }
+
+            await flushPendingSnapshotPublishIfNeeded(
+                for: sessionID,
+                grid: grid,
+                modeState: modeState
+            )
 
             // Stream ended — force-exit alternate buffer if the program
             // crashed or exited without sending ESC[?1049l. This prevents
             // alternate screen content from leaking into the primary buffer.
             if await grid.usingAlternateBuffer {
                 await grid.disableAlternateBuffer()
-                let snapshot = await grid.snapshot()
-                gridSnapshotsBySessionID[sessionID] = snapshot
-                gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
-                shellBuffers[sessionID] = await grid.visibleText()
+                await publishGridState(for: sessionID, grid: grid, modeState: modeState)
             }
 
             // Detect disconnection.
@@ -1097,6 +1087,7 @@ final class SessionManager: ObservableObject {
     private func removeSessionArtifacts(sessionID: UUID) {
         parserReaderTasks[sessionID]?.cancel()
         parserReaderTasks.removeValue(forKey: sessionID)
+        cancelPendingSnapshotPublish(for: sessionID)
         shellChannels.removeValue(forKey: sessionID)
         terminalGrids.removeValue(forKey: sessionID)
         vtParsers.removeValue(forKey: sessionID)
@@ -1122,6 +1113,88 @@ final class SessionManager: ObservableObject {
         }
         lastShellBufferPublishAtBySessionID[sessionID] = now
         return true
+    }
+
+    private func scheduleCoalescedGridPublish(
+        for sessionID: UUID,
+        grid: TerminalGrid,
+        modeState: InputModeState?
+    ) {
+        guard pendingSnapshotPublishTasksBySessionID[sessionID] == nil else {
+            return
+        }
+
+        pendingSnapshotPublishTasksBySessionID[sessionID] = Task { @MainActor [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(for: self.snapshotPublishInterval)
+            guard !Task.isCancelled else { return }
+            self.pendingSnapshotPublishTasksBySessionID.removeValue(forKey: sessionID)
+            await self.publishGridState(for: sessionID, grid: grid, modeState: modeState)
+        }
+    }
+
+    private func flushPendingSnapshotPublishIfNeeded(
+        for sessionID: UUID,
+        grid: TerminalGrid,
+        modeState: InputModeState?
+    ) async {
+        guard pendingSnapshotPublishTasksBySessionID[sessionID] != nil else {
+            return
+        }
+        cancelPendingSnapshotPublish(for: sessionID)
+        await publishGridState(for: sessionID, grid: grid, modeState: modeState)
+    }
+
+    private func cancelPendingSnapshotPublish(for sessionID: UUID) {
+        pendingSnapshotPublishTasksBySessionID[sessionID]?.cancel()
+        pendingSnapshotPublishTasksBySessionID.removeValue(forKey: sessionID)
+    }
+
+    private func publishGridState(
+        for sessionID: UUID,
+        grid: TerminalGrid,
+        modeState: InputModeState?,
+        snapshotOverride: GridSnapshot? = nil
+    ) async {
+        // Session may have been torn down while a scheduled publish was pending.
+        guard terminalGrids[sessionID] != nil else { return }
+
+        let snapshot: GridSnapshot
+        if let snapshotOverride {
+            snapshot = snapshotOverride
+        } else {
+            snapshot = await grid.snapshot()
+        }
+        gridSnapshotsBySessionID[sessionID] = snapshot
+        gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
+
+        // Derive text lines from grid for fallback view, search, and password detection.
+        if shouldPublishShellBuffer(for: sessionID) {
+            shellBuffers[sessionID] = await grid.visibleText()
+        }
+
+        // F.8: Propagate bell events from VTParser → grid → UI.
+        let bellCount = await grid.consumeBellCount()
+        if bellCount > 0 {
+            bellEventNonceBySessionID[sessionID, default: 0] += bellCount
+        }
+
+        // F.5: Propagate input mode changes to published snapshots.
+        if let modeState {
+            inputModeSnapshotsBySessionID[sessionID] = await modeState.snapshot()
+        }
+
+        // F.7: Propagate window title changes to published state.
+        let title = await grid.windowTitle
+        if !title.isEmpty {
+            windowTitleBySessionID[sessionID] = title
+        }
+
+        // Propagate working directory from OSC 7.
+        let cwd = await grid.workingDirectory
+        if !cwd.isEmpty {
+            workingDirectoryBySessionID[sessionID] = cwd
+        }
     }
 
     // MARK: - SSH Keepalive

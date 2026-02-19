@@ -149,8 +149,24 @@ actor VTParser {
         while feedQueueHead < feedQueue.count {
             let next = feedQueue[feedQueueHead]
             feedQueueHead += 1
-            for byte in next {
+            let bytes = Array(next)
+            var index = 0
+
+            while index < bytes.count {
+                let byte = bytes[index]
+
+                if shouldFastPathGroundTextByte(byte) {
+                    let start = index
+                    index += 1
+                    while index < bytes.count, shouldFastPathGroundTextByte(bytes[index]) {
+                        index += 1
+                    }
+                    await grid.processGroundTextBytes(Array(bytes[start..<index]))
+                    continue
+                }
+
                 await processByte(byte)
+                index += 1
             }
 
             // Compact occasionally so long bursts don't retain a large head offset.
@@ -160,6 +176,18 @@ actor VTParser {
             }
         }
         return true
+    }
+
+    /// Fast-path condition for ground-state text bytes that can be
+    /// processed in bulk without changing parser state.
+    private func shouldFastPathGroundTextByte(_ byte: UInt8) -> Bool {
+        state == .ground &&
+        utf8Remaining == 0 &&
+        (
+            (byte >= 0x20 && byte <= 0x7E) || // printable ASCII
+            byte == 0x0A ||                   // LF
+            byte == 0x0D                      // CR
+        )
     }
 
     /// Feed a single byte array into the parser.

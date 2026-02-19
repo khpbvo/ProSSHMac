@@ -17,6 +17,11 @@ actor TerminalGrid {
         String(UnicodeScalar($0)!)
     }
 
+    /// Reuse ASCII Characters for parser fast-path bulk printing.
+    private static let asciiCharacterCache: [Character] = (0..<128).map {
+        Character(UnicodeScalar($0)!)
+    }
+
     // MARK: - Dimensions
 
     private(set) var columns: Int
@@ -361,6 +366,74 @@ actor TerminalGrid {
         for _ in 0..<max(n, 1) {
             printCharacter(ch)
         }
+    }
+
+    /// Print a run of printable ASCII bytes in one actor call.
+    /// This avoids per-byte parser->grid actor hops in high-throughput output.
+    func printASCIIBytes(_ bytes: [UInt8]) {
+        guard !bytes.isEmpty else { return }
+
+        let charset: Charset = (activeCharset == 1) ? g1Charset : g0Charset
+
+        for byte in bytes {
+            guard byte < 128 else { continue }
+
+            let ch: Character
+            switch charset {
+            case .ascii:
+                ch = Self.asciiCharacterCache[Int(byte)]
+            case .ukNational:
+                ch = (byte == 0x23) ? "£" : Self.asciiCharacterCache[Int(byte)]
+            case .decSpecialGraphics:
+                if (0x60...0x7E).contains(byte),
+                   let mapped = DECSpecialGraphics.mapCharacter(byte) {
+                    ch = mapped
+                } else {
+                    ch = Self.asciiCharacterCache[Int(byte)]
+                }
+            }
+
+            printCharacter(ch)
+        }
+    }
+
+    /// Process plain ground-state text bytes in bulk.
+    /// Supports printable ASCII plus CR/LF controls.
+    func processGroundTextBytes(_ bytes: [UInt8]) {
+        guard !bytes.isEmpty else { return }
+
+        var runStart: Int?
+
+        func flushPrintableRun(upTo end: Int) {
+            guard let start = runStart, start < end else {
+                runStart = nil
+                return
+            }
+            printASCIIBytes(Array(bytes[start..<end]))
+            runStart = nil
+        }
+
+        for (idx, byte) in bytes.enumerated() {
+            if (0x20...0x7E).contains(byte) {
+                if runStart == nil {
+                    runStart = idx
+                }
+                continue
+            }
+
+            flushPrintableRun(upTo: idx)
+
+            switch byte {
+            case 0x0A: // LF
+                lineFeed()
+            case 0x0D: // CR
+                carriageReturn()
+            default:
+                break
+            }
+        }
+
+        flushPrintableRun(upTo: bytes.count)
     }
 
     /// Perform the actual line wrap: CR + LF, scrolling if needed.

@@ -290,8 +290,8 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
             cellHeight: Int(ceil(initialCellHeight))
         )
 
-        // Create glyph cache (4096 entries, covers ASCII + plenty of extended Unicode).
-        self.glyphCache = GlyphCache(maxCapacity: 4096)
+        // Create glyph cache (larger capacity reduces churn for CJK/emoji-heavy output).
+        self.glyphCache = GlyphCache(maxCapacity: 8192)
 
         // Create cell buffer (lazy allocation on first update).
         self.cellBuffer = CellBuffer(device: device)

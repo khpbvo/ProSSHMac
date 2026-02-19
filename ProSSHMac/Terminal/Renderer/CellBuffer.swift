@@ -168,12 +168,19 @@ final class CellBuffer {
         guard let buffer = writeBuffer else { return }
         let dst = buffer.contents().bindMemory(to: CellInstance.self, capacity: capacity)
 
-        // Metal stability mode: always upload the full cell array.
-        // This avoids sparse-update corruption while renderer stabilization
-        // work is in progress.
         let updateRange: Range<Int>
-        _ = forceFullUpdate
-        updateRange = 0..<newCellCount
+        if forceFullUpdate {
+            updateRange = 0..<newCellCount
+        } else if let dirtyRange = snapshot.dirtyRange {
+            let lower = max(0, min(dirtyRange.lowerBound, newCellCount))
+            let upper = max(lower, min(dirtyRange.upperBound, newCellCount))
+            updateRange = lower..<upper
+        } else {
+            // Nil dirty range means "unknown/whole snapshot changed".
+            updateRange = 0..<newCellCount
+        }
+
+        guard !updateRange.isEmpty else { return }
 
         // Process each cell in the update range.
         for i in updateRange {
