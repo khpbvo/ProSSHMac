@@ -17,15 +17,6 @@ import Foundation
 /// All methods are static and take the grid + parsed parameters.
 nonisolated enum CSIHandler {
 
-    // MARK: - Parameter Compatibility
-
-    /// Flatten subparameter groups into a simple [Int] array by taking
-    /// the first element of each group. This preserves backward compatibility
-    /// for all CSI sequences that don't use subparameters.
-    private static func flatParams(_ params: [[Int]]) -> [Int] {
-        params.map { $0.first ?? 0 }
-    }
-
     // MARK: - Main Dispatch
 
     /// Dispatch a CSI sequence by its final byte.
@@ -40,7 +31,6 @@ nonisolated enum CSIHandler {
         inputModeState: InputModeState? = nil
     ) async {
         let isPrivate = privateMarker == ByteRange.questionMark
-        let flat = flatParams(params)
 
         // DECRQM: CSI ? Ps $ p — Request Mode (DEC private).
         // Must be checked before dispatchPrivateMode because that path
@@ -50,7 +40,7 @@ nonisolated enum CSIHandler {
         if isPrivate && !intermediates.isEmpty {
             if intermediates.first == 0x24 && byte == 0x70 {
                 await handleDECRQM(
-                    params: flat,
+                    params: params,
                     grid: grid,
                     responseHandler: responseHandler
                 )
@@ -63,7 +53,7 @@ nonisolated enum CSIHandler {
         if isPrivate {
             await dispatchPrivateMode(
                 byte: byte,
-                params: flat,
+                params: params,
                 grid: grid,
                 inputModeState: inputModeState
             )
@@ -74,7 +64,7 @@ nonisolated enum CSIHandler {
         // Applications like Claude Code, vim, and tmux query this to detect
         // terminal capabilities.
         if privateMarker == ByteRange.greaterThan && byte == 0x63 {
-            let p0 = param(flat, 0, default: 0, raw: true)
+            let p0 = param(params, 0, default: 0, raw: true)
             if p0 == 0 {
                 await responseHandler?(DeviceAttributes.secondaryResponse)
             }
@@ -94,7 +84,7 @@ nonisolated enum CSIHandler {
         if !intermediates.isEmpty {
             await dispatchWithIntermediate(
                 byte: byte,
-                params: flat,
+                params: params,
                 intermediates: intermediates,
                 grid: grid,
                 inputModeState: inputModeState
@@ -107,7 +97,7 @@ nonisolated enum CSIHandler {
             await SGRHandler.handle(params: params, grid: grid)
         } else {
             await dispatchStandard(
-                byte: byte, params: flat, grid: grid,
+                byte: byte, params: params, grid: grid,
                 responseHandler: responseHandler
             )
         }
@@ -117,7 +107,7 @@ nonisolated enum CSIHandler {
 
     private static func dispatchStandard(
         byte: UInt8,
-        params: [Int],
+        params: [[Int]],
         grid: TerminalGrid,
         responseHandler: (([UInt8]) async -> Void)?
     ) async {
@@ -242,24 +232,24 @@ nonisolated enum CSIHandler {
     /// Dispatch CSI ? sequences (DECSET/DECRST).
     private static func dispatchPrivateMode(
         byte: UInt8,
-        params: [Int],
+        params: [[Int]],
         grid: TerminalGrid,
         inputModeState: InputModeState?
     ) async {
         switch byte {
         case 0x68: // CSI ? h — DECSET
-            for p in params {
+            for group in params {
                 await setPrivateMode(
-                    p,
+                    group.first ?? 0,
                     enabled: true,
                     grid: grid,
                     inputModeState: inputModeState
                 )
             }
         case 0x6C: // CSI ? l — DECRST
-            for p in params {
+            for group in params {
                 await setPrivateMode(
-                    p,
+                    group.first ?? 0,
                     enabled: false,
                     grid: grid,
                     inputModeState: inputModeState
@@ -335,7 +325,7 @@ nonisolated enum CSIHandler {
     /// Dispatch CSI with intermediate bytes.
     private static func dispatchWithIntermediate(
         byte: UInt8,
-        params: [Int],
+        params: [[Int]],
         intermediates: [UInt8],
         grid: TerminalGrid,
         inputModeState: InputModeState?
@@ -371,7 +361,7 @@ nonisolated enum CSIHandler {
     /// Handle CSI ? Ps $ p — respond with CSI ? Ps ; Pm $ y
     /// where Pm indicates: 0=not recognized, 1=set, 2=reset.
     private static func handleDECRQM(
-        params: [Int],
+        params: [[Int]],
         grid: TerminalGrid,
         responseHandler: (([UInt8]) async -> Void)?
     ) async {
@@ -419,7 +409,7 @@ nonisolated enum CSIHandler {
     // MARK: - A.10.16 DSR Handler
 
     private static func handleDSR(
-        params: [Int],
+        params: [[Int]],
         grid: TerminalGrid,
         responseHandler: (([UInt8]) async -> Void)?
     ) async {
@@ -435,7 +425,7 @@ nonisolated enum CSIHandler {
     // MARK: - A.10.17 DA Handler
 
     private static func handleDA(
-        params: [Int],
+        params: [[Int]],
         responseHandler: (([UInt8]) async -> Void)?
     ) async {
         let p0 = param(params, 0, default: 0, raw: true)
@@ -446,9 +436,9 @@ nonisolated enum CSIHandler {
 
     // MARK: - A.10.18 SM/RM (ANSI Modes)
 
-    private static func handleSetMode(params: [Int], grid: TerminalGrid) async {
-        for p in params {
-            switch p {
+    private static func handleSetMode(params: [[Int]], grid: TerminalGrid) async {
+        for group in params {
+            switch group.first ?? 0 {
             case ANSIMode.IRM:
                 await grid.setInsertMode(true)
             case ANSIMode.LNM:
@@ -459,9 +449,9 @@ nonisolated enum CSIHandler {
         }
     }
 
-    private static func handleResetMode(params: [Int], grid: TerminalGrid) async {
-        for p in params {
-            switch p {
+    private static func handleResetMode(params: [[Int]], grid: TerminalGrid) async {
+        for group in params {
+            switch group.first ?? 0 {
             case ANSIMode.IRM:
                 await grid.setInsertMode(false)
             case ANSIMode.LNM:
@@ -475,13 +465,14 @@ nonisolated enum CSIHandler {
     // MARK: - Parameter Helpers
 
     /// Get parameter at index with a default value.
+    /// Extracts the first element of each subparameter group (inline flatParams).
     /// When raw is false (default), 0 is treated as "not specified" and replaced by defaultValue.
     /// When raw is true, 0 is kept as 0.
     private static func param(
-        _ params: [Int], _ index: Int, default defaultValue: Int, raw: Bool = false
+        _ params: [[Int]], _ index: Int, default defaultValue: Int, raw: Bool = false
     ) -> Int {
         guard index < params.count else { return defaultValue }
-        let v = params[index]
+        let v = params[index].first ?? 0
         if raw { return v }
         return v == 0 ? defaultValue : v
     }

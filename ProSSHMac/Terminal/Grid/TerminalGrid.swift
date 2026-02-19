@@ -368,60 +368,148 @@ actor TerminalGrid {
         }
     }
 
-    /// Print a run of printable ASCII bytes in one actor call.
-    /// This avoids per-byte parser->grid actor hops in high-throughput output.
-    func printASCIIBytes(_ bytes: [UInt8]) {
-        guard !bytes.isEmpty else { return }
+    /// Print a run of printable ASCII bytes using a bulk fast path.
+    /// Calls `withActiveCells` once for the entire run, skips wide-character
+    /// checks (ASCII is never wide), and calls `markDirty` once per affected
+    /// row range. This avoids per-character overhead in high-throughput output.
+    /// Accepts a ContiguousArray + range to avoid copies from VTParser.
+    private func printASCIIBytesBulk(_ bytes: ContiguousArray<UInt8>, range: Range<Int>) {
+        guard !range.isEmpty else { return }
 
         let charset: Charset = (activeCharset == 1) ? g1Charset : g0Charset
+        let needsCharsetMapping = charset != .ascii
 
-        for byte in bytes {
-            guard byte < 128 else { continue }
+        withActiveCells { buf in
+            var dirtyRowLo = Int.max
+            var dirtyRowHi = -1
 
-            let ch: Character
-            switch charset {
-            case .ascii:
-                ch = Self.asciiCharacterCache[Int(byte)]
-            case .ukNational:
-                ch = (byte == 0x23) ? "£" : Self.asciiCharacterCache[Int(byte)]
-            case .decSpecialGraphics:
-                if (0x60...0x7E).contains(byte),
-                   let mapped = DECSpecialGraphics.mapCharacter(byte) {
-                    ch = mapped
+            for i in range {
+                let byte = bytes[i]
+                guard byte >= 0x20 && byte <= 0x7E else { continue }
+
+                // Handle pending wrap
+                if cursor.pendingWrap {
+                    // Mark the current line as wrapped
+                    let lastCol = columns - 1
+                    var lastCell = buf[cursor.row][lastCol]
+                    lastCell.attributes.insert(.wrapped)
+                    lastCell.isDirty = true
+                    buf[cursor.row][lastCol] = lastCell
+
+                    dirtyRowLo = min(dirtyRowLo, cursor.row)
+                    dirtyRowHi = max(dirtyRowHi, cursor.row)
+
+                    cursor.col = 0
+                    cursor.pendingWrap = false
+
+                    if cursor.row == scrollBottom {
+                        // Inline scrollUp(lines: 1)
+                        if !usingAlternateBuffer {
+                            let topRow = buf[scrollTop]
+                            let isWrapped = topRow.last.map { $0.attributes.contains(.wrapped) } ?? false
+                            scrollback.push(cells: topRow, isWrapped: isWrapped)
+                        }
+                        for row in scrollTop..<scrollBottom {
+                            buf[row] = buf[row + 1]
+                        }
+                        buf[scrollBottom] = makeBlankRow()
+                        dirtyRowLo = min(dirtyRowLo, scrollTop)
+                        dirtyRowHi = max(dirtyRowHi, scrollBottom)
+                    } else if cursor.row < rows - 1 {
+                        cursor.row += 1
+                    }
+                }
+
+                // Resolve character string — ASCII is never wide
+                let charStr: String
+                if needsCharsetMapping {
+                    switch charset {
+                    case .ascii:
+                        charStr = Self.asciiScalarStringCache[Int(byte)]
+                    case .ukNational:
+                        charStr = (byte == 0x23) ? "£" : Self.asciiScalarStringCache[Int(byte)]
+                    case .decSpecialGraphics:
+                        if (0x60...0x7E).contains(byte),
+                           let mapped = DECSpecialGraphics.mapCharacter(byte) {
+                            charStr = String(mapped)
+                        } else {
+                            charStr = Self.asciiScalarStringCache[Int(byte)]
+                        }
+                    }
                 } else {
-                    ch = Self.asciiCharacterCache[Int(byte)]
+                    charStr = Self.asciiScalarStringCache[Int(byte)]
+                }
+
+                let row = cursor.row
+                let col = cursor.col
+
+                // Insert mode is rare; fall back to per-character path.
+                if insertMode {
+                    let ch = needsCharsetMapping ? charStr.first! : Self.asciiCharacterCache[Int(byte)]
+                    if dirtyRowLo <= dirtyRowHi {
+                        for r in dirtyRowLo...dirtyRowHi { markDirty(row: r) }
+                    }
+                    printCharacter(ch)
+                    return
+                }
+
+                buf[row][col] = TerminalCell(
+                    graphemeCluster: charStr,
+                    fgColor: currentFgColor,
+                    bgColor: currentBgColor,
+                    underlineColor: currentUnderlineColor,
+                    attributes: currentAttributes,
+                    underlineStyle: currentUnderlineStyle,
+                    width: 1,
+                    isDirty: true
+                )
+
+                dirtyRowLo = min(dirtyRowLo, row)
+                dirtyRowHi = max(dirtyRowHi, row)
+
+                lastPrintedChar = Self.asciiCharacterCache[Int(byte)]
+
+                // Advance cursor (ASCII is always width 1)
+                if cursor.col >= columns - 1 {
+                    if autoWrapMode {
+                        cursor.pendingWrap = true
+                    }
+                } else {
+                    cursor.col += 1
                 }
             }
 
-            printCharacter(ch)
+            // Batch mark dirty for all affected rows
+            if dirtyRowLo <= dirtyRowHi {
+                for r in dirtyRowLo...dirtyRowHi {
+                    markDirty(row: r)
+                }
+            }
         }
     }
 
     /// Process plain ground-state text bytes in bulk.
     /// Supports printable ASCII plus CR/LF controls.
-    func processGroundTextBytes(_ bytes: [UInt8]) {
-        guard !bytes.isEmpty else { return }
+    /// Accepts ContiguousArray + range to avoid extra copies from VTParser.
+    func processGroundTextBytes(_ bytes: ContiguousArray<UInt8>, range: Range<Int>) {
+        guard !range.isEmpty else { return }
 
-        var runStart: Int?
+        var runStart: Int = -1
 
-        func flushPrintableRun(upTo end: Int) {
-            guard let start = runStart, start < end else {
-                runStart = nil
-                return
-            }
-            printASCIIBytes(Array(bytes[start..<end]))
-            runStart = nil
-        }
-
-        for (idx, byte) in bytes.enumerated() {
-            if (0x20...0x7E).contains(byte) {
-                if runStart == nil {
+        for idx in range {
+            let byte = bytes[idx]
+            if byte >= 0x20 && byte <= 0x7E {
+                if runStart < 0 {
                     runStart = idx
                 }
                 continue
             }
 
-            flushPrintableRun(upTo: idx)
+            // Flush printable run
+            if runStart >= 0 {
+                printASCIIBytesBulk(bytes, range: runStart..<idx)
+                runStart = -1
+            }
 
             switch byte {
             case 0x0A: // LF
@@ -433,7 +521,10 @@ actor TerminalGrid {
             }
         }
 
-        flushPrintableRun(upTo: bytes.count)
+        // Flush trailing printable run
+        if runStart >= 0 {
+            printASCIIBytesBulk(bytes, range: runStart..<range.upperBound)
+        }
     }
 
     /// Perform the actual line wrap: CR + LF, scrolling if needed.
@@ -466,49 +557,47 @@ actor TerminalGrid {
     /// Top lines go to scrollback (primary buffer only). Bottom lines become blank.
     func scrollUp(lines n: Int) {
         let count = max(n, 1)
-        var buf = cells
 
-        for _ in 0..<count {
-            // Save the top line to scrollback (only for primary buffer)
-            if !usingAlternateBuffer {
-                let topRow = buf[scrollTop]
-                let isWrapped = topRow.last.map { $0.attributes.contains(.wrapped) } ?? false
-                scrollback.push(cells: topRow, isWrapped: isWrapped)
+        withActiveCells { buf in
+            for _ in 0..<count {
+                // Save the top line to scrollback (only for primary buffer)
+                if !usingAlternateBuffer {
+                    let topRow = buf[scrollTop]
+                    let isWrapped = topRow.last.map { $0.attributes.contains(.wrapped) } ?? false
+                    scrollback.push(cells: topRow, isWrapped: isWrapped)
+                }
+
+                // Shift lines up within scroll region
+                for row in scrollTop..<scrollBottom {
+                    buf[row] = buf[row + 1]
+                    markDirty(row: row)
+                }
+
+                // Clear the bottom line
+                buf[scrollBottom] = makeBlankRow()
+                markDirty(row: scrollBottom)
             }
-
-            // Shift lines up within scroll region
-            for row in scrollTop..<scrollBottom {
-                buf[row] = buf[row + 1]
-                markDirty(row: row)
-            }
-
-            // Clear the bottom line
-            buf[scrollBottom] = makeBlankRow()
-            markDirty(row: scrollBottom)
         }
-
-        cells = buf
     }
 
     /// Scroll content down within the scroll region by `n` lines.
     /// Bottom lines are discarded. Top lines become blank.
     func scrollDown(lines n: Int) {
         let count = max(n, 1)
-        var buf = cells
 
-        for _ in 0..<count {
-            // Shift lines down within scroll region
-            for row in stride(from: scrollBottom, through: scrollTop + 1, by: -1) {
-                buf[row] = buf[row - 1]
-                markDirty(row: row)
+        withActiveCells { buf in
+            for _ in 0..<count {
+                // Shift lines down within scroll region
+                for row in stride(from: scrollBottom, through: scrollTop + 1, by: -1) {
+                    buf[row] = buf[row - 1]
+                    markDirty(row: row)
+                }
+
+                // Clear the top line of the scroll region
+                buf[scrollTop] = makeBlankRow()
+                markDirty(row: scrollTop)
             }
-
-            // Clear the top line of the scroll region
-            buf[scrollTop] = makeBlankRow()
-            markDirty(row: scrollTop)
         }
-
-        cells = buf
     }
 
     /// Index (IND / ESC D): move cursor down, scroll if at bottom of scroll region.
@@ -560,28 +649,26 @@ actor TerminalGrid {
     /// - 2: Entire line
     func eraseInLine(mode: Int) {
         let row = cursor.row
-
-        var buf = cells
         let bgColor = currentBgColor
 
-        switch mode {
-        case 0: // Cursor to end
-            for col in cursor.col..<columns {
-                buf[row][col].erase(bgColor: bgColor)
+        withActiveCells { buf in
+            switch mode {
+            case 0: // Cursor to end
+                for col in cursor.col..<columns {
+                    buf[row][col].erase(bgColor: bgColor)
+                }
+            case 1: // Beginning to cursor
+                for col in 0...cursor.col {
+                    buf[row][col].erase(bgColor: bgColor)
+                }
+            case 2: // Entire line
+                for col in 0..<columns {
+                    buf[row][col].erase(bgColor: bgColor)
+                }
+            default:
+                break
             }
-        case 1: // Beginning to cursor
-            for col in 0...cursor.col {
-                buf[row][col].erase(bgColor: bgColor)
-            }
-        case 2: // Entire line
-            for col in 0..<columns {
-                buf[row][col].erase(bgColor: bgColor)
-            }
-        default:
-            break
         }
-
-        cells = buf
         markDirty(row: row)
     }
 
@@ -593,74 +680,72 @@ actor TerminalGrid {
     /// - 2: Entire screen
     /// - 3: Entire screen + scrollback
     func eraseInDisplay(mode: Int) {
-        var buf = cells
         let bgColor = currentBgColor
 
-        switch mode {
-        case 0: // Cursor to end
-            // Rest of current line
-            for col in cursor.col..<columns {
-                buf[cursor.row][col].erase(bgColor: bgColor)
-            }
-            markDirty(row: cursor.row)
-            // All lines below
-            for row in (cursor.row + 1)..<rows {
-                for col in 0..<columns {
-                    buf[row][col].erase(bgColor: bgColor)
+        withActiveCells { buf in
+            switch mode {
+            case 0: // Cursor to end
+                // Rest of current line
+                for col in cursor.col..<columns {
+                    buf[cursor.row][col].erase(bgColor: bgColor)
                 }
-                markDirty(row: row)
-            }
-
-        case 1: // Beginning to cursor
-            // All lines above
-            for row in 0..<cursor.row {
-                for col in 0..<columns {
-                    buf[row][col].erase(bgColor: bgColor)
+                markDirty(row: cursor.row)
+                // All lines below
+                for row in (cursor.row + 1)..<rows {
+                    for col in 0..<columns {
+                        buf[row][col].erase(bgColor: bgColor)
+                    }
+                    markDirty(row: row)
                 }
-                markDirty(row: row)
-            }
-            // Start of current line to cursor
-            for col in 0...cursor.col {
-                buf[cursor.row][col].erase(bgColor: bgColor)
-            }
-            markDirty(row: cursor.row)
 
-        case 2: // Entire screen
-            for row in 0..<rows {
-                for col in 0..<columns {
-                    buf[row][col].erase(bgColor: bgColor)
+            case 1: // Beginning to cursor
+                // All lines above
+                for row in 0..<cursor.row {
+                    for col in 0..<columns {
+                        buf[row][col].erase(bgColor: bgColor)
+                    }
+                    markDirty(row: row)
                 }
-                markDirty(row: row)
-            }
-
-        case 3: // Entire screen + scrollback
-            for row in 0..<rows {
-                for col in 0..<columns {
-                    buf[row][col].erase(bgColor: bgColor)
+                // Start of current line to cursor
+                for col in 0...cursor.col {
+                    buf[cursor.row][col].erase(bgColor: bgColor)
                 }
-                markDirty(row: row)
-            }
-            scrollback.clear()
+                markDirty(row: cursor.row)
 
-        default:
-            break
+            case 2: // Entire screen
+                for row in 0..<rows {
+                    for col in 0..<columns {
+                        buf[row][col].erase(bgColor: bgColor)
+                    }
+                    markDirty(row: row)
+                }
+
+            case 3: // Entire screen + scrollback
+                for row in 0..<rows {
+                    for col in 0..<columns {
+                        buf[row][col].erase(bgColor: bgColor)
+                    }
+                    markDirty(row: row)
+                }
+                scrollback.clear()
+
+            default:
+                break
+            }
         }
-
-        cells = buf
     }
 
     /// Erase characters at cursor position (ECH — CSI X).
     func eraseCharacters(_ n: Int) {
         let count = max(n, 1)
-        var buf = cells
         let row = cursor.row
         let bgColor = currentBgColor
 
-        for col in cursor.col..<min(cursor.col + count, columns) {
-            buf[row][col].erase(bgColor: bgColor)
+        withActiveCells { buf in
+            for col in cursor.col..<min(cursor.col + count, columns) {
+                buf[row][col].erase(bgColor: bgColor)
+            }
         }
-
-        cells = buf
         markDirty(row: row)
     }
 
@@ -677,40 +762,40 @@ actor TerminalGrid {
     /// Shifts remaining characters left. Blank characters fill from the right.
     func deleteCharacters(_ n: Int) {
         let count = max(n, 1)
-        var buf = cells
         let row = cursor.row
+        let bgColor = currentBgColor
 
-        // Shift left
-        for col in cursor.col..<columns {
-            let srcCol = col + count
-            if srcCol < columns {
-                buf[row][col] = buf[row][srcCol]
-            } else {
-                buf[row][col] = TerminalCell(bgColor: currentBgColor)
+        withActiveCells { buf in
+            // Shift left
+            for col in cursor.col..<columns {
+                let srcCol = col + count
+                if srcCol < columns {
+                    buf[row][col] = buf[row][srcCol]
+                } else {
+                    buf[row][col] = TerminalCell(bgColor: bgColor)
+                }
+                buf[row][col].isDirty = true
             }
-            buf[row][col].isDirty = true
         }
-
-        cells = buf
         markDirty(row: row)
     }
 
     /// Helper: insert blank characters at a specific position in a row.
     private func insertBlanks(count: Int, atRow row: Int, col: Int) {
-        var buf = cells
+        let bgColor = currentBgColor
 
-        // Shift right
-        for c in stride(from: columns - 1, through: col + count, by: -1) {
-            buf[row][c] = buf[row][c - count]
-            buf[row][c].isDirty = true
+        withActiveCells { buf in
+            // Shift right
+            for c in stride(from: columns - 1, through: col + count, by: -1) {
+                buf[row][c] = buf[row][c - count]
+                buf[row][c].isDirty = true
+            }
+
+            // Fill blanks
+            for c in col..<min(col + count, columns) {
+                buf[row][c] = TerminalCell(bgColor: bgColor)
+            }
         }
-
-        // Fill blanks
-        for c in col..<min(col + count, columns) {
-            buf[row][c] = TerminalCell(bgColor: currentBgColor)
-        }
-
-        cells = buf
         markDirty(row: row)
     }
 
@@ -720,22 +805,21 @@ actor TerminalGrid {
     /// Lines within the scroll region shift down; bottom lines are discarded.
     func insertLines(_ n: Int) {
         let count = max(n, 1)
-        var buf = cells
 
         // Only operates within scroll region, starting from cursor row
         let top = max(cursor.row, scrollTop)
 
-        for _ in 0..<count {
-            // Shift lines down
-            for row in stride(from: scrollBottom, through: top + 1, by: -1) {
-                buf[row] = buf[row - 1]
-                markDirty(row: row)
+        withActiveCells { buf in
+            for _ in 0..<count {
+                // Shift lines down
+                for row in stride(from: scrollBottom, through: top + 1, by: -1) {
+                    buf[row] = buf[row - 1]
+                    markDirty(row: row)
+                }
+                buf[top] = makeBlankRow()
+                markDirty(row: top)
             }
-            buf[top] = makeBlankRow()
-            markDirty(row: top)
         }
-
-        cells = buf
         cursor.col = 0
         cursor.pendingWrap = false
     }
@@ -744,21 +828,20 @@ actor TerminalGrid {
     /// Lines within the scroll region shift up; blank lines fill from the bottom.
     func deleteLines(_ n: Int) {
         let count = max(n, 1)
-        var buf = cells
 
         let top = max(cursor.row, scrollTop)
 
-        for _ in 0..<count {
-            // Shift lines up
-            for row in top..<scrollBottom {
-                buf[row] = buf[row + 1]
-                markDirty(row: row)
+        withActiveCells { buf in
+            for _ in 0..<count {
+                // Shift lines up
+                for row in top..<scrollBottom {
+                    buf[row] = buf[row + 1]
+                    markDirty(row: row)
+                }
+                buf[scrollBottom] = makeBlankRow()
+                markDirty(row: scrollBottom)
             }
-            buf[scrollBottom] = makeBlankRow()
-            markDirty(row: scrollBottom)
         }
-
-        cells = buf
         cursor.col = 0
         cursor.pendingWrap = false
     }
@@ -1306,20 +1389,20 @@ actor TerminalGrid {
 
     /// Fill screen with 'E' for alignment test (DECALN — ESC # 8).
     func screenAlignmentPattern() {
-        var buf = cells
-        for row in 0..<rows {
-            for col in 0..<columns {
-                buf[row][col] = TerminalCell(
-                    graphemeCluster: "E",
-                    fgColor: .default,
-                    bgColor: .default,
-                    attributes: [],
-                    width: 1,
-                    isDirty: true
-                )
+        withActiveCells { buf in
+            for row in 0..<rows {
+                for col in 0..<columns {
+                    buf[row][col] = TerminalCell(
+                        graphemeCluster: "E",
+                        fgColor: .default,
+                        bgColor: .default,
+                        attributes: [],
+                        width: 1,
+                        isDirty: true
+                    )
+                }
             }
         }
-        cells = buf
         cursor.moveTo(row: 0, col: 0, gridRows: rows, gridCols: columns)
         markAllDirty()
     }
@@ -1572,6 +1655,15 @@ actor TerminalGrid {
     /// Get the current SGR state (attributes, fg, bg, underline color, underline style).
     func sgrState() -> (attributes: CellAttributes, fg: TerminalColor, bg: TerminalColor, underlineColor: TerminalColor, underlineStyle: UnderlineStyle) {
         (currentAttributes, currentFgColor, currentBgColor, currentUnderlineColor, currentUnderlineStyle)
+    }
+
+    /// Apply a complete SGR state in a single actor hop (replaces 5 separate set* calls).
+    func applySGRState(attributes: CellAttributes, fg: TerminalColor, bg: TerminalColor, underlineColor: TerminalColor, underlineStyle: UnderlineStyle) {
+        currentAttributes = attributes
+        currentFgColor = fg
+        currentBgColor = bg
+        currentUnderlineColor = underlineColor
+        currentUnderlineStyle = underlineStyle
     }
 
     /// Get the current cursor position.

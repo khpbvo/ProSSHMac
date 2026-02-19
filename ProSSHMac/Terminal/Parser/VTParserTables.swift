@@ -29,9 +29,13 @@ nonisolated struct VTParserTables: Sendable {
     /// Singleton instance with all tables generated at first access.
     static let shared = VTParserTables()
 
-    /// 256-entry transition table for each parser state.
-    /// Access: `tables[state][byte]` → `VTTransition`
-    let tables: [ParserState: [VTTransition]]
+    /// Number of parser states (rawValue 0..<stateCount).
+    private static let stateCount = 14
+
+    /// Flat packed transition table: stateCount * 256 entries.
+    /// Each UInt16 packs action (high byte) | nextState (low byte).
+    /// Indexed as: flatTable[state.rawValue * 256 + byte]
+    let flatTable: ContiguousArray<UInt16>
 
     /// All parser states in order.
     private static let allStates: [ParserState] = [
@@ -44,17 +48,26 @@ nonisolated struct VTParserTables: Sendable {
     // MARK: - Initialization (Auto-Generation)
 
     private init() {
-        var result = [ParserState: [VTTransition]]()
+        var flat = ContiguousArray<UInt16>(repeating: 0, count: VTParserTables.stateCount * 256)
         for state in VTParserTables.allStates {
-            result[state] = VTParserTables.generateTable(for: state)
+            let table = VTParserTables.generateTable(for: state)
+            let base = Int(state.rawValue) * 256
+            for byte in 0..<256 {
+                let t = table[byte]
+                flat[base + byte] = UInt16(t.action.rawValue) << 8 | UInt16(t.nextState.rawValue)
+            }
         }
-        self.tables = result
+        self.flatTable = flat
     }
 
     /// Look up the transition for a given state and byte.
-    func transition(state: ParserState, byte: UInt8) -> VTTransition {
-        guard let table = tables[state] else { return .none }
-        return table[Int(byte)]
+    /// Returns action and nextState unpacked from the flat table.
+    @inline(__always)
+    func transition(state: ParserState, byte: UInt8) -> (action: ParserAction, nextState: ParserState) {
+        let packed = flatTable[Int(state.rawValue) &* 256 &+ Int(byte)]
+        let action = ParserAction(rawValue: UInt8(packed >> 8)) ?? .none
+        let nextState = ParserState(rawValue: UInt8(packed & 0xFF)) ?? .ground
+        return (action, nextState)
     }
 
     // MARK: - Table Generation

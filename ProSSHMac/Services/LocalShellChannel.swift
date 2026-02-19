@@ -261,8 +261,7 @@ actor LocalShellChannel: SSHShellChannel {
                         }
                     }
 
-                    let text = String(decoding: accumulated, as: UTF8.self)
-                    await self?.yieldOutput(data: accumulated, text: text)
+                    await self?.yieldOutput(data: accumulated)
                 } else if bytesRead == 0 {
                     // EOF
                     break
@@ -301,14 +300,18 @@ actor LocalShellChannel: SSHShellChannel {
 
             let exitMessage = "\r\n[Process completed with exit code \(exitCode)]"
             let exitData = Data(exitMessage.utf8)
-            await self?.yieldOutput(data: exitData, text: exitMessage)
+            await self?.yieldOutput(data: exitData)
             await self?.finishStreams()
         }
     }
 
-    private func yieldOutput(data: Data, text: String) {
+    private func yieldOutput(data: Data) {
         rawContinuation.yield(data)
-        textContinuation.yield(text)
+        // Note: textContinuation is still yielded for protocol conformance
+        // (SSHShellChannel requires `output: AsyncStream<String>`), but
+        // the expensive UTF-8 decode is skipped. Yield an empty string
+        // to keep the stream technically alive for any future consumers.
+        textContinuation.yield("")
     }
 
     private func finishStreams() {

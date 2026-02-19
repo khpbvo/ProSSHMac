@@ -149,7 +149,7 @@ actor VTParser {
         while feedQueueHead < feedQueue.count {
             let next = feedQueue[feedQueueHead]
             feedQueueHead += 1
-            let bytes = Array(next)
+            let bytes = ContiguousArray(next)
             var index = 0
 
             while index < bytes.count {
@@ -161,7 +161,8 @@ actor VTParser {
                     while index < bytes.count, shouldFastPathGroundTextByte(bytes[index]) {
                         index += 1
                     }
-                    await grid.processGroundTextBytes(Array(bytes[start..<index]))
+                    // Pass range to avoid second Array copy.
+                    await grid.processGroundTextBytes(bytes, range: start..<index)
                     continue
                 }
 
@@ -304,15 +305,17 @@ actor VTParser {
 
     // MARK: - State Transition Table (Precomputed)
 
-    /// Reference to the precomputed transition tables.
-    private let transitionTables = VTParserTables.shared
+    /// Reference to the precomputed flat transition table.
+    private let transitionTable = VTParserTables.shared.flatTable
 
     /// Look up the transition for a given state and input byte.
-    /// Uses precomputed 256-entry arrays per state for O(1) lookup
-    /// with no branch misprediction.
+    /// Uses a flat packed array for O(1) lookup with no dictionary hashing.
+    @inline(__always)
     private func stateTransition(state: ParserState, byte: UInt8) -> Transition {
-        let vt = transitionTables.transition(state: state, byte: byte)
-        return Transition(vt.action, vt.nextState)
+        let packed = transitionTable[Int(state.rawValue) &* 256 &+ Int(byte)]
+        let action = ParserAction(rawValue: UInt8(packed >> 8)) ?? .none
+        let nextState = ParserState(rawValue: UInt8(packed & 0xFF)) ?? .ground
+        return Transition(action, nextState)
     }
 
     // MARK: - String Terminator Helper

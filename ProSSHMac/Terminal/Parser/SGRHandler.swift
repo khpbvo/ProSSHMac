@@ -354,12 +354,14 @@ nonisolated enum SGRHandler {
 
     // MARK: - Apply to Grid
 
-    /// Write the SGR state back to the grid.
+    /// Write the SGR state back to the grid in a single actor hop.
     private static func apply(_ sgr: SGRState, to grid: TerminalGrid) async {
-        await grid.setCurrentAttributes(sgr.attributes)
-        await grid.setCurrentFgColor(sgr.fg)
-        await grid.setCurrentBgColor(sgr.bg)
-        await grid.setCurrentUnderlineColor(sgr.underlineColor)
-        await grid.setCurrentUnderlineStyle(sgr.underlineStyle)
+        await grid.applySGRState(
+            attributes: sgr.attributes,
+            fg: sgr.fg,
+            bg: sgr.bg,
+            underlineColor: sgr.underlineColor,
+            underlineStyle: sgr.underlineStyle
+        )
     }
 }
