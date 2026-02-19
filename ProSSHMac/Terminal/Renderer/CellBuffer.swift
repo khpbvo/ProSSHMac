@@ -182,6 +182,39 @@ final class CellBuffer {
 
         guard !updateRange.isEmpty else { return }
 
+        // Partial updates with double buffering require a current baseline.
+        // The write buffer can be one frame behind the read buffer; if we apply
+        // only a dirty range directly, stale cells from older frames remain and
+        // can cause old/new frame oscillation when buffers swap.
+        // Copy the current read buffer into the write buffer first so unchanged
+        // cells stay in sync, then apply the dirty delta on top.
+        if !forceFullUpdate, updateRange.count < newCellCount {
+            if let read = readBuffer, read !== buffer {
+                let src = read.contents().bindMemory(to: CellInstance.self, capacity: capacity)
+                dst.update(from: src, count: newCellCount)
+            } else {
+                // No valid baseline; fall back to full upload semantics.
+                for i in 0..<newCellCount {
+                    var cell = snapshot.cells[i]
+                    let isContinuation = isContinuationCell(cell, at: i, in: snapshot)
+                    if isContinuation {
+                        cell.glyphIndex = kNoGlyphIndex
+                        if i > 0 {
+                            let primary = snapshot.cells[i - 1]
+                            cell.fgColor = primary.fgColor
+                            cell.bgColor = primary.bgColor
+                        }
+                    } else if cell.glyphIndex == 0 {
+                        cell.glyphIndex = kNoGlyphIndex
+                    } else {
+                        cell.glyphIndex = glyphLookup(cell)
+                    }
+                    dst[i] = cell
+                }
+                return
+            }
+        }
+
         // Process each cell in the update range.
         for i in updateRange {
             var cell = snapshot.cells[i]

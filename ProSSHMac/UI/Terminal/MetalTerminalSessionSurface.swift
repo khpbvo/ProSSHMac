@@ -49,7 +49,6 @@ struct MetalTerminalSessionSurface: View {
                 )
                 .onAppear {
                     model.renderer?.isLocalSession = isLocalSession
-                    model.updateFontSize(CGFloat(fontSize))
                     model.apply(snapshot: snapshot)
                     model.setRendererPaused(false)
                     model.updateFPS(isFocused: isFocused)
@@ -122,15 +121,33 @@ final class MetalTerminalSurfaceModel: ObservableObject {
     nonisolated let objectWillChange = ObservableObjectPublisher()
     let renderer: MetalTerminalRenderer?
     private var dragStart: SelectionPoint?
+    private var appliedFontSize: CGFloat
+    private var cachedGradientConfiguration: GradientBackgroundConfiguration
+    private var cachedScannerConfiguration: ScannerEffectConfiguration
+    private var cachedCRTEffectEnabled: Bool
 
     /// Observer token for UserDefaults change notifications.
     /// Marked `nonisolated(unsafe)` so deinit can access it without
     /// crossing the MainActor isolation boundary.
     nonisolated(unsafe) private var settingsObserver: NSObjectProtocol?
 
+    private static let terminalUIFontSizeKey = "terminal.ui.fontSize"
+    private static let defaultTerminalUIFontSize = 12.0
+    private static let minimumTerminalUIFontSize = 9.0
+    private static let maximumTerminalUIFontSize = 28.0
+
     init() {
+        let initialFontSize = Self.loadTerminalUIFontSize()
+        self.appliedFontSize = initialFontSize
+        self.cachedGradientConfiguration = GradientBackgroundConfiguration.load()
+        self.cachedScannerConfiguration = ScannerEffectConfiguration.load()
+        self.cachedCRTEffectEnabled = CRTEffect.loadEnabledFromDefaults()
+
         if let device = MTLCreateSystemDefaultDevice() {
-            renderer = MetalTerminalRenderer(device: device, fontManager: FontManager())
+            renderer = MetalTerminalRenderer(
+                device: device,
+                fontManager: FontManager(baseFontSize: initialFontSize)
+            )
         } else {
             renderer = nil
         }
@@ -141,9 +158,7 @@ final class MetalTerminalSurfaceModel: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                self?.renderer?.reloadGradientBackgroundSettings()
-                self?.renderer?.reloadCRTEffectSettings()
-                self?.renderer?.reloadScannerEffectSettings()
+                self?.reloadRendererSettingsIfNeeded()
             }
         }
     }
@@ -168,7 +183,10 @@ final class MetalTerminalSurfaceModel: ObservableObject {
     }
 
     func updateFontSize(_ size: CGFloat) {
-        renderer?.setFontSize(size)
+        let clamped = Self.normalizedTerminalUIFontSize(Double(size))
+        guard abs(clamped - appliedFontSize) > 0.01 else { return }
+        appliedFontSize = clamped
+        renderer?.setFontSize(clamped)
     }
 
     // MARK: - Selection
@@ -218,5 +236,43 @@ final class MetalTerminalSurfaceModel: ObservableObject {
 
     var hasSelection: Bool {
         renderer?.hasSelection ?? false
+    }
+
+    private func reloadRendererSettingsIfNeeded() {
+        guard let renderer else { return }
+
+        let gradientConfiguration = GradientBackgroundConfiguration.load()
+        if gradientConfiguration != cachedGradientConfiguration {
+            cachedGradientConfiguration = gradientConfiguration
+            renderer.reloadGradientBackgroundSettings()
+        }
+
+        let crtEffectEnabled = CRTEffect.loadEnabledFromDefaults()
+        if crtEffectEnabled != cachedCRTEffectEnabled {
+            cachedCRTEffectEnabled = crtEffectEnabled
+            renderer.reloadCRTEffectSettings()
+        }
+
+        let scannerConfiguration = ScannerEffectConfiguration.load()
+        if scannerConfiguration != cachedScannerConfiguration {
+            cachedScannerConfiguration = scannerConfiguration
+            renderer.reloadScannerEffectSettings()
+        }
+    }
+
+    private static func loadTerminalUIFontSize(defaults: UserDefaults = .standard) -> CGFloat {
+        let storedValue: Double
+        if defaults.object(forKey: terminalUIFontSizeKey) == nil {
+            storedValue = defaultTerminalUIFontSize
+        } else {
+            storedValue = defaults.double(forKey: terminalUIFontSizeKey)
+        }
+        return normalizedTerminalUIFontSize(storedValue)
+    }
+
+    private static func normalizedTerminalUIFontSize(_ value: Double) -> CGFloat {
+        let sanitized = value.isFinite ? value : defaultTerminalUIFontSize
+        let clamped = min(maximumTerminalUIFontSize, max(minimumTerminalUIFontSize, sanitized))
+        return CGFloat(clamped)
     }
 }

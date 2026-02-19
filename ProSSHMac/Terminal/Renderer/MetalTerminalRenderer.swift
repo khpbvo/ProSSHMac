@@ -199,6 +199,9 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     /// Previous frame time for frame-delta aware afterglow blending.
     private var previousUniformTime: Float = 0
 
+    /// In-flight task for applying font changes. New font updates cancel older ones.
+    private var fontChangeTask: Task<Void, Never>?
+
     // MARK: - Initialization (B.8.1, B.8.2)
 
     /// Create a MetalTerminalRenderer with a Metal device and font manager.
@@ -986,53 +989,64 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     /// Called when the font configuration changes.
     /// Rebuilds the glyph atlas, clears the cache, and re-populates ASCII glyphs.
     func handleFontChange() {
-        Task { [weak self] in
+        fontChangeTask?.cancel()
+        fontChangeTask = Task { [weak self] in
             guard let self else { return }
-
-            let dims = await fontManager.currentCellDimensions()
-            let fontSize = await fontManager.effectiveFontSize
-            let fontName = await fontManager.fontName
-
-            // Store raw dimensions and pixel-align to the current screen scale.
-            self.rawCellWidth = dims.width
-            self.rawCellHeight = dims.height
-            self.rasterFontSize = fontSize
-            self.rasterFontName = fontName
-
-            let scale = max(self.screenScale, 1.0)
-            let pixelW = round(dims.width * scale)
-            let pixelH = ceil(dims.height * scale)
-            self.cellWidth = pixelW / scale
-            self.cellHeight = pixelH / scale
-
-            let cw = Int(pixelW)
-            let ch = Int(pixelH)
-            self.glyphAtlas.rebuild(cellWidth: cw, cellHeight: ch)
-
-            // Clear the glyph cache (all entries are now invalid).
-            self.glyphCache.clear()
-
-            // Re-populate ASCII glyphs.
-            self.glyphCache.prePopulateASCII { [weak self] key in
-                guard let self else { return nil }
-                return self.rasterizeAndUpload(key: key)
-            }
-
-            // Recalculate grid with new cell dimensions.
-            self.recalculateGridDimensions()
-            // Reset the uniform buffer's animation time after font change.
-            self.uniformBuffer.resetTime()
-            self.isDirty = true
+            await self.reloadFontStateFromManager()
         }
     }
 
     /// Updates the base terminal font size and refreshes renderer metrics.
     func setFontSize(_ size: CGFloat) {
-        Task { [weak self] in
+        let clamped = min(28.0, max(9.0, size))
+        guard abs(clamped - rasterFontSize) > 0.01 else { return }
+
+        fontChangeTask?.cancel()
+        fontChangeTask = Task { [weak self] in
             guard let self else { return }
-            await self.fontManager.setFont(size: size)
-            self.handleFontChange()
+            await self.fontManager.setFont(size: clamped)
+            guard !Task.isCancelled else { return }
+            await self.reloadFontStateFromManager()
         }
+    }
+
+    private func reloadFontStateFromManager() async {
+        let dims = await fontManager.currentCellDimensions()
+        let fontSize = await fontManager.effectiveFontSize
+        let fontName = await fontManager.fontName
+
+        // Store raw dimensions and pixel-align to the current screen scale.
+        self.rawCellWidth = dims.width
+        self.rawCellHeight = dims.height
+        self.rasterFontSize = fontSize
+        self.rasterFontName = fontName
+
+        let scale = max(self.screenScale, 1.0)
+        let pixelW = round(dims.width * scale)
+        let pixelH = ceil(dims.height * scale)
+        self.cellWidth = pixelW / scale
+        self.cellHeight = pixelH / scale
+
+        let cw = Int(pixelW)
+        let ch = Int(pixelH)
+        self.glyphAtlas.rebuild(cellWidth: cw, cellHeight: ch)
+
+        // Clear the glyph cache (all entries are now invalid).
+        self.glyphCache.clear()
+
+        // Re-populate ASCII glyphs.
+        self.glyphCache.prePopulateASCII { [weak self] key in
+            guard let self else { return nil }
+            return self.rasterizeAndUpload(key: key)
+        }
+
+        // Recalculate grid with new cell dimensions.
+        self.recalculateGridDimensions()
+        // Reset effect history so post-processing doesn't blend stale geometry.
+        self.hasCapturedPreviousFrame = false
+        self.previousUniformTime = 0
+        self.uniformBuffer.resetTime()
+        self.isDirty = true
     }
 
     // MARK: - Pixel Alignment Helpers
