@@ -1708,6 +1708,17 @@ actor TerminalGrid {
         currentUnderlineStyle = underlineStyle
     }
 
+    /// Get all input-mode flags in a single actor hop (replaces 5 separate property reads).
+    func inputModeSnapshot() -> InputModeSnapshot {
+        InputModeSnapshot(
+            applicationCursorKeys: applicationCursorKeys,
+            applicationKeypad: applicationKeypad,
+            bracketedPasteMode: bracketedPasteMode,
+            mouseTracking: mouseTracking,
+            mouseEncoding: mouseEncoding
+        )
+    }
+
     /// Get the current cursor position.
     func cursorPosition() -> (row: Int, col: Int) {
         (cursor.row, cursor.col)
