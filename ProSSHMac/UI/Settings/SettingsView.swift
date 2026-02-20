@@ -82,11 +82,12 @@ struct SettingsView: View {
                 NavigationLink {
                     MatrixScreensaverSettingsView()
                 } label: {
+                    let screensaverConfig = MatrixScreensaverConfiguration.load()
                     HStack {
                         Label("Matrix Screensaver", systemImage: "sparkles.tv")
                         Spacer()
-                        if MatrixScreensaverConfiguration.load().isEnabled {
-                            Text("\(MatrixScreensaverConfiguration.load().idleTimeoutMinutes) min")
+                        if screensaverConfig.isEnabled {
+                            Text("\(screensaverConfig.idleTimeoutMinutes) min")
                                 .font(.subheadline)
                                 .foregroundStyle(.green)
                         } else {

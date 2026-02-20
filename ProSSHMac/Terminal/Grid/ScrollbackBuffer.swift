@@ -102,6 +102,8 @@ nonisolated struct ScrollbackBuffer: Sendable {
 
     /// Access a line by logical index (0 = oldest).
     subscript(index: Int) -> ScrollbackLine {
+        precondition(index >= 0 && index < count && !storage.isEmpty,
+                     "ScrollbackBuffer index \(index) out of range (count: \(count))")
         let storageIndex = (head + index) % storage.count
         return storage[storageIndex]
     }

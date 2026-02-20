@@ -114,7 +114,7 @@ await withCheckedContinuation { continuation in
 
 ---
 
-### Bug 5 — SSHTransport `normalizeRemotePath` Does Not Handle `..` Components (Medium)
+### Bug 5 — ~~SSHTransport `normalizeRemotePath` Does Not Handle `..` Components~~ [FIXED] (Medium)
 
 **File:** `SSH/Transport/SSHTransport.swift`
 
@@ -261,7 +261,7 @@ generation pipeline.
 
 ---
 
-### Bug 13 — KnownHostEntry `id` Collides When Same Host Has Multiple Key Types (Medium)
+### Bug 13 — ~~KnownHostEntry `id` Collides When Same Host Has Multiple Key Types~~ [FIXED] (Medium)
 
 **File:** `Services/Security/KnownHostsStore.swift`  (and `Models/KnownHostEntry.swift`)
 
@@ -279,7 +279,7 @@ var id: String { "\(hostname):\(port):\(keyType)" }
 
 ---
 
-### Bug 14 — FileKnownHostsStore Uses `NSLock` Inside Async Context (Medium)
+### Bug 14 — ~~KnownHostVerificationChallenge `id` Also Missing keyType~~ [FIXED] / FileKnownHostsStore Uses `NSLock` Inside Async Context (Medium)
 
 **File:** `Services/Security/FileKnownHostsStore.swift`
 
@@ -298,7 +298,7 @@ no `await` (suspension) points.
 
 ---
 
-### Bug 15 — SecureEnclaveKeyManager Force-Casts `SecKey` Query Result (Medium)
+### Bug 15 — ~~SecureEnclaveKeyManager Force-Casts `SecKey` Query Result~~ [FIXED] (Medium)
 
 **File:** `Services/Security/SecureEnclaveKeyManager.swift`
 
@@ -333,7 +333,7 @@ until they finish on their own.
 
 ---
 
-### Bug 17 — EncryptedStorage Backup Filename Collision (Medium)
+### Bug 17 — ~~EncryptedStorage Backup Filename Collision~~ [FIXED] (Medium)
 
 **File:** `Services/Security/EncryptedStorage.swift`
 
@@ -363,7 +363,7 @@ the Keychain item genuinely does not exist.
 
 ---
 
-### Bug 19 — KnownHostsStore Debug `print()` Statements Left in Production Code (Low)
+### Bug 19 — ~~KnownHostsStore Debug `print()` Statements Left in Production Code~~ [FIXED] (Low)
 
 **File:** `Services/Security/KnownHostsStore.swift`
 
@@ -453,7 +453,7 @@ array or both use the nested container.
 
 ---
 
-### Bug 25 — Host `legacyModeEnabled` / `tags` Break Backward Compatibility (Medium)
+### Bug 25 — ~~Host `legacyModeEnabled` / `tags` Break Backward Compatibility~~ [FIXED] (Medium)
 
 **File:** `Models/Host.swift`
 
@@ -469,7 +469,7 @@ for forward/backward compatibility.
 
 ---
 
-### Bug 26 — Session Decoder Not Forward-Compatible (Medium)
+### Bug 26 — ~~Session Decoder Not Forward-Compatible~~ [FIXED] (Medium)
 
 **File:** `Models/Session.swift`
 
@@ -519,7 +519,7 @@ RFC 5280).
 
 ---
 
-### Bug 29 — Transfer `bytesTransferred` Can Exceed `totalBytes` (Low)
+### Bug 29 — ~~Transfer `bytesTransferred` Can Exceed `totalBytes`~~ [FIXED] (Low)
 
 **File:** `Models/Transfer.swift`
 
@@ -536,7 +536,7 @@ progress bars render incorrectly (> 100%).
 
 ## 5. Terminal Grid & Reflow
 
-### Bug 30 — Snapshot Double-Buffer Can Share Storage With Live Snapshot (High)
+### Bug 30 — ~~Snapshot Double-Buffer Can Share Storage With Live Snapshot~~ [FIXED] (High)
 
 **File:** `Terminal/Grid/TerminalGrid.swift`, lines 1082–1171
 
@@ -557,7 +557,7 @@ has a unique copy.
 
 ---
 
-### Bug 31 — Wide Character at Last Column Creates Orphaned Half-Width Cell (High)
+### Bug 31 — ~~Wide Character at Last Column Creates Orphaned Half-Width Cell~~ [FIXED] (High)
 
 **File:** `Terminal/Grid/TerminalGrid.swift`, lines 301–372
 
@@ -579,7 +579,7 @@ if isWide && col >= columns - 1 {
 
 ---
 
-### Bug 32 — `printASCIIBytesBulk` Returns Prematurely in Insert Mode (High)
+### Bug 32 — ~~`printASCIIBytesBulk` Returns Prematurely in Insert Mode~~ [FIXED] (High)
 
 **File:** `Terminal/Grid/TerminalGrid.swift`, lines 456–465
 
@@ -596,7 +596,7 @@ fall back to per-character processing for the remaining bytes.
 
 ---
 
-### Bug 33 — GridReflow Marks All Screen Rows as `isWrapped: false` (Medium)
+### Bug 33 — ~~GridReflow Marks All Screen Rows as `isWrapped: false`~~ [FIXED] (Medium)
 
 **File:** `Terminal/Grid/GridReflow.swift`, lines 182–184
 
@@ -628,7 +628,7 @@ for (i, row) in screenRows.enumerated() {
 
 ---
 
-### Bug 34 — GridReflow Cursor Tracking Misses One-Past-End Position (Medium)
+### Bug 34 — ~~GridReflow Cursor Tracking Misses One-Past-End Position~~ [FIXED] (Medium)
 
 **File:** `Terminal/Grid/GridReflow.swift`, lines 90–103
 
@@ -655,7 +655,7 @@ if offsetInLine >= rowStart
 
 ---
 
-### Bug 35 — `TerminalGrid.resize` Reflows Primary Buffer With Alternate-Screen Cursor (Medium)
+### Bug 35 — ~~`TerminalGrid.resize` Reflows Primary Buffer With Alternate-Screen Cursor~~ [FIXED] (Medium)
 
 **File:** `Terminal/Grid/TerminalGrid.swift`, lines 1457–1495
 
@@ -676,7 +676,7 @@ let (row, col) = usingAlternateBuffer
 
 ---
 
-### Bug 36 — ScrollbackBuffer `subscript` Has No Bounds Check (Medium)
+### Bug 36 — ~~ScrollbackBuffer `subscript` Has No Bounds Check~~ [FIXED] (Medium)
 
 **File:** `Terminal/Grid/ScrollbackBuffer.swift`, lines 104–107
 
@@ -749,7 +749,7 @@ intermediates, it will be incorrectly routed to the DECRQSS handler.
 
 ## 7. Terminal Input
 
-### Bug 40 — Mouse Coordinate 0-Based vs 1-Based Mismatch (Medium)
+### Bug 40 — ~~Mouse Coordinate 0-Based vs 1-Based Mismatch~~ [FIXED] (Medium)
 
 **File:** `Terminal/Input/MouseEncoder.swift`, lines 135–148, 296–313
 
@@ -785,7 +785,7 @@ happens to be correct by accident for the common case, but the code path is inco
 
 ## 8. Terminal Renderer
 
-### Bug 42 — GlyphAtlas `rowHeight` Not Reset When Starting a New Row (Medium)
+### Bug 42 — ~~GlyphAtlas `rowHeight` Not Reset When Starting a New Row~~ [FIXED] (Medium)
 
 **File:** `Terminal/Renderer/GlyphAtlas.swift`, lines 174–178
 
@@ -840,7 +840,7 @@ histories but avoidable.
 
 ## 9. Terminal Features & Pane Management
 
-### Bug 45 — PaneManager `syncSessions` Mutates Collection During Iteration (High)
+### Bug 45 — ~~PaneManager `syncSessions` Mutates Collection During Iteration~~ [FIXED] (High)
 
 **File:** `Terminal/Features/PaneManager.swift`
 
@@ -886,7 +886,7 @@ tree from saved state. If the saved layout references a pane ID that no longer e
 
 ---
 
-### Bug 48 — SessionTabManager `Dictionary(uniqueKeysWithValues:)` Crashes on Duplicate IDs (High)
+### Bug 48 — ~~SessionTabManager `Dictionary(uniqueKeysWithValues:)` Crashes on Duplicate IDs~~ [FIXED] (High)
 
 **File:** `Terminal/Features/SessionTabManager.swift`
 
@@ -917,7 +917,7 @@ contention.
 
 ---
 
-### Bug 50 — SessionRecorder Playback Has No Cancellation Support (Medium)
+### Bug 50 — ~~SessionRecorder Playback Has No Cancellation Support~~ [FIXED] (Medium)
 
 **File:** `Terminal/Features/SessionRecorder.swift`
 
@@ -938,7 +938,7 @@ for frame in recording.frames {
 
 ---
 
-### Bug 51 — QuickCommands `replacingVariables` Causes Out-of-Range Crash (Critical)
+### Bug 51 — ~~QuickCommands `replacingVariables` Causes Out-of-Range Crash~~ [FIXED] (Critical)
 
 **File:** `Terminal/Features/QuickCommands.swift`
 
@@ -1008,7 +1008,7 @@ dialogs or wrong files.
 
 ---
 
-### Bug 56 — IdleScreensaverManager Never Removes Event Monitors (High)
+### Bug 56 — ~~IdleScreensaverManager Never Removes Event Monitors~~ [FIXED] (High)
 
 **File:** `Terminal/Effects/IdleScreensaverManager.swift`
 
@@ -1070,7 +1070,7 @@ ghost rendering.
 
 ---
 
-### Bug 60 — Barrel Distortion Shader Produces Edge Artifacts (Medium)
+### Bug 60 — ~~Barrel Distortion Shader Produces Edge Artifacts~~ [FIXED] (Medium)
 
 **File:** `Terminal/Renderer/Effects/BarrelDistortion.metal`
 
@@ -1121,7 +1121,7 @@ truncation introduces a tiny phase drift over long durations.
 
 ---
 
-### Bug 64 — CRT Scanline Effect Scrolls With Content (Low)
+### Bug 64 — ~~CRT Scanline Effect Scrolls With Content~~ [FIXED] (Low)
 
 **File:** `Terminal/Renderer/Effects/CRTScanline.metal`
 
@@ -1189,7 +1189,7 @@ trigger re-renders, creating an infinite update loop that pegs the CPU.
 
 ---
 
-### Bug 68 — `pasteClipboardToSession` Pastes to Wrong Session (High)
+### Bug 68 — ~~`pasteClipboardToSession` Pastes to Wrong Session~~ [FIXED] (High)
 
 **File:** `Views/Terminal/TerminalView.swift`
 
@@ -1239,7 +1239,7 @@ method on change.
 
 ---
 
-### Bug 71 — GradientBackgroundSettingsView Drops Fourth Color (Medium)
+### Bug 71 — ~~GradientBackgroundSettingsView Drops Fourth Color~~ [FIXED] (Medium)
 
 **File:** `Views/Settings/GradientBackgroundSettingsView.swift`
 
@@ -1268,7 +1268,7 @@ array index.
 
 ---
 
-### Bug 73 — `copyToClipboard` Always Returns `true` (Low)
+### Bug 73 — `copyToClipboard` Always Returns `true` / ~~`statusColor` Uses Fragile String Matching~~ [FIXED] (Low)
 
 **File:** `Views/Settings/CertificateInspectorView.swift`
 
@@ -1326,7 +1326,7 @@ checking. Usually works in practice due to SwiftUI's internal handling.
 
 ---
 
-### Bug 78 — Double `load()` Call in MatrixScreensaver Settings (Low)
+### Bug 78 — ~~Double `load()` Call in MatrixScreensaver Settings~~ [FIXED] (Low)
 
 **File:** `Views/Settings/SettingsView.swift`
 

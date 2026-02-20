@@ -172,9 +172,10 @@ final class GlyphAtlas {
         // Try to fit the glyph in the current row of the current page.
 
         if nextX + width > pageSize {
-            // Move to the next row.
+            // Move to the next row and reset row height for the new row.
             nextX = 0
             nextY += rowHeight
+            rowHeight = cellHeight
         }
 
         if nextY + height > pageSize {

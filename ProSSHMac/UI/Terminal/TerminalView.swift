@@ -2166,7 +2166,7 @@ struct TerminalView: View {
         let bracketedPaste = inputModeSnapshot(for: sessionID).bracketedPasteMode
         let sequences = PasteHandler.readClipboardSequences(bracketedPasteEnabled: bracketedPaste)
         for sequence in sequences {
-            sendControl(sequence)
+            sendControl(sequence, sessionID: sessionID)
         }
     }
 

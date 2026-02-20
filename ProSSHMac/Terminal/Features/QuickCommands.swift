@@ -300,7 +300,7 @@ final class QuickCommands: ObservableObject {
         for match in matches.reversed() {
             guard match.numberOfRanges > 1,
                   let nameRange = Range(match.range(at: 1), in: template),
-                  let fullMatchRange = Range(match.range(at: 0), in: resolved) else {
+                  let fullMatchRange = Range(match.range(at: 0), in: template) else {
                 continue
             }
 

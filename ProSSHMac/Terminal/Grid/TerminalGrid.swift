@@ -313,6 +313,17 @@ actor TerminalGrid {
             charStr = String(char)
         }
         let isWide = char.isWideCharacter
+
+        // Wide character at the last column: wrap first so the character
+        // starts at column 0 of the next row (matching xterm/VTE behavior).
+        // Without this, the primary cell is written at columns-1 but the
+        // continuation cell at columns would be out of bounds.
+        if isWide && cursor.col >= columns - 1 {
+            if autoWrapMode {
+                performWrap()
+            }
+        }
+
         let row = cursor.row
         let col = cursor.col
 
@@ -387,6 +398,37 @@ actor TerminalGrid {
     private func printASCIIBytesBulk(_ bytes: ContiguousArray<UInt8>, range: Range<Int>) {
         guard !range.isEmpty else { return }
 
+        // Insert mode is rare; fall back to the per-character path for all
+        // bytes so that insertBlanks() is called for each character.
+        if insertMode {
+            let charset: Charset = (activeCharset == 1) ? g1Charset : g0Charset
+            let needsCharsetMapping = charset != .ascii
+            for i in range {
+                let byte = bytes[i]
+                guard byte >= 0x20 && byte <= 0x7E else { continue }
+                let ch: Character
+                if needsCharsetMapping {
+                    switch charset {
+                    case .ascii:
+                        ch = Self.asciiCharacterCache[Int(byte)]
+                    case .ukNational:
+                        ch = (byte == 0x23) ? "£" : Self.asciiCharacterCache[Int(byte)]
+                    case .decSpecialGraphics:
+                        if (0x60...0x7E).contains(byte),
+                           let mapped = DECSpecialGraphics.mapCharacter(byte) {
+                            ch = mapped
+                        } else {
+                            ch = Self.asciiCharacterCache[Int(byte)]
+                        }
+                    }
+                } else {
+                    ch = Self.asciiCharacterCache[Int(byte)]
+                }
+                printCharacter(ch)
+            }
+            return
+        }
+
         let charset: Charset = (activeCharset == 1) ? g1Charset : g0Charset
         let needsCharsetMapping = charset != .ascii
 
@@ -453,16 +495,6 @@ actor TerminalGrid {
 
                 let row = cursor.row
                 let col = cursor.col
-
-                // Insert mode is rare; fall back to per-character path.
-                if insertMode {
-                    let ch = needsCharsetMapping ? charStr.first! : Self.asciiCharacterCache[Int(byte)]
-                    if dirtyRowLo <= dirtyRowHi {
-                        for r in dirtyRowLo...dirtyRowHi { markDirty(row: r) }
-                    }
-                    printCharacter(ch)
-                    return
-                }
 
                 buf[row][col] = TerminalCell(
                     graphemeCluster: charStr,
@@ -1151,6 +1183,13 @@ actor TerminalGrid {
             dirtyRange = startIdx..<endIdx
         }
 
+        // Do not store `buffer` back into the snapshot slot after creating the
+        // snapshot. Doing so lets the snapshot and the slot share the same
+        // backing storage via copy-on-write, and a later snapshot() call may
+        // mutate the slot in-place while the renderer still reads the old
+        // snapshot. Instead, let the snapshot uniquely own this buffer and
+        // allocate a fresh one next cycle (the cost is low compared to the
+        // correctness risk).
         let snap = GridSnapshot(
             cells: buffer,
             dirtyRange: dirtyRange,
@@ -1162,12 +1201,6 @@ actor TerminalGrid {
             rows: rows
         )
 
-        // Store the buffer back for reuse on the next cycle.
-        if useSnapshotBufferA {
-            snapshotBufferA = buffer
-        } else {
-            snapshotBufferB = buffer
-        }
         useSnapshotBufferA.toggle()
 
         clearDirtyState()
@@ -1460,12 +1493,22 @@ actor TerminalGrid {
 
         let oldColumns = columns
 
+        // When the alternate buffer is active, the primary cursor is saved
+        // in cursor.savedPrimary. Use it for reflowing the primary buffer
+        // so the primary cursor position is preserved correctly.
+        let primaryCursorRow = usingAlternateBuffer
+            ? (cursor.savedPrimary?.row ?? 0)
+            : cursor.row
+        let primaryCursorCol = usingAlternateBuffer
+            ? (cursor.savedPrimary?.col ?? 0)
+            : cursor.col
+
         // Reflow primary buffer (the one with scrollback that needs proper reflow)
         let reflowResult = GridReflow.reflow(
             screenRows: primaryCells,
             scrollback: scrollback,
-            cursorRow: cursor.row,
-            cursorCol: cursor.col,
+            cursorRow: primaryCursorRow,
+            cursorCol: primaryCursorCol,
             oldColumns: oldColumns,
             newColumns: newColumns,
             newRows: newRows
@@ -1484,11 +1527,17 @@ actor TerminalGrid {
             alternateCells, newRows: newRows, newColumns: newColumns
         )
 
-        // Update cursor from reflow result (only if on primary buffer)
+        // Update cursor from reflow result
         if !usingAlternateBuffer {
             cursor.row = reflowResult.cursorRow
             cursor.col = reflowResult.cursorCol
         } else {
+            // Update the saved primary cursor from the reflow result
+            if var saved = cursor.savedPrimary {
+                saved.row = reflowResult.cursorRow
+                saved.col = reflowResult.cursorCol
+                cursor.savedPrimary = saved
+            }
             cursor.row = min(cursor.row, newRows - 1)
             cursor.col = min(cursor.col, newColumns - 1)
         }
