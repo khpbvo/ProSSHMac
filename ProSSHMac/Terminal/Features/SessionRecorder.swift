@@ -255,6 +255,7 @@ final class SessionRecorder {
     ) async throws {
         let steps = try playbackSchedule(recording: recording, speed: speed)
         for step in steps {
+            guard !Task.isCancelled else { break }
             if step.delayNanoseconds > 0 {
                 try await Task.sleep(nanoseconds: step.delayNanoseconds)
             }

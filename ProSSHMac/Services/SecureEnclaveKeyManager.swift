@@ -194,7 +194,7 @@ nonisolated final class SecureEnclaveKeyManager {
 
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard status == errSecSuccess, let key = item as! SecKey? else {
+        guard status == errSecSuccess, let key = item as? SecKey else {
             throw SecureEnclaveKeyManagerError.privateKeyNotFound
         }
         return key

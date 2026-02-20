@@ -9,7 +9,7 @@ struct KnownHostEntry: Identifiable, Codable, Hashable, Sendable {
     var lastVerifiedAt: Date
 
     var id: String {
-        "\(hostname.lowercased()):\(port)"
+        "\(hostname.lowercased()):\(port):\(hostKeyType)"
     }
 }
 
@@ -21,7 +21,7 @@ struct KnownHostVerificationChallenge: Identifiable, Equatable, Sendable {
     var expectedFingerprint: String?
 
     var id: String {
-        "\(hostname.lowercased()):\(port)"
+        "\(hostname.lowercased()):\(port):\(hostKeyType)"
     }
 
     var isMismatch: Bool {
@@ -115,9 +115,6 @@ final class FileKnownHostsStore: KnownHostsStoreProtocol, @unchecked Sendable {
             let normalizedHostname = challenge.hostname.lowercased()
             let now = Date.now
 
-            print("[KnownHosts] trust() called for \(challenge.hostname):\(challenge.port) fingerprint=\(challenge.presentedFingerprint)")
-            print("[KnownHosts] existing entries before trust: \(entries.count)")
-
             if let index = entries.firstIndex(where: {
                 $0.hostname.lowercased() == normalizedHostname && $0.port == challenge.port
             }) {
@@ -138,8 +135,6 @@ final class FileKnownHostsStore: KnownHostsStoreProtocol, @unchecked Sendable {
             }
 
             try persist(entries)
-            let verification = try loadEntries()
-            print("[KnownHosts] entries after persist: \(verification.count) — file: \(fileURL.path(percentEncoded: false))")
         }
     }
 

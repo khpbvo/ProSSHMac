@@ -774,7 +774,7 @@ fragment float4 terminal_post_fragment(
         float2 ndc = uv * 2.0 - 1.0;
         float r2 = dot(ndc, ndc);
         ndc *= (1.0 + uniforms.barrelDistortion * r2);
-        uv = ndc * 0.5 + 0.5;
+        uv = saturate(ndc * 0.5 + 0.5);
     }
 
     float4 color = sceneTexture.sample(postSampler, uv);
@@ -859,7 +859,7 @@ fragment float4 terminal_post_fragment(
     if (uniforms.crtEnabled > 0.5 && uniforms.scanlineOpacity > 0.001) {
         float2 safeViewport = max(uniforms.viewportSize, float2(1.0, 1.0));
         float pixelY = uv.y * safeViewport.y;
-        float scanWave = sin((pixelY * uniforms.scanlineDensity) + (uniforms.time * 30.0));
+        float scanWave = sin(pixelY * uniforms.scanlineDensity);
         float darken = ((scanWave + 1.0) * 0.5) * uniforms.scanlineOpacity;
         color.rgb *= (1.0 - darken);
     }

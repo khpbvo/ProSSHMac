@@ -560,7 +560,7 @@ struct GradientPreviewRenderer: View {
         let color1 = config.color1.color
         let color2 = config.color2.color
         if config.useMultipleStops {
-            return Gradient(colors: [color1, config.color3.color, color2])
+            return Gradient(colors: [color1, config.color3.color, config.color4.color, color2])
         }
         return Gradient(colors: [color1, color2])
     }

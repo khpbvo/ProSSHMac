@@ -105,8 +105,8 @@ struct Session: Identifiable, Codable, Hashable {
         negotiatedCipher = try container.decodeIfPresent(String.self, forKey: .negotiatedCipher)
         negotiatedHostKeyType = try container.decodeIfPresent(String.self, forKey: .negotiatedHostKeyType)
         negotiatedHostFingerprint = try container.decodeIfPresent(String.self, forKey: .negotiatedHostFingerprint)
-        usesLegacyCrypto = try container.decode(Bool.self, forKey: .usesLegacyCrypto)
-        usesAgentForwarding = try container.decode(Bool.self, forKey: .usesAgentForwarding)
+        usesLegacyCrypto = try container.decodeIfPresent(Bool.self, forKey: .usesLegacyCrypto) ?? false
+        usesAgentForwarding = try container.decodeIfPresent(Bool.self, forKey: .usesAgentForwarding) ?? false
         securityAdvisory = try container.decodeIfPresent(String.self, forKey: .securityAdvisory)
         transportBackend = try container.decodeIfPresent(SSHBackendKind.self, forKey: .transportBackend)
         jumpHostLabel = try container.decodeIfPresent(String.self, forKey: .jumpHostLabel)

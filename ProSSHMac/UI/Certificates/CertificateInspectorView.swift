@@ -127,14 +127,14 @@ struct CertificateInspectorView: View {
     }
 
     private var statusColor: Color {
-        switch statusLabel {
-        case "Active":
-            return .green
-        case "Expired":
-            return .red
-        default:
+        let now = Date()
+        if now < certificate.validAfter {
             return .orange
         }
+        if now > certificate.validBefore {
+            return .red
+        }
+        return .green
     }
 }
 

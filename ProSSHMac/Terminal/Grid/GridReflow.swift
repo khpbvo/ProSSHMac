@@ -93,9 +93,11 @@ nonisolated enum GridReflow {
                     let offsetInLine = cursorPosition.offsetInLine
                     let rowStart = physIdx * newColumns
                     let rowEnd = rowStart + physRow.count
-                    if offsetInLine >= rowStart && offsetInLine < rowEnd {
+                    let isLastRow = physIdx == wrapped.count - 1
+                    if offsetInLine >= rowStart
+                        && (offsetInLine < rowEnd || (isLastRow && offsetInLine == rowEnd)) {
                         cursorNewRow = newPhysicalRows.count
-                        cursorNewCol = offsetInLine - rowStart
+                        cursorNewCol = min(offsetInLine - rowStart, newColumns - 1)
                     }
                 }
 
@@ -179,9 +181,24 @@ nonisolated enum GridReflow {
             allRows.append((cells: line.cells, isWrapped: line.isWrapped))
         }
 
-        // Add screen rows
-        for row in screenRows {
-            allRows.append((cells: row, isWrapped: false))
+        // Add screen rows, checking the previous row for the wrapped attribute
+        for (i, row) in screenRows.enumerated() {
+            let isWrapped: Bool
+            if i == 0 {
+                // First screen row: check if the last scrollback row was wrapped
+                if let lastScrollback = allRows.last {
+                    isWrapped = lastScrollback.cells.last.map {
+                        $0.attributes.contains(.wrapped)
+                    } ?? false
+                } else {
+                    isWrapped = false
+                }
+            } else {
+                isWrapped = screenRows[i - 1].last.map {
+                    $0.attributes.contains(.wrapped)
+                } ?? false
+            }
+            allRows.append((cells: row, isWrapped: isWrapped))
         }
 
         // Now group into logical lines

@@ -55,7 +55,7 @@ final class SessionTabManager: ObservableObject {
         }
 
         let pinnedIDs = loadPinnedSessionIDs()
-        let sessionsByID = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0) })
+        let sessionsByID = Dictionary(sessions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         tabs = orderedIDs.compactMap { id in
             guard let session = sessionsByID[id] else { return nil }
             return SessionTab(session: session, isPinned: pinnedIDs.contains(id))

@@ -144,12 +144,17 @@ struct MouseEncoder: Sendable {
             UInt8(clamping: col + 32),
             UInt8(clamping: row + 32)
         ]
-        return String(bytes: bytes, encoding: .utf8)
+        // Use .isoLatin1 instead of .utf8 because X10 mouse encoding
+        // produces raw bytes 0x20-0xFF which may include invalid UTF-8
+        // continuation bytes (0x80-0xBF), causing String(encoding: .utf8)
+        // to return nil.
+        return String(bytes: bytes, encoding: .isoLatin1)
     }
 
     private func encodeSGR(buttonCode: Int, event: MouseEvent) -> String {
-        let col = max(1, event.column)
-        let row = max(1, event.row)
+        // SGR mouse encoding uses 1-based coordinates; grid coordinates are 0-based.
+        let col = max(1, event.column + 1)
+        let row = max(1, event.row + 1)
         let suffix = event.kind == .release ? "m" : "M"
         return "\u{1B}[<\(buttonCode);\(col);\(row)\(suffix)"
     }

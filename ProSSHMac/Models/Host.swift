@@ -156,8 +156,8 @@ struct Host: Identifiable, Codable, Hashable {
         pinnedHostKeyAlgorithms = try container.decodeIfPresent([String].self, forKey: .pinnedHostKeyAlgorithms) ?? []
         agentForwardingEnabled = try container.decodeIfPresent(Bool.self, forKey: .agentForwardingEnabled) ?? false
         portForwardingRules = try container.decodeIfPresent([PortForwardingRule].self, forKey: .portForwardingRules) ?? []
-        legacyModeEnabled = try container.decode(Bool.self, forKey: .legacyModeEnabled)
-        tags = try container.decode([String].self, forKey: .tags)
+        legacyModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .legacyModeEnabled) ?? false
+        tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? []
         notes = try container.decodeIfPresent(String.self, forKey: .notes)
         lastConnected = try container.decodeIfPresent(Date.self, forKey: .lastConnected)
         createdAt = try container.decode(Date.self, forKey: .createdAt)

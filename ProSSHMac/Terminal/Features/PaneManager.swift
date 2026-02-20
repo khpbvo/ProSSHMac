@@ -208,17 +208,20 @@ final class PaneManager {
     /// Removes panes whose sessions are no longer active.
     /// Keeps panes that have no session assigned (e.g., newly split panes awaiting assignment).
     func syncSessions(activeSessionIDs: Set<UUID>) {
-        let panes = rootNode.allPanes
-        for pane in panes {
-            if let sessionID = pane.sessionID, !activeSessionIDs.contains(sessionID) {
-                if paneCount > 1 {
-                    closePane(pane.id)
-                } else {
-                    // Last pane — just clear the session.
-                    rootNode = rootNode.updatePane(pane.id) { p in
-                        p.sessionID = nil
-                        p.title = "Terminal"
-                    }
+        // Collect dead panes first to avoid mutating the tree during iteration.
+        let deadPanes = rootNode.allPanes.filter { pane in
+            guard let sessionID = pane.sessionID else { return false }
+            return !activeSessionIDs.contains(sessionID)
+        }
+
+        for pane in deadPanes {
+            if paneCount > 1 {
+                closePane(pane.id)
+            } else {
+                // Last pane — just clear the session.
+                rootNode = rootNode.updatePane(pane.id) { p in
+                    p.sessionID = nil
+                    p.title = "Terminal"
                 }
             }
         }

@@ -47,8 +47,9 @@ enum EncryptedStorage {
                 // Decryption failed — the master key is no longer accessible (e.g. app
                 // was migrated to a new bundle/keychain identity). Back up the old file
                 // and start fresh so the user isn't permanently locked out.
+                let timestamp = Int(Date().timeIntervalSince1970)
                 let backupURL = fileURL.deletingPathExtension()
-                    .appendingPathExtension("unreadable-backup.json")
+                    .appendingPathExtension("unreadable-\(timestamp).json")
                 try? fileManager.moveItem(at: fileURL, to: backupURL)
                 return nil
             }

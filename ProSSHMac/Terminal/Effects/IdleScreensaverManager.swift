@@ -23,6 +23,16 @@ final class IdleScreensaverManager: ObservableObject {
     /// Current configuration, reloaded from UserDefaults.
     private(set) var config: MatrixScreensaverConfiguration
 
+    deinit {
+        idleTimer?.invalidate()
+        if let monitor = globalEventMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
+        if let monitor = localEventMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
+    }
+
     init() {
         self.config = MatrixScreensaverConfiguration.load()
         startMonitoring()

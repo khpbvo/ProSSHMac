@@ -286,7 +286,18 @@ final class TransferManager: ObservableObject {
 
         var parts = trimmed.split(separator: "/").map(String.init)
         parts.removeAll(where: { $0.isEmpty || $0 == "." })
-        let normalized = "/" + parts.joined(separator: "/")
+
+        // Resolve ".." components
+        var resolved: [String] = []
+        for part in parts {
+            if part == ".." {
+                resolved.removeLast(min(1, resolved.count))
+            } else {
+                resolved.append(part)
+            }
+        }
+
+        let normalized = "/" + resolved.joined(separator: "/")
         if normalized.count > 1 && normalized.hasSuffix("/") {
             return String(normalized.dropLast())
         }
