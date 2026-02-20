@@ -10,8 +10,8 @@ import Foundation
 /// State saved by DECSC (ESC 7) and restored by DECRC (ESC 8).
 /// Captures everything needed to fully restore cursor context.
 nonisolated struct SavedCursorState: Sendable {
-    let row: Int
-    let col: Int
+    var row: Int
+    var col: Int
     let attributes: CellAttributes
     let fgColor: TerminalColor
     let bgColor: TerminalColor
