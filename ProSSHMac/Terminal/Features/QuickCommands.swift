@@ -8,10 +8,22 @@ import Foundation
 import Combine
 
 struct QuickCommandVariable: Identifiable, Codable, Hashable, Sendable {
+    let id: UUID
     var name: String
     var defaultValue: String
 
-    var id: String { name }
+    init(name: String, defaultValue: String) {
+        self.id = UUID()
+        self.name = name
+        self.defaultValue = defaultValue
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = (try? container.decode(UUID.self, forKey: .id)) ?? UUID()
+        self.name = try container.decode(String.self, forKey: .name)
+        self.defaultValue = try container.decode(String.self, forKey: .defaultValue)
+    }
 }
 
 struct QuickCommandSnippet: Identifiable, Codable, Hashable, Sendable {

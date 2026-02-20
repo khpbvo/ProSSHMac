@@ -476,14 +476,28 @@ final class CertificateAuthorityService {
         updatedCertificates.insert(certificate, at: 0)
         updatedCertificates.sort { $0.createdAt > $1.createdAt }
 
+        guard authority.issuedCertificateCount < UInt64.max else {
+            throw CertificateAuthorityError.signingFailed(
+                message: "Certificate authority has reached the maximum issued certificate count."
+            )
+        }
         authority.issuedCertificateCount += 1
+
+        guard serialNumber < UInt64.max else {
+            throw CertificateAuthorityError.signingFailed(
+                message: "Serial number has reached the maximum allowed value."
+            )
+        }
         authority.nextSerialNumber = max(authority.nextSerialNumber, serialNumber + 1)
         updatedAuthorities[authorityIndex] = authority
         updatedAuthorities.sort { $0.createdAt > $1.createdAt }
 
         do {
-            try await authorityStore.saveAuthorities(updatedAuthorities)
+            // Save certificates first: if the authority save fails afterward,
+            // we have a saved certificate with a stale serial counter (recoverable)
+            // rather than an updated counter with a missing certificate (data loss).
             try await certificateStore.saveCertificates(updatedCertificates)
+            try await authorityStore.saveAuthorities(updatedAuthorities)
         } catch {
             throw CertificateAuthorityError.persistenceFailed(
                 message: "Failed to persist signed certificate: \(error.localizedDescription)"

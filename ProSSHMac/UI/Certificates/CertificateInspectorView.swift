@@ -140,8 +140,7 @@ struct CertificateInspectorView: View {
 
 private func copyToClipboard(_ value: String) -> Bool {
     NSPasteboard.general.clearContents()
-    NSPasteboard.general.setString(value, forType: .string)
-    return true
+    return NSPasteboard.general.setString(value, forType: .string)
 }
 
 private struct CertificateValidityTimelineView: View {

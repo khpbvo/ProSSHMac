@@ -15,6 +15,8 @@ final class TransferManager: ObservableObject {
     private var pausedTransferIDs: Set<UUID> = []
     private var cancelRequestedIDs: Set<UUID> = []
     private var workerTask: Task<Void, Never>?
+    private var activeTransferTask: Task<SFTPTransferResult, Error>?
+    private var activeTransferID: UUID?
 
     func configure(sessionManager: SessionManager) {
         if self.sessionManager == nil {
@@ -159,6 +161,11 @@ final class TransferManager: ObservableObject {
             transfers[index].state = .cancelled
             transfers[index].updatedAt = .now
         }
+
+        // Cancel in-flight network I/O if this transfer is currently running.
+        if activeTransferID == transferID {
+            activeTransferTask?.cancel()
+        }
     }
 
     func clearFinishedTransfers() {
@@ -213,22 +220,31 @@ final class TransferManager: ObservableObject {
             transfers[index].updatedAt = .now
 
             let transfer = transfers[index]
+            activeTransferID = transfer.id
             do {
-                let result: SFTPTransferResult
+                let transferTask: Task<SFTPTransferResult, Error>
                 switch transfer.direction {
                 case .download:
-                    result = try await sessionManager.downloadFile(
-                        sessionID: transfer.sessionID,
-                        remotePath: transfer.sourcePath,
-                        localPath: transfer.destinationPath
-                    )
+                    transferTask = Task<SFTPTransferResult, Error> {
+                        try await sessionManager.downloadFile(
+                            sessionID: transfer.sessionID,
+                            remotePath: transfer.sourcePath,
+                            localPath: transfer.destinationPath
+                        )
+                    }
                 case .upload:
-                    result = try await sessionManager.uploadFile(
-                        sessionID: transfer.sessionID,
-                        localPath: transfer.sourcePath,
-                        remotePath: transfer.destinationPath
-                    )
+                    transferTask = Task<SFTPTransferResult, Error> {
+                        try await sessionManager.uploadFile(
+                            sessionID: transfer.sessionID,
+                            localPath: transfer.sourcePath,
+                            remotePath: transfer.destinationPath
+                        )
+                    }
                 }
+                activeTransferTask = transferTask
+                let result = try await transferTask.value
+                activeTransferTask = nil
+                activeTransferID = nil
 
                 guard let updatedIndex = transfers.firstIndex(where: { $0.id == transfer.id }) else {
                     continue
@@ -251,13 +267,20 @@ final class TransferManager: ObservableObject {
                     await refreshDirectory(path: currentRemotePath)
                 }
             } catch {
+                activeTransferTask = nil
+                activeTransferID = nil
+
                 guard let updatedIndex = transfers.firstIndex(where: { $0.id == transfer.id }) else {
                     continue
                 }
 
-                transfers[updatedIndex].state = .failed
+                if cancelRequestedIDs.contains(transfer.id) {
+                    transfers[updatedIndex].state = .cancelled
+                } else {
+                    transfers[updatedIndex].state = .failed
+                    errorMessage = "Transfer failed (\(URL(fileURLWithPath: transfer.sourcePath).lastPathComponent)): \(error.localizedDescription)"
+                }
                 transfers[updatedIndex].updatedAt = .now
-                errorMessage = "Transfer failed (\(URL(fileURLWithPath: transfer.sourcePath).lastPathComponent)): \(error.localizedDescription)"
             }
         }
     }

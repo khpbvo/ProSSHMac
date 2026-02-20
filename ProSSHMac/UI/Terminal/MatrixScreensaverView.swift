@@ -15,6 +15,7 @@ struct MatrixScreensaverView: View {
     @State private var streams: [MatrixStream] = []
     @State private var isInitialized = false
     @State private var eventMonitor: Any?
+    @State private var lastCanvasSize: CGSize = .zero
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
@@ -26,19 +27,17 @@ struct MatrixScreensaverView: View {
                 )
 
                 let elapsed = timeline.date.timeIntervalSinceReferenceDate
-                let columns = Int(size.width / MatrixStream.cellWidth)
                 let rows = Int(size.height / MatrixStream.cellHeight)
 
-                if !isInitialized || streams.count != activeColumnCount(for: columns) {
-                    DispatchQueue.main.async {
-                        initializeStreams(columns: columns, rows: rows)
-                    }
-                    return
-                }
+                guard isInitialized else { return }
 
                 for stream in streams {
                     drawStream(stream, context: &context, size: size, elapsed: elapsed, rows: rows)
                 }
+            }
+            .onChange(of: timeline.date) { _, _ in
+                // Perform state mutations outside the Canvas draw closure
+                updateStreamsIfNeeded()
             }
         }
         .ignoresSafeArea()
@@ -53,6 +52,22 @@ struct MatrixScreensaverView: View {
         .onAppear {
             installEventMonitor()
         }
+        .background(
+            GeometryReader { geo in
+                Color.clear
+                    .onAppear {
+                        lastCanvasSize = geo.size
+                        let columns = Int(geo.size.width / MatrixStream.cellWidth)
+                        let rows = Int(geo.size.height / MatrixStream.cellHeight)
+                        if columns > 0 && rows > 0 {
+                            initializeStreams(columns: columns, rows: rows)
+                        }
+                    }
+                    .onChange(of: geo.size) { _, newSize in
+                        lastCanvasSize = newSize
+                    }
+            }
+        )
         .onDisappear {
             removeEventMonitor()
         }
@@ -75,6 +90,20 @@ struct MatrixScreensaverView: View {
         if let monitor = eventMonitor {
             NSEvent.removeMonitor(monitor)
             eventMonitor = nil
+        }
+    }
+
+    // MARK: - Stream Update
+
+    private func updateStreamsIfNeeded() {
+        let size = lastCanvasSize
+        guard size.width > 0, size.height > 0 else { return }
+        let columns = Int(size.width / MatrixStream.cellWidth)
+        let rows = Int(size.height / MatrixStream.cellHeight)
+        guard columns > 0, rows > 0 else { return }
+
+        if !isInitialized || streams.count != activeColumnCount(for: columns) {
+            initializeStreams(columns: columns, rows: rows)
         }
     }
 
@@ -118,7 +147,8 @@ struct MatrixScreensaverView: View {
             let row = headPosition - offset
             guard row >= 0, row < rows else { continue }
 
-            let charIndex = (stream.column &* 31 &+ row &* 17 &+ Int(elapsed * 3)) % stream.characters.count
+            let elapsedComponent = Int(elapsed * 3) & 0x7FFFFFFF
+            let charIndex = (stream.column &* 31 &+ row &* 17 &+ elapsedComponent) % stream.characters.count
             let char = stream.characters[abs(charIndex) % stream.characters.count]
 
             let fade: Double

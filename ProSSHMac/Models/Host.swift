@@ -180,9 +180,7 @@ struct Host: Identifiable, Codable, Hashable {
         try container.encodeIfPresent(algorithmPreferences, forKey: .algorithmPreferences)
         try container.encode(pinnedHostKeyAlgorithms, forKey: .pinnedHostKeyAlgorithms)
         try container.encode(agentForwardingEnabled, forKey: .agentForwardingEnabled)
-        if !portForwardingRules.isEmpty {
-            try container.encode(portForwardingRules, forKey: .portForwardingRules)
-        }
+        try container.encode(portForwardingRules, forKey: .portForwardingRules)
         try container.encode(legacyModeEnabled, forKey: .legacyModeEnabled)
         try container.encode(tags, forKey: .tags)
         try container.encodeIfPresent(notes, forKey: .notes)
@@ -273,8 +271,21 @@ struct HostDraft: Equatable {
     func jumpHostValidationError(hostID: UUID?, allHosts: [Host]) -> String? {
         guard let jh = jumpHost else { return nil }
         if let hostID, jh == hostID { return "A host cannot use itself as a jump host." }
-        if let target = allHosts.first(where: { $0.id == jh }),
-           target.jumpHost != nil { return "Chained jump hosts are not supported." }
+
+        // Walk the jump host chain to detect cycles
+        var visited: Set<UUID> = []
+        if let hostID {
+            visited.insert(hostID)
+        }
+        var current: UUID? = jh
+        while let nextID = current {
+            if visited.contains(nextID) {
+                return "Jump host chain contains a cycle."
+            }
+            visited.insert(nextID)
+            current = allHosts.first(where: { $0.id == nextID })?.jumpHost
+        }
+
         return nil
     }
 

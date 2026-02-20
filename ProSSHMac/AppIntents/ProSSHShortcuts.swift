@@ -1,7 +1,7 @@
 import Foundation
 import AppIntents
 
-@available(iOS 16.0, *)
+@available(macOS 13.0, *)
 enum ProSSHSectionOption: String, AppEnum {
     case hosts
     case terminal
@@ -39,7 +39,7 @@ enum ProSSHSectionOption: String, AppEnum {
     }
 }
 
-@available(iOS 16.0, *)
+@available(macOS 13.0, *)
 struct OpenProSSHSectionIntent: AppIntent {
     static let title: LocalizedStringResource = "Open ProSSH Section"
     static let description = IntentDescription("Open ProSSH directly to a specific section.")
@@ -81,7 +81,7 @@ struct OpenProSSHSectionIntent: AppIntent {
     }
 }
 
-@available(iOS 16.0, *)
+@available(macOS 13.0, *)
 struct ConnectHostShortcutIntent: AppIntent {
     static let title: LocalizedStringResource = "Connect Host in ProSSH"
     static let description = IntentDescription("Open ProSSH and connect to a host by label or hostname.")
@@ -111,7 +111,7 @@ struct ConnectHostShortcutIntent: AppIntent {
     }
 }
 
-@available(iOS 16.0, *)
+@available(macOS 13.0, *)
 struct ProSSHShortcutsProvider: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
         AppShortcut(

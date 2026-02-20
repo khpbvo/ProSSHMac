@@ -203,7 +203,8 @@ vertex VertexOut terminal_vertex(
         float2(1.0, 1.0),  // v3: bottom-right
     };
 
-    float2 corner = corners[vid];
+    // Bounds-check vid to prevent out-of-bounds access into corners array.
+    float2 corner = corners[min(vid, 5u)];
 
     // Cell origin in pixels (top-left corner of this cell).
     float2 cellOrigin = float2(float(cell.col), float(cell.row)) * uniforms.cellSize;
@@ -219,13 +220,20 @@ vertex VertexOut terminal_vertex(
     ndc.y = (pixelPos.y / uniforms.viewportSize.y) * -2.0 + 1.0;
 
     // Glyph atlas UV coordinates.
-    // glyphIndex encodes atlas pixel position: upper 16 bits = Y, lower 16 bits = X.
-    float atlasX = float(cell.glyphIndex & 0xFFFF);
-    float atlasY = float((cell.glyphIndex >> 16) & 0xFFFF);
+    // When glyphIndex is GLYPH_INDEX_NONE, output zero UV so the fragment
+    // shader does not sample arbitrary atlas texels.
+    float2 uv;
+    if (cell.glyphIndex == GLYPH_INDEX_NONE) {
+        uv = float2(0.0, 0.0);
+    } else {
+        // glyphIndex encodes atlas pixel position: upper 16 bits = Y, lower 16 bits = X.
+        float atlasX = float(cell.glyphIndex & 0xFFFF);
+        float atlasY = float((cell.glyphIndex >> 16) & 0xFFFF);
 
-    float2 uvOrigin = float2(atlasX, atlasY) / uniforms.atlasSize;
-    float2 uvSize   = uniforms.cellSize / uniforms.atlasSize;
-    float2 uv       = uvOrigin + corner * uvSize;
+        float2 uvOrigin = float2(atlasX, atlasY) / uniforms.atlasSize;
+        float2 uvSize   = uniforms.cellSize / uniforms.atlasSize;
+        uv = uvOrigin + corner * uvSize;
+    }
 
     // Build output.
     VertexOut out;
@@ -295,7 +303,7 @@ fragment float4 terminal_fragment(
     bool blinkHidden = false;
     if (attrs & ATTR_BLINK) {
         // Use a sine wave for smooth blink: visible when sin > 0.
-        float blinkWave = sin(uniforms.time * 3.14159);
+        float blinkWave = sin(uniforms.time * M_PI_F);
         blinkHidden = (blinkWave < 0.0);
     }
 
@@ -379,7 +387,7 @@ fragment float4 terminal_fragment(
             } else if (ulStyle == UL_STYLE_CURLY) {
                 // Curly underline: sine wave at bottom of cell
                 float waveCenter = bottomEdge - CURLY_AMPLITUDE * uniforms.contentScale - scaledThick;
-                float phase = pixelX * CURLY_FREQUENCY * 2.0 * 3.14159 / uniforms.cellSize.x;
+                float phase = pixelX * CURLY_FREQUENCY * 2.0 * M_PI_F / uniforms.cellSize.x;
                 float waveY = waveCenter + sin(phase) * CURLY_AMPLITUDE * uniforms.contentScale;
                 float dist = abs(pixelY - waveY);
                 if (dist < scaledThick * 1.2) {
@@ -621,8 +629,8 @@ inline float3 computeGradientColor(
     } else if (uniforms.gradientStyle == GRADIENT_ANGULAR) {
         // Angle from center.
         float2 centered = animUV - 0.5;
-        blend = (atan2(centered.y, centered.x) + 3.14159) / (2.0 * 3.14159);
-        blend = fract(blend + angle / (2.0 * 3.14159));
+        blend = fmod(atan2(centered.y, centered.x) + 2.0 * M_PI_F, 2.0 * M_PI_F) / (2.0 * M_PI_F);
+        blend = fract(blend + angle / (2.0 * M_PI_F));
     } else if (uniforms.gradientStyle == GRADIENT_DIAMOND) {
         // Manhattan distance from center.
         float2 centered = abs(animUV - 0.5);
@@ -684,7 +692,7 @@ inline float3 computeGradientColor(
             glowCenter.x += sin(t * 0.3) * 0.05;
             glowCenter.y += cos(t * 0.4) * 0.03;
         }
-        float dist = length(uv - glowCenter);
+        float dist = max(distance(uv, glowCenter), 0.001);
         float glowFalloff = exp(-dist * dist / (uniforms.gradientGlowRadius * uniforms.gradientGlowRadius * 0.5));
         float glowPulse = 1.0;
         if (uniforms.gradientAnimationMode != GRAD_ANIM_NONE) {

@@ -184,7 +184,7 @@ final class PortForwardingManager: ObservableObject {
     }
 }
 
-final class ForwardConnectionProxy: @unchecked Sendable {
+actor ForwardConnectionProxy {
     private let connection: NWConnection
     private let channel: any SSHForwardChannel
     private var localToRemoteTask: Task<Void, Never>?
@@ -196,7 +196,7 @@ final class ForwardConnectionProxy: @unchecked Sendable {
         self.channel = channel
     }
 
-    func start(onComplete: @escaping @Sendable () -> Void) async {
+    func start(onComplete: @escaping @Sendable () -> Void) {
         connection.start(queue: DispatchQueue(label: "prosshv2.fwdproxy.\(ObjectIdentifier(self))"))
 
         localToRemoteTask = Task { [weak self] in
@@ -253,7 +253,7 @@ final class ForwardConnectionProxy: @unchecked Sendable {
         }
     }
 
-    private func receiveFromConnection() async throws -> Data? {
+    private nonisolated func receiveFromConnection() async throws -> Data? {
         try await withCheckedThrowingContinuation { continuation in
             connection.receive(minimumIncompleteLength: 1, maximumLength: 32768) { content, _, isComplete, error in
                 if let error {
@@ -269,7 +269,7 @@ final class ForwardConnectionProxy: @unchecked Sendable {
         }
     }
 
-    private func sendToConnection(_ data: Data) async throws {
+    private nonisolated func sendToConnection(_ data: Data) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             connection.send(content: data, completion: .contentProcessed { error in
                 if let error {

@@ -118,6 +118,7 @@ struct KeyForgeView: View {
                         )
                         if imported {
                             operationMessage = "Key imported from clipboard."
+                            importLabel = ""
                             importPassphrase = ""
                         }
                     }
@@ -211,11 +212,14 @@ struct KeyForgeView: View {
                     )
                     if imported {
                         operationMessage = "Key imported from file."
+                        importLabel = ""
                         importPassphrase = ""
                     }
                 }
             case let .failure(error):
-                viewModel.errorMessage = "Unable to select key file: \(error.localizedDescription)"
+                Task { @MainActor in
+                    viewModel.errorMessage = "Unable to select key file: \(error.localizedDescription)"
+                }
             }
         }
         .alert(

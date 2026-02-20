@@ -33,10 +33,10 @@ struct DetectedLink: Identifiable, Sendable {
 
 struct LinkDetector {
     private static let urlRegex = try! NSRegularExpression(
-        pattern: #"(?i)\b((?:https?://|www\.)[^\s<>'"`]+)"#
+        pattern: #"(?i)\b((?:https?://|www\.)[^\s<>'"`]*(?:\([^\s<>'"`]*\)[^\s<>'"`]*)*)"#
     )
     private static let filePathRegex = try! NSRegularExpression(
-        pattern: #"(?<!\w)(~\/[^\s:;,]+|\/(?:[\w\-.]+\/)*[\w\-.]+)"#
+        pattern: #"(?<!\w)(~\/[^\s:;,]+|\.\/[^\s:;,]+|\/(?:[\w\-.]+\/)+[\w\-.]+)"#
     )
     private static let ipv4Regex = try! NSRegularExpression(
         pattern: #"\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b"#
@@ -146,8 +146,17 @@ struct LinkDetector {
 
     private func trimTrailingPunctuation(_ text: String) -> String {
         var value = text
+        // Count open and close parentheses to preserve balanced parens in URLs
         let trailing = CharacterSet(charactersIn: ".,;:!?)")
         while let scalar = value.unicodeScalars.last, trailing.contains(scalar) {
+            if scalar == ")" {
+                // Only trim closing paren if parentheses are unbalanced
+                let openCount = value.filter { $0 == "(" }.count
+                let closeCount = value.filter { $0 == ")" }.count
+                if closeCount <= openCount {
+                    break
+                }
+            }
             value.removeLast()
         }
         return value

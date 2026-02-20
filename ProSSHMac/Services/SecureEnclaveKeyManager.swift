@@ -267,8 +267,8 @@ nonisolated final class SecureEnclaveKeyManager {
     }
 
     private func cfErrorMessage(_ error: Unmanaged<CFError>?) -> String? {
-        guard let error else { return nil }
-        let managed = error.takeRetainedValue()
-        return managed.localizedDescription
+        return error
+            .map { $0.takeRetainedValue() as CFError }
+            .map { ($0 as Error).localizedDescription }
     }
 }

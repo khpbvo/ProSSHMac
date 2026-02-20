@@ -63,7 +63,7 @@ nonisolated enum DCSHandler {
     ) async {
         // Dispatch based on intermediates
         // DCS $ q ... ST = DECRQSS
-        if intermediates.contains(0x24) { // '$'
+        if intermediates == [0x24] { // '$'
             await handleDECRQSS(
                 data: data, grid: grid, responseHandler: responseHandler
             )

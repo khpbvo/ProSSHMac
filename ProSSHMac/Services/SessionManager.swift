@@ -215,6 +215,9 @@ final class SessionManager: ObservableObject {
             throw LocalShellError.platformUnsupported
         }
 
+        // Capture the tracked working directory before cleanup removes it.
+        let trackedWorkingDirectory = workingDirectoryBySessionID[sessionID]
+
         // Clean up old session artifacts
         if let shell = shellChannels[sessionID] {
             await shell.close()
@@ -224,14 +227,14 @@ final class SessionManager: ObservableObject {
 
         return try await openLocalSession(
             shellPath: oldSession.shellPath,
-            workingDirectory: workingDirectoryBySessionID[sessionID]
+            workingDirectory: trackedWorkingDirectory
         )
     }
 
     func applicationDidEnterBackground() {
         for session in sessions where session.state == .connected {
             if let host = hostBySessionID[session.id] {
-                pendingReconnectHosts[host.id] = (host: host, jumpHost: jumpHostBySessionID[session.id])
+                pendingReconnectHosts[session.id] = (host: host, jumpHost: jumpHostBySessionID[session.id])
             }
         }
     }
@@ -353,7 +356,9 @@ final class SessionManager: ObservableObject {
             if let jumpHost {
                 jumpHostBySessionID[sessionID] = jumpHost
             }
-            pendingReconnectHosts.removeValue(forKey: host.id)
+            for (key, entry) in pendingReconnectHosts where entry.host.id == host.id {
+                pendingReconnectHosts.removeValue(forKey: key)
+            }
 
             let securityNote: String
             if details.usedLegacyAlgorithms {
@@ -467,9 +472,7 @@ final class SessionManager: ObservableObject {
         manuallyDisconnectingSessions.insert(sessionID)
         defer { manuallyDisconnectingSessions.remove(sessionID) }
 
-        if let host = hostBySessionID[sessionID] {
-            pendingReconnectHosts.removeValue(forKey: host.id)
-        }
+        pendingReconnectHosts.removeValue(forKey: sessionID)
         hostBySessionID.removeValue(forKey: sessionID)
         jumpHostBySessionID.removeValue(forKey: sessionID)
 
@@ -689,7 +692,7 @@ final class SessionManager: ObservableObject {
 
     func stopRecording(sessionID: UUID) async {
         do {
-            let recordingURL = try sessionRecorder.stopRecording(sessionID: sessionID)
+            let recordingURL = try await sessionRecorder.stopRecording(sessionID: sessionID)
             isRecordingBySessionID[sessionID] = false
             hasRecordingBySessionID[sessionID] = true
             latestRecordingURLBySessionID[sessionID] = recordingURL
@@ -721,7 +724,7 @@ final class SessionManager: ObservableObject {
 
     func exportLastRecordingAsCast(sessionID: UUID, columns: Int = 80, rows: Int = 24) async {
         do {
-            let castURL = try sessionRecorder.exportLatestRecordingAsCast(
+            let castURL = try await sessionRecorder.exportLatestRecordingAsCast(
                 sessionID: sessionID,
                 columns: columns,
                 rows: rows
@@ -984,7 +987,7 @@ final class SessionManager: ObservableObject {
 
         let host = hostBySessionID[sessionID]
         if let host {
-            pendingReconnectHosts[host.id] = (host: host, jumpHost: jumpHostBySessionID[sessionID])
+            pendingReconnectHosts[sessionID] = (host: host, jumpHost: jumpHostBySessionID[sessionID])
         }
 
         await auditLogManager?.record(
@@ -1053,14 +1056,14 @@ final class SessionManager: ObservableObject {
     }
 
     private func removeSession(sessionID: UUID) {
+        guard sessions.contains(where: { $0.id == sessionID }) else { return }
+
         if let pfm = portForwardingManager {
             Task {
                 await pfm.deactivateAll(for: sessionID)
             }
         }
-        if let host = hostBySessionID[sessionID] {
-            pendingReconnectHosts.removeValue(forKey: host.id)
-        }
+        pendingReconnectHosts.removeValue(forKey: sessionID)
         hostBySessionID.removeValue(forKey: sessionID)
         jumpHostBySessionID.removeValue(forKey: sessionID)
         sessions.removeAll(where: { $0.id == sessionID })
@@ -1075,12 +1078,14 @@ final class SessionManager: ObservableObject {
             return
         }
 
-        do {
-            let recordingURL = try sessionRecorder.stopRecording(sessionID: sessionID)
-            hasRecordingBySessionID[sessionID] = true
-            latestRecordingURLBySessionID[sessionID] = recordingURL
-        } catch {
-            // Best-effort finalization when sessions disconnect unexpectedly.
+        Task { @MainActor in
+            do {
+                let recordingURL = try await sessionRecorder.stopRecording(sessionID: sessionID)
+                hasRecordingBySessionID[sessionID] = true
+                latestRecordingURLBySessionID[sessionID] = recordingURL
+            } catch {
+                // Best-effort finalization when sessions disconnect unexpectedly.
+            }
         }
     }
 
@@ -1349,20 +1354,20 @@ final class SessionManager: ObservableObject {
             return
         }
 
-        let entries = Array(pendingReconnectHosts.values)
-        for entry in entries {
+        let snapshot = pendingReconnectHosts
+        for (oldSessionID, entry) in snapshot {
             if activeSession(for: entry.host.id) != nil {
-                pendingReconnectHosts.removeValue(forKey: entry.host.id)
+                pendingReconnectHosts.removeValue(forKey: oldSessionID)
                 continue
             }
 
             do {
                 _ = try await connect(to: entry.host, jumpHost: entry.jumpHost, automaticReconnect: true, passwordOverride: nil)
-                pendingReconnectHosts.removeValue(forKey: entry.host.id)
+                pendingReconnectHosts.removeValue(forKey: oldSessionID)
             } catch SessionConnectionError.hostVerificationRequired {
-                pendingReconnectHosts.removeValue(forKey: entry.host.id)
+                pendingReconnectHosts.removeValue(forKey: oldSessionID)
             } catch {
-                // Keep host in pending queue for a later retry.
+                // Keep entry in pending queue for a later retry.
             }
         }
     }

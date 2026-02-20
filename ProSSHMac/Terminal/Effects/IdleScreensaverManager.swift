@@ -15,7 +15,7 @@ final class IdleScreensaverManager: ObservableObject {
     /// Whether the screensaver is currently displayed.
     @Published private(set) var isActive = false
 
-    private var idleTimer: Timer?
+    private var idleTimerTask: Task<Void, Never>?
     private var globalEventMonitor: Any?
     private var localEventMonitor: Any?
     private var configObserver: AnyCancellable?
@@ -24,7 +24,8 @@ final class IdleScreensaverManager: ObservableObject {
     private(set) var config: MatrixScreensaverConfiguration
 
     deinit {
-        idleTimer?.invalidate()
+        idleTimerTask?.cancel()
+        idleTimerTask = nil
         if let monitor = globalEventMonitor {
             NSEvent.removeMonitor(monitor)
         }
@@ -59,8 +60,8 @@ final class IdleScreensaverManager: ObservableObject {
     /// Force-activate the screensaver (e.g. from a menu action).
     func activate() {
         guard config.isEnabled else { return }
-        idleTimer?.invalidate()
-        idleTimer = nil
+        idleTimerTask?.cancel()
+        idleTimerTask = nil
         isActive = true
     }
 
@@ -74,8 +75,8 @@ final class IdleScreensaverManager: ObservableObject {
         if !newConfig.isEnabled {
             // Screensaver was disabled — dismiss and stop timer
             isActive = false
-            idleTimer?.invalidate()
-            idleTimer = nil
+            idleTimerTask?.cancel()
+            idleTimerTask = nil
         } else if !wasEnabled && newConfig.isEnabled {
             // Screensaver was just enabled — start timer
             resetIdleTimer()
@@ -113,8 +114,8 @@ final class IdleScreensaverManager: ObservableObject {
     }
 
     private func stopMonitoring() {
-        idleTimer?.invalidate()
-        idleTimer = nil
+        idleTimerTask?.cancel()
+        idleTimerTask = nil
 
         if let monitor = globalEventMonitor {
             NSEvent.removeMonitor(monitor)
@@ -137,18 +138,22 @@ final class IdleScreensaverManager: ObservableObject {
     }
 
     private func resetIdleTimer() {
-        idleTimer?.invalidate()
+        idleTimerTask?.cancel()
 
         guard config.isEnabled else {
-            idleTimer = nil
+            idleTimerTask = nil
             return
         }
 
-        let timeout = TimeInterval(max(1, config.idleTimeoutMinutes)) * 60.0
+        let timeout = UInt64(max(1, config.idleTimeoutMinutes)) * 60 * 1_000_000_000
 
-        idleTimer = Timer.scheduledTimer(withTimeInterval: timeout, repeats: false) { [weak self] _ in
-            Task { @MainActor in
-                self?.activateScreensaver()
+        idleTimerTask = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: timeout)
+                guard !Task.isCancelled else { return }
+                await self?.activateScreensaver()
+            } catch {
+                // Task was cancelled — nothing to do
             }
         }
     }

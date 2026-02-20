@@ -124,23 +124,31 @@ nonisolated enum OSCHandler {
         grid: TerminalGrid,
         responseHandler: (([UInt8]) async -> Void)?
     ) async {
-        // Text after "4;" is: index;color_spec or index;?
-        let parts = text.split(separator: ";", maxSplits: 1)
-        guard parts.count >= 2,
-              let index = UInt8(parts[0]) else { return }
-
-        let spec = String(parts[1])
-
-        if spec == "?" {
-            // Query: respond with current color
-            let (r, g, b) = await grid.paletteColor(index: index)
-            let response = "\u{1B}]4;\(index);rgb:\(hexPair(r))/\(hexPair(g))/\(hexPair(b))\u{1B}\\"
-            await responseHandler?(Array(response.utf8))
-        } else {
-            // Set: parse color spec
-            if let (r, g, b) = parseColorSpec(spec) {
-                await grid.setPaletteColor(index: index, r: r, g: g, b: b)
+        // Text after "4;" is: index;color_spec[;index;color_spec...]
+        // OSC 4 can set multiple palette colors in one sequence,
+        // so we parse all pairs by advancing two parts at a time.
+        let parts = text.split(separator: ";")
+        var i = 0
+        while i + 1 < parts.count {
+            guard let index = UInt8(parts[i]) else {
+                i += 2
+                continue
             }
+            let spec = String(parts[i + 1])
+
+            if spec == "?" {
+                // Query: respond with current color
+                let (r, g, b) = await grid.paletteColor(index: index)
+                let response = "\u{1B}]4;\(index);rgb:\(hexPair(r))/\(hexPair(g))/\(hexPair(b))\u{1B}\\"
+                await responseHandler?(Array(response.utf8))
+            } else {
+                // Set: parse color spec
+                if let (r, g, b) = parseColorSpec(spec) {
+                    await grid.setPaletteColor(index: index, r: r, g: g, b: b)
+                }
+            }
+
+            i += 2
         }
     }
 
