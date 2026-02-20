@@ -51,7 +51,7 @@ actor FileKnownHostsStore: KnownHostsStoreProtocol {
     private let fileManager: FileManager
     private let fileURL: URL
 
-    init(fileManager: FileManager = .default) {
+    nonisolated init(fileManager: FileManager = .default) {
         self.fileManager = fileManager
         self.fileURL = Self.defaultFileURL(fileManager: fileManager)
     }
