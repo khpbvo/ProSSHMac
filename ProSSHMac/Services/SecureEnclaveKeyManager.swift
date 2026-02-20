@@ -194,10 +194,11 @@ nonisolated final class SecureEnclaveKeyManager {
 
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard status == errSecSuccess, let key = item as? SecKey else {
+        guard status == errSecSuccess, let ref = item else {
             throw SecureEnclaveKeyManagerError.privateKeyNotFound
         }
-        return key
+        // swiftlint:disable:next force_cast
+        return ref as! SecKey
     }
 
     private func decodeECDSASignatureDER(_ der: Data) throws -> (Data, Data) {

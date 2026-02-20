@@ -16,8 +16,8 @@ final class IdleScreensaverManager: ObservableObject {
     @Published private(set) var isActive = false
 
     private var idleTimerTask: Task<Void, Never>?
-    private var globalEventMonitor: Any?
-    private var localEventMonitor: Any?
+    nonisolated(unsafe) private var globalEventMonitor: Any?
+    nonisolated(unsafe) private var localEventMonitor: Any?
     private var configObserver: AnyCancellable?
 
     /// Current configuration, reloaded from UserDefaults.
@@ -151,7 +151,7 @@ final class IdleScreensaverManager: ObservableObject {
             do {
                 try await Task.sleep(nanoseconds: timeout)
                 guard !Task.isCancelled else { return }
-                await self?.activateScreensaver()
+                self?.activateScreensaver()
             } catch {
                 // Task was cancelled — nothing to do
             }

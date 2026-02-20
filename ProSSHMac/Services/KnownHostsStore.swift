@@ -48,10 +48,10 @@ protocol KnownHostsStoreProtocol: Sendable {
 }
 
 actor FileKnownHostsStore: KnownHostsStoreProtocol {
-    private let fileManager: FileManager
+    nonisolated(unsafe) private let fileManager: FileManager
     private let fileURL: URL
 
-    nonisolated init(fileManager: FileManager = .default) {
+    init(fileManager: FileManager = .default) {
         self.fileManager = fileManager
         self.fileURL = Self.defaultFileURL(fileManager: fileManager)
     }

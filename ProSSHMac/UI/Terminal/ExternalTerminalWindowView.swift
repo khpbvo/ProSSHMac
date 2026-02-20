@@ -6,6 +6,7 @@ struct ExternalTerminalWindowView: View {
 
     @EnvironmentObject private var sessionManager: SessionManager
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.dismiss) private var dismiss
     @AppStorage(TransparencyManager.backgroundOpacityKey) private var terminalBackgroundOpacityPercent = TransparencyManager.defaultBackgroundOpacityPercent
     @AppStorage("terminal.ui.fontSize") private var terminalUIFontSize = 12.0
     @AppStorage("terminal.renderer.useMetal") private var useMetalRenderer = true
@@ -38,6 +39,11 @@ struct ExternalTerminalWindowView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))
+        .onAppear {
+            if session == nil {
+                dismiss()
+            }
+        }
     }
 
     // MARK: - Header

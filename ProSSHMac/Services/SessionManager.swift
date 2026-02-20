@@ -692,7 +692,7 @@ final class SessionManager: ObservableObject {
 
     func stopRecording(sessionID: UUID) async {
         do {
-            let recordingURL = try await sessionRecorder.stopRecording(sessionID: sessionID)
+            let recordingURL = try sessionRecorder.stopRecording(sessionID: sessionID)
             isRecordingBySessionID[sessionID] = false
             hasRecordingBySessionID[sessionID] = true
             latestRecordingURLBySessionID[sessionID] = recordingURL
@@ -724,7 +724,7 @@ final class SessionManager: ObservableObject {
 
     func exportLastRecordingAsCast(sessionID: UUID, columns: Int = 80, rows: Int = 24) async {
         do {
-            let castURL = try await sessionRecorder.exportLatestRecordingAsCast(
+            let castURL = try sessionRecorder.exportLatestRecordingAsCast(
                 sessionID: sessionID,
                 columns: columns,
                 rows: rows
@@ -1080,7 +1080,7 @@ final class SessionManager: ObservableObject {
 
         Task { @MainActor in
             do {
-                let recordingURL = try await sessionRecorder.stopRecording(sessionID: sessionID)
+                let recordingURL = try sessionRecorder.stopRecording(sessionID: sessionID)
                 hasRecordingBySessionID[sessionID] = true
                 latestRecordingURLBySessionID[sessionID] = recordingURL
             } catch {
