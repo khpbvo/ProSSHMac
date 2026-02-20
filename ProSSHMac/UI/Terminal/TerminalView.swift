@@ -1190,7 +1190,8 @@ struct TerminalView: View {
         }
 
         return lines.enumerated().map { index, line in
-            SafeTerminalRenderedLine(id: index, text: line)
+            let stableID = "\(index)-\(line.hashValue)"
+            return SafeTerminalRenderedLine(id: stableID, lineNumber: index, text: line)
         }
     }
 
@@ -1248,7 +1249,8 @@ struct TerminalView: View {
             for provider in providers {
                 _ = provider.loadObject(ofClass: URL.self) { url, _ in
                     guard let url else { return }
-                    let escapedPath = url.path.replacingOccurrences(of: " ", with: "\\ ")
+                    let escaped = url.path.replacingOccurrences(of: "'", with: "'\\''")
+                    let escapedPath = "'\(escaped)'"
                     Task { @MainActor in
                         await sessionManager.sendShellInput(sessionID: session.id, input: escapedPath)
                     }
@@ -1348,7 +1350,7 @@ struct TerminalView: View {
                     LazyVStack(alignment: .leading, spacing: 2) {
                         ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
                             terminalLineView(line, lineIndex: index)
-                                .id(index)
+                                .id("\(index)-\(line.hashValue)")
                         }
                     }
                     .padding(8)
@@ -2354,7 +2356,8 @@ struct TerminalView: View {
 // MetalTerminalSessionSurface and MetalTerminalSurfaceModel moved to MetalTerminalSessionSurface.swift
 
 private struct SafeTerminalRenderedLine: Identifiable {
-    let id: Int
+    let id: String
+    let lineNumber: Int
     let text: String
 }
 

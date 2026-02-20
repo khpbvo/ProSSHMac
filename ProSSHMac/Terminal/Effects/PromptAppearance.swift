@@ -96,12 +96,16 @@ struct PromptAppearanceConfiguration: Codable, Sendable, Equatable {
             usernameStr = "%{\u{1b}[38;2;\(r);\(g);\(b)m%}\(user)%{\u{1b}[0m%}"
         case .rainbow:
             var parts = [String]()
-            for (i, char) in user.enumerated() {
-                let c = rainbowColors[i % rainbowColors.count]
-                let (r, g, b) = c.rgb255
-                parts.append("%{\u{1b}[38;2;\(r);\(g);\(b)m%}\(char)")
+            if !rainbowColors.isEmpty {
+                for (i, char) in user.enumerated() {
+                    let c = rainbowColors[i % rainbowColors.count]
+                    let (r, g, b) = c.rgb255
+                    parts.append("%{\u{1b}[38;2;\(r);\(g);\(b)m%}\(char)")
+                }
+                usernameStr = parts.joined() + "%{\u{1b}[0m%}"
+            } else {
+                usernameStr = "%F{255}\(user)%f"
             }
-            usernameStr = parts.joined() + "%{\u{1b}[0m%}"
         }
 
         let (pr, pg, pb) = pathColor.rgb255
@@ -124,12 +128,16 @@ struct PromptAppearanceConfiguration: Codable, Sendable, Equatable {
             usernameStr = "\\[\\e[38;2;\(r);\(g);\(b)m\\]\(user)\\[\\e[0m\\]"
         case .rainbow:
             var parts = [String]()
-            for (i, char) in user.enumerated() {
-                let c = rainbowColors[i % rainbowColors.count]
-                let (r, g, b) = c.rgb255
-                parts.append("\\[\\e[38;2;\(r);\(g);\(b)m\\]\(char)")
+            if !rainbowColors.isEmpty {
+                for (i, char) in user.enumerated() {
+                    let c = rainbowColors[i % rainbowColors.count]
+                    let (r, g, b) = c.rgb255
+                    parts.append("\\[\\e[38;2;\(r);\(g);\(b)m\\]\(char)")
+                }
+                usernameStr = parts.joined() + "\\[\\e[0m\\]"
+            } else {
+                usernameStr = "\\[\\e[38;2;255;255;255m\\]\(user)\\[\\e[0m\\]"
             }
-            usernameStr = parts.joined() + "\\[\\e[0m\\]"
         }
 
         let (pr, pg, pb) = pathColor.rgb255

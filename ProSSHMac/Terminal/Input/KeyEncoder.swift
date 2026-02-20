@@ -215,9 +215,12 @@ struct KeyEncoder: Sendable {
     }
 
     private func encodeBackspace(modifiers: KeyModifiers) -> [UInt8] {
-        // Ctrl+Backspace conventionally maps to DEL.
+        // Ctrl+Backspace sends the opposite of the normal backspace byte,
+        // so users can distinguish Ctrl+Backspace from plain Backspace.
+        // This applies regardless of whether Alt is also held (Alt adds ESC prefix).
         if modifiers.contains(.ctrl) {
-            return maybePrefixEscape([0x7F], modifiers: modifiers)
+            let ctrlByte: UInt8 = options.backspaceSendsDelete ? 0x08 : 0x7F
+            return maybePrefixEscape([ctrlByte], modifiers: modifiers)
         }
 
         let base: UInt8 = options.backspaceSendsDelete ? 0x7F : 0x08

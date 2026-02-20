@@ -495,7 +495,7 @@ struct HostsView: View {
         }
 
         return groups
-            .map { (folder: $0.key, hosts: $0.value) }
+            .map { (folder: $0.key, hosts: $0.value.sorted { $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending }) }
             .sorted { lhs, rhs in
                 lhs.folder.localizedCaseInsensitiveCompare(rhs.folder) == .orderedAscending
             }

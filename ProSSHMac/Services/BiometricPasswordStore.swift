@@ -17,6 +17,8 @@ enum BiometricPasswordError: LocalizedError {
     case deleteFailed(OSStatus)
     case noPasswordStored
     case dataConversionFailed
+    case authenticationFailed
+    case userCancelled
 
     var errorDescription: String? {
         switch self {
@@ -32,6 +34,10 @@ enum BiometricPasswordError: LocalizedError {
             return "No saved password found for this host."
         case .dataConversionFailed:
             return "Password data could not be converted."
+        case .authenticationFailed:
+            return "Biometric authentication failed."
+        case .userCancelled:
+            return "Authentication was cancelled by the user."
         }
     }
 }
@@ -109,9 +115,17 @@ final class BiometricPasswordStore: BiometricPasswordStoring {
                 guard status == errSecSuccess,
                       let data = result as? Data,
                       let password = String(data: data, encoding: .utf8) else {
-                    if status == errSecItemNotFound {
+                    switch status {
+                    case errSecItemNotFound:
                         continuation.resume(throwing: BiometricPasswordError.noPasswordStored)
-                    } else {
+                    case errSecAuthFailed:
+                        continuation.resume(throwing: BiometricPasswordError.authenticationFailed)
+                    case errSecUserCanceled:
+                        continuation.resume(throwing: BiometricPasswordError.userCancelled)
+                    case errSecSuccess:
+                        // Status was success but data conversion failed.
+                        continuation.resume(throwing: BiometricPasswordError.dataConversionFailed)
+                    default:
                         continuation.resume(throwing: BiometricPasswordError.retrieveFailed(status))
                     }
                     return

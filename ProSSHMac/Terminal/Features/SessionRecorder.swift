@@ -88,6 +88,7 @@ final class SessionRecorder {
     private let recordingsDirectoryURL: URL
     private var activeRecordingsBySessionID: [UUID: ActiveRecording] = [:]
     private var latestRecordingURLBySessionID: [UUID: URL] = [:]
+    private let ioQueue = DispatchQueue(label: "com.prosshv2.sessionrecorder.io", qos: .utility)
 
     init(fileManager: FileManager = .default, recordingsDirectoryURL: URL? = nil) {
         self.fileManager = fileManager
@@ -130,14 +131,24 @@ final class SessionRecorder {
     }
 
     @discardableResult
-    func stopRecording(sessionID: UUID) throws -> URL {
+    func stopRecording(sessionID: UUID) async throws -> URL {
         guard var active = activeRecordingsBySessionID.removeValue(forKey: sessionID) else {
             throw SessionRecorderError.notRecording
         }
 
         active.recording.endedAt = Date()
         let fileURL = recordingFileURL(recordingID: active.recording.id)
-        try persistRecording(active.recording, to: fileURL)
+        let recording = active.recording
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            ioQueue.async {
+                do {
+                    try self.persistRecording(recording, to: fileURL)
+                    continuation.resume()
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
         latestRecordingURLBySessionID[sessionID] = fileURL
         return fileURL
     }
@@ -177,9 +188,9 @@ final class SessionRecorder {
         columns: Int = 80,
         rows: Int = 24,
         destinationURL: URL? = nil
-    ) throws -> URL {
+    ) async throws -> URL {
         let recording = try loadLatestRecording(sessionID: sessionID)
-        return try exportAsciinemaCast(
+        return try await exportAsciinemaCast(
             recording: recording,
             columns: columns,
             rows: rows,
@@ -192,7 +203,7 @@ final class SessionRecorder {
         columns: Int = 80,
         rows: Int = 24,
         destinationURL: URL? = nil
-    ) throws -> URL {
+    ) async throws -> URL {
         let outputURL = destinationURL ?? recordingsDirectoryURL
             .appendingPathComponent(recording.id.uuidString)
             .appendingPathExtension("cast")
@@ -217,8 +228,18 @@ final class SessionRecorder {
         }
 
         let output = lines.joined(separator: "\n") + "\n"
-        try fileManager.createDirectory(at: outputURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try output.write(to: outputURL, atomically: true, encoding: .utf8)
+        let fm = fileManager
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            ioQueue.async {
+                do {
+                    try fm.createDirectory(at: outputURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try output.write(to: outputURL, atomically: true, encoding: .utf8)
+                    continuation.resume()
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
         return outputURL
     }
 
@@ -288,7 +309,7 @@ final class SessionRecorder {
         activeRecordingsBySessionID[sessionID] = active
     }
 
-    private func persistRecording(_ recording: SessionRecording, to fileURL: URL) throws {
+    nonisolated private func persistRecording(_ recording: SessionRecording, to fileURL: URL) throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601

@@ -510,7 +510,9 @@ actor TerminalGrid {
                 dirtyRowLo = min(dirtyRowLo, row)
                 dirtyRowHi = max(dirtyRowHi, row)
 
-                lastPrintedChar = Self.asciiCharacterCache[Int(byte)]
+                lastPrintedChar = needsCharsetMapping
+                    ? charStr.first ?? Self.asciiCharacterCache[Int(byte)]
+                    : Self.asciiCharacterCache[Int(byte)]
 
                 // Advance cursor (ASCII is always width 1)
                 if cursor.col >= columns - 1 {

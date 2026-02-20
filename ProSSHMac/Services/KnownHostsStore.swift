@@ -47,21 +47,18 @@ protocol KnownHostsStoreProtocol: Sendable {
     func clearAll() async throws
 }
 
-final class FileKnownHostsStore: KnownHostsStoreProtocol, @unchecked Sendable {
+actor FileKnownHostsStore: KnownHostsStoreProtocol {
     private let fileManager: FileManager
     private let fileURL: URL
-    private let lock = NSLock()
 
     init(fileManager: FileManager = .default) {
         self.fileManager = fileManager
         self.fileURL = Self.defaultFileURL(fileManager: fileManager)
     }
 
-    func allEntries() async throws -> [KnownHostEntry] {
-        try withLock {
-            try loadEntries().sorted {
-                $0.hostname.localizedCaseInsensitiveCompare($1.hostname) == .orderedAscending
-            }
+    func allEntries() throws -> [KnownHostEntry] {
+        try loadEntries().sorted {
+            $0.hostname.localizedCaseInsensitiveCompare($1.hostname) == .orderedAscending
         }
     }
 
@@ -70,78 +67,72 @@ final class FileKnownHostsStore: KnownHostsStoreProtocol, @unchecked Sendable {
         port: UInt16,
         hostKeyType: String,
         presentedFingerprint: String
-    ) async throws -> KnownHostVerificationResult {
-        try withLock {
-            let normalizedHostname = hostname.lowercased()
-            var entries = try loadEntries()
+    ) throws -> KnownHostVerificationResult {
+        let normalizedHostname = hostname.lowercased()
+        var entries = try loadEntries()
 
-            guard let index = entries.firstIndex(where: {
-                $0.hostname.lowercased() == normalizedHostname && $0.port == port
-            }) else {
-                return .requiresUserApproval(
-                    KnownHostVerificationChallenge(
-                        hostname: hostname,
-                        port: port,
-                        hostKeyType: hostKeyType,
-                        presentedFingerprint: presentedFingerprint,
-                        expectedFingerprint: nil
-                    )
+        guard let index = entries.firstIndex(where: {
+            $0.hostname.lowercased() == normalizedHostname && $0.port == port
+        }) else {
+            return .requiresUserApproval(
+                KnownHostVerificationChallenge(
+                    hostname: hostname,
+                    port: port,
+                    hostKeyType: hostKeyType,
+                    presentedFingerprint: presentedFingerprint,
+                    expectedFingerprint: nil
                 )
-            }
-
-            let existing = entries[index]
-            guard existing.fingerprint == presentedFingerprint else {
-                return .requiresUserApproval(
-                    KnownHostVerificationChallenge(
-                        hostname: hostname,
-                        port: port,
-                        hostKeyType: hostKeyType,
-                        presentedFingerprint: presentedFingerprint,
-                        expectedFingerprint: existing.fingerprint
-                    )
-                )
-            }
-
-            entries[index].hostKeyType = hostKeyType
-            entries[index].lastVerifiedAt = .now
-            try persist(entries)
-            return .trusted
+            )
         }
+
+        let existing = entries[index]
+        guard existing.fingerprint == presentedFingerprint else {
+            return .requiresUserApproval(
+                KnownHostVerificationChallenge(
+                    hostname: hostname,
+                    port: port,
+                    hostKeyType: hostKeyType,
+                    presentedFingerprint: presentedFingerprint,
+                    expectedFingerprint: existing.fingerprint
+                )
+            )
+        }
+
+        entries[index].hostKeyType = hostKeyType
+        entries[index].lastVerifiedAt = .now
+        try persist(entries)
+        return .trusted
     }
 
-    func trust(challenge: KnownHostVerificationChallenge) async throws {
-        try withLock {
-            var entries = try loadEntries()
-            let normalizedHostname = challenge.hostname.lowercased()
-            let now = Date.now
+    func trust(challenge: KnownHostVerificationChallenge) throws {
+        var entries = try loadEntries()
+        let normalizedHostname = challenge.hostname.lowercased()
+        let now = Date.now
 
-            if let index = entries.firstIndex(where: {
-                $0.hostname.lowercased() == normalizedHostname && $0.port == challenge.port
-            }) {
-                entries[index].hostKeyType = challenge.hostKeyType
-                entries[index].fingerprint = challenge.presentedFingerprint
-                entries[index].lastVerifiedAt = now
-            } else {
-                entries.append(
-                    KnownHostEntry(
-                        hostname: challenge.hostname,
-                        port: challenge.port,
-                        hostKeyType: challenge.hostKeyType,
-                        fingerprint: challenge.presentedFingerprint,
-                        firstTrustedAt: now,
-                        lastVerifiedAt: now
-                    )
+        if let index = entries.firstIndex(where: {
+            $0.hostname.lowercased() == normalizedHostname && $0.port == challenge.port
+        }) {
+            entries[index].hostKeyType = challenge.hostKeyType
+            entries[index].fingerprint = challenge.presentedFingerprint
+            entries[index].lastVerifiedAt = now
+        } else {
+            entries.append(
+                KnownHostEntry(
+                    hostname: challenge.hostname,
+                    port: challenge.port,
+                    hostKeyType: challenge.hostKeyType,
+                    fingerprint: challenge.presentedFingerprint,
+                    firstTrustedAt: now,
+                    lastVerifiedAt: now
                 )
-            }
-
-            try persist(entries)
+            )
         }
+
+        try persist(entries)
     }
 
-    func clearAll() async throws {
-        try withLock {
-            try persist([])
-        }
+    func clearAll() throws {
+        try persist([])
     }
 
     private func loadEntries() throws -> [KnownHostEntry] {
@@ -178,11 +169,5 @@ final class FileKnownHostsStore: KnownHostsStoreProtocol, @unchecked Sendable {
         return baseDirectory
             .appendingPathComponent("ProSSHV2", isDirectory: true)
             .appendingPathComponent("known_hosts.json")
-    }
-
-    private func withLock<T>(_ operation: () throws -> T) rethrows -> T {
-        lock.lock()
-        defer { lock.unlock() }
-        return try operation()
     }
 }

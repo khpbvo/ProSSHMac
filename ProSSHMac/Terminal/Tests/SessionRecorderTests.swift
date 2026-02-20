@@ -9,7 +9,7 @@ import XCTest
 @MainActor
 final class SessionRecorderTests: XCTestCase {
 
-    func testRecordingPersistsEncryptedPayloadWithTimestampedChunks() throws {
+    func testRecordingPersistsEncryptedPayloadWithTimestampedChunks() async throws {
         let directory = makeTempDirectory(suffix: "persist")
         let recorder = SessionRecorder(recordingsDirectoryURL: directory)
         let session = makeSession()
@@ -19,7 +19,7 @@ final class SessionRecorderTests: XCTestCase {
         Thread.sleep(forTimeInterval: 0.002)
         recorder.recordOutput(sessionID: session.id, text: "total 64\n")
 
-        let recordingURL = try recorder.stopRecording(sessionID: session.id)
+        let recordingURL = try await recorder.stopRecording(sessionID: session.id)
 
         let raw = try Data(contentsOf: recordingURL)
         XCTAssertTrue(raw.starts(with: Data("PSSHENC1".utf8)))
@@ -56,7 +56,7 @@ final class SessionRecorderTests: XCTestCase {
         XCTAssertEqual(steps[1].text, "b")
     }
 
-    func testExportAsciinemaCastWritesHeaderAndEvents() throws {
+    func testExportAsciinemaCastWritesHeaderAndEvents() async throws {
         let directory = makeTempDirectory(suffix: "cast")
         let recorder = SessionRecorder(recordingsDirectoryURL: directory)
         let recording = SessionRecording(
@@ -73,7 +73,7 @@ final class SessionRecorderTests: XCTestCase {
             ]
         )
 
-        let castURL = try recorder.exportAsciinemaCast(
+        let castURL = try await recorder.exportAsciinemaCast(
             recording: recording,
             columns: 90,
             rows: 30,

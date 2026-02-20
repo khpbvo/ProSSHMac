@@ -17,19 +17,64 @@ struct RendererPerformanceSnapshot: Sendable {
     let lastDrawCallCount: Int
 }
 
+/// Fixed-size ring buffer for frame time samples.
+/// Uses a circular index to avoid O(n) `removeFirst()` calls.
+private struct RingBuffer {
+    private var storage: [Double]
+    private var head: Int = 0   // next write position
+    private var count_: Int = 0
+    private let capacity: Int
+
+    init(capacity: Int) {
+        self.capacity = capacity
+        self.storage = [Double](repeating: 0.0, count: capacity)
+    }
+
+    var count: Int { count_ }
+    var isEmpty: Bool { count_ == 0 }
+
+    mutating func append(_ value: Double) {
+        storage[head] = value
+        head = (head + 1) % capacity
+        if count_ < capacity {
+            count_ += 1
+        }
+    }
+
+    /// Return all stored values (oldest first) for aggregate computation.
+    func toArray() -> [Double] {
+        guard count_ > 0 else { return [] }
+        if count_ < capacity {
+            return Array(storage[0..<count_])
+        }
+        // Ring is full: head points to the oldest element.
+        return Array(storage[head..<capacity]) + Array(storage[0..<head])
+    }
+}
+
 /// Rolling performance monitor for draw loop diagnostics and Instruments signposts.
-final class RendererPerformanceMonitor {
+/// Thread-safe: all mutable state is protected by an unfair lock so that
+/// render-thread writes and main-thread snapshot reads do not race.
+final class RendererPerformanceMonitor: @unchecked Sendable {
 
     private let sampleWindow = 240
     private let log = OSLog(subsystem: "nl.budgetsoft.ProSSHV2", category: "TerminalRenderer")
 
-    private var cpuFrameSamplesMs: [Double] = []
-    private var gpuFrameSamplesMs: [Double] = []
+    // Lock protecting all mutable state below.
+    private let lock = NSLock()
 
-    private(set) var totalFrames: Int = 0
-    private(set) var dropped120HzFrames: Int = 0
-    private(set) var dropped60HzFrames: Int = 0
-    private(set) var lastDrawCallCount: Int = 0
+    private var cpuFrameSamples: RingBuffer
+    private var gpuFrameSamples: RingBuffer
+
+    private var _totalFrames: Int = 0
+    private var _dropped120HzFrames: Int = 0
+    private var _dropped60HzFrames: Int = 0
+    private var _lastDrawCallCount: Int = 0
+
+    init() {
+        cpuFrameSamples = RingBuffer(capacity: sampleWindow)
+        gpuFrameSamples = RingBuffer(capacity: sampleWindow)
+    }
 
     @discardableResult
     func beginFrame() -> OSSignpostID {
@@ -45,21 +90,24 @@ final class RendererPerformanceMonitor {
         drawCalls: Int
     ) {
         let cpuMs = max(0, cpuFrameSeconds * 1000.0)
-        append(&cpuFrameSamplesMs, value: cpuMs)
+
+        lock.lock()
+        cpuFrameSamples.append(cpuMs)
 
         if let gpuFrameSeconds, gpuFrameSeconds > 0 {
-            append(&gpuFrameSamplesMs, value: gpuFrameSeconds * 1000.0)
+            gpuFrameSamples.append(gpuFrameSeconds * 1000.0)
         }
 
-        totalFrames += 1
-        lastDrawCallCount = drawCalls
+        _totalFrames += 1
+        _lastDrawCallCount = drawCalls
 
         if cpuMs > 8.3 {
-            dropped120HzFrames += 1
+            _dropped120HzFrames += 1
         }
         if cpuMs > 16.6 {
-            dropped60HzFrames += 1
+            _dropped60HzFrames += 1
         }
+        lock.unlock()
 
         os_signpost(
             .end,
@@ -73,30 +121,32 @@ final class RendererPerformanceMonitor {
     }
 
     func snapshot() -> RendererPerformanceSnapshot {
-        RendererPerformanceSnapshot(
+        lock.lock()
+        let cpuValues = cpuFrameSamples.toArray()
+        let gpuValues = gpuFrameSamples.toArray()
+        let totalFrames = _totalFrames
+        let dropped120 = _dropped120HzFrames
+        let dropped60 = _dropped60HzFrames
+        let drawCalls = _lastDrawCallCount
+        lock.unlock()
+
+        return RendererPerformanceSnapshot(
             totalFrames: totalFrames,
-            averageCPUFrameMs: average(cpuFrameSamplesMs) ?? 0,
-            p95CPUFrameMs: percentile(cpuFrameSamplesMs, p: 0.95) ?? 0,
-            averageGPUFrameMs: average(gpuFrameSamplesMs),
-            dropped120HzFrames: dropped120HzFrames,
-            dropped60HzFrames: dropped60HzFrames,
-            lastDrawCallCount: lastDrawCallCount
+            averageCPUFrameMs: Self.average(cpuValues) ?? 0,
+            p95CPUFrameMs: Self.percentile(cpuValues, p: 0.95) ?? 0,
+            averageGPUFrameMs: Self.average(gpuValues),
+            dropped120HzFrames: dropped120,
+            dropped60HzFrames: dropped60,
+            lastDrawCallCount: drawCalls
         )
     }
 
-    private func append(_ target: inout [Double], value: Double) {
-        target.append(value)
-        if target.count > sampleWindow {
-            target.removeFirst(target.count - sampleWindow)
-        }
-    }
-
-    private func average(_ values: [Double]) -> Double? {
+    private static func average(_ values: [Double]) -> Double? {
         guard !values.isEmpty else { return nil }
         return values.reduce(0, +) / Double(values.count)
     }
 
-    private func percentile(_ values: [Double], p: Double) -> Double? {
+    private static func percentile(_ values: [Double], p: Double) -> Double? {
         guard !values.isEmpty else { return nil }
         let sorted = values.sorted()
         let rank = Int((Double(sorted.count - 1) * p).rounded())

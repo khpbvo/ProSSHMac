@@ -89,6 +89,23 @@ final class TerminalSearch: ObservableObject {
         selectedMatch == match
     }
 
+    /// Validates that a match range is still within bounds for the given line content.
+    /// Returns true if the match can be safely applied.
+    func isMatchValid(_ match: TerminalSearchMatch, in currentLines: [String]) -> Bool {
+        guard match.lineIndex >= 0, match.lineIndex < currentLines.count else {
+            return false
+        }
+        let line = currentLines[match.lineIndex]
+        let lineLength = (line as NSString).length
+        let endLocation = match.location + match.length
+        return match.location >= 0 && endLocation <= lineLength
+    }
+
+    /// Returns only those matches whose ranges are still valid against the given live content.
+    func validMatches(for currentLines: [String]) -> [TerminalSearchMatch] {
+        matches.filter { isMatchValid($0, in: currentLines) }
+    }
+
     private func refreshMatches() {
         let previousSelection = selectedMatch
         matches.removeAll(keepingCapacity: true)

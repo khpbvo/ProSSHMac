@@ -30,10 +30,11 @@ final class PaneManager {
 
     init(layoutStore: PaneLayoutStore = PaneLayoutStore()) {
         self.layoutStore = layoutStore
-        if let restored = layoutStore.loadLastLayout() {
+        if let restored = layoutStore.loadLastLayout(),
+           let fallbackPane = restored.allPanes.first {
             self.rootNode = restored
             self.focusedPaneId = restored.allPanes.first(where: { $0.isFocused })?.id
-                ?? restored.allPanes.first!.id
+                ?? fallbackPane.id
         } else {
             let pane = TerminalPane(isFocused: true)
             self.rootNode = .terminal(pane)
@@ -182,7 +183,37 @@ final class PaneManager {
     func restoreMaximize() {
         guard maximizedPaneId != nil else { return }
         if let saved = savedRootNode {
-            rootNode = saved
+            // Merge: keep any panes that were added while maximized and
+            // remove saved panes that were closed while maximized.
+            let currentPaneIDs = Set(rootNode.allPanes.map(\.id))
+            let savedPaneIDs = Set(saved.allPanes.map(\.id))
+
+            // Panes added while maximized that are not in the saved layout.
+            let addedPanes = rootNode.allPanes.filter { !savedPaneIDs.contains($0.id) }
+
+            // Start from the saved layout, but prune panes that were removed while maximized.
+            var merged = saved
+            let removedPaneIDs = savedPaneIDs.subtracting(currentPaneIDs)
+            for removedID in removedPaneIDs {
+                if merged.paneCount > 1 {
+                    merged = merged.removePane(removedID)
+                }
+            }
+
+            // Append panes that were added while maximized.
+            for pane in addedPanes {
+                if let firstPaneID = merged.allPanes.first?.id {
+                    let container = SplitContainer(
+                        direction: .horizontal,
+                        first: merged,
+                        second: .terminal(pane)
+                    )
+                    _ = firstPaneID // suppress unused warning
+                    merged = .split(container)
+                }
+            }
+
+            rootNode = merged
             savedRootNode = nil
         }
         maximizedPaneId = nil

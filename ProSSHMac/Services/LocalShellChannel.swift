@@ -204,8 +204,17 @@ actor LocalShellChannel: SSHShellChannel {
         readerTask = nil
 
         kill(childPID, SIGHUP)
-        var status: Int32 = 0
-        waitpid(childPID, &status, 0)
+
+        // Dispatch waitpid to a non-cooperative thread to avoid blocking
+        // the Swift concurrency cooperative thread pool.
+        let pid = childPID
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global().async {
+                var status: Int32 = 0
+                waitpid(pid, &status, 0)
+                continuation.resume(returning: ())
+            }
+        }
 
         Darwin.close(masterFD)
         rawContinuation.finish()

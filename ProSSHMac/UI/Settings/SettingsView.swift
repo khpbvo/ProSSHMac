@@ -9,7 +9,7 @@ struct SettingsView: View {
     @AppStorage("terminal.effects.crtEnabled") private var terminalCRTEffectEnabled = false
     @AppStorage(BellEffectController.settingsKey) private var terminalBellFeedbackMode = BellFeedbackMode.none.rawValue
     @AppStorage(TransparencyManager.backgroundOpacityKey) private var terminalBackgroundOpacityPercent = TransparencyManager.defaultBackgroundOpacityPercent
-    @State private var allowLegacyByDefault = false
+    @AppStorage("ssh.algorithms.allowLegacyByDefault") private var allowLegacyByDefault = false
     @AppStorage("terminal.scrollback.maxLines") private var terminalScrollback = 10_000
     @AppStorage("ssh.keepalive.enabled") private var keepaliveEnabled = false
     @AppStorage("ssh.keepalive.interval") private var keepaliveInterval = 30
