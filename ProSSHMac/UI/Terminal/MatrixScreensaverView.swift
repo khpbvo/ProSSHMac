@@ -15,29 +15,43 @@ struct MatrixScreensaverView: View {
     @State private var streams: [MatrixStream] = []
     @State private var isInitialized = false
     @State private var eventMonitor: Any?
-    @State private var lastCanvasSize: CGSize = .zero
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
-            Canvas { context, size in
-                // Black background
-                context.fill(
-                    Path(CGRect(origin: .zero, size: size)),
-                    with: .color(.black)
-                )
+        GeometryReader { geo in
+            let viewSize = geo.size
 
-                let elapsed = timeline.date.timeIntervalSinceReferenceDate
-                let rows = Int(size.height / MatrixStream.cellHeight)
+            TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
+                Canvas { context, _ in
+                    // Black background
+                    context.fill(
+                        Path(CGRect(origin: .zero, size: viewSize)),
+                        with: .color(.black)
+                    )
 
-                guard isInitialized else { return }
+                    let elapsed = timeline.date.timeIntervalSinceReferenceDate
+                    let rows = Int(viewSize.height / MatrixStream.cellHeight)
 
-                for stream in streams {
-                    drawStream(stream, context: &context, size: size, elapsed: elapsed, rows: rows)
+                    guard rows > 0 else { return }
+
+                    guard isInitialized else {
+                        drawFallbackRain(context: &context, size: viewSize, elapsed: elapsed, rows: rows)
+                        return
+                    }
+
+                    for stream in streams {
+                        drawStream(stream, context: &context, size: viewSize, elapsed: elapsed, rows: rows)
+                    }
                 }
-            }
-            .onChange(of: timeline.date) { _, _ in
-                // Perform state mutations outside the Canvas draw closure
-                updateStreamsIfNeeded()
+                .onAppear {
+                    updateStreamsIfNeeded(for: viewSize)
+                }
+                .onChange(of: timeline.date) { _, _ in
+                    // Perform state mutations outside the Canvas draw closure
+                    updateStreamsIfNeeded(for: viewSize)
+                }
+                .onChange(of: viewSize) { _, newSize in
+                    updateStreamsIfNeeded(for: newSize)
+                }
             }
         }
         .ignoresSafeArea()
@@ -52,22 +66,6 @@ struct MatrixScreensaverView: View {
         .onAppear {
             installEventMonitor()
         }
-        .background(
-            GeometryReader { geo in
-                Color.clear
-                    .onAppear {
-                        lastCanvasSize = geo.size
-                        let columns = Int(geo.size.width / MatrixStream.cellWidth)
-                        let rows = Int(geo.size.height / MatrixStream.cellHeight)
-                        if columns > 0 && rows > 0 {
-                            initializeStreams(columns: columns, rows: rows)
-                        }
-                    }
-                    .onChange(of: geo.size) { _, newSize in
-                        lastCanvasSize = newSize
-                    }
-            }
-        )
         .onDisappear {
             removeEventMonitor()
         }
@@ -95,14 +93,15 @@ struct MatrixScreensaverView: View {
 
     // MARK: - Stream Update
 
-    private func updateStreamsIfNeeded() {
-        let size = lastCanvasSize
+    private func updateStreamsIfNeeded(for size: CGSize) {
         guard size.width > 0, size.height > 0 else { return }
         let columns = Int(size.width / MatrixStream.cellWidth)
         let rows = Int(size.height / MatrixStream.cellHeight)
         guard columns > 0, rows > 0 else { return }
+        let expectedColumns = activeColumnCount(for: columns)
+        let rowsChanged = streams.first.map { $0.totalRows != rows } ?? false
 
-        if !isInitialized || streams.count != activeColumnCount(for: columns) {
+        if !isInitialized || streams.count != expectedColumns || rowsChanged {
             initializeStreams(columns: columns, rows: rows)
         }
     }
@@ -132,6 +131,47 @@ struct MatrixScreensaverView: View {
     }
 
     // MARK: - Drawing
+
+    private func drawFallbackRain(
+        context: inout GraphicsContext,
+        size: CGSize,
+        elapsed: TimeInterval,
+        rows: Int
+    ) {
+        let columns = Int(size.width / MatrixStream.cellWidth)
+        guard columns > 0 else { return }
+
+        let activeColumns = activeColumnCount(for: columns)
+        let chars = config.characterSet.characters
+        let sampledColumns = distributedColumns(totalColumns: columns, activeColumns: activeColumns)
+
+        for column in sampledColumns {
+            let stream = MatrixStream(
+                column: column,
+                rows: rows,
+                speed: config.speed,
+                trailLength: config.trailLength,
+                characters: chars,
+                seed: UInt64(column)
+            )
+            drawStream(stream, context: &context, size: size, elapsed: elapsed, rows: rows)
+        }
+    }
+
+    private func distributedColumns(totalColumns: Int, activeColumns: Int) -> [Int] {
+        guard totalColumns > 0 else { return [] }
+        let clampedActive = max(1, min(activeColumns, totalColumns))
+        if clampedActive == 1 {
+            return [totalColumns / 2]
+        }
+        if clampedActive == totalColumns {
+            return Array(0..<totalColumns)
+        }
+
+        return (0..<clampedActive).map { index in
+            Int((Double(index) * Double(totalColumns - 1)) / Double(clampedActive - 1))
+        }
+    }
 
     private func drawStream(
         _ stream: MatrixStream,
@@ -202,13 +242,34 @@ struct MatrixStream {
     let characters: [Character]
     let totalRows: Int
 
-    init(column: Int, rows: Int, speed: Float, trailLength: Int, characters: [Character]) {
+    init(
+        column: Int,
+        rows: Int,
+        speed: Float,
+        trailLength: Int,
+        characters: [Character],
+        seed: UInt64? = nil
+    ) {
         self.column = column
         self.totalRows = rows
-        self.startOffset = Double.random(in: -Double(rows * 2)...0)
-        self.fallSpeed = Double(speed) * Double.random(in: 0.5...1.5) * 12.0
+        if let seed {
+            let offsetUnit = Self.seededUnit(seed ^ 0xA5A5_A5A5_A5A5_A5A5)
+            let speedUnit = Self.seededUnit(seed ^ 0x5A5A_5A5A_5A5A_5A5A)
+            let span = max(1.0, Double(rows * 2))
+            self.startOffset = -(offsetUnit * span)
+            self.fallSpeed = Double(speed) * (0.5 + speedUnit) * 12.0
+        } else {
+            self.startOffset = Double.random(in: -Double(rows * 2)...0)
+            self.fallSpeed = Double(speed) * Double.random(in: 0.5...1.5) * 12.0
+        }
         self.trailLength = trailLength
         self.characters = characters.isEmpty ? Array("0") : characters
+    }
+
+    private static func seededUnit(_ seed: UInt64) -> Double {
+        let mixed = seed &* 6364136223846793005 &+ 1442695040888963407
+        let lower = UInt32(truncatingIfNeeded: mixed)
+        return Double(lower) / Double(UInt32.max)
     }
 
     func headRow(at elapsed: TimeInterval) -> Int {
