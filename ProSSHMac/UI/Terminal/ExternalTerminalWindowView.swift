@@ -93,13 +93,12 @@ struct ExternalTerminalWindowView: View {
 
     @ViewBuilder
     private func terminalSurface(for session: Session) -> some View {
-        let snapshot = sessionManager.gridSnapshotsBySessionID[session.id]
         let snapshotNonce = sessionManager.gridSnapshotNonceBySessionID[session.id, default: 0]
 
         if useMetalRenderer, MTLCreateSystemDefaultDevice() != nil {
             MetalTerminalSessionSurface(
                 sessionID: session.id,
-                snapshot: snapshot,
+                snapshotProvider: { sessionManager.gridSnapshot(for: session.id) },
                 snapshotNonce: snapshotNonce,
                 fontSize: terminalUIFontSize,
                 backgroundOpacityPercent: terminalBackgroundOpacityPercent,

@@ -10,12 +10,18 @@
 
 import Foundation
 import os.log
+#if DEBUG
+import os.signpost
+#endif
 
 // MARK: - VTParser Actor
 
 actor VTParser {
 
     private static let parserLog = Logger(subsystem: "com.prossh", category: "VTParser")
+    #if DEBUG
+    private static let perfSignpostLog = OSLog(subsystem: "com.prossh", category: "TerminalPerf")
+    #endif
 
     // MARK: - Grid Reference
 
@@ -150,6 +156,25 @@ actor VTParser {
             let next = feedQueue[feedQueueHead]
             feedQueueHead += 1
             var index = 0
+            #if DEBUG
+            let signpostID = OSSignpostID(log: Self.perfSignpostLog)
+            os_signpost(
+                .begin,
+                log: Self.perfSignpostLog,
+                name: "ParserChunk",
+                signpostID: signpostID,
+                "bytes=%d",
+                next.count
+            )
+            defer {
+                os_signpost(
+                    .end,
+                    log: Self.perfSignpostLog,
+                    name: "ParserChunk",
+                    signpostID: signpostID
+                )
+            }
+            #endif
 
             while index < next.count {
                 let byte = next[index]

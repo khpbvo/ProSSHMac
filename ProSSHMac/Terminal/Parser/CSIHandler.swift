@@ -285,56 +285,9 @@ nonisolated enum CSIHandler {
         grid: TerminalGrid,
         inputModeState: InputModeState?
     ) async {
-        switch mode {
-        case DECPrivateMode.DECCKM:
-            await grid.setApplicationCursorKeys(enabled)
-            await inputModeState?.setApplicationCursorKeys(enabled)
-        case DECPrivateMode.DECSCNM:
-            await grid.setReverseVideo(enabled)
-        case DECPrivateMode.DECOM:
-            await grid.setOriginMode(enabled)
-            if enabled { await grid.moveCursorTo(row: 0, col: 0) }
-        case DECPrivateMode.DECAWM:
-            await grid.setAutoWrapMode(enabled)
-        case DECPrivateMode.cursorBlink:
-            await grid.setCursorBlink(enabled)
-        case DECPrivateMode.DECTCEM:
-            await grid.setCursorVisible(enabled)
-        case DECPrivateMode.altScreenOld, DECPrivateMode.altScreenAlt:
-            if enabled { await grid.enableAlternateBuffer() }
-            else { await grid.disableAlternateBuffer() }
-        case DECPrivateMode.altScreen:
-            if enabled { await grid.enableAlternateBuffer() }
-            else { await grid.disableAlternateBuffer() }
-        case DECPrivateMode.mouseX10:
-            await grid.setMouseTracking(enabled ? .x10 : .none)
-            await inputModeState?.setMouseTracking(enabled ? .x10 : .none)
-        case DECPrivateMode.mouseButton:
-            await grid.setMouseTracking(enabled ? .buttonEvent : .none)
-            await inputModeState?.setMouseTracking(enabled ? .buttonEvent : .none)
-        case DECPrivateMode.mouseAny:
-            await grid.setMouseTracking(enabled ? .anyEvent : .none)
-            await inputModeState?.setMouseTracking(enabled ? .anyEvent : .none)
-        case DECPrivateMode.focusEvent:
-            await grid.setFocusReporting(enabled)
-        case DECPrivateMode.mouseUTF8:
-            if enabled {
-                await grid.setMouseEncoding(.utf8)
-                await inputModeState?.setMouseEncoding(.utf8)
-            } else {
-                await grid.setMouseEncoding(.x10)
-                await inputModeState?.setMouseEncoding(.x10)
-            }
-        case DECPrivateMode.mouseSGR:
-            await grid.setMouseEncoding(enabled ? .sgr : .x10)
-            await inputModeState?.setMouseEncoding(enabled ? .sgr : .x10)
-        case DECPrivateMode.bracketedPaste:
-            await grid.setBracketedPasteMode(enabled)
-            await inputModeState?.setBracketedPasteMode(enabled)
-        case DECPrivateMode.synchronizedOutput:
-            await grid.setSynchronizedOutput(enabled)
-        default:
-            break
+        await grid.applyDECPrivateMode(mode, enabled: enabled)
+        if let inputModeState {
+            await inputModeState.syncFromGrid(grid)
         }
     }
 
@@ -352,7 +305,9 @@ nonisolated enum CSIHandler {
 
         if intermediate == 0x21 && byte == 0x70 { // CSI ! p — DECSTR
             await grid.softReset()
-            await inputModeState?.applySoftReset()
+            if let inputModeState {
+                await inputModeState.syncFromGrid(grid)
+            }
         } else if intermediate == 0x20 && byte == 0x71 { // CSI Ps SP q — DECSCUSR (cursor style)
             let p = param(params, 0, default: 0, raw: true)
             // 0/1 = blinking block, 2 = steady block,

@@ -105,6 +105,16 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     /// Font name used for glyph rasterization, synced from FontManager.
     private var rasterFontName: String = "SF Mono"
 
+    /// Cached CTFont variants for glyph miss rasterization.
+    /// Rebuilt only when font name/size/scale changes.
+    private var cachedRasterFontName: String = ""
+    private var cachedRasterFontSize: CGFloat = 0
+    private var cachedRasterScale: CGFloat = 0
+    private var cachedRasterRegularFont: CTFont?
+    private var cachedRasterBoldFont: CTFont?
+    private var cachedRasterItalicFont: CTFont?
+    private var cachedRasterBoldItalicFont: CTFont?
+
     /// Screen scale factor for Retina rendering (e.g., 2.0 on Retina displays).
     /// Glyphs are rasterized at this multiple of point dimensions for crisp text.
     private var screenScale: CGFloat = 1.0
@@ -375,21 +385,18 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         guard cw > 0, ch > 0 else { return nil }
         guard let scalar = Unicode.Scalar(key.codepoint) else { return nil }
 
-        // Create a CTFont at the scaled font size for Retina-quality glyphs.
-        // This avoids crossing the actor boundary in the synchronous render path.
-        let scaledFontSize = rasterFontSize * scale
-        let font = CTFontCreateWithName(rasterFontName as CFString, scaledFontSize, nil)
+        rebuildRasterFontCacheIfNeeded(scale: scale)
+        guard let regularFont = cachedRasterRegularFont else { return nil }
 
         let variantFont: CTFont
         if key.bold && key.italic {
-            let traits: CTFontSymbolicTraits = [.boldTrait, .italicTrait]
-            variantFont = CTFontCreateCopyWithSymbolicTraits(font, scaledFontSize, nil, traits, traits) ?? font
+            variantFont = cachedRasterBoldItalicFont ?? regularFont
         } else if key.bold {
-            variantFont = CTFontCreateCopyWithSymbolicTraits(font, scaledFontSize, nil, .boldTrait, .boldTrait) ?? font
+            variantFont = cachedRasterBoldFont ?? regularFont
         } else if key.italic {
-            variantFont = CTFontCreateCopyWithSymbolicTraits(font, scaledFontSize, nil, .italicTrait, .italicTrait) ?? font
+            variantFont = cachedRasterItalicFont ?? regularFont
         } else {
-            variantFont = font
+            variantFont = regularFont
         }
 
         // Font fallback: if the primary font lacks a glyph for this codepoint
@@ -422,6 +429,47 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         }
 
         return entry
+    }
+
+    private func rebuildRasterFontCacheIfNeeded(scale: CGFloat) {
+        let clampedScale = max(scale, 1.0)
+        let scaledFontSize = rasterFontSize * clampedScale
+        let isCacheValid =
+            cachedRasterRegularFont != nil &&
+            cachedRasterFontName == rasterFontName &&
+            abs(cachedRasterFontSize - scaledFontSize) < 0.001 &&
+            abs(cachedRasterScale - clampedScale) < 0.001
+        if isCacheValid {
+            return
+        }
+
+        let base = CTFontCreateWithName(rasterFontName as CFString, scaledFontSize, nil)
+        cachedRasterRegularFont = base
+        cachedRasterBoldFont = CTFontCreateCopyWithSymbolicTraits(
+            base,
+            scaledFontSize,
+            nil,
+            .boldTrait,
+            .boldTrait
+        ) ?? base
+        cachedRasterItalicFont = CTFontCreateCopyWithSymbolicTraits(
+            base,
+            scaledFontSize,
+            nil,
+            .italicTrait,
+            .italicTrait
+        ) ?? base
+        let boldItalicTraits: CTFontSymbolicTraits = [.boldTrait, .italicTrait]
+        cachedRasterBoldItalicFont = CTFontCreateCopyWithSymbolicTraits(
+            base,
+            scaledFontSize,
+            nil,
+            boldItalicTraits,
+            boldItalicTraits
+        ) ?? base
+        cachedRasterFontName = rasterFontName
+        cachedRasterFontSize = scaledFontSize
+        cachedRasterScale = clampedScale
     }
 
     // MARK: - Font Fallback for Rasterization

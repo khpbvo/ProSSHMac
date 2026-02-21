@@ -8,6 +8,9 @@
 // updates (dirty ranges) and wide character handling.
 
 import Metal
+#if DEBUG
+import os.signpost
+#endif
 
 // MARK: - Constants
 
@@ -21,6 +24,9 @@ private let kCellStride: Int = MemoryLayout<CellInstance>.stride
 /// Sentinel glyph index meaning "no glyph".
 /// This must match the shader-side `GLYPH_INDEX_NONE` constant.
 private let kNoGlyphIndex: UInt32 = 0xFFFF_FFFF
+#if DEBUG
+private let kCellBufferSignpostLog = OSLog(subsystem: "com.prossh", category: "TerminalPerf")
+#endif
 
 // MARK: - CellBuffer
 
@@ -148,6 +154,14 @@ final class CellBuffer {
     ///     grid (with row, col, colors, attributes) and should return the
     ///     atlas glyph index for rendering.
     func update(from snapshot: GridSnapshot, glyphLookup: (CellInstance) -> UInt32) {
+        #if DEBUG
+        let signpostID = OSSignpostID(log: kCellBufferSignpostLog)
+        os_signpost(.begin, log: kCellBufferSignpostLog, name: "CellBufferUpdate", signpostID: signpostID)
+        defer {
+            os_signpost(.end, log: kCellBufferSignpostLog, name: "CellBufferUpdate", signpostID: signpostID)
+        }
+        #endif
+
         let newCellCount = snapshot.rows * snapshot.columns
         guard newCellCount > 0 else {
             cellCount = 0
@@ -188,45 +202,21 @@ final class CellBuffer {
         // can cause old/new frame oscillation when buffers swap.
         // Copy the current read buffer into the write buffer first so unchanged
         // cells stay in sync, then apply the dirty delta on top.
+        var effectiveRange = updateRange
         if !forceFullUpdate, updateRange.count < newCellCount {
             if let read = readBuffer, read !== buffer {
                 let src = read.contents().bindMemory(to: CellInstance.self, capacity: capacity)
                 dst.update(from: src, count: newCellCount)
             } else {
-                // No valid baseline; fall back to full upload semantics.
-                for i in 0..<newCellCount {
-                    var cell = snapshot.cells[i]
-                    let isContinuation = isContinuationCell(cell, at: i, in: snapshot)
-                    if isContinuation {
-                        cell.glyphIndex = kNoGlyphIndex
-                        if i > 0 {
-                            let primary = snapshot.cells[i - 1]
-                            cell.fgColor = primary.fgColor
-                            cell.bgColor = primary.bgColor
-                        }
-                    } else if cell.glyphIndex == 0 {
-                        cell.glyphIndex = kNoGlyphIndex
-                    } else {
-                        cell.glyphIndex = glyphLookup(cell)
-                    }
-                    dst[i] = cell
-                }
-                return
+                // No valid baseline; fall back to a full upload.
+                effectiveRange = 0..<newCellCount
             }
         }
 
-        // Process each cell in the update range.
-        for i in updateRange {
-            var cell = snapshot.cells[i]
-
-            // Resolve glyph index via the lookup closure.
-            // Check if this is a continuation cell (width=0).
-            // Continuation cells are identified by having the wideChar attribute
-            // cleared and glyphIndex already set to 0 by the grid, but we also
-            // check the flags to be safe. In the grid's CellInstance array,
-            // a continuation cell follows its primary wide cell and should
-            // render with glyphIndex=0 (no glyph — the primary cell's glyph
-            // spans both columns).
+        // Copy dirty slice first, then resolve glyphs in a second pass.
+        copyCells(from: snapshot, range: effectiveRange, to: dst)
+        for i in effectiveRange {
+            var cell = dst[i]
             let isContinuation = isContinuationCell(cell, at: i, in: snapshot)
 
             if isContinuation {
@@ -241,11 +231,24 @@ final class CellBuffer {
                 // Empty/NUL cells should not sample atlas texel (0,0).
                 cell.glyphIndex = kNoGlyphIndex
             } else {
-                // Standard or primary wide cell: resolve glyph index.
                 cell.glyphIndex = glyphLookup(cell)
             }
 
             dst[i] = cell
+        }
+    }
+
+    private func copyCells(
+        from snapshot: GridSnapshot,
+        range: Range<Int>,
+        to dst: UnsafeMutablePointer<CellInstance>
+    ) {
+        snapshot.cells.withUnsafeBufferPointer { src in
+            guard let srcBase = src.baseAddress else { return }
+            dst.advanced(by: range.lowerBound).update(
+                from: srcBase.advanced(by: range.lowerBound),
+                count: range.count
+            )
         }
     }
 

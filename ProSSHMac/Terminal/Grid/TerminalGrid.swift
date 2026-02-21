@@ -6,10 +6,16 @@
 // Produces GridSnapshot values for the renderer.
 
 import Foundation
+#if DEBUG
+import os.signpost
+#endif
 
 // MARK: - TerminalGrid Actor
 
 actor TerminalGrid {
+    #if DEBUG
+    private static let perfSignpostLog = OSLog(subsystem: "com.prossh", category: "TerminalPerf")
+    #endif
 
     /// Reuse one-character ASCII strings to avoid per-character allocations
     /// in the common shell-output fast path.
@@ -33,11 +39,15 @@ actor TerminalGrid {
     private var primaryCells: [[TerminalCell]]
     /// Ring-buffer base offset for primaryCells (logical row 0 -> physical row base).
     private var primaryRowBase: Int = 0
+    /// Logical-to-physical row indirection for primary buffer.
+    private var primaryRowMap: [Int]
 
     /// Alternate screen buffer (for full-screen TUI apps: htop, vim, etc.).
     private var alternateCells: [[TerminalCell]]
     /// Ring-buffer base offset for alternateCells.
     private var alternateRowBase: Int = 0
+    /// Logical-to-physical row indirection for alternate buffer.
+    private var alternateRowMap: [Int]
 
     /// Which buffer is currently active.
     private(set) var usingAlternateBuffer: Bool = false
@@ -202,6 +212,8 @@ actor TerminalGrid {
         let blankRow = [TerminalCell](repeating: .blank, count: columns)
         self.primaryCells = [[TerminalCell]](repeating: blankRow, count: rows)
         self.alternateCells = [[TerminalCell]](repeating: blankRow, count: rows)
+        self.primaryRowMap = Array(0..<rows)
+        self.alternateRowMap = Array(0..<rows)
     }
 
     // MARK: - Active Buffer Access
@@ -239,21 +251,60 @@ actor TerminalGrid {
         }
     }
 
+    /// Mutate the active buffer, ring base, and logical row map together.
+    private func withActiveBufferState(_ body: (inout [[TerminalCell]], inout Int, inout [Int]) -> Void) {
+        if usingAlternateBuffer {
+            body(&alternateCells, &alternateRowBase, &alternateRowMap)
+        } else {
+            body(&primaryCells, &primaryRowBase, &primaryRowMap)
+        }
+    }
+
+    /// Active buffer logical-to-physical row map.
+    private var activeRowMap: [Int] {
+        get { usingAlternateBuffer ? alternateRowMap : primaryRowMap }
+        set {
+            if usingAlternateBuffer {
+                alternateRowMap = newValue
+            } else {
+                primaryRowMap = newValue
+            }
+        }
+    }
+
     /// Translate a logical row index into the backing physical row index.
     @inline(__always)
     private func physicalRow(_ logicalRow: Int, base: Int) -> Int {
+        let map = activeRowMap
+        return physicalRow(logicalRow, base: base, map: map)
+    }
+
+    @inline(__always)
+    private func logicalRowIndex(_ logicalRow: Int, base: Int) -> Int {
         guard rows > 0 else { return 0 }
         let idx = logicalRow + base
         return idx >= rows ? idx - rows : idx
     }
 
+    /// Translate a logical row index into the backing physical row index for an explicit row map.
+    @inline(__always)
+    private func physicalRow(_ logicalRow: Int, base: Int, map: [Int]) -> Int {
+        map[logicalRowIndex(logicalRow, base: base)]
+    }
+
     /// Return a logically ordered copy of a ring-backed screen buffer.
-    private func linearizedRows(_ buffer: [[TerminalCell]], base: Int) -> [[TerminalCell]] {
-        guard rows > 0, base != 0 else { return buffer }
+    private func linearizedRows(_ buffer: [[TerminalCell]], base: Int, map: [Int]) -> [[TerminalCell]] {
+        guard rows > 0 else { return buffer }
+        let isIdentityMap = map.count == rows && map.enumerated().allSatisfy { index, value in
+            index == value
+        }
+        if base == 0 && isIdentityMap {
+            return buffer
+        }
         var ordered = [[TerminalCell]]()
         ordered.reserveCapacity(rows)
         for logicalRow in 0..<rows {
-            ordered.append(buffer[physicalRow(logicalRow, base: base)])
+            ordered.append(buffer[physicalRow(logicalRow, base: base, map: map)])
         }
         return ordered
     }
@@ -479,7 +530,7 @@ actor TerminalGrid {
         let charset: Charset = (activeCharset == 1) ? g1Charset : g0Charset
         let needsCharsetMapping = charset != .ascii
 
-        withActiveBuffer { buf, base in
+        withActiveBufferState { buf, base, rowMap in
             var dirtyRowLo = Int.max
             var dirtyRowHi = -1
 
@@ -491,7 +542,7 @@ actor TerminalGrid {
                 if cursor.pendingWrap {
                     // Mark the current line as wrapped
                     let lastCol = columns - 1
-                    let wrappedPhysical = physicalRow(cursor.row, base: base)
+                    let wrappedPhysical = physicalRow(cursor.row, base: base, map: rowMap)
                     var lastCell = buf[wrappedPhysical][lastCol]
                     lastCell.attributes.insert(.wrapped)
                     lastCell.isDirty = true
@@ -507,7 +558,7 @@ actor TerminalGrid {
                         // Inline scrollUp(lines: 1), using O(1) ring rotation
                         // for the common full-screen scroll region.
                         if !usingAlternateBuffer {
-                            let topPhysical = physicalRow(scrollTop, base: base)
+                            let topPhysical = physicalRow(scrollTop, base: base, map: rowMap)
                             let topRow = buf[topPhysical]
                             let isWrapped = topRow.last.map { $0.attributes.contains(.wrapped) } ?? false
                             scrollback.push(cells: topRow, isWrapped: isWrapped)
@@ -517,14 +568,19 @@ actor TerminalGrid {
                             base += 1
                             if base == rows { base = 0 }
                         } else {
-                            for row in scrollTop..<scrollBottom {
-                                let dst = physicalRow(row, base: base)
-                                let src = physicalRow(row + 1, base: base)
-                                buf[dst] = buf[src]
+                            let regionCount = scrollBottom - scrollTop + 1
+                            var regionKeys = [Int]()
+                            regionKeys.reserveCapacity(regionCount)
+                            for row in scrollTop...scrollBottom {
+                                regionKeys.append(logicalRowIndex(row, base: base))
+                            }
+                            let regionPhysicalRows = regionKeys.map { rowMap[$0] }
+                            for i in 0..<regionCount {
+                                rowMap[regionKeys[i]] = regionPhysicalRows[(i + 1) % regionCount]
                             }
                         }
 
-                        let bottomPhysical = physicalRow(scrollBottom, base: base)
+                        let bottomPhysical = physicalRow(scrollBottom, base: base, map: rowMap)
                         buf[bottomPhysical] = makeBlankRow()
                         dirtyRowLo = min(dirtyRowLo, scrollTop)
                         dirtyRowHi = max(dirtyRowHi, scrollBottom)
@@ -555,7 +611,7 @@ actor TerminalGrid {
 
                 let row = cursor.row
                 let col = cursor.col
-                let physical = physicalRow(row, base: base)
+                let physical = physicalRow(row, base: base, map: rowMap)
 
                 buf[physical][col] = TerminalCell(
                     graphemeCluster: charStr,
@@ -668,11 +724,11 @@ actor TerminalGrid {
         guard regionHeight > 0 else { return }
         let lines = min(count, regionHeight)
 
-        withActiveBuffer { buf, base in
+        withActiveBufferState { buf, base, rowMap in
             // Save top lines to scrollback (primary buffer only), preserving order.
             if !usingAlternateBuffer {
                 for i in 0..<lines {
-                    let topPhysical = physicalRow(scrollTop + i, base: base)
+                    let topPhysical = physicalRow(scrollTop + i, base: base, map: rowMap)
                     let topRow = buf[topPhysical]
                     let isWrapped = topRow.last.map { $0.attributes.contains(.wrapped) } ?? false
                     scrollback.push(cells: topRow, isWrapped: isWrapped)
@@ -684,20 +740,22 @@ actor TerminalGrid {
                 base += lines
                 if base >= rows { base %= rows }
             } else {
-                // Partial scroll region: shift once by N logical rows.
-                let lastDst = scrollBottom - lines
-                if scrollTop <= lastDst {
-                    for row in scrollTop...lastDst {
-                        let dst = physicalRow(row, base: base)
-                        let src = physicalRow(row + lines, base: base)
-                        buf[dst] = buf[src]
-                    }
+                // Partial scroll region: rotate row indirection in-region.
+                let regionCount = scrollBottom - scrollTop + 1
+                var regionKeys = [Int]()
+                regionKeys.reserveCapacity(regionCount)
+                for row in scrollTop...scrollBottom {
+                    regionKeys.append(logicalRowIndex(row, base: base))
+                }
+                let regionPhysicalRows = regionKeys.map { rowMap[$0] }
+                for i in 0..<regionCount {
+                    rowMap[regionKeys[i]] = regionPhysicalRows[(i + lines) % regionCount]
                 }
             }
 
             // Clear newly exposed bottom lines.
             for row in (scrollBottom - lines + 1)...scrollBottom {
-                let physical = physicalRow(row, base: base)
+                let physical = physicalRow(row, base: base, map: rowMap)
                 buf[physical] = makeBlankRow()
             }
         }
@@ -716,26 +774,28 @@ actor TerminalGrid {
         guard regionHeight > 0 else { return }
         let lines = min(count, regionHeight)
 
-        withActiveBuffer { buf, base in
+        withActiveBufferState { buf, base, rowMap in
             if scrollTop == 0 && scrollBottom == rows - 1 {
                 // Full-screen reverse scroll: rotate base by N in O(1).
                 base -= lines
                 while base < 0 { base += rows }
             } else {
-                // Partial scroll region: shift once by N logical rows.
-                let firstSrc = scrollTop + lines
-                if firstSrc <= scrollBottom {
-                    for row in stride(from: scrollBottom, through: firstSrc, by: -1) {
-                        let dst = physicalRow(row, base: base)
-                        let src = physicalRow(row - lines, base: base)
-                        buf[dst] = buf[src]
-                    }
+                // Partial scroll region: rotate row indirection in-region.
+                let regionCount = scrollBottom - scrollTop + 1
+                var regionKeys = [Int]()
+                regionKeys.reserveCapacity(regionCount)
+                for row in scrollTop...scrollBottom {
+                    regionKeys.append(logicalRowIndex(row, base: base))
+                }
+                let regionPhysicalRows = regionKeys.map { rowMap[$0] }
+                for i in 0..<regionCount {
+                    rowMap[regionKeys[i]] = regionPhysicalRows[(i - lines + regionCount) % regionCount]
                 }
             }
 
             // Clear newly exposed top lines.
             for row in scrollTop..<(scrollTop + lines) {
-                let physical = physicalRow(row, base: base)
+                let physical = physicalRow(row, base: base, map: rowMap)
                 buf[physical] = makeBlankRow()
             }
         }
@@ -1063,6 +1123,7 @@ actor TerminalGrid {
         let blankRow = makeBlankRow()
         alternateCells = [[TerminalCell]](repeating: blankRow, count: rows)
         alternateRowBase = 0
+        alternateRowMap = Array(0..<rows)
 
         // Reset cursor position
         cursor.moveTo(row: 0, col: 0, gridRows: rows, gridCols: columns)
@@ -1223,6 +1284,23 @@ actor TerminalGrid {
         if synchronizedOutput, let cached = lastSnapshot {
             return cached
         }
+        #if DEBUG
+        let signpostID = OSSignpostID(log: Self.perfSignpostLog)
+        os_signpost(
+            .begin,
+            log: Self.perfSignpostLog,
+            name: "GridSnapshot",
+            signpostID: signpostID
+        )
+        defer {
+            os_signpost(
+                .end,
+                log: Self.perfSignpostLog,
+                name: "GridSnapshot",
+                signpostID: signpostID
+            )
+        }
+        #endif
 
         let activeCells = usingAlternateBuffer ? alternateCells : primaryCells
         let rowBase = activeRowBase
@@ -1263,14 +1341,7 @@ actor TerminalGrid {
                 if rowIsDirty { flags |= CellInstance.flagDirty }
                 if isCursor { flags |= CellInstance.flagCursor }
 
-                // Extract the first Unicode scalar as the codepoint for glyph lookup.
-                // The renderer's glyphLookup closure reads this to resolve the atlas entry.
-                let codepoint: UInt32
-                if let scalar = cell.graphemeCluster.unicodeScalars.first {
-                    codepoint = scalar.value
-                } else {
-                    codepoint = 0
-                }
+                let codepoint = cell.primaryCodepoint
 
                 // boldIsBright: bold + standard color (0-7) → bright variant (8-15)
                 let fgPacked: UInt32
@@ -1279,18 +1350,18 @@ actor TerminalGrid {
                    case .indexed(let idx) = cell.fgColor, idx < 8 {
                     fgPacked = TerminalColor.indexed(idx + 8).packedRGBA()
                 } else {
-                    fgPacked = cell.fgColor.packedRGBA()
+                    fgPacked = cell.fgPackedRGBA
                 }
 
                 // Pack underline color (0 = use fg)
-                let ulColorPacked = cell.underlineColor.packedRGBA()
+                let ulColorPacked = cell.underlinePackedRGBA
 
                 buffer[idx] = CellInstance(
                     row: UInt16(row),
                     col: UInt16(col),
                     glyphIndex: codepoint,
                     fgColor: fgPacked,
-                    bgColor: cell.bgColor.packedRGBA(),
+                    bgColor: cell.bgPackedRGBA,
                     underlineColor: ulColorPacked,
                     attributes: cell.attributes.rawValue,
                     flags: flags,
@@ -1308,13 +1379,10 @@ actor TerminalGrid {
             dirtyRange = startIdx..<endIdx
         }
 
-        // Do not store `buffer` back into the snapshot slot after creating the
-        // snapshot. Doing so lets the snapshot and the slot share the same
-        // backing storage via copy-on-write, and a later snapshot() call may
-        // mutate the slot in-place while the renderer still reads the old
-        // snapshot. Instead, let the snapshot uniquely own this buffer and
-        // allocate a fresh one next cycle (the cost is low compared to the
-        // correctness risk).
+        // Keep the filled buffer in the reuse slot. The returned snapshot and
+        // slot intentionally share storage; later writes trigger COW when the
+        // old snapshot is still retained by the renderer, preserving correctness
+        // while recovering steady-state buffer reuse.
         let snap = GridSnapshot(
             cells: buffer,
             dirtyRange: dirtyRange,
@@ -1325,6 +1393,11 @@ actor TerminalGrid {
             columns: columns,
             rows: rows
         )
+        if useSnapshotBufferA {
+            snapshotBufferA = buffer
+        } else {
+            snapshotBufferB = buffer
+        }
 
         useSnapshotBufferA.toggle()
 
@@ -1342,6 +1415,25 @@ actor TerminalGrid {
         guard scrollOffset > 0, scrollback.count > 0 else {
             return snapshot()
         }
+        #if DEBUG
+        let signpostID = OSSignpostID(log: Self.perfSignpostLog)
+        os_signpost(
+            .begin,
+            log: Self.perfSignpostLog,
+            name: "GridSnapshotScrollback",
+            signpostID: signpostID,
+            "offset=%d",
+            scrollOffset
+        )
+        defer {
+            os_signpost(
+                .end,
+                log: Self.perfSignpostLog,
+                name: "GridSnapshotScrollback",
+                signpostID: signpostID
+            )
+        }
+        #endif
 
         let activeCells = usingAlternateBuffer ? alternateCells : primaryCells
         let rowBase = activeRowBase
@@ -1375,21 +1467,17 @@ actor TerminalGrid {
 
                     if col < scrollLine.cells.count {
                         let cell = scrollLine.cells[col]
-                        if let scalar = cell.graphemeCluster.unicodeScalars.first {
-                            codepoint = scalar.value
-                        } else {
-                            codepoint = 0
-                        }
+                        codepoint = cell.primaryCodepoint
                         if TerminalDefaults.boldIsBright,
                            cell.attributes.contains(.bold),
                            case .indexed(let idx) = cell.fgColor, idx < 8 {
                             fgPacked = TerminalColor.indexed(idx + 8).packedRGBA()
                         } else {
-                            fgPacked = cell.fgColor.packedRGBA()
+                            fgPacked = cell.fgPackedRGBA
                         }
-                        bgPacked = cell.bgColor.packedRGBA()
+                        bgPacked = cell.bgPackedRGBA
                         attrs = cell.attributes.rawValue
-                        ulColorPacked = cell.underlineColor.packedRGBA()
+                        ulColorPacked = cell.underlinePackedRGBA
                         ulStyle = cell.underlineStyle.rawValue
                     } else {
                         codepoint = 0
@@ -1423,12 +1511,7 @@ actor TerminalGrid {
                     var flags: UInt8 = CellInstance.flagDirty
                     if isCursor { flags |= CellInstance.flagCursor }
 
-                    let codepoint: UInt32
-                    if let scalar = cell.graphemeCluster.unicodeScalars.first {
-                        codepoint = scalar.value
-                    } else {
-                        codepoint = 0
-                    }
+                    let codepoint = cell.primaryCodepoint
 
                     let fgPacked: UInt32
                     if TerminalDefaults.boldIsBright,
@@ -1436,7 +1519,7 @@ actor TerminalGrid {
                        case .indexed(let idx) = cell.fgColor, idx < 8 {
                         fgPacked = TerminalColor.indexed(idx + 8).packedRGBA()
                     } else {
-                        fgPacked = cell.fgColor.packedRGBA()
+                        fgPacked = cell.fgPackedRGBA
                     }
 
                     cellInstances.append(CellInstance(
@@ -1444,8 +1527,8 @@ actor TerminalGrid {
                         col: UInt16(col),
                         glyphIndex: codepoint,
                         fgColor: fgPacked,
-                        bgColor: cell.bgColor.packedRGBA(),
-                        underlineColor: cell.underlineColor.packedRGBA(),
+                        bgColor: cell.bgPackedRGBA,
+                        underlineColor: cell.underlinePackedRGBA,
                         attributes: cell.attributes.rawValue,
                         flags: flags,
                         underlineStyle: cell.underlineStyle.rawValue
@@ -1513,6 +1596,8 @@ actor TerminalGrid {
         alternateCells = [[TerminalCell]](repeating: blankRow, count: rows)
         primaryRowBase = 0
         alternateRowBase = 0
+        primaryRowMap = Array(0..<rows)
+        alternateRowMap = Array(0..<rows)
         usingAlternateBuffer = false
 
         // Reset cursor
@@ -1572,6 +1657,8 @@ actor TerminalGrid {
         insertMode = false
         applicationCursorKeys = false
         applicationKeypad = false
+        mouseTracking = .none
+        mouseEncoding = .x10
         reverseVideo = false
 
         scrollTop = 0
@@ -1635,7 +1722,7 @@ actor TerminalGrid {
             ? (cursor.savedPrimary?.col ?? 0)
             : cursor.col
 
-        let primaryForReflow = linearizedRows(primaryCells, base: primaryRowBase)
+        let primaryForReflow = linearizedRows(primaryCells, base: primaryRowBase, map: primaryRowMap)
 
         // Reflow primary buffer (the one with scrollback that needs proper reflow)
         let reflowResult = GridReflow.reflow(
@@ -1658,7 +1745,7 @@ actor TerminalGrid {
         }
 
         // Simple resize for alternate buffer (TUI apps redraw on SIGWINCH)
-        let alternateForResize = linearizedRows(alternateCells, base: alternateRowBase)
+        let alternateForResize = linearizedRows(alternateCells, base: alternateRowBase, map: alternateRowMap)
         alternateCells = simpleResizeBuffer(
             alternateForResize, newRows: newRows, newColumns: newColumns
         )
@@ -1682,6 +1769,8 @@ actor TerminalGrid {
 
         columns = newColumns
         rows = newRows
+        primaryRowMap = Array(0..<newRows)
+        alternateRowMap = Array(0..<newRows)
 
         // Adjust scroll region
         scrollTop = 0
@@ -1848,6 +1937,52 @@ actor TerminalGrid {
     /// Set line feed mode (LNM).
     func setLineFeedMode(_ enabled: Bool) {
         lineFeedMode = enabled
+    }
+
+    /// Apply one DEC private mode in a single actor hop.
+    /// This batches the hot parser path and avoids per-field await storms.
+    func applyDECPrivateMode(_ mode: Int, enabled: Bool) {
+        switch mode {
+        case DECPrivateMode.DECCKM:
+            applicationCursorKeys = enabled
+        case DECPrivateMode.DECSCNM:
+            reverseVideo = enabled
+        case DECPrivateMode.DECOM:
+            originMode = enabled
+            if enabled {
+                moveCursorTo(row: 0, col: 0)
+            }
+        case DECPrivateMode.DECAWM:
+            autoWrapMode = enabled
+        case DECPrivateMode.cursorBlink:
+            cursor.blinkEnabled = enabled
+        case DECPrivateMode.DECTCEM:
+            cursor.visible = enabled
+        case DECPrivateMode.altScreenOld, DECPrivateMode.altScreenAlt, DECPrivateMode.altScreen:
+            if enabled {
+                enableAlternateBuffer()
+            } else {
+                disableAlternateBuffer()
+            }
+        case DECPrivateMode.mouseX10:
+            mouseTracking = enabled ? .x10 : .none
+        case DECPrivateMode.mouseButton:
+            mouseTracking = enabled ? .buttonEvent : .none
+        case DECPrivateMode.mouseAny:
+            mouseTracking = enabled ? .anyEvent : .none
+        case DECPrivateMode.focusEvent:
+            focusReporting = enabled
+        case DECPrivateMode.mouseUTF8:
+            mouseEncoding = enabled ? .utf8 : .x10
+        case DECPrivateMode.mouseSGR:
+            mouseEncoding = enabled ? .sgr : .x10
+        case DECPrivateMode.bracketedPaste:
+            bracketedPasteMode = enabled
+        case DECPrivateMode.synchronizedOutput:
+            setSynchronizedOutput(enabled)
+        default:
+            break
+        }
     }
 
     /// Set SGR attributes directly.

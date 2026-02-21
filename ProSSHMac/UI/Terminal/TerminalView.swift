@@ -1197,12 +1197,11 @@ struct TerminalView: View {
 
     @ViewBuilder
     private func metalTerminalBuffer(for session: Session, isFocused: Bool = true, paneID: UUID? = nil) -> some View {
-        let snapshot = sessionManager.gridSnapshotsBySessionID[session.id]
         let snapshotNonce = sessionManager.gridSnapshotNonceBySessionID[session.id, default: 0]
 
         MetalTerminalSessionSurface(
             sessionID: session.id,
-            snapshot: snapshot,
+            snapshotProvider: { sessionManager.gridSnapshot(for: session.id) },
             snapshotNonce: snapshotNonce,
             fontSize: terminalUIFontSize,
             backgroundOpacityPercent: terminalBackgroundOpacityPercent,

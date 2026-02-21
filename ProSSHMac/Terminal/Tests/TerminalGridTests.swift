@@ -631,6 +631,110 @@ final class TerminalGridTests: XCTestCase {
         XCTAssertEqual(snap.cells.count, 80 * 24)
     }
 
+    func testTerminalCellCacheCoherence() async {
+        var cell = TerminalCell(
+            graphemeCluster: "A",
+            fgColor: .indexed(2),
+            bgColor: .rgb(1, 2, 3),
+            underlineColor: .indexed(4),
+            attributes: [.underline],
+            underlineStyle: .single,
+            width: 1,
+            isDirty: false
+        )
+
+        XCTAssertEqual(cell.primaryCodepoint, UInt32("A".unicodeScalars.first!.value))
+        XCTAssertEqual(cell.fgPackedRGBA, TerminalColor.indexed(2).packedRGBA())
+        XCTAssertEqual(cell.bgPackedRGBA, TerminalColor.rgb(1, 2, 3).packedRGBA())
+        XCTAssertEqual(cell.underlinePackedRGBA, TerminalColor.indexed(4).packedRGBA())
+
+        cell.graphemeCluster = "é"
+        cell.fgColor = .rgb(8, 9, 10)
+        cell.bgColor = .indexed(6)
+        cell.underlineColor = .rgb(11, 12, 13)
+
+        XCTAssertEqual(cell.primaryCodepoint, UInt32("é".unicodeScalars.first!.value))
+        XCTAssertEqual(cell.fgPackedRGBA, TerminalColor.rgb(8, 9, 10).packedRGBA())
+        XCTAssertEqual(cell.bgPackedRGBA, TerminalColor.indexed(6).packedRGBA())
+        XCTAssertEqual(cell.underlinePackedRGBA, TerminalColor.rgb(11, 12, 13).packedRGBA())
+
+        cell.clear()
+        XCTAssertEqual(cell.primaryCodepoint, 0)
+        XCTAssertEqual(cell.fgPackedRGBA, 0)
+        XCTAssertEqual(cell.bgPackedRGBA, 0)
+        XCTAssertEqual(cell.underlinePackedRGBA, 0)
+
+        cell.erase(bgColor: .indexed(5))
+        XCTAssertEqual(cell.primaryCodepoint, 0)
+        XCTAssertEqual(cell.fgPackedRGBA, 0)
+        XCTAssertEqual(cell.bgPackedRGBA, TerminalColor.indexed(5).packedRGBA())
+        XCTAssertEqual(cell.underlinePackedRGBA, 0)
+    }
+
+    func testSnapshotUsesCachedCellFields() async {
+        let styledCell = TerminalCell(
+            graphemeCluster: "A",
+            fgColor: .indexed(1),
+            bgColor: .indexed(2),
+            underlineColor: .indexed(3),
+            attributes: [.bold, .underline],
+            underlineStyle: .single,
+            width: 1,
+            isDirty: true
+        )
+        await grid.setCellAt(row: 0, col: 0, cell: styledCell)
+
+        let snapshot = await grid.snapshot()
+        let snapshotCell = snapshot.cells[0]
+
+        XCTAssertEqual(snapshotCell.glyphIndex, styledCell.primaryCodepoint)
+        XCTAssertEqual(snapshotCell.bgColor, styledCell.bgPackedRGBA)
+        XCTAssertEqual(snapshotCell.underlineColor, styledCell.underlinePackedRGBA)
+
+        let expectedFG: UInt32
+        if TerminalDefaults.boldIsBright {
+            expectedFG = TerminalColor.indexed(9).packedRGBA()
+        } else {
+            expectedFG = styledCell.fgPackedRGBA
+        }
+        XCTAssertEqual(snapshotCell.fgColor, expectedFG)
+    }
+
+    func testPartialScrollRegionRowIndirectionKeepsRowsConsistent() async {
+        let markers: [Character] = ["A", "B", "C", "D", "E", "F"]
+        for (row, marker) in markers.enumerated() {
+            await grid.moveCursorTo(row: row, col: 0)
+            await grid.printCharacter(marker)
+        }
+
+        await grid.setScrollRegion(top: 1, bottom: 4)
+        await grid.scrollUp(lines: 2)
+
+        XCTAssertEqual((await grid.cellAt(row: 0, col: 0))?.graphemeCluster, "A")
+        XCTAssertEqual((await grid.cellAt(row: 1, col: 0))?.graphemeCluster, "D")
+        XCTAssertEqual((await grid.cellAt(row: 2, col: 0))?.graphemeCluster, "E")
+        XCTAssertTrue((await grid.cellAt(row: 3, col: 0))?.isBlank ?? false)
+        XCTAssertTrue((await grid.cellAt(row: 4, col: 0))?.isBlank ?? false)
+        XCTAssertEqual((await grid.cellAt(row: 5, col: 0))?.graphemeCluster, "F")
+        XCTAssertEqual(await grid.scrollbackCount, 2)
+
+        await grid.scrollDown(lines: 1)
+
+        XCTAssertEqual((await grid.cellAt(row: 0, col: 0))?.graphemeCluster, "A")
+        XCTAssertTrue((await grid.cellAt(row: 1, col: 0))?.isBlank ?? false)
+        XCTAssertEqual((await grid.cellAt(row: 2, col: 0))?.graphemeCluster, "D")
+        XCTAssertEqual((await grid.cellAt(row: 3, col: 0))?.graphemeCluster, "E")
+        XCTAssertTrue((await grid.cellAt(row: 4, col: 0))?.isBlank ?? false)
+        XCTAssertEqual((await grid.cellAt(row: 5, col: 0))?.graphemeCluster, "F")
+
+        let snapshot = await grid.snapshot()
+        XCTAssertEqual(snapshotText(snapshot, row: 0, startCol: 0, count: 1), "A")
+        XCTAssertEqual(snapshotText(snapshot, row: 1, startCol: 0, count: 1), " ")
+        XCTAssertEqual(snapshotText(snapshot, row: 2, startCol: 0, count: 1), "D")
+        XCTAssertEqual(snapshotText(snapshot, row: 3, startCol: 0, count: 1), "E")
+        XCTAssertEqual(snapshotText(snapshot, row: 5, startCol: 0, count: 1), "F")
+    }
+
     // MARK: - Repeat Last Character
 
     func testRepeatLastCharacter() async {

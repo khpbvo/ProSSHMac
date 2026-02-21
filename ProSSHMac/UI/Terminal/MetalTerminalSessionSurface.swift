@@ -10,7 +10,7 @@ import Metal
 
 struct MetalTerminalSessionSurface: View {
     let sessionID: UUID
-    let snapshot: GridSnapshot?
+    let snapshotProvider: () -> GridSnapshot?
     let snapshotNonce: Int
     let fontSize: Double
     let backgroundOpacityPercent: Double
@@ -49,7 +49,7 @@ struct MetalTerminalSessionSurface: View {
                 )
                 .onAppear {
                     model.renderer?.isLocalSession = isLocalSession
-                    model.apply(snapshot: snapshot)
+                    model.apply(snapshot: snapshotProvider())
                     model.setRendererPaused(false)
                     model.updateFPS(isFocused: isFocused)
                     selectionCoordinator?.register(sessionID: sessionID, model: model)
@@ -59,7 +59,7 @@ struct MetalTerminalSessionSurface: View {
                     selectionCoordinator?.unregister(sessionID: sessionID)
                 }
                 .onChange(of: snapshotNonce) { _, _ in
-                    model.apply(snapshot: snapshot)
+                    model.apply(snapshot: snapshotProvider())
                 }
                 .onChange(of: isFocused) { _, newValue in
                     model.updateFPS(isFocused: newValue)

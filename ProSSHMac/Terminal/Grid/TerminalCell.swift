@@ -75,16 +75,46 @@ nonisolated struct CellAttributes: OptionSet, Sendable, Hashable {
 nonisolated struct TerminalCell: Sendable {
     /// The character(s) displayed in this cell.
     /// Empty string represents a space. May contain multi-codepoint grapheme clusters.
-    var graphemeCluster: String
+    var graphemeCluster: String {
+        didSet {
+            primaryCodepoint = Self.extractPrimaryCodepoint(from: graphemeCluster)
+        }
+    }
 
     /// Foreground color for this cell.
-    var fgColor: TerminalColor
+    var fgColor: TerminalColor {
+        didSet {
+            fgPackedRGBA = fgColor.packedRGBA()
+        }
+    }
 
     /// Background color for this cell.
-    var bgColor: TerminalColor
+    var bgColor: TerminalColor {
+        didSet {
+            bgPackedRGBA = bgColor.packedRGBA()
+        }
+    }
 
     /// Underline color for this cell. When `.default`, renderer uses fgColor.
-    var underlineColor: TerminalColor
+    var underlineColor: TerminalColor {
+        didSet {
+            underlinePackedRGBA = underlineColor.packedRGBA()
+        }
+    }
+
+    /// Cached primary Unicode scalar value for snapshot generation.
+    /// 0 means empty cell.
+    var primaryCodepoint: UInt32
+
+    /// Cached packed foreground color for GPU upload.
+    var fgPackedRGBA: UInt32
+
+    /// Cached packed background color for GPU upload.
+    var bgPackedRGBA: UInt32
+
+    /// Cached packed underline color for GPU upload.
+    /// 0 means renderer should use fg color.
+    var underlinePackedRGBA: UInt32
 
     /// Text attributes (bold, italic, underline, etc.).
     var attributes: CellAttributes
@@ -125,6 +155,10 @@ nonisolated struct TerminalCell: Sendable {
         self.fgColor = fgColor
         self.bgColor = bgColor
         self.underlineColor = underlineColor
+        self.primaryCodepoint = Self.extractPrimaryCodepoint(from: graphemeCluster)
+        self.fgPackedRGBA = fgColor.packedRGBA()
+        self.bgPackedRGBA = bgColor.packedRGBA()
+        self.underlinePackedRGBA = underlineColor.packedRGBA()
         self.attributes = attributes
         self.underlineStyle = underlineStyle
         self.width = width
@@ -164,5 +198,9 @@ nonisolated struct TerminalCell: Sendable {
         underlineStyle = .none
         width = 1
         isDirty = true
+    }
+
+    private static func extractPrimaryCodepoint(from text: String) -> UInt32 {
+        text.unicodeScalars.first?.value ?? 0
     }
 }

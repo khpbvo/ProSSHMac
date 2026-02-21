@@ -1,6 +1,9 @@
 import Foundation
 import Combine
 import Network
+#if DEBUG
+import os.signpost
+#endif
 
 enum SessionConnectionError: LocalizedError {
     case hostVerificationRequired(KnownHostVerificationChallenge)
@@ -22,7 +25,7 @@ final class SessionManager: ObservableObject {
     @Published private(set) var shellBuffers: [UUID: [String]] = [:]
     @Published private(set) var bellEventNonceBySessionID: [UUID: Int] = [:]
     @Published private(set) var inputModeSnapshotsBySessionID: [UUID: InputModeSnapshot] = [:]
-    @Published private(set) var gridSnapshotsBySessionID: [UUID: GridSnapshot] = [:]
+    private var gridSnapshotsBySessionID: [UUID: GridSnapshot] = [:]
     @Published private(set) var gridSnapshotNonceBySessionID: [UUID: Int] = [:]
     @Published private(set) var windowTitleBySessionID: [UUID: String] = [:]
     @Published private(set) var knownHosts: [KnownHostEntry] = []
@@ -43,7 +46,6 @@ final class SessionManager: ObservableObject {
     private var parserReaderTasks: [UUID: Task<Void, Never>] = [:]
     private var terminalGrids: [UUID: TerminalGrid] = [:]
     private var vtParsers: [UUID: VTParser] = [:]
-    private var inputModeActors: [UUID: InputModeState] = [:]
     private var desiredPTYBySessionID: [UUID: PTYConfiguration] = [:]
     private var hostBySessionID: [UUID: Host] = [:]
     private(set) var lastActivityBySessionID: [UUID: Date] = [:]
@@ -65,6 +67,9 @@ final class SessionManager: ObservableObject {
     private let shellBufferPublishInterval: TimeInterval = 1.0 / 30.0
     private let throughputShellBufferPublishInterval: TimeInterval = 1.0 / 5.0
     private let snapshotPublishInterval: Duration = .milliseconds(8)
+    #if DEBUG
+    private let perfSignpostLog = OSLog(subsystem: "com.prossh", category: "TerminalPerf")
+    #endif
 
     /// Runtime throughput policy. When enabled, expensive non-render work is throttled.
     private var throughputModeEnabled: Bool {
@@ -160,15 +165,11 @@ final class SessionManager: ObservableObject {
         let parser = VTParser(grid: grid)
         vtParsers[sessionID] = parser
 
-        let modeState = InputModeState()
-        inputModeActors[sessionID] = modeState
-        await parser.setInputModeState(modeState)
-
         gridSnapshotsBySessionID[sessionID] = await grid.snapshot()
         gridSnapshotNonceBySessionID[sessionID] = 0
         shellBuffers[sessionID] = []
         bellEventNonceBySessionID[sessionID] = 0
-        inputModeSnapshotsBySessionID[sessionID] = await modeState.snapshot()
+        inputModeSnapshotsBySessionID[sessionID] = await grid.inputModeSnapshot()
         isRecordingBySessionID[sessionID] = false
         hasRecordingBySessionID[sessionID] = false
         isPlaybackRunningBySessionID[sessionID] = false
@@ -305,16 +306,11 @@ final class SessionManager: ObservableObject {
         let parser = VTParser(grid: grid)
         vtParsers[sessionID] = parser
 
-        // F.5: Create InputModeState and wire to VTParser so mode changes propagate.
-        let modeState = InputModeState()
-        inputModeActors[sessionID] = modeState
-        await parser.setInputModeState(modeState)
-
         gridSnapshotsBySessionID[sessionID] = await grid.snapshot()
         gridSnapshotNonceBySessionID[sessionID] = 0
         shellBuffers[sessionID] = []
         bellEventNonceBySessionID[sessionID] = 0
-        inputModeSnapshotsBySessionID[sessionID] = await modeState.snapshot()
+        inputModeSnapshotsBySessionID[sessionID] = await grid.inputModeSnapshot()
         isRecordingBySessionID[sessionID] = false
         hasRecordingBySessionID[sessionID] = false
         isPlaybackRunningBySessionID[sessionID] = false
@@ -675,6 +671,12 @@ final class SessionManager: ObservableObject {
         (scrollOffsetBySessionID[sessionID] ?? 0) > 0
     }
 
+    /// Returns the latest grid snapshot for a session.
+    /// Snapshot publishing is nonce-driven to avoid large @Published payloads.
+    func gridSnapshot(for sessionID: UUID) -> GridSnapshot? {
+        gridSnapshotsBySessionID[sessionID]
+    }
+
     func toggleRecording(sessionID: UUID) async {
         if isRecordingBySessionID[sessionID, default: false] {
             await stopRecording(sessionID: sessionID)
@@ -887,8 +889,6 @@ final class SessionManager: ObservableObject {
             return
         }
 
-        let modeState = inputModeActors[sessionID]
-
         parserReaderTasks[sessionID] = Task.detached(priority: .userInitiated) { [weak self] in
             for await chunk in rawOutput {
                 if Task.isCancelled {
@@ -911,7 +911,6 @@ final class SessionManager: ObservableObject {
                     await self?.publishSyncExitSnapshot(
                         sessionID: sessionID,
                         grid: grid,
-                        modeState: modeState,
                         snapshotOverride: syncExitSnap
                     )
                 }
@@ -922,15 +921,13 @@ final class SessionManager: ObservableObject {
                 // Auto-reset scroll offset when new output arrives.
                 await self?.scheduleParsedChunkPublish(
                     sessionID: sessionID,
-                    grid: grid,
-                    modeState: modeState
+                    grid: grid
                 )
             }
 
             await self?.flushPendingSnapshotPublishIfNeeded(
                 for: sessionID,
-                grid: grid,
-                modeState: modeState
+                grid: grid
             )
 
             // Stream ended — force-exit alternate buffer if the program
@@ -938,7 +935,7 @@ final class SessionManager: ObservableObject {
             // alternate screen content from leaking into the primary buffer.
             if await grid.usingAlternateBuffer {
                 await grid.disableAlternateBuffer()
-                await self?.publishGridState(for: sessionID, grid: grid, modeState: modeState)
+                await self?.publishGridState(for: sessionID, grid: grid)
             }
 
             // Detect disconnection.
@@ -961,7 +958,6 @@ final class SessionManager: ObservableObject {
     private func publishSyncExitSnapshot(
         sessionID: UUID,
         grid: TerminalGrid,
-        modeState: InputModeState?,
         snapshotOverride: GridSnapshot
     ) async {
         scrollOffsetBySessionID[sessionID] = 0
@@ -969,23 +965,20 @@ final class SessionManager: ObservableObject {
         await publishGridState(
             for: sessionID,
             grid: grid,
-            modeState: modeState,
             snapshotOverride: snapshotOverride
         )
     }
 
     private func scheduleParsedChunkPublish(
         sessionID: UUID,
-        grid: TerminalGrid,
-        modeState: InputModeState?
+        grid: TerminalGrid
     ) {
         scrollOffsetBySessionID[sessionID] = 0
         // Frame-coalesced publish: parse every chunk immediately,
         // but publish at most once per display interval.
         scheduleCoalescedGridPublish(
             for: sessionID,
-            grid: grid,
-            modeState: modeState
+            grid: grid
         )
     }
 
@@ -1130,7 +1123,6 @@ final class SessionManager: ObservableObject {
         shellChannels.removeValue(forKey: sessionID)
         terminalGrids.removeValue(forKey: sessionID)
         vtParsers.removeValue(forKey: sessionID)
-        inputModeActors.removeValue(forKey: sessionID)
         desiredPTYBySessionID.removeValue(forKey: sessionID)
         shellBuffers.removeValue(forKey: sessionID)
         lastShellBufferPublishAtBySessionID.removeValue(forKey: sessionID)
@@ -1159,8 +1151,7 @@ final class SessionManager: ObservableObject {
 
     private func scheduleCoalescedGridPublish(
         for sessionID: UUID,
-        grid: TerminalGrid,
-        modeState: InputModeState?
+        grid: TerminalGrid
     ) {
         guard pendingSnapshotPublishTasksBySessionID[sessionID] == nil else {
             return
@@ -1171,20 +1162,19 @@ final class SessionManager: ObservableObject {
             try? await Task.sleep(for: self.snapshotPublishInterval)
             guard !Task.isCancelled else { return }
             self.pendingSnapshotPublishTasksBySessionID.removeValue(forKey: sessionID)
-            await self.publishGridState(for: sessionID, grid: grid, modeState: modeState)
+            await self.publishGridState(for: sessionID, grid: grid)
         }
     }
 
     private func flushPendingSnapshotPublishIfNeeded(
         for sessionID: UUID,
-        grid: TerminalGrid,
-        modeState: InputModeState?
+        grid: TerminalGrid
     ) async {
         guard pendingSnapshotPublishTasksBySessionID[sessionID] != nil else {
             return
         }
         cancelPendingSnapshotPublish(for: sessionID)
-        await publishGridState(for: sessionID, grid: grid, modeState: modeState)
+        await publishGridState(for: sessionID, grid: grid)
     }
 
     private func cancelPendingSnapshotPublish(for sessionID: UUID) {
@@ -1195,11 +1185,27 @@ final class SessionManager: ObservableObject {
     private func publishGridState(
         for sessionID: UUID,
         grid: TerminalGrid,
-        modeState: InputModeState?,
         snapshotOverride: GridSnapshot? = nil
     ) async {
         // Session may have been torn down while a scheduled publish was pending.
         guard terminalGrids[sessionID] != nil else { return }
+        #if DEBUG
+        let signpostID = OSSignpostID(log: perfSignpostLog)
+        os_signpost(
+            .begin,
+            log: perfSignpostLog,
+            name: "PublishGridState",
+            signpostID: signpostID
+        )
+        defer {
+            os_signpost(
+                .end,
+                log: perfSignpostLog,
+                name: "PublishGridState",
+                signpostID: signpostID
+            )
+        }
+        #endif
 
         let snapshot: GridSnapshot
         if let snapshotOverride {
@@ -1221,10 +1227,7 @@ final class SessionManager: ObservableObject {
             bellEventNonceBySessionID[sessionID, default: 0] += bellCount
         }
 
-        // F.5: Propagate input mode changes to published snapshots.
-        if let modeState {
-            inputModeSnapshotsBySessionID[sessionID] = await modeState.snapshot()
-        }
+        inputModeSnapshotsBySessionID[sessionID] = await grid.inputModeSnapshot()
 
         // F.7: Propagate window title changes to published state.
         let title = await grid.windowTitle
@@ -1426,10 +1429,6 @@ final class SessionManager: ObservableObject {
             let parser = VTParser(grid: grid)
             vtParsers[session.id] = parser
 
-            let modeState = InputModeState()
-            inputModeActors[session.id] = modeState
-            await parser.setInputModeState(modeState)
-
             desiredPTYBySessionID[session.id] = .default
             shellBuffers[session.id] = []
             bellEventNonceBySessionID[session.id] = 0
@@ -1451,7 +1450,7 @@ final class SessionManager: ObservableObject {
             let snapshot = await grid.snapshot()
             gridSnapshotsBySessionID[session.id] = snapshot
             gridSnapshotNonceBySessionID[session.id] = 1
-            inputModeSnapshotsBySessionID[session.id] = await modeState.snapshot()
+            inputModeSnapshotsBySessionID[session.id] = await grid.inputModeSnapshot()
             shellBuffers[session.id] = await grid.visibleText()
         }
     }

@@ -20,6 +20,19 @@ Latest sample (2026-02-21):
 - partial scroll-region avg: 1.38 MB/s
 - parser state after run: `ground`
 
+Post-change sample (2026-02-21, base `c510a45`, working tree dirty):
+- machine: Apple M1, 16 GB RAM, macOS 26.3 (25D125)
+- command: `./scripts/benchmark-throughput.sh --benchmark-bytes 2097152 --benchmark-runs 3 --benchmark-chunk 4096 --no-build`
+- fullscreen avg: 1.13 MB/s
+- partial scroll-region avg: 1.13 MB/s
+- parser state after run: `ground`
+
+Debug instrumentation now available for Instruments Points of Interest:
+- `ParserChunk` (VT parser chunk processing)
+- `GridSnapshot` / `GridSnapshotScrollback` (snapshot build)
+- `PublishGridState` (SessionManager snapshot publish)
+- `CellBufferUpdate` (CPU upload and glyph resolution)
+
 ---
 
 ## P0 — CRITICAL (the 400x slowdown lives here)
