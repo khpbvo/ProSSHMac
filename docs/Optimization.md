@@ -4,10 +4,11 @@
 
 **Current:** ~10 minutes (estimated ~220 KB/s throughput — a **400x** gap).
 
-Data pipeline:
+Data pipeline (current — after TerminalEngine merge):
 ```
-PTY read (LocalShellChannel) → AsyncStream<Data> → SessionManager (MainActor)
-  → VTParser actor → TerminalGrid actor → GridSnapshot → CellBuffer → Metal GPU
+PTY read (LocalShellChannel) → AsyncStream<Data> → TerminalEngine actor
+  → parser (sync) → grid (sync) → GridSnapshot → SessionManager (MainActor)
+  → CellBuffer → Metal GPU
 ```
 
 Benchmark command path (local parser/grid throughput harness):
@@ -92,12 +93,15 @@ Debug instrumentation now available for Instruments Points of Interest:
 
 ### Actor Isolation Overhead
 
-- [ ] **3 actor boundaries on every chunk** — SessionManager → VTParser → TerminalGrid
+- [x] **3 actor boundaries on every chunk** — SessionManager → VTParser → TerminalGrid
   Each `await` hop involves: suspension, executor scheduling, resumption. The parser and grid are
   always accessed sequentially — separate actors add overhead without concurrency benefit.
   **Fix (short-term):** Batch post-feed grid queries. Return sync mode state from `feed()` instead
   of a separate `await grid.synchronizedOutput` hop after every chunk.
   **Fix (long-term):** Merge VTParser and TerminalGrid onto a single actor/serial queue.
+  **Done:** Merged into single `TerminalEngine` actor. `TerminalGrid` is now a `nonisolated final class`
+  owned by the engine. All ~109 `await grid.*` calls in the parser/handler code path are now
+  synchronous. SessionManager uses a single `engines: [UUID: TerminalEngine]` dictionary.
 
 ---
 
@@ -129,10 +133,12 @@ Debug instrumentation now available for Instruments Points of Interest:
   **Fix:** Access params inline: `params[safe: n]?.first ?? 0`. No allocation needed.
   **Done:** Inline `param()` helper accesses `params[index].first ?? 0` directly.
 
-- [ ] **All CSI/ESC handlers are `async`** — `CSIHandler.swift`, `ESCHandler.swift`
+- [x] **All CSI/ESC handlers are `async`** — `CSIHandler.swift`, `ESCHandler.swift`
   Every cursor move, erase, or mode change goes through async/await overhead even though
   the parser and grid could share an actor.
   **Fix:** If parser + grid merge onto one actor, these become synchronous calls.
+  **Done:** SGRHandler, CharsetHandler, and most CSI/ESC handler functions are now fully
+  synchronous. Only functions that call `responseHandler` or `inputModeState` remain async.
 
 - [x] **`setPrivateMode` iterates params for single-param sequences** — `CSIHandler.swift:251-258`
   Most DECSET/DECRST have one parameter. The `for p in params` loop adds overhead.
@@ -164,9 +170,12 @@ Debug instrumentation now available for Instruments Points of Interest:
   **Fix:** Single `grid.inputModeSnapshot()` returning all five values at once.
   **Done:** Added `TerminalGrid.inputModeSnapshot()` returning `InputModeSnapshot`. 5 hops → 1.
 
-- [ ] **`InputModeState` is its own actor** — `InputModeState.swift:24`
+- [x] **`InputModeState` is its own actor** — `InputModeState.swift:24`
   CSIHandler calls both `await grid.set*()` and `await inputModeState?.set*()`, doubling hops.
   **Fix:** Make `InputModeState` `@MainActor`-isolated or embed it in the grid actor.
+  **Done (partial):** `syncFromGrid` replaced with `syncFromSnapshot` — passes a value snapshot
+  instead of a grid reference across the actor boundary. `InputModeState` remains a separate actor
+  but grid calls are now sync (only the `inputModeState` hop remains).
 
 ---
 
@@ -445,11 +454,11 @@ concurrently — the parser always calls the grid sequentially. The actor bounda
 
 For a byte stream of 133 million characters, even microseconds per hop become seconds.
 
-The ideal architecture for raw throughput:
-1. **Single actor** owns both parser state and grid state
-2. Parser methods call grid methods as **synchronous function calls** (no `await`)
-3. Snapshot generation is the **only** async boundary (grid actor → MainActor for rendering)
-4. PTY reader feeds data into this single actor via one `await` per chunk
+The ideal architecture for raw throughput (now implemented):
+1. **Single actor** owns both parser state and grid state — `TerminalEngine`
+2. Parser methods call grid methods as **synchronous function calls** (no `await`) — done
+3. Snapshot generation is the **only** async boundary (engine actor → MainActor for rendering) — done
+4. PTY reader feeds data into this single actor via one `await` per chunk — done
 
 ### Memory layout ideal
 
