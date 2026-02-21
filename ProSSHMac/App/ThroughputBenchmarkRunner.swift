@@ -4,7 +4,12 @@ import Foundation
 @MainActor
 enum ThroughputBenchmarkRunner {
     static var isEnabled: Bool {
-        ProcessInfo.processInfo.arguments.contains("--benchmark-base64")
+        let args = ProcessInfo.processInfo.arguments
+        return args.contains("--benchmark-base64") || args.contains("--benchmark-pty-local")
+    }
+
+    static var isPTYLocalEnabled: Bool {
+        ProcessInfo.processInfo.arguments.contains("--benchmark-pty-local")
     }
 
     private enum RunState {
@@ -21,6 +26,10 @@ enum ThroughputBenchmarkRunner {
             return true
         case .idle:
             runState = .running
+        }
+
+        if isPTYLocalEnabled {
+            return await runPTYLocalIfRequested()
         }
 
         let config = configurationFromArgs()
@@ -68,6 +77,93 @@ enum ThroughputBenchmarkRunner {
         fflush(stdout)
         fflush(stderr)
         exit(0)
+    }
+
+    // MARK: - PTY Local Benchmark
+
+    static func runPTYLocalIfRequested() async -> Bool {
+        let config = configurationFromArgs()
+        let kilobytes = config.bytes / 1024
+        let runs = config.runs
+
+        print("==> ProSSHMac PTY Local End-to-End Benchmark")
+        print("    kilobytes=\(kilobytes) runs=\(runs)")
+        print("")
+
+        var results: [Double] = []
+
+        for run in 1...runs {
+            let mbps = await runPTYLocalScenario(kilobytes: kilobytes)
+            results.append(mbps)
+            print("run \(run)/\(runs) [pty-local] \(format(mbps)) MB/s")
+        }
+
+        let avg = average(of: results)
+        print("")
+        print("summary:")
+        print("  pty-local avg: \(format(avg)) MB/s")
+        print("")
+
+        runState = .completed
+        fflush(stdout)
+        fflush(stderr)
+        exit(0)
+    }
+
+    private static func runPTYLocalScenario(kilobytes: Int) async -> Double {
+        let engine = TerminalEngine(columns: 80, rows: 24)
+
+        do {
+            let channel = try await LocalShellChannel.spawn(
+                columns: 80,
+                rows: 24,
+                shellPath: "/bin/sh"
+            )
+
+            // Wire PTY output → engine.feed (mimicking SessionManager's startParserReader)
+            let sentinel = "---BENCH_DONE---"
+            let command = "dd if=/dev/urandom bs=1024 count=\(kilobytes) 2>/dev/null | base64; echo '\(sentinel)'\n"
+
+            let expectedBytes = kilobytes * 1024 * 4 / 3  // base64 expansion ~4/3
+
+            let start = CFAbsoluteTimeGetCurrent()
+
+            try await channel.send(command)
+
+            var totalBytes = 0
+            var foundSentinel = false
+
+            for await chunk in channel.rawOutput {
+                if Task.isCancelled { break }
+
+                await engine.feed(chunk)
+                totalBytes += chunk.count
+
+                // Check for sentinel in the raw data
+                if let text = String(data: chunk, encoding: .utf8),
+                   text.contains(sentinel) {
+                    foundSentinel = true
+                    break
+                }
+            }
+
+            let elapsed = CFAbsoluteTimeGetCurrent() - start
+
+            // Take final snapshot to include snapshot overhead in measurement
+            _ = await engine.snapshot()
+
+            await channel.close()
+
+            if !foundSentinel {
+                print("  WARNING: sentinel not found, measurement may be inaccurate")
+            }
+
+            let mbps = elapsed > 0 ? Double(totalBytes) / elapsed / 1_048_576.0 : 0
+            return mbps
+        } catch {
+            print("  ERROR: PTY spawn failed: \(error.localizedDescription)")
+            return 0
+        }
     }
 
     private static func runScenario(

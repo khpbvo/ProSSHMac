@@ -148,8 +148,8 @@ final class PerformanceValidationTest: IntegrationTestBase {
 
         let elapsed = CFAbsoluteTimeGetCurrent() - start
 
-        // Verify no crash — parser should still be in ground state
-        let state = await parser.state
+        // Verify no crash — engine should still be in ground state
+        let state = await engine.state
         XCTAssertEqual(state, .ground, "Parser should be in ground state after cursor flood")
 
         // Verify a reasonable number of unique cells were touched
@@ -166,8 +166,8 @@ final class PerformanceValidationTest: IntegrationTestBase {
         XCTAssertNotNil(cell, "Cell should be accessible after cursor flood")
 
         // Verify processing was fast enough (10,000 cursor+char in reasonable time)
-        XCTAssertLessThan(elapsed, 10.0,
-            "10,000 cursor movement commands should process in under 10s, took \(String(format: "%.3f", elapsed))s")
+        XCTAssertLessThan(elapsed, 3.0,
+            "10,000 cursor movement commands should process in under 3s, took \(String(format: "%.3f", elapsed))s")
     }
 
     // MARK: - testBase64FloodProcessing
@@ -202,14 +202,14 @@ final class PerformanceValidationTest: IntegrationTestBase {
         while offset < data.count {
             let end = min(offset + chunkSize, data.count)
             let chunk = Array(data[offset..<end])
-            await parser.feed(chunk)
+            await engine.feed(chunk)
             offset = end
         }
 
         let elapsed = CFAbsoluteTimeGetCurrent() - start
 
-        // Parser should still be in ground state
-        let state = await parser.state
+        // Engine should still be in ground state
+        let state = await engine.state
         XCTAssertEqual(state, .ground, "Parser should remain in ground state after base64 flood")
 
         // Grid should have content (not blank) — the last line should have characters
@@ -219,8 +219,51 @@ final class PerformanceValidationTest: IntegrationTestBase {
 
         // Verify throughput: 1MB should process in under 5 seconds
         let throughputMBps = Double(targetBytes) / elapsed / 1_048_576.0
-        XCTAssertGreaterThan(throughputMBps, 0.2,
-            "Base64 flood should process at > 0.2 MB/s, got \(String(format: "%.2f", throughputMBps)) MB/s")
+        XCTAssertGreaterThan(throughputMBps, 0.8,
+            "Base64 flood should process at > 0.8 MB/s, got \(String(format: "%.2f", throughputMBps)) MB/s")
+    }
+
+    // MARK: - testBase64FloodThroughputRegression
+
+    /// Feed 4MB of base64-like data in 4096-byte chunks and assert throughput stays
+    /// above 1.0 MB/s to catch regressions from the 1.70 MB/s baseline.
+    func testBase64FloodThroughputRegression() async {
+        let base64Chars = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".utf8)
+        let targetBytes = 4_194_304  // 4MB
+        var data = [UInt8]()
+        data.reserveCapacity(targetBytes)
+
+        var seed: UInt64 = 99887766
+        for i in 0..<targetBytes {
+            if i > 0 && i % 76 == 0 {
+                data.append(0x0D)
+                data.append(0x0A)
+            } else {
+                seed = seed &* 6364136223846793005 &+ 1442695040888963407
+                let idx = Int((seed >> 33) % UInt64(base64Chars.count))
+                data.append(base64Chars[idx])
+            }
+        }
+
+        let start = CFAbsoluteTimeGetCurrent()
+
+        let chunkSize = 4096
+        var offset = 0
+        while offset < data.count {
+            let end = min(offset + chunkSize, data.count)
+            let chunk = Array(data[offset..<end])
+            await engine.feed(chunk)
+            offset = end
+        }
+
+        let elapsed = CFAbsoluteTimeGetCurrent() - start
+
+        let state = await engine.state
+        XCTAssertEqual(state, .ground, "Parser should be in ground state after regression flood")
+
+        let throughputMBps = Double(targetBytes) / elapsed / 1_048_576.0
+        XCTAssertGreaterThan(throughputMBps, 1.0,
+            "Throughput regression: 4MB base64 flood should sustain > 1.0 MB/s, got \(String(format: "%.2f", throughputMBps)) MB/s")
     }
 
     // MARK: - testTopBatchOutput
@@ -291,8 +334,8 @@ final class PerformanceValidationTest: IntegrationTestBase {
 
         // Verify reasonable processing time (100 full-screen rewrites)
         let fpsEquiv = Double(iterations) / elapsed
-        XCTAssertGreaterThan(fpsEquiv, 10.0,
-            "top batch output should process at > 10 iterations/sec, got \(String(format: "%.1f", fpsEquiv))")
+        XCTAssertGreaterThan(fpsEquiv, 40.0,
+            "top batch output should process at > 40 iterations/sec, got \(String(format: "%.1f", fpsEquiv))")
     }
 }
 

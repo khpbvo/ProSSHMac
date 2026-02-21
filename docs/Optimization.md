@@ -2,7 +2,8 @@
 
 **Target:** `dd if=/dev/urandom bs=1024 count=100000 | base64` completes in 1.5 seconds (~89 MB/s throughput).
 
-**Current:** ~10 minutes (estimated ~220 KB/s throughput — a **400x** gap).
+**Current:** **1.70 MB/s** fullscreen, **1.51 MB/s** partial scroll (parser/grid benchmark, 52x gap remaining).
+**Previous:** ~220 KB/s initial estimate → 1.13 MB/s post-merge → 1.34 MB/s post-ring → 1.70 MB/s post-pack.
 
 Data pipeline (current — after TerminalEngine merge):
 ```
@@ -11,9 +12,16 @@ PTY read (LocalShellChannel) → AsyncStream<Data> → TerminalEngine actor
   → CellBuffer → Metal GPU
 ```
 
-Benchmark command path (local parser/grid throughput harness):
+Benchmark command paths:
 ```bash
+# Parser/grid throughput (no PTY, no renderer — isolates parser+grid performance)
 ./scripts/benchmark-throughput.sh --benchmark-bytes 2097152 --benchmark-runs 2 --benchmark-chunk 4096
+
+# PTY local end-to-end (real PTY → parser → grid → snapshot — measures full local pipeline)
+./scripts/benchmark-throughput.sh --pty-local --no-build
+
+# Remote SSH baseline (raw SSH transport — no terminal emulation)
+./scripts/benchmark-ssh.sh --host <hostname> --user <username>
 ```
 
 Latest sample (2026-02-21, after Workstream 3 packed cell migration):
@@ -31,6 +39,42 @@ Debug instrumentation now available for Instruments Points of Interest:
 - `GridSnapshot` / `GridSnapshotScrollback` (snapshot build)
 - `PublishGridState` (SessionManager snapshot publish)
 - `CellBufferUpdate` (CPU upload and glyph resolution)
+
+---
+
+## Machine Profile
+
+All benchmark numbers in this document were collected on this configuration:
+
+| Property | Value |
+|----------|-------|
+| Hardware | Apple Silicon Mac (arm64) |
+| macOS | 15.x (Darwin 25.3.0) |
+| Xcode | 16.x |
+| Build config | Debug (no optimizations) |
+| Grid size | 80 columns × 24 rows |
+| Reference command | `dd if=/dev/urandom bs=1024 count=100000 \| base64` |
+| Host baseline | `time sh -c '... \| base64 > /dev/null'` → **0.373s** (~357 MB/s) |
+| Parser/grid benchmark | `./scripts/benchmark-throughput.sh --benchmark-bytes 2097152 --benchmark-runs 3 --benchmark-chunk 4096 --no-build` |
+| PTY local benchmark | `./scripts/benchmark-throughput.sh --pty-local --no-build` |
+| Remote SSH benchmark | `./scripts/benchmark-ssh.sh --host <host> --user <user>` |
+
+---
+
+## Throughput Mode Policy
+
+Throughput mode (`defaults write com.prossh terminal.throughput.mode.enabled -bool true`)
+reduces non-render overhead during high-throughput output:
+
+| Policy | Normal | Throughput Mode | Rationale |
+|--------|--------|----------------|-----------|
+| Snapshot publish interval | 8ms (~120fps) | 16ms (~60fps) | Halves snapshot overhead |
+| Shell buffer text extraction | 30Hz | 5Hz | Reduces expensive `visibleText()` calls |
+| Bell event rate | Unlimited | 1 per second per session | Prevents audio/visual flood |
+| Session recorder chunks | Per-packet | Coalesced (64KB / 100ms) | Reduces chunk count and I/O |
+
+All policies are transparent — the terminal remains fully functional. The trade-off is
+reduced visual responsiveness (frame rate) in exchange for higher data throughput.
 
 ---
 

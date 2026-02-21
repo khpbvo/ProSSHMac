@@ -89,6 +89,14 @@ final class SessionRecorder {
     private var activeRecordingsBySessionID: [UUID: ActiveRecording] = [:]
     private var latestRecordingURLBySessionID: [UUID: URL] = [:]
 
+    /// When enabled, output chunks are coalesced into larger buffers before being
+    /// committed as recording chunks. Reduces chunk count and I/O overhead during
+    /// high-throughput output. Flush occurs at ≥64KB accumulated or ≥100ms elapsed.
+    var coalescingEnabled: Bool = false
+    private var pendingCoalesceData: [UUID: Data] = [:]
+    private var lastCoalesceFlush: [UUID: UInt64] = [:]
+    private static let coalesceFlushThreshold = 65_536
+    private static let coalesceFlushIntervalNanos: UInt64 = 100_000_000  // 100ms
 
     init(fileManager: FileManager = .default, recordingsDirectoryURL: URL? = nil) {
         self.fileManager = fileManager
@@ -132,6 +140,10 @@ final class SessionRecorder {
 
     @discardableResult
     func stopRecording(sessionID: UUID) throws -> URL {
+        // Flush any pending coalesced data before finalizing.
+        flushPendingChunks(sessionID: sessionID)
+        lastCoalesceFlush.removeValue(forKey: sessionID)
+
         guard var active = activeRecordingsBySessionID.removeValue(forKey: sessionID) else {
             throw SessionRecorderError.notRecording
         }
@@ -280,9 +292,31 @@ final class SessionRecorder {
 
     private func appendChunk(sessionID: UUID, payload: Data, stream: SessionRecordingStream) {
         guard !payload.isEmpty,
-              var active = activeRecordingsBySessionID[sessionID] else {
+              activeRecordingsBySessionID[sessionID] != nil else {
             return
         }
+
+        // In coalescing mode, accumulate output chunks and flush when buffer is large
+        // enough or enough time has passed. Input chunks are never coalesced.
+        if coalescingEnabled && stream == .output {
+            let now = DispatchTime.now().uptimeNanoseconds
+            pendingCoalesceData[sessionID, default: Data()].append(payload)
+            let accumulated = pendingCoalesceData[sessionID]?.count ?? 0
+            let lastFlush = lastCoalesceFlush[sessionID] ?? 0
+            let elapsed = now &- lastFlush
+
+            if accumulated >= Self.coalesceFlushThreshold
+                || elapsed >= Self.coalesceFlushIntervalNanos {
+                flushPendingChunks(sessionID: sessionID)
+            }
+            return
+        }
+
+        commitChunk(sessionID: sessionID, payload: payload, stream: stream)
+    }
+
+    private func commitChunk(sessionID: UUID, payload: Data, stream: SessionRecordingStream) {
+        guard var active = activeRecordingsBySessionID[sessionID] else { return }
 
         let offset = DispatchTime.now().uptimeNanoseconds &- active.startUptimeNanoseconds
         let chunk = SessionRecordingChunk(
@@ -292,6 +326,16 @@ final class SessionRecorder {
         )
         active.recording.chunks.append(chunk)
         activeRecordingsBySessionID[sessionID] = active
+    }
+
+    /// Flush any pending coalesced data for a session into a single recording chunk.
+    func flushPendingChunks(sessionID: UUID) {
+        guard let data = pendingCoalesceData.removeValue(forKey: sessionID),
+              !data.isEmpty else {
+            return
+        }
+        lastCoalesceFlush[sessionID] = DispatchTime.now().uptimeNanoseconds
+        commitChunk(sessionID: sessionID, payload: data, stream: .output)
     }
 
     private func persistRecording(_ recording: SessionRecording, to fileURL: URL) throws {

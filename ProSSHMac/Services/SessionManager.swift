@@ -56,6 +56,8 @@ final class SessionManager: ObservableObject {
     private let networkMonitorQueue = DispatchQueue(label: "prosshv2.network.monitor")
     private var isNetworkReachable = true
     private var pendingResizeTasks: [UUID: Task<Void, Never>] = [:]
+    /// Tracks last bell event time per session for throughput mode rate-limiting.
+    private var lastBellTimeBySessionID: [UUID: Date] = [:]
     /// Per-session coalesced snapshot publish task (max one publish per frame interval).
     private var pendingSnapshotPublishTasksBySessionID: [UUID: Task<Void, Never>] = [:]
     /// Per-session scroll offset (0 = live view, >0 = scrolled back N lines).
@@ -66,11 +68,17 @@ final class SessionManager: ObservableObject {
     private let shellBufferPublishInterval: TimeInterval = 1.0 / 30.0
     private let throughputShellBufferPublishInterval: TimeInterval = 1.0 / 5.0
     private let snapshotPublishInterval: Duration = .milliseconds(8)
+    private let throughputSnapshotPublishInterval: Duration = .milliseconds(16)
     #if DEBUG
     private let perfSignpostLog = OSLog(subsystem: "com.prossh", category: "TerminalPerf")
     #endif
 
-    /// Runtime throughput policy. When enabled, expensive non-render work is throttled.
+    /// Runtime throughput policy. When enabled, expensive non-render work is throttled:
+    /// - Snapshot publish interval relaxed from 8ms to 16ms (~60fps → ~30fps)
+    /// - Shell buffer text extraction throttled from 30Hz to 5Hz
+    /// - Bell events rate-limited to 1 per second per session
+    /// - Session recorder uses chunk coalescing (64KB / 100ms flush)
+    /// Toggle via: `defaults write com.prossh terminal.throughput.mode.enabled -bool true`
     private var throughputModeEnabled: Bool {
         UserDefaults.standard.bool(forKey: "terminal.throughput.mode.enabled")
     }
@@ -945,6 +953,10 @@ final class SessionManager: ObservableObject {
 
         // Capture output directly as bytes to avoid a per-chunk UTF-8 decode.
         if sessionRecorder.isRecording(sessionID: sessionID) {
+            // Sync coalescing state with throughput mode policy.
+            if sessionRecorder.coalescingEnabled != throughputModeEnabled {
+                sessionRecorder.coalescingEnabled = throughputModeEnabled
+            }
             sessionRecorder.recordOutputData(sessionID: sessionID, data: chunk)
         }
     }
@@ -1118,6 +1130,7 @@ final class SessionManager: ObservableObject {
         shellBuffers.removeValue(forKey: sessionID)
         lastShellBufferPublishAtBySessionID.removeValue(forKey: sessionID)
         bellEventNonceBySessionID.removeValue(forKey: sessionID)
+        lastBellTimeBySessionID.removeValue(forKey: sessionID)
         inputModeSnapshotsBySessionID.removeValue(forKey: sessionID)
         gridSnapshotsBySessionID.removeValue(forKey: sessionID)
         gridSnapshotNonceBySessionID.removeValue(forKey: sessionID)
@@ -1150,7 +1163,10 @@ final class SessionManager: ObservableObject {
 
         pendingSnapshotPublishTasksBySessionID[sessionID] = Task { @MainActor [weak self] in
             guard let self else { return }
-            try? await Task.sleep(for: self.snapshotPublishInterval)
+            let interval = self.throughputModeEnabled
+                ? self.throughputSnapshotPublishInterval
+                : self.snapshotPublishInterval
+            try? await Task.sleep(for: interval)
             guard !Task.isCancelled else { return }
             self.pendingSnapshotPublishTasksBySessionID.removeValue(forKey: sessionID)
             await self.publishGridState(for: sessionID, engine: engine)
@@ -1213,9 +1229,20 @@ final class SessionManager: ObservableObject {
         }
 
         // F.8: Propagate bell events from engine → UI.
+        // In throughput mode, rate-limit bells to 1 per second per session to prevent
+        // audio/visual bell flooding during high-throughput output.
         let bellCount = await engine.consumeBellCount()
         if bellCount > 0 {
-            bellEventNonceBySessionID[sessionID, default: 0] += bellCount
+            if throughputModeEnabled {
+                let now = Date()
+                let lastBell = lastBellTimeBySessionID[sessionID] ?? .distantPast
+                if now.timeIntervalSince(lastBell) >= 1.0 {
+                    bellEventNonceBySessionID[sessionID, default: 0] += 1
+                    lastBellTimeBySessionID[sessionID] = now
+                }
+            } else {
+                bellEventNonceBySessionID[sessionID, default: 0] += bellCount
+            }
         }
 
         inputModeSnapshotsBySessionID[sessionID] = await engine.inputModeSnapshot()

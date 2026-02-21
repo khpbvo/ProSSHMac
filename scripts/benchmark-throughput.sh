@@ -2,14 +2,15 @@
 #
 # benchmark-throughput.sh
 #
-# Builds ProSSHMac (Debug) and runs the in-app base64 throughput benchmark mode.
+# Builds ProSSHMac (Debug) and runs the in-app throughput benchmark mode.
 #
 # Usage:
-#   ./scripts/benchmark-throughput.sh [--no-build] [benchmark args...]
+#   ./scripts/benchmark-throughput.sh [--no-build] [--pty-local] [benchmark args...]
 #
 # Examples:
 #   ./scripts/benchmark-throughput.sh
 #   ./scripts/benchmark-throughput.sh --benchmark-bytes 33554432 --benchmark-runs 5
+#   ./scripts/benchmark-throughput.sh --pty-local --no-build
 
 set -euo pipefail
 
@@ -18,11 +19,25 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 SCHEME="ProSSHMac"
 APP_NAME="ProSSHMac"
 NO_BUILD=0
+PTY_LOCAL=0
+EXTRA_ARGS=()
 
-if [[ "${1:-}" == "--no-build" ]]; then
-    NO_BUILD=1
-    shift
-fi
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --no-build)
+            NO_BUILD=1
+            shift
+            ;;
+        --pty-local)
+            PTY_LOCAL=1
+            shift
+            ;;
+        *)
+            EXTRA_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
 
 echo "==> ProSSHMac Throughput Benchmark"
 echo ""
@@ -53,4 +68,8 @@ echo ""
 pkill -9 -x "$APP_NAME" 2>/dev/null || true
 sleep 1
 
-"$APP_PATH/Contents/MacOS/$APP_NAME" --benchmark-base64 "$@"
+if [[ "$PTY_LOCAL" -eq 1 ]]; then
+    "$APP_PATH/Contents/MacOS/$APP_NAME" --benchmark-pty-local "${EXTRA_ARGS[@]}"
+else
+    "$APP_PATH/Contents/MacOS/$APP_NAME" --benchmark-base64 "${EXTRA_ARGS[@]}"
+fi
