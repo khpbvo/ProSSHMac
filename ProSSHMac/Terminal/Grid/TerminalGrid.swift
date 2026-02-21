@@ -394,8 +394,8 @@ actor TerminalGrid {
     /// Calls `withActiveCells` once for the entire run, skips wide-character
     /// checks (ASCII is never wide), and calls `markDirty` once per affected
     /// row range. This avoids per-character overhead in high-throughput output.
-    /// Accepts a ContiguousArray + range to avoid copies from VTParser.
-    private func printASCIIBytesBulk(_ bytes: ContiguousArray<UInt8>, range: Range<Int>) {
+    /// Accepts Data + range to avoid per-chunk byte array materialization from VTParser.
+    private func printASCIIBytesBulk(_ bytes: Data, range: Range<Int>) {
         guard !range.isEmpty else { return }
 
         // Insert mode is rare; fall back to the per-character path for all
@@ -535,8 +535,8 @@ actor TerminalGrid {
 
     /// Process plain ground-state text bytes in bulk.
     /// Supports printable ASCII plus CR/LF controls.
-    /// Accepts ContiguousArray + range to avoid extra copies from VTParser.
-    func processGroundTextBytes(_ bytes: ContiguousArray<UInt8>, range: Range<Int>) {
+    /// Accepts Data + range to avoid extra copies from VTParser.
+    func processGroundTextBytes(_ bytes: Data, range: Range<Int>) {
         guard !range.isEmpty else { return }
 
         var runStart: Int = -1

@@ -1503,21 +1503,27 @@ nonisolated actor LibSSHShellChannel: SSHShellChannel {
     }
 
     private func readLoop() async {
+        let bufferSize = 32768
+        var buffer = [UInt8](repeating: 0, count: bufferSize)
+        var errorBuffer = [CChar](repeating: 0, count: 512)
+
         while !Task.isCancelled && !isClosed {
-            var buffer = [CChar](repeating: 0, count: 4096)
             var bytesRead = Int32(0)
             var isEOF = false
-            var errorBuffer = [CChar](repeating: 0, count: 512)
 
-            let readResult = prossh_libssh_channel_read(
-                handle,
-                &buffer,
-                buffer.count,
-                &bytesRead,
-                &isEOF,
-                &errorBuffer,
-                errorBuffer.count
-            )
+            let readResult = buffer.withUnsafeMutableBytes { rawBuffer in
+                guard let baseAddress = rawBuffer.baseAddress else { return Int32(-1) }
+                let cBuffer = baseAddress.assumingMemoryBound(to: CChar.self)
+                return prossh_libssh_channel_read(
+                    handle,
+                    cBuffer,
+                    bufferSize,
+                    &bytesRead,
+                    &isEOF,
+                    &errorBuffer,
+                    errorBuffer.count
+                )
+            }
 
             if readResult != 0 {
                 let message = errorBuffer.asString
@@ -1528,8 +1534,7 @@ nonisolated actor LibSSHShellChannel: SSHShellChannel {
             }
 
             if bytesRead > 0 {
-                let bytes = buffer.prefix(Int(bytesRead)).map { UInt8(bitPattern: $0) }
-                rawContinuation.yield(Data(bytes))
+                rawContinuation.yield(Data(buffer[0..<Int(bytesRead)]))
             }
 
             if isEOF {
@@ -1555,18 +1560,23 @@ nonisolated actor LibSSHForwardChannel: SSHForwardChannel {
     func read() async throws -> Data? {
         guard let ptr = pointer else { return nil }
 
-        var buffer = [CChar](repeating: 0, count: 32768)
+        let bufferSize = 32768
+        var buffer = [UInt8](repeating: 0, count: bufferSize)
         var isEOF = false
         var errorBuffer = [CChar](repeating: 0, count: 512)
 
-        let bytesRead = prossh_forward_channel_read(
-            ptr,
-            &buffer,
-            buffer.count,
-            &isEOF,
-            &errorBuffer,
-            errorBuffer.count
-        )
+        let bytesRead = buffer.withUnsafeMutableBytes { rawBuffer in
+            guard let baseAddress = rawBuffer.baseAddress else { return Int32(-1) }
+            let cBuffer = baseAddress.assumingMemoryBound(to: CChar.self)
+            return prossh_forward_channel_read(
+                ptr,
+                cBuffer,
+                bufferSize,
+                &isEOF,
+                &errorBuffer,
+                errorBuffer.count
+            )
+        }
 
         if bytesRead < 0 {
             let message = errorBuffer.asString
@@ -1582,8 +1592,7 @@ nonisolated actor LibSSHForwardChannel: SSHForwardChannel {
             return Data()
         }
 
-        let bytes = buffer.prefix(Int(bytesRead)).map { UInt8(bitPattern: $0) }
-        return Data(bytes)
+        return Data(buffer[0..<Int(bytesRead)])
     }
 
     func write(_ data: Data) async throws {

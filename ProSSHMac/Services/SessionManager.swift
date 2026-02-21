@@ -63,7 +63,13 @@ final class SessionManager: ObservableObject {
     private var lastShellBufferPublishAtBySessionID: [UUID: Date] = [:]
     private var keepaliveTask: Task<Void, Never>?
     private let shellBufferPublishInterval: TimeInterval = 1.0 / 30.0
+    private let throughputShellBufferPublishInterval: TimeInterval = 1.0 / 5.0
     private let snapshotPublishInterval: Duration = .milliseconds(8)
+
+    /// Runtime throughput policy. When enabled, expensive non-render work is throttled.
+    private var throughputModeEnabled: Bool {
+        UserDefaults.standard.bool(forKey: "terminal.throughput.mode.enabled")
+    }
 
     private var keepaliveEnabled: Bool {
         UserDefaults.standard.bool(forKey: "ssh.keepalive.enabled")
@@ -883,20 +889,13 @@ final class SessionManager: ObservableObject {
 
         let modeState = inputModeActors[sessionID]
 
-        parserReaderTasks[sessionID] = Task { @MainActor in
+        parserReaderTasks[sessionID] = Task.detached(priority: .userInitiated) { [weak self] in
             for await chunk in rawOutput {
                 if Task.isCancelled {
                     break
                 }
                 await parser.feed(chunk)
-                lastActivityBySessionID[sessionID] = .now
-                bytesReceivedBySessionID[sessionID, default: 0] += Int64(chunk.count)
-
-                // Only decode output text when recording is active.
-                // This avoids large per-chunk UTF-8 decode overhead during bulk output.
-                if sessionRecorder.isRecording(sessionID: sessionID) {
-                    sessionRecorder.recordOutput(sessionID: sessionID, text: String(decoding: chunk, as: UTF8.self))
-                }
+                await self?.recordParsedChunk(sessionID: sessionID, chunk: chunk)
 
                 // When the terminal is in synchronized output mode (DECSET 2026),
                 // the application has signaled that a batch update is in progress.
@@ -909,10 +908,8 @@ final class SessionManager: ObservableObject {
                 // captured when sync re-enables — otherwise that frame is lost
                 // and stale content ("ghost characters") persists on screen.
                 if let syncExitSnap = await grid.consumeSyncExitSnapshot() {
-                    scrollOffsetBySessionID[sessionID] = 0
-                    cancelPendingSnapshotPublish(for: sessionID)
-                    await publishGridState(
-                        for: sessionID,
+                    await self?.publishSyncExitSnapshot(
+                        sessionID: sessionID,
                         grid: grid,
                         modeState: modeState,
                         snapshotOverride: syncExitSnap
@@ -923,18 +920,14 @@ final class SessionManager: ObservableObject {
                 if inSyncMode { continue }
 
                 // Auto-reset scroll offset when new output arrives.
-                scrollOffsetBySessionID[sessionID] = 0
-
-                // Frame-coalesced publish: parse every chunk immediately,
-                // but publish at most once per display interval.
-                scheduleCoalescedGridPublish(
-                    for: sessionID,
+                await self?.scheduleParsedChunkPublish(
+                    sessionID: sessionID,
                     grid: grid,
                     modeState: modeState
                 )
             }
 
-            await flushPendingSnapshotPublishIfNeeded(
+            await self?.flushPendingSnapshotPublishIfNeeded(
                 for: sessionID,
                 grid: grid,
                 modeState: modeState
@@ -945,14 +938,55 @@ final class SessionManager: ObservableObject {
             // alternate screen content from leaking into the primary buffer.
             if await grid.usingAlternateBuffer {
                 await grid.disableAlternateBuffer()
-                await publishGridState(for: sessionID, grid: grid, modeState: modeState)
+                await self?.publishGridState(for: sessionID, grid: grid, modeState: modeState)
             }
 
             // Detect disconnection.
             if !Task.isCancelled {
-                await handleShellStreamEnded(sessionID: sessionID)
+                await self?.handleShellStreamEnded(sessionID: sessionID)
             }
         }
+    }
+
+    private func recordParsedChunk(sessionID: UUID, chunk: Data) {
+        lastActivityBySessionID[sessionID] = .now
+        bytesReceivedBySessionID[sessionID, default: 0] += Int64(chunk.count)
+
+        // Capture output directly as bytes to avoid a per-chunk UTF-8 decode.
+        if sessionRecorder.isRecording(sessionID: sessionID) {
+            sessionRecorder.recordOutputData(sessionID: sessionID, data: chunk)
+        }
+    }
+
+    private func publishSyncExitSnapshot(
+        sessionID: UUID,
+        grid: TerminalGrid,
+        modeState: InputModeState?,
+        snapshotOverride: GridSnapshot
+    ) async {
+        scrollOffsetBySessionID[sessionID] = 0
+        cancelPendingSnapshotPublish(for: sessionID)
+        await publishGridState(
+            for: sessionID,
+            grid: grid,
+            modeState: modeState,
+            snapshotOverride: snapshotOverride
+        )
+    }
+
+    private func scheduleParsedChunkPublish(
+        sessionID: UUID,
+        grid: TerminalGrid,
+        modeState: InputModeState?
+    ) {
+        scrollOffsetBySessionID[sessionID] = 0
+        // Frame-coalesced publish: parse every chunk immediately,
+        // but publish at most once per display interval.
+        scheduleCoalescedGridPublish(
+            for: sessionID,
+            grid: grid,
+            modeState: modeState
+        )
     }
 
     private func handleShellStreamEnded(sessionID: UUID) async {
@@ -1112,8 +1146,11 @@ final class SessionManager: ObservableObject {
     }
 
     private func shouldPublishShellBuffer(for sessionID: UUID, now: Date = .now) -> Bool {
+        let publishInterval = throughputModeEnabled
+            ? throughputShellBufferPublishInterval
+            : shellBufferPublishInterval
         if let lastPublished = lastShellBufferPublishAtBySessionID[sessionID],
-           now.timeIntervalSince(lastPublished) < shellBufferPublishInterval {
+           now.timeIntervalSince(lastPublished) < publishInterval {
             return false
         }
         lastShellBufferPublishAtBySessionID[sessionID] = now

@@ -144,11 +144,16 @@ final class SessionRecorder {
     }
 
     func recordInput(sessionID: UUID, text: String) {
-        appendChunk(sessionID: sessionID, text: text, stream: .input)
+        appendChunk(sessionID: sessionID, payload: Data(text.utf8), stream: .input)
     }
 
     func recordOutput(sessionID: UUID, text: String) {
-        appendChunk(sessionID: sessionID, text: text, stream: .output)
+        appendChunk(sessionID: sessionID, payload: Data(text.utf8), stream: .output)
+    }
+
+    /// Record output without an intermediate UTF-8 String allocation.
+    func recordOutputData(sessionID: UUID, data: Data) {
+        appendChunk(sessionID: sessionID, payload: data, stream: .output)
     }
 
     func loadLatestRecording(sessionID: UUID) throws -> SessionRecording {
@@ -273,8 +278,8 @@ final class SessionRecorder {
         try await play(recording: recording, speed: speed, onStep: onStep)
     }
 
-    private func appendChunk(sessionID: UUID, text: String, stream: SessionRecordingStream) {
-        guard !text.isEmpty,
+    private func appendChunk(sessionID: UUID, payload: Data, stream: SessionRecordingStream) {
+        guard !payload.isEmpty,
               var active = activeRecordingsBySessionID[sessionID] else {
             return
         }
@@ -283,7 +288,7 @@ final class SessionRecorder {
         let chunk = SessionRecordingChunk(
             offsetNanoseconds: offset,
             stream: stream,
-            payload: Data(text.utf8)
+            payload: payload
         )
         active.recording.chunks.append(chunk)
         activeRecordingsBySessionID[sessionID] = active

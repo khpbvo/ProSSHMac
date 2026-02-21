@@ -42,6 +42,7 @@ final class SelectionRenderer {
     private(set) var selectionColor: SIMD4<Float> = SIMD4<Float>(0.30, 0.50, 0.90, 1.0)
 
     private var needsFullRefresh = false
+    private var previousSelectionLinearRange: ClosedRange<Int>?
 
     init() {
         refreshSelectionColorFromSystemAccent()
@@ -68,23 +69,40 @@ final class SelectionRenderer {
     /// selected bits are cleared correctly across the entire grid.
     func applySelection(to snapshot: GridSnapshot) -> GridSnapshot {
         guard var selection else {
-            if needsFullRefresh {
+            defer {
                 needsFullRefresh = false
-                var cleared = snapshot.cells
-                for i in cleared.indices {
-                    cleared[i].flags &= ~CellInstance.flagSelected
-                }
-                return GridSnapshot(
-                    cells: cleared,
-                    dirtyRange: nil,
-                    cursorRow: snapshot.cursorRow,
-                    cursorCol: snapshot.cursorCol,
-                    cursorVisible: snapshot.cursorVisible,
-                    cursorStyle: snapshot.cursorStyle,
-                    columns: snapshot.columns,
-                    rows: snapshot.rows
-                )
+                previousSelectionLinearRange = nil
             }
+
+            // Normal snapshots come directly from TerminalGrid and do not carry
+            // renderer selection bits. If there was a prior selection, clear only
+            // the previously selected range as a conservative fallback.
+            guard let previousRange = previousSelectionLinearRange,
+                  !snapshot.cells.isEmpty else {
+                return snapshot
+            }
+
+            let lower = max(0, previousRange.lowerBound)
+            let upper = min(snapshot.cells.count - 1, previousRange.upperBound)
+            guard lower <= upper else { return snapshot }
+
+            var cleared = snapshot.cells
+            for i in lower...upper {
+                cleared[i].flags &= ~CellInstance.flagSelected
+            }
+            return GridSnapshot(
+                cells: cleared,
+                dirtyRange: lower..<(upper + 1),
+                cursorRow: snapshot.cursorRow,
+                cursorCol: snapshot.cursorCol,
+                cursorVisible: snapshot.cursorVisible,
+                cursorStyle: snapshot.cursorStyle,
+                columns: snapshot.columns,
+                rows: snapshot.rows
+            )
+        }
+
+        guard snapshot.columns > 0, snapshot.rows > 0, !snapshot.cells.isEmpty else {
             return snapshot
         }
 
@@ -93,10 +111,19 @@ final class SelectionRenderer {
 
         let start = orderedMin(selection.start, selection.end, columns: snapshot.columns)
         let end = orderedMax(selection.start, selection.end, columns: snapshot.columns)
+        let startLinear = start.row * snapshot.columns + start.col
+        let endLinear = end.row * snapshot.columns + end.col
 
         var cells = snapshot.cells
-        for i in cells.indices {
-            cells[i].flags &= ~CellInstance.flagSelected
+
+        if needsFullRefresh, let previousRange = previousSelectionLinearRange {
+            let lower = max(0, previousRange.lowerBound)
+            let upper = min(cells.count - 1, previousRange.upperBound)
+            if lower <= upper {
+                for i in lower...upper {
+                    cells[i].flags &= ~CellInstance.flagSelected
+                }
+            }
         }
 
         for row in start.row...end.row {
@@ -112,9 +139,12 @@ final class SelectionRenderer {
         }
 
         needsFullRefresh = false
+        let dirtyStart = min(startLinear, previousSelectionLinearRange?.lowerBound ?? startLinear)
+        let dirtyEnd = max(endLinear, previousSelectionLinearRange?.upperBound ?? endLinear)
+        previousSelectionLinearRange = startLinear...endLinear
         return GridSnapshot(
             cells: cells,
-            dirtyRange: nil,
+            dirtyRange: dirtyStart..<(dirtyEnd + 1),
             cursorRow: snapshot.cursorRow,
             cursorCol: snapshot.cursorCol,
             cursorVisible: snapshot.cursorVisible,

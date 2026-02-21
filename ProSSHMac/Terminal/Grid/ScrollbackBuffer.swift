@@ -28,8 +28,15 @@ nonisolated struct ScrollbackLine: Sendable {
 
     /// Trim trailing blank cells to save memory.
     mutating func trimTrailingBlanks() {
-        while let last = cells.last, last.isBlank {
-            cells.removeLast()
+        guard !cells.isEmpty else { return }
+
+        if let lastNonBlank = cells.lastIndex(where: { !$0.isBlank }) {
+            let trimStart = cells.index(after: lastNonBlank)
+            if trimStart < cells.endIndex {
+                cells.removeSubrange(trimStart..<cells.endIndex)
+            }
+        } else {
+            cells.removeAll(keepingCapacity: true)
         }
     }
 }

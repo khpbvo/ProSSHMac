@@ -565,22 +565,25 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     private func applyPendingSnapshotIfNeeded() {
         guard let snapshot = pendingRenderSnapshot else { return }
         pendingRenderSnapshot = nil
-        // Prioritize visual correctness over dirty-range optimization.
-        // Full uploads avoid residual stale-cell artifacts during rapid
-        // scrolling/rewrites (e.g. agent tool-call output beyond page 1).
+        let shouldForceFullUpload = forceFullUploadForPendingSnapshot
         forceFullUploadForPendingSnapshot = false
-        let fullSnapshot = GridSnapshot(
-            cells: snapshot.cells,
-            dirtyRange: nil,
-            cursorRow: snapshot.cursorRow,
-            cursorCol: snapshot.cursorCol,
-            cursorVisible: snapshot.cursorVisible,
-            cursorStyle: snapshot.cursorStyle,
-            columns: snapshot.columns,
-            rows: snapshot.rows
-        )
+        let uploadSnapshot: GridSnapshot
+        if shouldForceFullUpload {
+            uploadSnapshot = GridSnapshot(
+                cells: snapshot.cells,
+                dirtyRange: nil,
+                cursorRow: snapshot.cursorRow,
+                cursorCol: snapshot.cursorCol,
+                cursorVisible: snapshot.cursorVisible,
+                cursorStyle: snapshot.cursorStyle,
+                columns: snapshot.columns,
+                rows: snapshot.rows
+            )
+        } else {
+            uploadSnapshot = snapshot
+        }
 
-        cellBuffer.update(from: fullSnapshot) { [weak self] cell -> UInt32 in
+        cellBuffer.update(from: uploadSnapshot) { [weak self] cell -> UInt32 in
             guard let self else { return Self.noGlyphIndex }
             return self.resolveGlyphIndex(for: cell)
         }

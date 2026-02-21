@@ -448,11 +448,11 @@ nonisolated enum GridReflow {
 
     /// Trim trailing blank cells from a cell array.
     private static func trimTrailingBlanks(_ cells: [TerminalCell]) -> [TerminalCell] {
-        var trimmed = cells
-        while let last = trimmed.last, last.isBlank {
-            trimmed.removeLast()
+        guard !cells.isEmpty else { return cells }
+        guard let lastNonBlank = cells.lastIndex(where: { !$0.isBlank }) else {
+            return []
         }
-        return trimmed
+        return Array(cells[...lastNonBlank])
     }
 
     /// Check if a physical row ends with the wrapped flag.

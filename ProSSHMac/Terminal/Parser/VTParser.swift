@@ -149,20 +149,18 @@ actor VTParser {
         while feedQueueHead < feedQueue.count {
             let next = feedQueue[feedQueueHead]
             feedQueueHead += 1
-            let bytes = ContiguousArray(next)
             var index = 0
 
-            while index < bytes.count {
-                let byte = bytes[index]
+            while index < next.count {
+                let byte = next[index]
 
                 if shouldFastPathGroundTextByte(byte) {
                     let start = index
                     index += 1
-                    while index < bytes.count, shouldFastPathGroundTextByte(bytes[index]) {
+                    while index < next.count, shouldFastPathGroundTextByte(next[index]) {
                         index += 1
                     }
-                    // Pass range to avoid second Array copy.
-                    await grid.processGroundTextBytes(bytes, range: start..<index)
+                    await grid.processGroundTextBytes(next, range: start..<index)
                     continue
                 }
 
