@@ -1,4 +1,5 @@
 import SwiftUI
+import CoreText
 
 struct SettingsView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -9,6 +10,7 @@ struct SettingsView: View {
     @AppStorage("terminal.effects.crtEnabled") private var terminalCRTEffectEnabled = false
     @AppStorage(BellEffectController.settingsKey) private var terminalBellFeedbackMode = BellFeedbackMode.none.rawValue
     @AppStorage(TransparencyManager.backgroundOpacityKey) private var terminalBackgroundOpacityPercent = TransparencyManager.defaultBackgroundOpacityPercent
+    @AppStorage("terminal.ui.fontFamily") private var terminalUIFontFamily = FontManager.platformDefaultFontFamily
     @AppStorage("ssh.algorithms.allowLegacyByDefault") private var allowLegacyByDefault = false
     @AppStorage("terminal.scrollback.maxLines") private var terminalScrollback = 10_000
     @AppStorage("ssh.keepalive.enabled") private var keepaliveEnabled = false
@@ -37,6 +39,18 @@ struct SettingsView: View {
 
             Section("Terminal") {
                 Stepper("Scrollback: \(terminalScrollback) lines", value: $terminalScrollback, in: 1_000...50_000, step: 1_000)
+
+                Picker("Terminal Font", selection: $terminalUIFontFamily) {
+                    ForEach(availableTerminalFontChoices, id: \.self) { family in
+                        Text(family).tag(family)
+                    }
+                }
+                .pickerStyle(.menu)
+
+                Text("Install a monospaced font in macOS, then select it here.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
                 Toggle("Enable CRT Effect (Experimental)", isOn: $terminalCRTEffectEnabled)
 
                 NavigationLink {
@@ -290,5 +304,50 @@ struct SettingsView: View {
                 terminalBackgroundOpacityPercent = TransparencyManager.clampBackgroundOpacityPercent(newValue)
             }
         )
+    }
+
+    private var availableTerminalFontChoices: [String] {
+        var fonts = TerminalFontCatalog.availableMonospaceFamilies()
+        let current = terminalUIFontFamily.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !current.isEmpty && !fonts.contains(current) {
+            fonts.insert(current, at: 0)
+        }
+        return fonts
+    }
+}
+
+private enum TerminalFontCatalog {
+    static func availableMonospaceFamilies() -> [String] {
+        let fallbackFamilies = [
+            FontManager.platformDefaultFontFamily,
+            "Menlo",
+            "Monaco",
+            "Courier"
+        ]
+
+        guard let available = CTFontManagerCopyAvailableFontFamilyNames() as? [String] else {
+            return fallbackFamilies
+        }
+
+        var seen = Set<String>()
+        var families: [String] = []
+
+        for family in available {
+            let font = CTFontCreateWithName(family as CFString, 14, nil)
+            let traits = CTFontGetSymbolicTraits(font)
+            if traits.contains(.traitMonoSpace) && seen.insert(family).inserted {
+                families.append(family)
+            }
+        }
+
+        for fallback in fallbackFamilies where seen.insert(fallback).inserted {
+            families.append(fallback)
+        }
+
+        return families.sorted { lhs, rhs in
+            if lhs == FontManager.platformDefaultFontFamily { return true }
+            if rhs == FontManager.platformDefaultFontFamily { return false }
+            return lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
+        }
     }
 }

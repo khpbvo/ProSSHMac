@@ -14,6 +14,7 @@ struct TerminalView: View {
     @AppStorage(BellEffectController.settingsKey) private var bellFeedbackModeRawValue = BellFeedbackMode.none.rawValue
     @AppStorage(TransparencyManager.backgroundOpacityKey) private var terminalBackgroundOpacityPercent = TransparencyManager.defaultBackgroundOpacityPercent
     @AppStorage("terminal.ui.fontSize") private var terminalUIFontSize = 12.0
+    @AppStorage("terminal.ui.fontFamily") private var terminalUIFontFamily = FontManager.platformDefaultFontFamily
     @AppStorage("terminal.renderer.useMetal") private var useMetalRenderer = true
     @AppStorage("terminal.renderer.migration.restoreMetal.v1") private var didRestoreMetalPreference = false
     @AppStorage("terminal.renderer.migration.defaultMetal.v2") private var didApplyMetalDefaultV2 = false
@@ -1148,7 +1149,7 @@ struct TerminalView: View {
                 LazyVStack(alignment: .leading, spacing: 2) {
                     ForEach(renderedLines) { line in
                         Text(verbatim: line.text)
-                            .font(.system(size: terminalUIFontSize, weight: .regular, design: .monospaced))
+                            .font(.custom(terminalUIFontFamily, size: terminalUIFontSize))
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .id(line.id)
                     }
@@ -1204,6 +1205,7 @@ struct TerminalView: View {
             snapshotProvider: { sessionManager.gridSnapshot(for: session.id) },
             snapshotNonce: snapshotNonce,
             fontSize: terminalUIFontSize,
+            fontFamily: terminalUIFontFamily,
             backgroundOpacityPercent: terminalBackgroundOpacityPercent,
             onTap: { _ in
                 focusSessionAndPane(session.id, paneID: paneID)

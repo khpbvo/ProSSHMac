@@ -2,8 +2,8 @@
 // ProSSHV2
 //
 // Settings UI for customizing the local terminal prompt colors.
-// Controls username style (white/single color/rainbow), path color,
-// and symbol color. Changes apply on new local terminal sessions.
+// Controls username style (white/single color/rainbow), parent/leaf
+// path colors, and symbol color. Changes apply on new local terminal sessions.
 
 import SwiftUI
 
@@ -136,8 +136,14 @@ struct PromptAppearanceSettingsView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             ColorPicker(
-                "Path Color (~)",
+                "Parent Path Color (~/Desktop/)",
                 selection: colorBinding(for: \.pathColor),
+                supportsOpacity: false
+            )
+
+            ColorPicker(
+                "Current Folder Color (ProSSHMac)",
+                selection: colorBinding(for: \.currentFolderColor),
                 supportsOpacity: false
             )
 
@@ -244,9 +250,9 @@ struct PromptPreviewRenderer: View {
             // Space
             x += 6
 
-            // Draw path "~"
-            let pathText = context.resolve(
-                Text("~")
+            // Draw parent path "~ /Desktop/"
+            let parentPathText = context.resolve(
+                Text("~/Desktop/")
                     .font(font)
                     .foregroundColor(Color(
                         red: Double(config.pathColor.red),
@@ -254,8 +260,21 @@ struct PromptPreviewRenderer: View {
                         blue: Double(config.pathColor.blue)
                     ))
             )
-            context.draw(pathText, at: CGPoint(x: x, y: y), anchor: .leading)
-            x += pathText.measure(in: size).width + 6
+            context.draw(parentPathText, at: CGPoint(x: x, y: y), anchor: .leading)
+            x += parentPathText.measure(in: size).width
+
+            // Draw current folder segment
+            let currentFolderText = context.resolve(
+                Text("ProSSHMac")
+                    .font(font)
+                    .foregroundColor(Color(
+                        red: Double(config.currentFolderColor.red),
+                        green: Double(config.currentFolderColor.green),
+                        blue: Double(config.currentFolderColor.blue)
+                    ))
+            )
+            context.draw(currentFolderText, at: CGPoint(x: x, y: y), anchor: .leading)
+            x += currentFolderText.measure(in: size).width + 6
 
             // Draw symbol "%"
             let symbolText = context.resolve(

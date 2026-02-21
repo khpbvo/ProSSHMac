@@ -1050,6 +1050,21 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         }
     }
 
+    /// Updates the terminal font family and refreshes renderer metrics.
+    func setFontName(_ name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let targetName = trimmed.isEmpty ? FontManager.platformDefaultFontFamily : trimmed
+        guard targetName != rasterFontName else { return }
+
+        fontChangeTask?.cancel()
+        fontChangeTask = Task { [weak self] in
+            guard let self else { return }
+            await self.fontManager.setFont(name: targetName)
+            guard !Task.isCancelled else { return }
+            await self.reloadFontStateFromManager()
+        }
+    }
+
     private func reloadFontStateFromManager() async {
         let dims = await fontManager.currentCellDimensions()
         let fontSize = await fontManager.effectiveFontSize

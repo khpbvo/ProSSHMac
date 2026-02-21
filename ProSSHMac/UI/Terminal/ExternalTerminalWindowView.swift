@@ -9,6 +9,7 @@ struct ExternalTerminalWindowView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage(TransparencyManager.backgroundOpacityKey) private var terminalBackgroundOpacityPercent = TransparencyManager.defaultBackgroundOpacityPercent
     @AppStorage("terminal.ui.fontSize") private var terminalUIFontSize = 12.0
+    @AppStorage("terminal.ui.fontFamily") private var terminalUIFontFamily = FontManager.platformDefaultFontFamily
     @AppStorage("terminal.renderer.useMetal") private var useMetalRenderer = true
     @StateObject private var selectionCoordinator = TerminalSelectionCoordinator()
 
@@ -101,6 +102,7 @@ struct ExternalTerminalWindowView: View {
                 snapshotProvider: { sessionManager.gridSnapshot(for: session.id) },
                 snapshotNonce: snapshotNonce,
                 fontSize: terminalUIFontSize,
+                fontFamily: terminalUIFontFamily,
                 backgroundOpacityPercent: terminalBackgroundOpacityPercent,
                 onTap: nil,
                 onTerminalResize: { columns, rows in

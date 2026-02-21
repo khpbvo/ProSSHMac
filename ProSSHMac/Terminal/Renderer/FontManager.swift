@@ -185,14 +185,15 @@ actor FontManager {
 
     // MARK: - Initialization
 
+    static let platformDefaultFontFamily = "SF Mono"
     static let platformDefaultFontSize: CGFloat = 14.0
 
     /// Create a font manager with the specified font name and base size.
     ///
     /// - Parameters:
-    ///   - fontName: Preferred monospace font family name. Defaults to "SF Mono".
+    ///   - fontName: Preferred monospace font family name. Defaults to SF Mono.
     ///   - baseFontSize: Base font size in points before Dynamic Type scaling.
-    init(fontName: String = "SF Mono", baseFontSize: CGFloat = platformDefaultFontSize) {
+    init(fontName: String = platformDefaultFontFamily, baseFontSize: CGFloat = platformDefaultFontSize) {
         self.fontName = fontName
         self.baseFontSize = baseFontSize
         self.effectiveFontSize = baseFontSize

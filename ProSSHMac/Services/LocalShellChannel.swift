@@ -396,11 +396,14 @@ actor LocalShellChannel: SSHShellChannel {
             let userRC = (home as NSString).appendingPathComponent(".zshrc")
 
             let promptStr = promptConfig.zshPrompt(user: user)
+            let pathFunction = promptConfig.zshPathFunction()
 
             let zshrc = """
 # ProSSH shell overlay -- sources real .zshrc then sets custom prompt.
 export REAL_ZDOTDIR="$HOME"
 [[ -f "\(userRC)" ]] && ZDOTDIR="$HOME" source "\(userRC)"
+\(pathFunction)
+setopt prompt_subst
 PROMPT='\(promptStr)'
 """
             try? zshrc.write(toFile: rcPath, atomically: true, encoding: .utf8)
@@ -428,10 +431,12 @@ PROMPT='\(promptStr)'
             let userRC = (home as NSString).appendingPathComponent(".bashrc")
 
             let promptStr = promptConfig.bashPrompt(user: user)
+            let pathFunction = promptConfig.bashPathFunction()
 
             let bashrc = """
 # ProSSH shell overlay -- sources real .bashrc then sets custom prompt.
 [[ -f "\(userRC)" ]] && source "\(userRC)"
+\(pathFunction)
 PS1='\(promptStr)'
 """
             try? bashrc.write(toFile: rcPath, atomically: true, encoding: .utf8)

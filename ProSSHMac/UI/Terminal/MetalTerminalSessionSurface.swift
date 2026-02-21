@@ -13,6 +13,7 @@ struct MetalTerminalSessionSurface: View {
     let snapshotProvider: () -> GridSnapshot?
     let snapshotNonce: Int
     let fontSize: Double
+    let fontFamily: String
     let backgroundOpacityPercent: Double
     let onTap: ((CGPoint) -> Void)?
     var onTerminalResize: ((Int, Int) -> Void)?
@@ -66,6 +67,9 @@ struct MetalTerminalSessionSurface: View {
                 }
                 .onChange(of: fontSize) { _, newValue in
                     model.updateFontSize(CGFloat(newValue))
+                }
+                .onChange(of: fontFamily) { _, newValue in
+                    model.updateFontFamily(newValue)
                 }
             } else {
                 VStack(alignment: .leading, spacing: 6) {
@@ -122,6 +126,7 @@ final class MetalTerminalSurfaceModel: ObservableObject {
     let renderer: MetalTerminalRenderer?
     private var dragStart: SelectionPoint?
     private var appliedFontSize: CGFloat
+    private var appliedFontFamily: String
     private var cachedGradientConfiguration: GradientBackgroundConfiguration
     private var cachedScannerConfiguration: ScannerEffectConfiguration
     private var cachedCRTEffectEnabled: Bool
@@ -132,13 +137,16 @@ final class MetalTerminalSurfaceModel: ObservableObject {
     nonisolated(unsafe) private var settingsObserver: NSObjectProtocol?
 
     private static let terminalUIFontSizeKey = "terminal.ui.fontSize"
+    private static let terminalUIFontFamilyKey = "terminal.ui.fontFamily"
     private static let defaultTerminalUIFontSize = 12.0
     private static let minimumTerminalUIFontSize = 9.0
     private static let maximumTerminalUIFontSize = 28.0
 
     init() {
         let initialFontSize = Self.loadTerminalUIFontSize()
+        let initialFontFamily = Self.loadTerminalUIFontFamily()
         self.appliedFontSize = initialFontSize
+        self.appliedFontFamily = initialFontFamily
         self.cachedGradientConfiguration = GradientBackgroundConfiguration.load()
         self.cachedScannerConfiguration = ScannerEffectConfiguration.load()
         self.cachedCRTEffectEnabled = CRTEffect.loadEnabledFromDefaults()
@@ -146,7 +154,7 @@ final class MetalTerminalSurfaceModel: ObservableObject {
         if let device = MTLCreateSystemDefaultDevice() {
             renderer = MetalTerminalRenderer(
                 device: device,
-                fontManager: FontManager(baseFontSize: initialFontSize)
+                fontManager: FontManager(fontName: initialFontFamily, baseFontSize: initialFontSize)
             )
         } else {
             renderer = nil
@@ -187,6 +195,13 @@ final class MetalTerminalSurfaceModel: ObservableObject {
         guard abs(clamped - appliedFontSize) > 0.01 else { return }
         appliedFontSize = clamped
         renderer?.setFontSize(clamped)
+    }
+
+    func updateFontFamily(_ family: String) {
+        let normalized = Self.normalizedTerminalUIFontFamily(family)
+        guard normalized != appliedFontFamily else { return }
+        appliedFontFamily = normalized
+        renderer?.setFontName(normalized)
     }
 
     // MARK: - Selection
@@ -274,5 +289,15 @@ final class MetalTerminalSurfaceModel: ObservableObject {
         let sanitized = value.isFinite ? value : defaultTerminalUIFontSize
         let clamped = min(maximumTerminalUIFontSize, max(minimumTerminalUIFontSize, sanitized))
         return CGFloat(clamped)
+    }
+
+    private static func loadTerminalUIFontFamily(defaults: UserDefaults = .standard) -> String {
+        let storedValue = defaults.string(forKey: terminalUIFontFamilyKey) ?? FontManager.platformDefaultFontFamily
+        return normalizedTerminalUIFontFamily(storedValue)
+    }
+
+    private static func normalizedTerminalUIFontFamily(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? FontManager.platformDefaultFontFamily : trimmed
     }
 }
