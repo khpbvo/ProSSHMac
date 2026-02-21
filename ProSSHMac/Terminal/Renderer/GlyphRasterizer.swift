@@ -100,30 +100,15 @@ enum GlyphRasterizer {
             return .empty
         }
 
-        // Fast path for the dominant case: single BMP scalar, non-color glyph.
-        var line: CTLine?
-        var imageBounds = CGRect.zero
-        var directGlyph: CGGlyph = 0
-        var hasDirectGlyph = false
-        if !isColor, codepoint.value <= 0xFFFF {
-            var char = UInt16(truncatingIfNeeded: codepoint.value)
-            if CTFontGetGlyphsForCharacters(font, &char, &directGlyph, 1), directGlyph != 0 {
-                imageBounds = CTFontGetBoundingRectsForGlyphs(font, .default, &directGlyph, nil, 1)
-                hasDirectGlyph = true
-            }
-        }
-
-        if !hasDirectGlyph {
-            let string = String(codepoint)
-            let attributes: [NSAttributedString.Key: Any] = [
-                NSAttributedString.Key(kCTFontAttributeName as String): font,
-                NSAttributedString.Key(kCTForegroundColorFromContextAttributeName as String): true
-            ]
-            let attrString = NSAttributedString(string: string, attributes: attributes)
-            let textLine = CTLineCreateWithAttributedString(attrString)
-            line = textLine
-            imageBounds = CTLineGetImageBounds(textLine, nil)
-        }
+        // Use CTLine path for glyph positioning to avoid clipping on overhanging glyphs (e.g. "f").
+        let string = String(codepoint)
+        let attributes: [NSAttributedString.Key: Any] = [
+            NSAttributedString.Key(kCTFontAttributeName as String): font,
+            NSAttributedString.Key(kCTForegroundColorFromContextAttributeName as String): true
+        ]
+        let attrString = NSAttributedString(string: string, attributes: attributes)
+        let line = CTLineCreateWithAttributedString(attrString)
+        let imageBounds = CTLineGetImageBounds(line, nil)
 
         // Terminal cells are fixed-advance slots; draw at the cell origin.
         let penX: CGFloat = 0
@@ -199,13 +184,7 @@ enum GlyphRasterizer {
         context.textPosition = CGPoint(x: penX, y: penY)
 
         // Draw the glyph
-        if hasDirectGlyph {
-            var glyph = directGlyph
-            var position = CGPoint(x: penX, y: penY)
-            CTFontDrawGlyphs(font, &glyph, &position, 1, context)
-        } else if let line {
-            CTLineDraw(line, context)
-        }
+        CTLineDraw(line, context)
 
         // B.2.3: For BGRA rendering (color emoji), swizzle to RGBA
         if isColor {

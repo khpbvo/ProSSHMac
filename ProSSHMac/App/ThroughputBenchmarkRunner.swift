@@ -124,8 +124,6 @@ enum ThroughputBenchmarkRunner {
             let sentinel = "---BENCH_DONE---"
             let command = "dd if=/dev/urandom bs=1024 count=\(kilobytes) 2>/dev/null | base64; echo '\(sentinel)'\n"
 
-            let expectedBytes = kilobytes * 1024 * 4 / 3  // base64 expansion ~4/3
-
             let start = CFAbsoluteTimeGetCurrent()
 
             try await channel.send(command)
