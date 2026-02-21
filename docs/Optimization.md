@@ -16,17 +16,15 @@ Benchmark command path (local parser/grid throughput harness):
 ./scripts/benchmark-throughput.sh --benchmark-bytes 2097152 --benchmark-runs 2 --benchmark-chunk 4096
 ```
 
-Latest sample (2026-02-21):
-- fullscreen avg: 1.34 MB/s
-- partial scroll-region avg: 1.38 MB/s
+Latest sample (2026-02-21, after Workstream 3 packed cell migration):
+- command: `./scripts/benchmark-throughput.sh --benchmark-bytes 2097152 --benchmark-runs 3 --benchmark-chunk 4096 --no-build`
+- fullscreen avg: **1.70 MB/s** (+27% vs pre-pack baseline of 1.34 MB/s)
+- partial scroll-region avg: **1.51 MB/s** (+9% vs 1.38 MB/s)
 - parser state after run: `ground`
 
-Post-change sample (2026-02-21, base `c510a45`, working tree dirty):
-- machine: Apple M1, 16 GB RAM, macOS 26.3 (25D125)
-- command: `./scripts/benchmark-throughput.sh --benchmark-bytes 2097152 --benchmark-runs 3 --benchmark-chunk 4096 --no-build`
-- fullscreen avg: 1.13 MB/s
-- partial scroll-region avg: 1.13 MB/s
-- parser state after run: `ground`
+Previous samples (2026-02-21):
+- Pre-packed-cell baseline: fullscreen 1.34 MB/s, partial 1.38 MB/s
+- Post-TerminalEngine merge (dirty tree): fullscreen 1.13 MB/s, partial 1.13 MB/s
 
 Debug instrumentation now available for Instruments Points of Interest:
 - `ParserChunk` (VT parser chunk processing)
@@ -153,15 +151,19 @@ Debug instrumentation now available for Instruments Points of Interest:
   **Done:** Double-buffered `ContiguousArray<CellInstance>` with `swap()` for unique ownership.
   Indexed writes instead of append. Zero allocation in steady state.
 
-- [ ] **3 `packedRGBA()` calls per cell in `snapshot()`** — `TerminalGrid.swift:1006-1023`
+- [x] **3 `packedRGBA()` calls per cell in `snapshot()`** — `TerminalGrid.swift:1006-1023`
   Each goes through `resolvedRGB()` → switch → `ColorPalette.rgb()`. For `.default`
   (the common case), this is a switch + guard + return per cell, 30,000 evaluations per snapshot.
   **Fix:** Cache the packed RGBA value in `TerminalCell` when the color is set. The snapshot just
   reads the pre-computed value.
+  **Done:** Packed cell model stores GPU-ready `UInt32` RGBA values directly. Snapshot reads
+  `cell.fgPackedRGBA`/`bgPackedRGBA`/`underlinePackedRGBA` — zero per-cell computation.
+  boldIsBright pre-applied at write-time in `printCharacter`/`printASCIIBytesBulk`.
 
-- [ ] **`graphemeCluster.unicodeScalars.first` per cell in `snapshot()`** — `TerminalGrid.swift:999`
+- [x] **`graphemeCluster.unicodeScalars.first` per cell in `snapshot()`** — `TerminalGrid.swift:999`
   String property access + iterator creation per cell during snapshot.
   **Fix:** Store codepoint as `UInt32` in the cell (see P2 cell layout), read it directly.
+  **Done:** Packed cell stores `UInt32 codepoint` directly. Snapshot reads `cell.codepoint`.
 
 ### InputModeState
 
@@ -183,21 +185,29 @@ Debug instrumentation now available for Instruments Points of Interest:
 
 ### Cell Data Model
 
-- [ ] **`TerminalCell.graphemeCluster` is `String`** — `TerminalCell.swift:78`
+- [x] **`TerminalCell.graphemeCluster` is `String`** — `TerminalCell.swift:78`
   Every cell stores a heap-allocated String. For a 200×50 grid = 10,000 Strings. For 10,000-line
   scrollback × 80 cols = 800,000 Strings.
   **Fix:** Store a `UInt32` codepoint for single-codepoint characters (99%+ of terminal content).
   Use a side-table `[Int: String]` for rare multi-codepoint grapheme clusters.
+  **Done:** Packed cell stores `UInt32 codepoint` (0=blank, scalar value, or `0x80000000|idx`
+  for side-table). `GraphemeSideTable` with free-list handles rare multi-codepoint graphemes.
+  Side-table entries resolved before scrollback push and resize/reflow.
 
-- [ ] **`TerminalColor` enum has hidden size overhead** — `TerminalCell.swift:13-48`
+- [x] **`TerminalColor` enum has hidden size overhead** — `TerminalCell.swift:13-48`
   Three TerminalColor fields per cell. The `.rgb(UInt8, UInt8, UInt8)` case is 3 bytes payload +
   1 byte discriminator, but Swift enum alignment may expand this to 5-8 bytes per color.
   **Fix:** Pack each TerminalColor into a `UInt32`: high byte = tag (0=default, 1=indexed, 2=rgb),
   lower 3 bytes = color data. Reduces each color from ~5-8 bytes to 4 bytes.
+  **Done:** Cells store GPU-ready `UInt32` packed RGBA directly (`fgPackedRGBA`, `bgPackedRGBA`,
+  `underlinePackedRGBA`). TerminalColor enum retained at grid level for SGR state; cells use
+  pre-computed packed values. Cell size reduced from ~50 bytes to 20 bytes.
 
-- [ ] **`TerminalCell.isBlank` does String operations** — `TerminalCell.swift:135-142`
+- [x] **`TerminalCell.isBlank` does String operations** — `TerminalCell.swift:135-142`
   `graphemeCluster.isEmpty || graphemeCluster == " "` on every blank check.
   **Fix:** With UInt32 codepoint, becomes `codepoint == 0 || codepoint == 0x20`.
+  **Done:** `isBlank` now checks `(codepoint == 0 || codepoint == 0x20) && fgPackedRGBA == 0
+  && bgPackedRGBA == 0 && ...` — pure integer comparisons, no String allocation.
 
 ### Glyph Pipeline
 
@@ -301,13 +311,17 @@ Debug instrumentation now available for Instruments Points of Interest:
   Per-element subscript with modulo arithmetic.
   **Fix:** Return a lazy view, or bulk copy the two contiguous segments.
 
-- [ ] **`search()` allocates String per scrollback line** — `ScrollbackBuffer.swift:184-197`
+- [x] **`search()` allocates String per scrollback line** — `ScrollbackBuffer.swift:184-197`
   `line.cells.map { $0.graphemeCluster }.joined()` — N allocations per search iteration.
   **Fix:** Build a reusable buffer, or search on raw codepoints.
+  **Done:** Search uses `line.grapheme(at:)` which checks `graphemeOverrides` dict first,
+  then falls back to `cell.graphemeCluster` (computed from UInt32 codepoint, no heap String).
 
-- [ ] **`ScrollbackLine.cells` stores String per cell** — `ScrollbackBuffer.swift`
+- [x] **`ScrollbackLine.cells` stores String per cell** — `ScrollbackBuffer.swift`
   Same issue as `TerminalCell.graphemeCluster` — 800,000 Strings for 10K-line scrollback.
   **Fix:** Use the UInt32 codepoint representation (see P2 cell data model above).
+  **Done:** Scrollback cells use packed `TerminalCell` (20 bytes, UInt32 codepoint). Multi-codepoint
+  grapheme clusters stored as `graphemeOverrides: [Int: String]?` on `ScrollbackLine`.
 
 ---
 
@@ -460,20 +474,21 @@ The ideal architecture for raw throughput (now implemented):
 3. Snapshot generation is the **only** async boundary (engine actor → MainActor for rendering) — done
 4. PTY reader feeds data into this single actor via one `await` per chunk — done
 
-### Memory layout ideal
+### Memory layout ~~ideal~~ (IMPLEMENTED)
 
-Replace `TerminalCell` (currently ~48+ bytes with String + 3 enums + attributes) with a
-packed 16-byte struct:
+~~Replace~~ Replaced `TerminalCell` (was ~50 bytes with String + 3 enums + attributes) with a
+packed 20-byte struct:
 ```
-UInt32 codepoint        // 4 bytes (0 = blank, side-table for grapheme clusters)
-UInt32 fgColor          // 4 bytes (packed: tag byte + RGB)
-UInt32 bgColor          // 4 bytes
-UInt16 attributes       // 2 bytes
-UInt8  width            // 1 byte
-UInt8  underlineStyle   // 1 byte
-                        // = 16 bytes total, down from ~48+
+UInt32 codepoint            // 4 bytes (0=blank, scalar, or 0x80000000|sideTableIdx)
+UInt32 fgPackedRGBA         // 4 bytes (GPU-ready, boldIsBright pre-applied. 0=default)
+UInt32 bgPackedRGBA         // 4 bytes (GPU-ready. 0=default)
+UInt32 underlinePackedRGBA  // 4 bytes (GPU-ready. 0=use fgColor)
+UInt16 attributes           // 2 bytes (CellAttributes bitfield)
+UInt8  underlineStyle       // 1 byte  (UnderlineStyle raw value)
+UInt8  width                // 1 byte  (1=normal, 2=wide, 0=continuation)
+                            // = 20 bytes total, down from ~50
 ```
 
-This eliminates all String heap allocations in the grid and halves the memory footprint.
-The snapshot generation becomes a near-trivial memcpy since the cell layout is already
-GPU-compatible.
+20 bytes instead of 16 because underline color was added (not in original estimate).
+This eliminates all String heap allocations in the grid and reduces memory footprint by 2.5x.
+Snapshot generation reads pre-computed packed values directly — no per-cell enum resolution.

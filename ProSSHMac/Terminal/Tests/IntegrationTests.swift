@@ -712,8 +712,11 @@ final class ColorRenderTest: IntegrationTestBase {
             await feed("X")
             await feed("\u{1B}[0m")
 
-            let fg = await fgAt(row: 0, col: i)
-            XCTAssertEqual(fg, .indexed(idx), "256-color fg index \(idx) should be set")
+            let cell = await grid.cellAt(row: 0, col: i)
+            // Compare packed RGBA for correctness (reverse-lookup is lossy for
+            // palette collisions, e.g. index 15 and 231 share RGB 255,255,255)
+            XCTAssertEqual(cell?.fgPackedRGBA, TerminalColor.indexed(idx).packedRGBA(),
+                           "256-color fg index \(idx) should be set")
         }
     }
 
@@ -726,8 +729,10 @@ final class ColorRenderTest: IntegrationTestBase {
             await feed(" ")
             await feed("\u{1B}[0m")
 
-            let bg = await bgAt(row: 0, col: i)
-            XCTAssertEqual(bg, .indexed(idx), "256-color bg index \(idx) should be set")
+            let cell = await grid.cellAt(row: 0, col: i)
+            // Compare packed RGBA (reverse-lookup lossy for collisions like 15/231)
+            XCTAssertEqual(cell?.bgPackedRGBA, TerminalColor.indexed(idx).packedRGBA(),
+                           "256-color bg index \(idx) should be set")
         }
     }
 
@@ -762,8 +767,11 @@ final class ColorRenderTest: IntegrationTestBase {
         }
 
         // Verify gradient endpoints
-        let bgStart = await bgAt(row: 0, col: 0)
-        XCTAssertEqual(bgStart, .rgb(0, 0, 0), "Gradient start should be black")
+        // Truecolor (0,0,0) matches palette index 16 in the reverse lookup;
+        // compare packed RGBA for correctness rather than enum equality.
+        let bgStartCell = await grid.cellAt(row: 0, col: 0)
+        XCTAssertEqual(bgStartCell?.bgPackedRGBA, TerminalColor.rgb(0, 0, 0).packedRGBA(),
+                        "Gradient start should be black")
 
         let bgMid = await bgAt(row: 0, col: 40)
         XCTAssertEqual(bgMid, .rgb(120, 0, 0), "Gradient midpoint should be (120, 0, 0)")
@@ -784,7 +792,12 @@ final class ColorRenderTest: IntegrationTestBase {
         XCTAssertTrue(attrs.contains(.underline), "Should have underline")
 
         let fg = await fgAt(row: 0, col: 0)
-        XCTAssertEqual(fg, .indexed(1), "Should have red foreground")
+        // boldIsBright is pre-applied at write-time: bold + indexed(1) → indexed(9)
+        if TerminalDefaults.boldIsBright {
+            XCTAssertEqual(fg, .indexed(9), "Bold red should be bright red with boldIsBright")
+        } else {
+            XCTAssertEqual(fg, .indexed(1), "Should have red foreground")
+        }
 
         let text = await rowText(row: 0, startCol: 0, endCol: 5)
         XCTAssertEqual(text, "ERROR")

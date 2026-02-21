@@ -949,7 +949,8 @@ final class VTParserTests: XCTestCase {
         await feed("\u{1B}[4:3;58;2;255;0;0mX")
         let cell = await grid.cellAt(row: 0, col: 0)
         XCTAssertEqual(cell?.underlineStyle, .curly)
-        XCTAssertEqual(cell?.underlineColor, .rgb(255, 0, 0))
+        // rgb(255,0,0) matches palette index 196; compare packed RGBA
+        XCTAssertEqual(cell?.underlinePackedRGBA, TerminalColor.rgb(255, 0, 0).packedRGBA())
     }
 
     // MARK: - Fix 5: Overline Tests

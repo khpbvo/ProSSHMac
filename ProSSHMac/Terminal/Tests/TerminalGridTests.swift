@@ -165,7 +165,12 @@ final class TerminalGridTests: XCTestCase {
         await grid.printCharacter("X")
         let cell = await grid.cellAt(row: 0, col: 0)
         XCTAssertTrue(cell?.attributes.contains(.bold) ?? false)
-        XCTAssertEqual(cell?.fgColor, .indexed(1))
+        // boldIsBright is pre-applied at write-time: indexed(1) + bold → indexed(9)
+        if TerminalDefaults.boldIsBright {
+            XCTAssertEqual(cell?.fgColor, .indexed(9))
+        } else {
+            XCTAssertEqual(cell?.fgColor, .indexed(1))
+        }
     }
 
     func testPrintStatusCheckmark_IsSingleWidth() async {
@@ -691,13 +696,9 @@ final class TerminalGridTests: XCTestCase {
         XCTAssertEqual(snapshotCell.bgColor, styledCell.bgPackedRGBA)
         XCTAssertEqual(snapshotCell.underlineColor, styledCell.underlinePackedRGBA)
 
-        let expectedFG: UInt32
-        if TerminalDefaults.boldIsBright {
-            expectedFG = TerminalColor.indexed(9).packedRGBA()
-        } else {
-            expectedFG = styledCell.fgPackedRGBA
-        }
-        XCTAssertEqual(snapshotCell.fgColor, expectedFG)
+        // boldIsBright is now applied at write-time (printCharacter/printASCIIBytesBulk),
+        // not at snapshot-time. setCellAt doesn't apply it, so the packed value is used as-is.
+        XCTAssertEqual(snapshotCell.fgColor, styledCell.fgPackedRGBA)
     }
 
     func testPartialScrollRegionRowIndirectionKeepsRowsConsistent() async {

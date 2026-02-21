@@ -17,14 +17,28 @@ nonisolated struct ScrollbackLine: Sendable {
     /// Whether this line was auto-wrapped (continued from the line above).
     var isWrapped: Bool
 
+    /// Multi-codepoint grapheme overrides for cells that had side-table entries.
+    /// Key is column index, value is the full grapheme cluster string.
+    /// nil when no cells in this line had multi-codepoint graphemes.
+    var graphemeOverrides: [Int: String]?
+
     /// Create a scrollback line from a row of cells.
-    init(cells: [TerminalCell], isWrapped: Bool = false) {
+    init(cells: [TerminalCell], isWrapped: Bool = false, graphemeOverrides: [Int: String]? = nil) {
         self.cells = cells
         self.isWrapped = isWrapped
+        self.graphemeOverrides = graphemeOverrides
     }
 
     /// The number of cells in this line.
     var count: Int { cells.count }
+
+    /// Get the grapheme cluster for a cell at the given column, checking overrides first.
+    func grapheme(at col: Int) -> String {
+        if let overrides = graphemeOverrides, let str = overrides[col] {
+            return str
+        }
+        return cells[col].graphemeCluster
+    }
 
     /// Trim trailing blank cells to save memory.
     mutating func trimTrailingBlanks() {
@@ -33,10 +47,20 @@ nonisolated struct ScrollbackLine: Sendable {
         if let lastNonBlank = cells.lastIndex(where: { !$0.isBlank }) {
             let trimStart = cells.index(after: lastNonBlank)
             if trimStart < cells.endIndex {
+                // Remove grapheme overrides for trimmed columns
+                if graphemeOverrides != nil {
+                    for col in trimStart..<cells.endIndex {
+                        graphemeOverrides?.removeValue(forKey: col)
+                    }
+                    if graphemeOverrides?.isEmpty == true {
+                        graphemeOverrides = nil
+                    }
+                }
                 cells.removeSubrange(trimStart..<cells.endIndex)
             }
         } else {
             cells.removeAll(keepingCapacity: true)
+            graphemeOverrides = nil
         }
     }
 }
@@ -91,8 +115,8 @@ nonisolated struct ScrollbackBuffer: Sendable {
     }
 
     /// Push a row of cells as a new scrollback line.
-    mutating func push(cells: [TerminalCell], isWrapped: Bool = false) {
-        var line = ScrollbackLine(cells: cells, isWrapped: isWrapped)
+    mutating func push(cells: [TerminalCell], isWrapped: Bool = false, graphemeOverrides: [Int: String]? = nil) {
+        var line = ScrollbackLine(cells: cells, isWrapped: isWrapped, graphemeOverrides: graphemeOverrides)
         line.trimTrailingBlanks()
         push(line)
     }
@@ -196,7 +220,7 @@ nonisolated struct ScrollbackBuffer: Sendable {
 
         for i in 0..<count {
             let line = self[i]
-            let lineText = line.cells.map { $0.graphemeCluster }.joined()
+            let lineText = (0..<line.count).map { line.grapheme(at: $0) }.joined()
             let compareText = caseSensitive ? lineText : lineText.lowercased()
             if compareText.contains(searchText) {
                 matches.append(i)

@@ -57,6 +57,13 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
 
     private var scrollback: ScrollbackBuffer
 
+    // MARK: - Grapheme Side Table
+
+    /// Storage for multi-codepoint grapheme clusters. Cells store a sentinel
+    /// codepoint referencing this table; entries are resolved when scrolling
+    /// to scrollback or extracting text.
+    private var graphemeSideTable = GraphemeSideTable()
+
     /// Maximum scrollback lines.
     let maxScrollbackLines: Int
 
@@ -328,6 +335,98 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
         return ordered
     }
 
+    // MARK: - Grapheme Encoding/Decoding
+
+    /// Encode a grapheme cluster string into a codepoint.
+    /// Single-scalar strings store the scalar directly; multi-scalar strings
+    /// allocate in the side table and return a sentinel codepoint.
+    @inline(__always)
+    func encodeGrapheme(_ string: String) -> UInt32 {
+        var scalars = string.unicodeScalars.makeIterator()
+        guard let first = scalars.next() else { return 0 }
+        if scalars.next() == nil {
+            return first.value  // Single scalar — store directly
+        }
+        return graphemeSideTable.allocate(string)
+    }
+
+    /// Resolve a cell's codepoint to its full grapheme cluster string.
+    /// For single-scalar cells, reconstructs from the codepoint.
+    /// For side-table entries, looks up the stored string.
+    func resolveGrapheme(for cell: TerminalCell) -> String {
+        let cp = cell.codepoint
+        if cp == 0 { return "" }
+        if GraphemeSideTable.isSideTable(cp) {
+            return graphemeSideTable.resolve(cp) ?? "\u{FFFD}"
+        }
+        if let scalar = UnicodeScalar(cp) {
+            return String(scalar)
+        }
+        return "\u{FFFD}"
+    }
+
+    /// Release a cell's side-table entry if it has one.
+    /// Fast no-op for the 99%+ of cells that are not side-table references.
+    @inline(__always)
+    private func releaseCellGrapheme(_ codepoint: UInt32) {
+        guard codepoint & GraphemeSideTable.sentinel != 0 else { return }
+        graphemeSideTable.release(codepoint)
+    }
+
+    /// Resolve side-table entries in a row, mutating codepoints to first-scalar values.
+    /// Returns grapheme overrides dictionary for multi-codepoint entries.
+    /// Used before pushing rows to scrollback.
+    private func resolveSideTableEntries(in row: inout [TerminalCell]) -> [Int: String]? {
+        guard graphemeSideTable.activeCount > 0 else { return nil }
+        var overrides: [Int: String]? = nil
+        for col in 0..<row.count {
+            let cp = row[col].codepoint
+            if GraphemeSideTable.isSideTable(cp) {
+                if let str = graphemeSideTable.resolve(cp) {
+                    if overrides == nil { overrides = [:] }
+                    overrides![col] = str
+                    row[col].codepoint = TerminalCell.extractPrimaryCodepoint(from: str)
+                } else {
+                    row[col].codepoint = 0
+                }
+                graphemeSideTable.release(cp)
+            }
+        }
+        return overrides
+    }
+
+    /// Resolve all side-table entries in both buffers, replacing sentinel
+    /// codepoints with their first scalar value. Used before resize/reflow
+    /// to ensure no stale side-table indices survive.
+    private func resolveAllSideTableEntries() {
+        guard graphemeSideTable.activeCount > 0 else { return }
+        for physical in 0..<primaryCells.count {
+            for col in 0..<primaryCells[physical].count {
+                let cp = primaryCells[physical][col].codepoint
+                if GraphemeSideTable.isSideTable(cp) {
+                    if let str = graphemeSideTable.resolve(cp) {
+                        primaryCells[physical][col].codepoint = TerminalCell.extractPrimaryCodepoint(from: str)
+                    } else {
+                        primaryCells[physical][col].codepoint = 0
+                    }
+                }
+            }
+        }
+        for physical in 0..<alternateCells.count {
+            for col in 0..<alternateCells[physical].count {
+                let cp = alternateCells[physical][col].codepoint
+                if GraphemeSideTable.isSideTable(cp) {
+                    if let str = graphemeSideTable.resolve(cp) {
+                        alternateCells[physical][col].codepoint = TerminalCell.extractPrimaryCodepoint(from: str)
+                    } else {
+                        alternateCells[physical][col].codepoint = 0
+                    }
+                }
+            }
+        }
+        graphemeSideTable.clear()
+    }
+
     // MARK: - A.6.1 Cell Read/Write
 
     /// Read the cell at the given position.
@@ -340,10 +439,10 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
     /// Write a cell at the given position and mark it dirty.
     func setCellAt(row: Int, col: Int, cell: TerminalCell) {
         guard row >= 0 && row < rows && col >= 0 && col < columns else { return }
-        var c = cell
-        c.isDirty = true
         withActiveBuffer { buffer, base in
-            buffer[physicalRow(row, base: base)][col] = c
+            let physical = physicalRow(row, base: base)
+            releaseCellGrapheme(buffer[physical][col].codepoint)
+            buffer[physical][col] = cell
         }
         markDirty(row: row)
     }
@@ -451,31 +550,41 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
 
         let attributes = isWide ? currentAttributes.union(.wideChar) : currentAttributes
 
+        // Pre-apply boldIsBright at write-time
+        let fgPacked: UInt32
+        if TerminalDefaults.boldIsBright && attributes.contains(.bold) {
+            fgPacked = currentFgColor.packedRGBA(bold: true, boldIsBright: true)
+        } else {
+            fgPacked = currentFgPacked
+        }
+
+        let cp = encodeGrapheme(charStr)
+
         // Write the cell(s) in place.
         withActiveBuffer { buffer, base in
             let physical = physicalRow(row, base: base)
+            releaseCellGrapheme(buffer[physical][col].codepoint)
             buffer[physical][col] = TerminalCell(
-                graphemeCluster: charStr,
-                fgColor: currentFgColor,
-                bgColor: currentBgColor,
-                underlineColor: currentUnderlineColor,
+                codepoint: cp,
+                fgPacked: fgPacked,
+                bgPacked: currentBgPacked,
+                ulPacked: currentUnderlinePacked,
                 attributes: attributes,
                 underlineStyle: currentUnderlineStyle,
-                width: isWide ? 2 : 1,
-                isDirty: true
+                width: isWide ? 2 : 1
             )
 
             // For wide characters, write a continuation cell.
             if isWide && col + 1 < columns {
+                releaseCellGrapheme(buffer[physical][col + 1].codepoint)
                 buffer[physical][col + 1] = TerminalCell(
-                    graphemeCluster: "",
-                    fgColor: currentFgColor,
-                    bgColor: currentBgColor,
-                    underlineColor: currentUnderlineColor,
+                    codepoint: 0,
+                    fgPacked: fgPacked,
+                    bgPacked: currentBgPacked,
+                    ulPacked: currentUnderlinePacked,
                     attributes: currentAttributes,
                     underlineStyle: currentUnderlineStyle,
-                    width: 0,  // continuation
-                    isDirty: true
+                    width: 0  // continuation
                 )
             }
         }
@@ -549,14 +658,17 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
         let charset: Charset = (activeCharset == 1) ? g1Charset : g0Charset
         let needsCharsetMapping = charset != .ascii
 
-        // Capture cached packed colors once for the entire run
-        let fgPacked = currentFgPacked
+        // Capture cached packed colors once for the entire run.
+        // Pre-apply boldIsBright at write-time so snapshot() needs no per-cell check.
+        let attrs = currentAttributes
+        let fgPacked: UInt32
+        if TerminalDefaults.boldIsBright && attrs.contains(.bold) {
+            fgPacked = currentFgColor.packedRGBA(bold: true, boldIsBright: true)
+        } else {
+            fgPacked = currentFgPacked
+        }
         let bgPacked = currentBgPacked
         let ulPacked = currentUnderlinePacked
-        let fg = currentFgColor
-        let bg = currentBgColor
-        let ul = currentUnderlineColor
-        let attrs = currentAttributes
         let ulStyle = currentUnderlineStyle
 
         withActiveBufferState { buf, base, rowMap in
@@ -588,9 +700,10 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
                         // for the common full-screen scroll region.
                         if !usingAlternateBuffer {
                             let topPhysical = physicalRow(scrollTop, base: base, map: rowMap)
-                            let topRow = buf[topPhysical]
+                            var topRow = buf[topPhysical]
+                            let graphemeOverrides = resolveSideTableEntries(in: &topRow)
                             let isWrapped = topRow.last.map { $0.attributes.contains(.wrapped) } ?? false
-                            scrollback.push(cells: topRow, isWrapped: isWrapped)
+                            scrollback.push(cells: topRow, isWrapped: isWrapped, graphemeOverrides: graphemeOverrides)
                         }
 
                         if scrollTop == 0 && scrollBottom == rows - 1 {
@@ -655,13 +768,9 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
 
                 buf[physical][col] = TerminalCell(
                     codepoint: codepoint,
-                    graphemeCluster: charStr,
-                    fgColor: fg,
-                    bgColor: bg,
-                    underlineColor: ul,
                     fgPacked: fgPacked,
                     bgPacked: bgPacked,
-                    underlinePacked: ulPacked,
+                    ulPacked: ulPacked,
                     attributes: attrs,
                     underlineStyle: ulStyle,
                     width: 1
@@ -772,9 +881,10 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
             if !usingAlternateBuffer {
                 for i in 0..<lines {
                     let topPhysical = physicalRow(scrollTop + i, base: base, map: rowMap)
-                    let topRow = buf[topPhysical]
+                    var topRow = buf[topPhysical]
+                    let graphemeOverrides = resolveSideTableEntries(in: &topRow)
                     let isWrapped = topRow.last.map { $0.attributes.contains(.wrapped) } ?? false
-                    scrollback.push(cells: topRow, isWrapped: isWrapped)
+                    scrollback.push(cells: topRow, isWrapped: isWrapped, graphemeOverrides: graphemeOverrides)
                 }
             }
 
@@ -905,14 +1015,17 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
             switch mode {
             case 0: // Cursor to end
                 for col in cursor.col..<columns {
+                    releaseCellGrapheme(buf[row][col].codepoint)
                     buf[row][col] = erasedCell
                 }
             case 1: // Beginning to cursor
                 for col in 0...cursor.col {
+                    releaseCellGrapheme(buf[row][col].codepoint)
                     buf[row][col] = erasedCell
                 }
             case 2: // Entire line
                 for col in 0..<columns {
+                    releaseCellGrapheme(buf[row][col].codepoint)
                     buf[row][col] = erasedCell
                 }
             default:
@@ -938,6 +1051,7 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
                 // Rest of current line
                 let cursorPhysical = physicalRow(cursor.row, base: base)
                 for col in cursor.col..<columns {
+                    releaseCellGrapheme(buf[cursorPhysical][col].codepoint)
                     buf[cursorPhysical][col] = erasedCell
                 }
                 markDirty(row: cursor.row)
@@ -945,6 +1059,7 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
                 for row in (cursor.row + 1)..<rows {
                     let physical = physicalRow(row, base: base)
                     for col in 0..<columns {
+                        releaseCellGrapheme(buf[physical][col].codepoint)
                         buf[physical][col] = erasedCell
                     }
                     markDirty(row: row)
@@ -955,6 +1070,7 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
                 for row in 0..<cursor.row {
                     let physical = physicalRow(row, base: base)
                     for col in 0..<columns {
+                        releaseCellGrapheme(buf[physical][col].codepoint)
                         buf[physical][col] = erasedCell
                     }
                     markDirty(row: row)
@@ -962,6 +1078,7 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
                 // Start of current line to cursor
                 let cursorPhysical = physicalRow(cursor.row, base: base)
                 for col in 0...cursor.col {
+                    releaseCellGrapheme(buf[cursorPhysical][col].codepoint)
                     buf[cursorPhysical][col] = erasedCell
                 }
                 markDirty(row: cursor.row)
@@ -970,6 +1087,7 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
                 for row in 0..<rows {
                     let physical = physicalRow(row, base: base)
                     for col in 0..<columns {
+                        releaseCellGrapheme(buf[physical][col].codepoint)
                         buf[physical][col] = erasedCell
                     }
                     markDirty(row: row)
@@ -979,6 +1097,7 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
                 for row in 0..<rows {
                     let physical = physicalRow(row, base: base)
                     for col in 0..<columns {
+                        releaseCellGrapheme(buf[physical][col].codepoint)
                         buf[physical][col] = erasedCell
                     }
                     markDirty(row: row)
@@ -1000,6 +1119,7 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
         withActiveBuffer { buf, base in
             let row = physicalRow(logicalRow, base: base)
             for col in cursor.col..<min(cursor.col + count, columns) {
+                releaseCellGrapheme(buf[row][col].codepoint)
                 buf[row][col] = erasedCell
             }
         }
@@ -1024,6 +1144,10 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
 
         withActiveBuffer { buf, base in
             let row = physicalRow(logicalRow, base: base)
+            // Release side-table entries for cells being deleted
+            for col in cursor.col..<min(cursor.col + count, columns) {
+                releaseCellGrapheme(buf[row][col].codepoint)
+            }
             // Shift left
             for col in cursor.col..<columns {
                 let srcCol = col + count
@@ -1032,7 +1156,6 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
                 } else {
                     buf[row][col] = erasedCell
                 }
-                buf[row][col].isDirty = true
             }
         }
         markDirty(row: logicalRow)
@@ -1044,10 +1167,14 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
 
         withActiveBuffer { buf, base in
             let physical = physicalRow(row, base: base)
+            // Release side-table entries for cells pushed off right edge
+            let discardStart = max(columns - count, col)
+            for c in discardStart..<columns {
+                releaseCellGrapheme(buf[physical][c].codepoint)
+            }
             // Shift right
             for c in stride(from: columns - 1, through: col + count, by: -1) {
                 buf[physical][c] = buf[physical][c - count]
-                buf[physical][c].isDirty = true
             }
 
             // Fill blanks
@@ -1388,17 +1515,8 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
 
                 let codepoint = cell.primaryCodepoint
 
-                // boldIsBright: bold + standard color (0-7) → bright variant (8-15)
-                let fgPacked: UInt32
-                if TerminalDefaults.boldIsBright,
-                   cell.attributes.contains(.bold),
-                   case .indexed(let idx) = cell.fgColor, idx < 8 {
-                    fgPacked = TerminalColor.indexed(idx + 8).packedRGBA()
-                } else {
-                    fgPacked = cell.fgPackedRGBA
-                }
-
-                // Pack underline color (0 = use fg)
+                // boldIsBright is pre-applied at write-time; use packed values directly.
+                let fgPacked = cell.fgPackedRGBA
                 let ulColorPacked = cell.underlinePackedRGBA
 
                 buffer[idx] = CellInstance(
@@ -1513,21 +1631,16 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
                     if col < scrollLine.cells.count {
                         let cell = scrollLine.cells[col]
                         codepoint = cell.primaryCodepoint
-                        if TerminalDefaults.boldIsBright,
-                           cell.attributes.contains(.bold),
-                           case .indexed(let idx) = cell.fgColor, idx < 8 {
-                            fgPacked = TerminalColor.indexed(idx + 8).packedRGBA()
-                        } else {
-                            fgPacked = cell.fgPackedRGBA
-                        }
+                        // boldIsBright was pre-applied at write-time
+                        fgPacked = cell.fgPackedRGBA
                         bgPacked = cell.bgPackedRGBA
                         attrs = cell.attributes.rawValue
                         ulColorPacked = cell.underlinePackedRGBA
                         ulStyle = cell.underlineStyle.rawValue
                     } else {
                         codepoint = 0
-                        fgPacked = TerminalColor.default.packedRGBA()
-                        bgPacked = TerminalColor.default.packedRGBA()
+                        fgPacked = 0
+                        bgPacked = 0
                         attrs = 0
                         ulColorPacked = 0
                         ulStyle = 0
@@ -1558,14 +1671,8 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
 
                     let codepoint = cell.primaryCodepoint
 
-                    let fgPacked: UInt32
-                    if TerminalDefaults.boldIsBright,
-                       cell.attributes.contains(.bold),
-                       case .indexed(let idx) = cell.fgColor, idx < 8 {
-                        fgPacked = TerminalColor.indexed(idx + 8).packedRGBA()
-                    } else {
-                        fgPacked = cell.fgPackedRGBA
-                    }
+                    // boldIsBright was pre-applied at write-time
+                    let fgPacked = cell.fgPackedRGBA
 
                     cellInstances.append(CellInstance(
                         row: UInt16(displayRow),
@@ -1615,10 +1722,11 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
             for col in 0..<columns {
                 let cell = activeCells[physicalRowIndex][col]
                 if cell.width == 0 { continue } // skip wide-char continuation
-                if cell.graphemeCluster.isEmpty {
+                let grapheme = resolveGrapheme(for: cell)
+                if grapheme.isEmpty {
                     line.append(" ")
                 } else {
-                    line.append(cell.graphemeCluster)
+                    line.append(grapheme)
                 }
             }
             // Trim trailing spaces with a single pass.
@@ -1684,8 +1792,9 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
         currentHyperlink = nil
         invalidatePackedColors()
 
-        // Reset scrollback
+        // Reset scrollback and side table
         scrollback.clear()
+        graphemeSideTable.clear()
 
         lastPrintedChar = nil
 
@@ -1729,18 +1838,15 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
 
     /// Fill screen with 'E' for alignment test (DECALN — ESC # 8).
     func screenAlignmentPattern() {
+        let eCell = TerminalCell(
+            codepoint: 0x45, fgPacked: 0, bgPacked: 0, ulPacked: 0,
+            attributes: [], underlineStyle: .none, width: 1)
         withActiveBuffer { buf, base in
             for row in 0..<rows {
                 let physical = physicalRow(row, base: base)
                 for col in 0..<columns {
-                    buf[physical][col] = TerminalCell(
-                        graphemeCluster: "E",
-                        fgColor: .default,
-                        bgColor: .default,
-                        attributes: [],
-                        width: 1,
-                        isDirty: true
-                    )
+                    releaseCellGrapheme(buf[physical][col].codepoint)
+                    buf[physical][col] = eCell
                 }
             }
         }
@@ -1768,6 +1874,10 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
         let primaryCursorCol = usingAlternateBuffer
             ? (cursor.savedPrimary?.col ?? 0)
             : cursor.col
+
+        // Resolve all side-table entries before linearizing so reflow
+        // doesn't carry stale side-table indices.
+        resolveAllSideTableEntries()
 
         let primaryForReflow = linearizedRows(primaryCells, base: primaryRowBase, map: primaryRowMap)
 
