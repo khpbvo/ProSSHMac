@@ -1,12 +1,13 @@
-// VTParser.swift
+// TerminalEngine.swift
 // ProSSHV2
 //
-// VT500-series compatible parser state machine.
+// Unified terminal engine: VT500-series parser state machine + terminal grid.
 // Based on Paul Flo Williams' state machine model (https://vt100.net/emu/dec_ansi_parser).
 //
-// Every byte from the SSH channel feeds into this parser via `feed(_:)`.
-// The parser emits actions that modify the terminal grid. No rendering logic lives here.
-// The parser and grid are separate actors — the parser calls grid methods across the actor boundary.
+// Every byte from the SSH channel feeds into this engine via `feed(_:)`.
+// The engine owns a TerminalGrid (plain class) and drives it synchronously —
+// no cross-actor overhead for parser→grid calls. External callers access grid
+// state through forwarding methods on this actor.
 
 import Foundation
 import os.log
@@ -14,18 +15,21 @@ import os.log
 import os.signpost
 #endif
 
-// MARK: - VTParser Actor
+// MARK: - TerminalEngine Actor
 
-actor VTParser {
+/// Typealias for backward compatibility during migration.
+typealias VTParser = TerminalEngine
 
-    private static let parserLog = Logger(subsystem: "com.prossh", category: "VTParser")
+actor TerminalEngine {
+
+    private static let parserLog = Logger(subsystem: "com.prossh", category: "TerminalEngine")
     #if DEBUG
     private static let perfSignpostLog = OSLog(subsystem: "com.prossh", category: "TerminalPerf")
     #endif
 
-    // MARK: - Grid Reference
+    // MARK: - Grid (owned)
 
-    /// The terminal grid this parser drives.
+    /// The terminal grid owned by this engine. Accessed synchronously within the actor.
     let grid: TerminalGrid
 
     // MARK: - Debug Logging
@@ -120,6 +124,12 @@ actor VTParser {
 
     // MARK: - Initialization
 
+    /// Create an engine that owns its own grid.
+    init(columns: Int = 80, rows: Int = 24, maxScrollbackLines: Int = 10000) {
+        self.grid = TerminalGrid(columns: columns, rows: rows, maxScrollbackLines: maxScrollbackLines)
+    }
+
+    /// Legacy init for backward compatibility (tests that already created a grid).
     init(grid: TerminalGrid) {
         self.grid = grid
     }
@@ -185,7 +195,7 @@ actor VTParser {
                     while index < next.count, shouldFastPathGroundTextByte(next[index]) {
                         index += 1
                     }
-                    await grid.processGroundTextBytes(next, range: start..<index)
+                    grid.processGroundTextBytes(next, range: start..<index)
                     continue
                 }
 
@@ -230,7 +240,7 @@ actor VTParser {
                 utf8Buffer.append(byte)
                 utf8Remaining -= 1
                 if utf8Remaining == 0 {
-                    await flushUTF8()
+                    flushUTF8()
                 }
                 return
             } else {
@@ -363,10 +373,10 @@ actor VTParser {
             break
 
         case .print:
-            await handlePrint(byte)
+            handlePrint(byte)
 
         case .execute:
-            await handleExecute(byte)
+            handleExecute(byte)
 
         case .clear:
             clearParams()
@@ -431,12 +441,12 @@ actor VTParser {
     // MARK: - Print Handler (with UTF-8 decoding — A.8.5)
 
     /// Handle a printable byte. Starts UTF-8 multibyte decoding if needed.
-    private func handlePrint(_ byte: UInt8) async {
+    private func handlePrint(_ byte: UInt8) {
         if byte < 0x80 {
             // ASCII — print directly, applying charset mapping via CharsetHandler
-            let cs = await grid.charsetState()
+            let cs = grid.charsetState()
             let ch = CharsetHandler.mapCharacter(byte, charsetState: cs)
-            await grid.printCharacter(ch)
+            grid.printCharacter(ch)
         } else if byte & 0xE0 == 0xC0 {
             // 2-byte UTF-8 sequence start
             utf8Buffer = [byte]
@@ -454,24 +464,24 @@ actor VTParser {
             utf8Expected = 4
         } else {
             // Invalid start byte — print replacement character
-            await grid.printCharacter("\u{FFFD}")
+            grid.printCharacter("\u{FFFD}")
         }
     }
 
     /// Flush a completed UTF-8 sequence and print the resulting character.
-    private func flushUTF8() async {
+    private func flushUTF8() {
         if Self.debugLogging {
             if let preview = String(bytes: utf8Buffer, encoding: .utf8) {
-                let pos = await grid.cursorPosition()
+                let pos = grid.cursorPosition()
                 Self.parserLog.debug("PRINT UTF-8 '\(preview)' at (\(pos.row),\(pos.col)) state=\(String(describing: self.state))")
             }
         }
         if let str = String(bytes: utf8Buffer, encoding: .utf8),
            let ch = str.first {
-            await grid.printCharacter(ch)
+            grid.printCharacter(ch)
         } else {
             // Invalid UTF-8 — print replacement character
-            await grid.printCharacter("\u{FFFD}")
+            grid.printCharacter("\u{FFFD}")
         }
         resetUTF8()
     }
@@ -573,38 +583,38 @@ actor VTParser {
     // MARK: - C0 Control Execution
 
     /// Execute a C0 control character.
-    private func handleExecute(_ byte: UInt8) async {
+    private func handleExecute(_ byte: UInt8) {
         // Also handle C1 8-bit controls that map to actions
         switch byte {
         case C0.BEL.rawValue:
-            await handleBell()
+            handleBell()
         case C0.BS.rawValue:
-            await grid.backspace()
+            grid.backspace()
         case C0.HT.rawValue:
-            await grid.tabForward()
+            grid.tabForward()
         case C0.LF.rawValue, C0.VT.rawValue, C0.FF.rawValue:
-            await grid.lineFeed()
+            grid.lineFeed()
         case C0.CR.rawValue:
             if Self.debugLogging {
-                let pos = await grid.cursorPosition()
+                let pos = grid.cursorPosition()
                 Self.parserLog.debug("CR executed — cursor at (\(pos.row),\(pos.col)), moving to col 0")
             }
-            await grid.carriageReturn()
+            grid.carriageReturn()
         case C0.SO.rawValue: // Shift Out — activate G1
-            await CharsetHandler.invoke(1, grid: grid)
+            CharsetHandler.invoke(1, grid: grid)
         case C0.SI.rawValue: // Shift In — activate G0
-            await CharsetHandler.invoke(0, grid: grid)
+            CharsetHandler.invoke(0, grid: grid)
         case C0.SUB.rawValue: // Substitute — abort sequence, print ⌧
-            await grid.printCharacter("\u{2327}")
+            grid.printCharacter("\u{2327}")
         case C1.IND.rawValue:
-            await grid.index()
+            grid.index()
         case C1.NEL.rawValue:
-            await grid.carriageReturn()
-            await grid.index()
+            grid.carriageReturn()
+            grid.index()
         case C1.HTS.rawValue:
-            await grid.setTabStop()
+            grid.setTabStop()
         case C1.RI.rawValue:
-            await grid.reverseIndex()
+            grid.reverseIndex()
         default:
             break // Ignore other C0 controls
         }
@@ -612,8 +622,8 @@ actor VTParser {
 
     /// Handle BEL (0x07). Increments a bell counter on the grid, which
     /// SessionManager reads each frame to trigger visual/haptic/audio feedback.
-    private func handleBell() async {
-        await grid.ringBell()
+    private func handleBell() {
+        grid.ringBell()
     }
 
     // MARK: - ESC Dispatch → ESCHandler (A.15)
@@ -684,7 +694,7 @@ actor VTParser {
 
         if Self.debugLogging {
             let ch = Character(UnicodeScalar(byte))
-            let pos = await grid.cursorPosition()
+            let pos = grid.cursorPosition()
             let marker = privateMarker > 0 ? String(Character(UnicodeScalar(privateMarker))) : ""
             Self.parserLog.debug("CSI \(marker)\(self.params) \(ch) at (\(pos.row),\(pos.col))")
         }
@@ -738,9 +748,44 @@ actor VTParser {
     func setInputModeState(_ state: InputModeState?) async {
         inputModeState = state
         if let state {
-            await state.syncFromGrid(grid)
+            let snap = grid.inputModeSnapshot()
+            await state.syncFromSnapshot(snap)
         }
     }
+
+    // MARK: - Grid Forwarding (for SessionManager)
+
+    func snapshot() -> GridSnapshot { grid.snapshot() }
+    func snapshot(scrollOffset: Int) -> GridSnapshot { grid.snapshot(scrollOffset: scrollOffset) }
+    func resize(newColumns: Int, newRows: Int) { grid.resize(newColumns: newColumns, newRows: newRows) }
+    func visibleText() -> [String] { grid.visibleText() }
+    func eraseInDisplay(mode: Int) { grid.eraseInDisplay(mode: mode) }
+    func moveCursorTo(row: Int, col: Int) { grid.moveCursorTo(row: row, col: col) }
+    func setLineFeedMode(_ enabled: Bool) { grid.setLineFeedMode(enabled) }
+    func setScrollRegion(top: Int, bottom: Int) { grid.setScrollRegion(top: top, bottom: bottom) }
+    func disableAlternateBuffer() { grid.disableAlternateBuffer() }
+    func consumeBellCount() -> Int { grid.consumeBellCount() }
+    func consumeSyncExitSnapshot() -> GridSnapshot? { grid.consumeSyncExitSnapshot() }
+    func inputModeSnapshot() -> InputModeSnapshot { grid.inputModeSnapshot() }
+
+    var synchronizedOutput: Bool { grid.synchronizedOutput }
+    var usingAlternateBuffer: Bool { grid.usingAlternateBuffer }
+    var scrollbackCount: Int { grid.scrollbackCount }
+    var windowTitle: String { grid.windowTitle }
+    var workingDirectory: String { grid.workingDirectory }
+    var focusReporting: Bool { grid.focusReporting }
+
+    // MARK: - Grid State Forwarding (for tests)
+
+    func cellAt(row: Int, col: Int) -> TerminalCell? { grid.cellAt(row: row, col: col) }
+    var cursor: CursorState { grid.cursor }
+    var columns: Int { grid.columns }
+    var rows: Int { grid.rows }
+    var tabStops: Set<Int> { grid.tabStops }
+    var originMode: Bool { grid.originMode }
+    var autoWrapMode: Bool { grid.autoWrapMode }
+    var scrollTop: Int { grid.scrollTop }
+    var scrollBottom: Int { grid.scrollBottom }
 }
 
 // MARK: - Transition Type

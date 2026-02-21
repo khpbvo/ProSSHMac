@@ -1,18 +1,19 @@
 // TerminalGrid.swift
 // ProSSHV2
 //
-// The terminal grid actor. Owns the cell buffer, cursor, scroll region,
+// The terminal grid. Owns the cell buffer, cursor, scroll region,
 // mode flags, and all operations the VT parser drives.
 // Produces GridSnapshot values for the renderer.
+// Thread safety: owned exclusively by the TerminalEngine actor.
 
 import Foundation
 #if DEBUG
 import os.signpost
 #endif
 
-// MARK: - TerminalGrid Actor
+// MARK: - TerminalGrid
 
-actor TerminalGrid {
+nonisolated final class TerminalGrid: @unchecked Sendable {
     #if DEBUG
     private static let perfSignpostLog = OSLog(subsystem: "com.prossh", category: "TerminalPerf")
     #endif
@@ -173,6 +174,24 @@ actor TerminalGrid {
     var currentBgColor: TerminalColor = .default
     var currentUnderlineColor: TerminalColor = .default
     var currentUnderlineStyle: UnderlineStyle = .none
+
+    // MARK: - Cached Packed Colors (for hot-path TerminalCell construction)
+
+    /// Pre-computed packed RGBA for currentFgColor, updated on color mutation.
+    private var currentFgPacked: UInt32 = 0
+    /// Pre-computed packed RGBA for currentBgColor, updated on color mutation.
+    private var currentBgPacked: UInt32 = 0
+    /// Pre-computed packed RGBA for currentUnderlineColor, updated on color mutation.
+    private var currentUnderlinePacked: UInt32 = 0
+
+    /// Recompute cached packed RGBA values from the current colors.
+    /// Must be called after any mutation of currentFgColor/currentBgColor/currentUnderlineColor.
+    @inline(__always)
+    private func invalidatePackedColors() {
+        currentFgPacked = currentFgColor.packedRGBA()
+        currentBgPacked = currentBgColor.packedRGBA()
+        currentUnderlinePacked = currentUnderlineColor.packedRGBA()
+    }
 
     // MARK: - Dirty Tracking
 
@@ -530,6 +549,16 @@ actor TerminalGrid {
         let charset: Charset = (activeCharset == 1) ? g1Charset : g0Charset
         let needsCharsetMapping = charset != .ascii
 
+        // Capture cached packed colors once for the entire run
+        let fgPacked = currentFgPacked
+        let bgPacked = currentBgPacked
+        let ulPacked = currentUnderlinePacked
+        let fg = currentFgColor
+        let bg = currentBgColor
+        let ul = currentUnderlineColor
+        let attrs = currentAttributes
+        let ulStyle = currentUnderlineStyle
+
         withActiveBufferState { buf, base, rowMap in
             var dirtyRowLo = Int.max
             var dirtyRowHi = -1
@@ -589,24 +618,35 @@ actor TerminalGrid {
                     }
                 }
 
-                // Resolve character string — ASCII is never wide
+                // Resolve character string and codepoint — ASCII is never wide
                 let charStr: String
+                let codepoint: UInt32
                 if needsCharsetMapping {
                     switch charset {
                     case .ascii:
                         charStr = Self.asciiScalarStringCache[Int(byte)]
+                        codepoint = UInt32(byte)
                     case .ukNational:
-                        charStr = (byte == 0x23) ? "£" : Self.asciiScalarStringCache[Int(byte)]
+                        if byte == 0x23 {
+                            charStr = "£"
+                            codepoint = 0xA3 // £ Unicode scalar
+                        } else {
+                            charStr = Self.asciiScalarStringCache[Int(byte)]
+                            codepoint = UInt32(byte)
+                        }
                     case .decSpecialGraphics:
                         if (0x60...0x7E).contains(byte),
                            let mapped = DECSpecialGraphics.mapCharacter(byte) {
                             charStr = String(mapped)
+                            codepoint = mapped.unicodeScalars.first?.value ?? UInt32(byte)
                         } else {
                             charStr = Self.asciiScalarStringCache[Int(byte)]
+                            codepoint = UInt32(byte)
                         }
                     }
                 } else {
                     charStr = Self.asciiScalarStringCache[Int(byte)]
+                    codepoint = UInt32(byte)
                 }
 
                 let row = cursor.row
@@ -614,14 +654,17 @@ actor TerminalGrid {
                 let physical = physicalRow(row, base: base, map: rowMap)
 
                 buf[physical][col] = TerminalCell(
+                    codepoint: codepoint,
                     graphemeCluster: charStr,
-                    fgColor: currentFgColor,
-                    bgColor: currentBgColor,
-                    underlineColor: currentUnderlineColor,
-                    attributes: currentAttributes,
-                    underlineStyle: currentUnderlineStyle,
-                    width: 1,
-                    isDirty: true
+                    fgColor: fg,
+                    bgColor: bg,
+                    underlineColor: ul,
+                    fgPacked: fgPacked,
+                    bgPacked: bgPacked,
+                    underlinePacked: ulPacked,
+                    attributes: attrs,
+                    underlineStyle: ulStyle,
+                    width: 1
                 )
 
                 dirtyRowLo = min(dirtyRowLo, row)
@@ -855,22 +898,22 @@ actor TerminalGrid {
     /// - 2: Entire line
     func eraseInLine(mode: Int) {
         let logicalRow = cursor.row
-        let bgColor = currentBgColor
+        let erasedCell = TerminalCell.erased(bgColor: currentBgColor, bgPacked: currentBgPacked)
 
         withActiveBuffer { buf, base in
             let row = physicalRow(logicalRow, base: base)
             switch mode {
             case 0: // Cursor to end
                 for col in cursor.col..<columns {
-                    buf[row][col].erase(bgColor: bgColor)
+                    buf[row][col] = erasedCell
                 }
             case 1: // Beginning to cursor
                 for col in 0...cursor.col {
-                    buf[row][col].erase(bgColor: bgColor)
+                    buf[row][col] = erasedCell
                 }
             case 2: // Entire line
                 for col in 0..<columns {
-                    buf[row][col].erase(bgColor: bgColor)
+                    buf[row][col] = erasedCell
                 }
             default:
                 break
@@ -887,7 +930,7 @@ actor TerminalGrid {
     /// - 2: Entire screen
     /// - 3: Entire screen + scrollback
     func eraseInDisplay(mode: Int) {
-        let bgColor = currentBgColor
+        let erasedCell = TerminalCell.erased(bgColor: currentBgColor, bgPacked: currentBgPacked)
 
         withActiveBuffer { buf, base in
             switch mode {
@@ -895,14 +938,14 @@ actor TerminalGrid {
                 // Rest of current line
                 let cursorPhysical = physicalRow(cursor.row, base: base)
                 for col in cursor.col..<columns {
-                    buf[cursorPhysical][col].erase(bgColor: bgColor)
+                    buf[cursorPhysical][col] = erasedCell
                 }
                 markDirty(row: cursor.row)
                 // All lines below
                 for row in (cursor.row + 1)..<rows {
                     let physical = physicalRow(row, base: base)
                     for col in 0..<columns {
-                        buf[physical][col].erase(bgColor: bgColor)
+                        buf[physical][col] = erasedCell
                     }
                     markDirty(row: row)
                 }
@@ -912,14 +955,14 @@ actor TerminalGrid {
                 for row in 0..<cursor.row {
                     let physical = physicalRow(row, base: base)
                     for col in 0..<columns {
-                        buf[physical][col].erase(bgColor: bgColor)
+                        buf[physical][col] = erasedCell
                     }
                     markDirty(row: row)
                 }
                 // Start of current line to cursor
                 let cursorPhysical = physicalRow(cursor.row, base: base)
                 for col in 0...cursor.col {
-                    buf[cursorPhysical][col].erase(bgColor: bgColor)
+                    buf[cursorPhysical][col] = erasedCell
                 }
                 markDirty(row: cursor.row)
 
@@ -927,7 +970,7 @@ actor TerminalGrid {
                 for row in 0..<rows {
                     let physical = physicalRow(row, base: base)
                     for col in 0..<columns {
-                        buf[physical][col].erase(bgColor: bgColor)
+                        buf[physical][col] = erasedCell
                     }
                     markDirty(row: row)
                 }
@@ -936,7 +979,7 @@ actor TerminalGrid {
                 for row in 0..<rows {
                     let physical = physicalRow(row, base: base)
                     for col in 0..<columns {
-                        buf[physical][col].erase(bgColor: bgColor)
+                        buf[physical][col] = erasedCell
                     }
                     markDirty(row: row)
                 }
@@ -952,12 +995,12 @@ actor TerminalGrid {
     func eraseCharacters(_ n: Int) {
         let count = max(n, 1)
         let logicalRow = cursor.row
-        let bgColor = currentBgColor
+        let erasedCell = TerminalCell.erased(bgColor: currentBgColor, bgPacked: currentBgPacked)
 
         withActiveBuffer { buf, base in
             let row = physicalRow(logicalRow, base: base)
             for col in cursor.col..<min(cursor.col + count, columns) {
-                buf[row][col].erase(bgColor: bgColor)
+                buf[row][col] = erasedCell
             }
         }
         markDirty(row: logicalRow)
@@ -977,7 +1020,7 @@ actor TerminalGrid {
     func deleteCharacters(_ n: Int) {
         let count = max(n, 1)
         let logicalRow = cursor.row
-        let bgColor = currentBgColor
+        let erasedCell = TerminalCell.erased(bgColor: currentBgColor, bgPacked: currentBgPacked)
 
         withActiveBuffer { buf, base in
             let row = physicalRow(logicalRow, base: base)
@@ -987,7 +1030,7 @@ actor TerminalGrid {
                 if srcCol < columns {
                     buf[row][col] = buf[row][srcCol]
                 } else {
-                    buf[row][col] = TerminalCell(bgColor: bgColor)
+                    buf[row][col] = erasedCell
                 }
                 buf[row][col].isDirty = true
             }
@@ -997,7 +1040,7 @@ actor TerminalGrid {
 
     /// Helper: insert blank characters at a specific position in a row.
     private func insertBlanks(count: Int, atRow row: Int, col: Int) {
-        let bgColor = currentBgColor
+        let erasedCell = TerminalCell.erased(bgColor: currentBgColor, bgPacked: currentBgPacked)
 
         withActiveBuffer { buf, base in
             let physical = physicalRow(row, base: base)
@@ -1009,7 +1052,7 @@ actor TerminalGrid {
 
             // Fill blanks
             for c in col..<min(col + count, columns) {
-                buf[physical][c] = TerminalCell(bgColor: bgColor)
+                buf[physical][c] = erasedCell
             }
         }
         markDirty(row: row)
@@ -1157,6 +1200,7 @@ actor TerminalGrid {
             activeCharset = saved.activeCharset
             g0Charset = saved.g0Charset
             g1Charset = saved.g1Charset
+            invalidatePackedColors()
         }
 
         markAllDirty()
@@ -1201,6 +1245,7 @@ actor TerminalGrid {
         activeCharset = s.activeCharset
         g0Charset = s.g0Charset
         g1Charset = s.g1Charset
+        invalidatePackedColors()
     }
 
     // MARK: - A.6.12 Tab Stop Management
@@ -1637,6 +1682,7 @@ actor TerminalGrid {
         currentUnderlineColor = .default
         currentUnderlineStyle = .none
         currentHyperlink = nil
+        invalidatePackedColors()
 
         // Reset scrollback
         scrollback.clear()
@@ -1673,6 +1719,7 @@ actor TerminalGrid {
         currentBgColor = .default
         currentUnderlineColor = .default
         currentUnderlineStyle = .none
+        invalidatePackedColors()
 
         resetTabStops()
 
@@ -1993,16 +2040,19 @@ actor TerminalGrid {
     /// Set SGR foreground color.
     func setCurrentFgColor(_ color: TerminalColor) {
         currentFgColor = color
+        currentFgPacked = color.packedRGBA()
     }
 
     /// Set SGR background color.
     func setCurrentBgColor(_ color: TerminalColor) {
         currentBgColor = color
+        currentBgPacked = color.packedRGBA()
     }
 
     /// Set SGR underline color (SGR 58/59).
     func setCurrentUnderlineColor(_ color: TerminalColor) {
         currentUnderlineColor = color
+        currentUnderlinePacked = color.packedRGBA()
     }
 
     /// Set SGR underline style (from SGR 4 subparameters).
@@ -2027,6 +2077,7 @@ actor TerminalGrid {
         currentBgColor = bg
         currentUnderlineColor = underlineColor
         currentUnderlineStyle = underlineStyle
+        invalidatePackedColors()
     }
 
     /// Get all input-mode flags in a single actor hop (replaces 5 separate property reads).
@@ -2127,7 +2178,8 @@ actor TerminalGrid {
 
     /// Create a blank row with the current background color.
     private func makeBlankRow() -> [TerminalCell] {
-        [TerminalCell](repeating: TerminalCell(bgColor: currentBgColor), count: columns)
+        let cell = TerminalCell.erased(bgColor: currentBgColor, bgPacked: currentBgPacked)
+        return [TerminalCell](repeating: cell, count: columns)
     }
 }
 

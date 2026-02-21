@@ -99,13 +99,13 @@ nonisolated enum DCSHandler {
 
         switch selector {
         case "m": // SGR — report current text attributes
-            response = await buildSGRReport(grid: grid)
+            response = buildSGRReport(grid: grid)
 
         case "r": // DECSTBM — report scroll region
-            response = await buildScrollRegionReport(grid: grid)
+            response = buildScrollRegionReport(grid: grid)
 
         case " q": // DECSCUSR — report cursor style
-            response = await buildCursorStyleReport(grid: grid)
+            response = buildCursorStyleReport(grid: grid)
 
         default:
             // Unknown selector — respond with invalid marker
@@ -127,8 +127,8 @@ nonisolated enum DCSHandler {
 
     /// Build SGR report string for current attributes.
     /// Returns the CSI parameter string (e.g., "0;1;31" for reset+bold+red fg).
-    private static func buildSGRReport(grid: TerminalGrid) async -> String {
-        let sgr = await grid.sgrState()
+    private static func buildSGRReport(grid: TerminalGrid) -> String {
+        let sgr = grid.sgrState()
         var codes: [Int] = [0] // Always start with reset
 
         if sgr.attributes.contains(.bold)          { codes.append(1) }
@@ -171,15 +171,15 @@ nonisolated enum DCSHandler {
     }
 
     /// Build DECSTBM report string for current scroll region.
-    private static func buildScrollRegionReport(grid: TerminalGrid) async -> String {
-        let top = await grid.scrollTop + 1  // 1-based
-        let bottom = await grid.scrollBottom + 1
+    private static func buildScrollRegionReport(grid: TerminalGrid) -> String {
+        let top = grid.scrollTop + 1  // 1-based
+        let bottom = grid.scrollBottom + 1
         return "\(top);\(bottom)r"
     }
 
     /// Build DECSCUSR report string for current cursor style.
-    private static func buildCursorStyleReport(grid: TerminalGrid) async -> String {
-        let style = await grid.cursor.style
+    private static func buildCursorStyleReport(grid: TerminalGrid) -> String {
+        let style = grid.cursor.style
         let code: Int
         switch style {
         case .block:     code = 2  // Steady block

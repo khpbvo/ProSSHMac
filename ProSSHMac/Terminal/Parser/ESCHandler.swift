@@ -41,7 +41,7 @@ nonisolated enum ESCHandler {
         inputModeState: InputModeState? = nil
     ) async {
         if let intermediate = intermediates.first {
-            await dispatchWithIntermediate(
+            dispatchWithIntermediate(
                 intermediate: intermediate, final: byte, grid: grid
             )
         } else {
@@ -61,38 +61,38 @@ nonisolated enum ESCHandler {
 
         // A.15.1 — DECSC / DECRC (Save / Restore Cursor)
         case 0x37: // ESC 7 — DECSC
-            await grid.saveCursor()
+            grid.saveCursor()
 
         case 0x38: // ESC 8 — DECRC
-            await grid.restoreCursor()
+            grid.restoreCursor()
 
         // A.15.2 — IND / RI / NEL
         case 0x44: // ESC D — IND (Index: cursor down, scroll if at bottom)
-            await grid.index()
+            grid.index()
 
         case 0x4D: // ESC M — RI (Reverse Index: cursor up, scroll if at top)
-            await grid.reverseIndex()
+            grid.reverseIndex()
 
         case 0x45: // ESC E — NEL (Next Line: CR + IND)
-            await grid.carriageReturn()
-            await grid.index()
+            grid.carriageReturn()
+            grid.index()
 
         // A.15.3 — RIS (Full Reset)
         case 0x63: // ESC c — RIS
-            await grid.fullReset()
+            grid.fullReset()
             await inputModeState?.applyFullReset()
 
         // A.15.4 — HTS (Set Tab Stop)
         case 0x48: // ESC H — HTS
-            await grid.setTabStop()
+            grid.setTabStop()
 
         // A.15.5 — DECKPAM / DECKPNM (Keypad Modes)
         case 0x3D: // ESC = — DECKPAM (Application Keypad Mode)
-            await grid.setApplicationKeypad(true)
+            grid.setApplicationKeypad(true)
             await inputModeState?.setApplicationKeypad(true)
 
         case 0x3E: // ESC > — DECKPNM (Normal Keypad Mode)
-            await grid.setApplicationKeypad(false)
+            grid.setApplicationKeypad(false)
             await inputModeState?.setApplicationKeypad(false)
 
         default:
@@ -107,20 +107,20 @@ nonisolated enum ESCHandler {
         intermediate: UInt8,
         final byte: UInt8,
         grid: TerminalGrid
-    ) async {
+    ) {
         switch intermediate {
 
         // A.15.6 — Charset Designation (ESC ( / ESC ))
         case 0x28: // ESC ( — Designate G0 character set
-            await CharsetHandler.designate(g: 0, designator: byte, grid: grid)
+            CharsetHandler.designate(g: 0, designator: byte, grid: grid)
 
         case 0x29: // ESC ) — Designate G1 character set
-            await CharsetHandler.designate(g: 1, designator: byte, grid: grid)
+            CharsetHandler.designate(g: 1, designator: byte, grid: grid)
 
         // A.15.7 — DECALN (ESC # 8)
         case 0x23: // ESC #
             if byte == 0x38 { // ESC # 8 — DECALN (Screen Alignment Pattern)
-                await grid.screenAlignmentPattern()
+                grid.screenAlignmentPattern()
             }
 
         default:

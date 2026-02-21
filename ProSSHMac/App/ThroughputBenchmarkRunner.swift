@@ -76,11 +76,10 @@ enum ThroughputBenchmarkRunner {
         chunkSize: Int,
         scrollRegion: (top: Int, bottom: Int)?
     ) async -> BenchmarkResult {
-        let grid = TerminalGrid(columns: 80, rows: 24)
-        let parser = VTParser(grid: grid)
+        let engine = TerminalEngine(columns: 80, rows: 24)
 
         if let region = scrollRegion {
-            await grid.setScrollRegion(top: region.top, bottom: region.bottom)
+            await engine.setScrollRegion(top: region.top, bottom: region.bottom)
         }
 
         let start = CFAbsoluteTimeGetCurrent()
@@ -88,13 +87,13 @@ enum ThroughputBenchmarkRunner {
         while offset < payload.count {
             let end = min(offset + chunkSize, payload.count)
             let chunk = payload.subdata(in: offset..<end)
-            _ = await parser.feed(chunk)
+            _ = await engine.feed(chunk)
             offset = end
         }
         let elapsed = CFAbsoluteTimeGetCurrent() - start
 
-        let state = await parser.state
-        _ = await grid.snapshot()
+        let state = await engine.state
+        _ = await engine.snapshot()
 
         return BenchmarkResult(
             name: name,

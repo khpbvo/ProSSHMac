@@ -41,8 +41,8 @@ nonisolated enum SGRHandler {
     /// `params` is [[Int]] where each element is a group of subparameters.
     /// A semicolon-separated sequence like "1;31" produces [[1],[31]].
     /// A colon-separated sequence like "4:3" produces [[4,3]].
-    static func handle(params: [[Int]], grid: TerminalGrid) async {
-        var sgr = await grid.sgrState()
+    static func handle(params: [[Int]], grid: TerminalGrid) {
+        var sgr = grid.sgrState()
 
         // A.11.1 — No parameters means reset
         if params.isEmpty {
@@ -51,7 +51,7 @@ nonisolated enum SGRHandler {
             sgr.bg = .default
             sgr.underlineColor = .default
             sgr.underlineStyle = .none
-            await apply(sgr, to: grid)
+            apply(sgr, to: grid)
             return
         }
 
@@ -183,7 +183,7 @@ nonisolated enum SGRHandler {
             i += 1
         }
 
-        await apply(sgr, to: grid)
+        apply(sgr, to: grid)
     }
 
     // MARK: - Underline Style Helper
@@ -355,8 +355,8 @@ nonisolated enum SGRHandler {
     // MARK: - Apply to Grid
 
     /// Write the SGR state back to the grid in a single actor hop.
-    private static func apply(_ sgr: SGRState, to grid: TerminalGrid) async {
-        await grid.applySGRState(
+    private static func apply(_ sgr: SGRState, to grid: TerminalGrid) {
+        grid.applySGRState(
             attributes: sgr.attributes,
             fg: sgr.fg,
             bg: sgr.bg,

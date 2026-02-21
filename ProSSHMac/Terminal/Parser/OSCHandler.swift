@@ -58,22 +58,22 @@ nonisolated enum OSCHandler {
 
         // A.13.2 — Window title
         case OSCCommand.setTitleAndIcon:
-            await grid.setWindowTitle(text)
-            await grid.setIconName(text)
+            grid.setWindowTitle(text)
+            grid.setIconName(text)
 
         case OSCCommand.setIconName:
-            await grid.setIconName(text)
+            grid.setIconName(text)
 
         case OSCCommand.setWindowTitle:
-            await grid.setWindowTitle(text)
+            grid.setWindowTitle(text)
 
         // OSC 7 — Working directory (file://hostname/path)
         case OSCCommand.setWorkingDirectory:
-            await handleWorkingDirectory(text: text, grid: grid)
+            handleWorkingDirectory(text: text, grid: grid)
 
         // OSC 8 — Hyperlink (stub: parse and store, no click handling yet)
         case OSCCommand.hyperlink:
-            await handleHyperlink(text: text, grid: grid)
+            handleHyperlink(text: text, grid: grid)
 
         // A.13.3 — Color palette set/query (OSC 4)
         case OSCCommand.setColorPalette:
@@ -103,7 +103,7 @@ nonisolated enum OSCHandler {
 
         // A.13.4 — Reset cursor color (OSC 112)
         case OSCCommand.resetCursorColor:
-            await grid.resetCursorColor()
+            grid.resetCursorColor()
 
         // OSC 133 — Semantic prompt (placeholder for future shell integration)
         case OSCCommand.semanticPrompt:
@@ -138,13 +138,13 @@ nonisolated enum OSCHandler {
 
             if spec == "?" {
                 // Query: respond with current color
-                let (r, g, b) = await grid.paletteColor(index: index)
+                let (r, g, b) = grid.paletteColor(index: index)
                 let response = "\u{1B}]4;\(index);rgb:\(hexPair(r))/\(hexPair(g))/\(hexPair(b))\u{1B}\\"
                 await responseHandler?(Array(response.utf8))
             } else {
                 // Set: parse color spec
                 if let (r, g, b) = parseColorSpec(spec) {
-                    await grid.setPaletteColor(index: index, r: r, g: g, b: b)
+                    grid.setPaletteColor(index: index, r: r, g: g, b: b)
                 }
             }
 
@@ -177,16 +177,16 @@ nonisolated enum OSCHandler {
 
             switch kind {
             case .foreground:
-                (r, g, b) = await grid.defaultForegroundRGB()
+                (r, g, b) = grid.defaultForegroundRGB()
                 oscCode = OSCCommand.setForeground
             case .background:
-                (r, g, b) = await grid.defaultBackgroundRGB()
+                (r, g, b) = grid.defaultBackgroundRGB()
                 oscCode = OSCCommand.setBackground
             case .cursor:
-                if let cc = await grid.cursorColor {
+                if let cc = grid.cursorColor {
                     (r, g, b) = cc
                 } else {
-                    (r, g, b) = await grid.defaultForegroundRGB()
+                    (r, g, b) = grid.defaultForegroundRGB()
                 }
                 oscCode = OSCCommand.setCursorColor
             }
@@ -198,11 +198,11 @@ nonisolated enum OSCHandler {
             if let (r, g, b) = parseColorSpec(text) {
                 switch kind {
                 case .foreground:
-                    await grid.setDefaultForegroundRGB(r: r, g: g, b: b)
+                    grid.setDefaultForegroundRGB(r: r, g: g, b: b)
                 case .background:
-                    await grid.setDefaultBackgroundRGB(r: r, g: g, b: b)
+                    grid.setDefaultBackgroundRGB(r: r, g: g, b: b)
                 case .cursor:
-                    await grid.setCursorColor(r: r, g: g, b: b)
+                    grid.setCursorColor(r: r, g: g, b: b)
                 }
             }
         }
@@ -249,14 +249,14 @@ nonisolated enum OSCHandler {
     private static func handleWorkingDirectory(
         text: String,
         grid: TerminalGrid
-    ) async {
+    ) {
         // Parse file://hostname/path URL
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: trimmed),
               url.scheme == "file" else {
             // Fallback: treat the entire text as a path
             if !trimmed.isEmpty {
-                await grid.setWorkingDirectory(trimmed)
+                grid.setWorkingDirectory(trimmed)
             }
             return
         }
@@ -266,7 +266,7 @@ nonisolated enum OSCHandler {
 
         // Decode percent-encoded path
         let decoded = path.removingPercentEncoding ?? path
-        await grid.setWorkingDirectory(decoded)
+        grid.setWorkingDirectory(decoded)
     }
 
     // MARK: - OSC 8 Hyperlink (Stub)
@@ -286,12 +286,12 @@ nonisolated enum OSCHandler {
     private static func handleHyperlink(
         text: String,
         grid: TerminalGrid
-    ) async {
+    ) {
         // Text after "8;" is: params;URI
         // Find the second semicolon to split params from URI
         guard let sepIndex = text.firstIndex(of: ";") else {
             // Malformed — need at least one semicolon
-            await grid.setCurrentHyperlink(nil)
+            grid.setCurrentHyperlink(nil)
             return
         }
 
@@ -299,10 +299,10 @@ nonisolated enum OSCHandler {
 
         if uri.isEmpty {
             // End hyperlink
-            await grid.setCurrentHyperlink(nil)
+            grid.setCurrentHyperlink(nil)
         } else {
             // Start hyperlink — store the URI
-            await grid.setCurrentHyperlink(uri)
+            grid.setCurrentHyperlink(uri)
         }
     }
 

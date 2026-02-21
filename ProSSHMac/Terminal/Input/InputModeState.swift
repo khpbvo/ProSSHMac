@@ -75,9 +75,8 @@ actor InputModeState {
         mouseEncoding = .x10
     }
 
-    /// Initialize state from current grid flags in a single actor hop.
-    func syncFromGrid(_ grid: TerminalGrid) async {
-        let snap = await grid.inputModeSnapshot()
+    /// Initialize state from a snapshot (avoids passing grid reference across actor boundary).
+    func syncFromSnapshot(_ snap: InputModeSnapshot) {
         applicationCursorKeys = snap.applicationCursorKeys
         applicationKeypad = snap.applicationKeypad
         bracketedPasteMode = snap.bracketedPasteMode

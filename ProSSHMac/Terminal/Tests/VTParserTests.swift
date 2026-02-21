@@ -15,16 +15,16 @@ import XCTest
 
 final class VTParserTests: XCTestCase {
 
+    private var engine: TerminalEngine!
     private var grid: TerminalGrid!
-    private var parser: VTParser!
     private var responses: [[UInt8]]!
 
     override func setUp() async throws {
-        grid = TerminalGrid(columns: 80, rows: 24)
-        parser = VTParser(grid: grid)
+        engine = TerminalEngine(columns: 80, rows: 24)
+        grid = await engine.grid
         responses = []
 
-        await parser.setResponseHandler { @Sendable [weak self] bytes in
+        await engine.setResponseHandler { @Sendable [weak self] bytes in
             self?.responses.append(bytes)
         }
     }
@@ -33,57 +33,57 @@ final class VTParserTests: XCTestCase {
 
     /// Feed a string as UTF-8 bytes into the parser.
     private func feed(_ string: String) async {
-        await parser.feed(Array(string.utf8))
+        await engine.feed(Array(string.utf8))
     }
 
     /// Feed raw bytes into the parser.
     private func feedBytes(_ bytes: [UInt8]) async {
-        await parser.feed(bytes)
+        await engine.feed(bytes)
     }
 
     // MARK: - State Transition Tests
 
     func testInitialStateIsGround() async {
-        let state = await parser.state
+        let state = await engine.state
         XCTAssertEqual(state, .ground)
     }
 
     func testEscapeTransitionsToEscapeState() async {
         await feedBytes([0x1B]) // ESC
-        let state = await parser.state
+        let state = await engine.state
         XCTAssertEqual(state, .escape)
     }
 
     func testCSIEntryViaEscBracket() async {
         await feedBytes([0x1B, 0x5B]) // ESC [
-        let state = await parser.state
+        let state = await engine.state
         XCTAssertEqual(state, .csiEntry)
     }
 
     func testCSICompletionReturnsToGround() async {
         // CSI H (CUP) should complete and return to ground
         await feed("\u{1B}[1;1H")
-        let state = await parser.state
+        let state = await engine.state
         XCTAssertEqual(state, .ground)
     }
 
     func testOSCStringState() async {
         await feedBytes([0x1B, 0x5D]) // ESC ]
-        let state = await parser.state
+        let state = await engine.state
         XCTAssertEqual(state, .oscString)
     }
 
     func testOSCTerminatedByST() async {
         // OSC 0;title ST
         await feed("\u{1B}]0;Hello\u{1B}\\")
-        let state = await parser.state
+        let state = await engine.state
         XCTAssertEqual(state, .ground)
     }
 
     func testCANCancelsSequence() async {
         // Start a CSI then cancel with CAN (0x18)
         await feedBytes([0x1B, 0x5B, 0x18]) // ESC [ CAN
-        let state = await parser.state
+        let state = await engine.state
         XCTAssertEqual(state, .ground)
     }
 
@@ -523,7 +523,7 @@ final class VTParserTests: XCTestCase {
         }
         seq += "H"
         await feed(seq)
-        let state = await parser.state
+        let state = await engine.state
         XCTAssertEqual(state, .ground) // Should complete normally
     }
 
@@ -535,7 +535,7 @@ final class VTParserTests: XCTestCase {
         }
         await feedBytes(bytes)
         // Just verify we didn't crash
-        let state = await parser.state
+        let state = await engine.state
         XCTAssertNotNil(state)
     }
 
@@ -543,7 +543,7 @@ final class VTParserTests: XCTestCase {
         // ESC followed by an invalid byte
         await feedBytes([0x1B, 0xFF])
         // Parser should handle gracefully
-        let state = await parser.state
+        let state = await engine.state
         // After garbage, parser may be in various states but shouldn't crash
         XCTAssertNotNil(state)
     }

@@ -94,7 +94,7 @@ nonisolated enum CSIHandler {
 
         // Standard CSI sequences (SGR gets full params for subparameter support)
         if byte == 0x6D { // CSI m — SGR
-            await SGRHandler.handle(params: params, grid: grid)
+            SGRHandler.handle(params: params, grid: grid)
         } else {
             await dispatchStandard(
                 byte: byte, params: params, grid: grid,
@@ -118,89 +118,89 @@ nonisolated enum CSIHandler {
 
         // A.10.1 — Cursor Movement
         case 0x41: // CSI A — CUU (Cursor Up)
-            await grid.moveCursorUp(p0)
+            grid.moveCursorUp(p0)
         case 0x42: // CSI B — CUD (Cursor Down)
-            await grid.moveCursorDown(p0)
+            grid.moveCursorDown(p0)
         case 0x43: // CSI C — CUF (Cursor Forward)
-            await grid.moveCursorForward(p0)
+            grid.moveCursorForward(p0)
         case 0x44: // CSI D — CUB (Cursor Backward)
-            await grid.moveCursorBackward(p0)
+            grid.moveCursorBackward(p0)
 
         // A.10.2 — Cursor Position (1-based → 0-based)
         case 0x48: // CSI H — CUP (Cursor Position)
             let row = param(params, 0, default: 1) - 1
             let col = param(params, 1, default: 1) - 1
-            await grid.moveCursorTo(row: row, col: col)
+            grid.moveCursorTo(row: row, col: col)
         case 0x66: // CSI f — HVP (same as CUP)
             let row = param(params, 0, default: 1) - 1
             let col = param(params, 1, default: 1) - 1
-            await grid.moveCursorTo(row: row, col: col)
+            grid.moveCursorTo(row: row, col: col)
 
         // A.10.3 — ED (Erase in Display)
         case 0x4A: // CSI J
-            await grid.eraseInDisplay(mode: p0raw)
+            grid.eraseInDisplay(mode: p0raw)
 
         // A.10.4 — EL (Erase in Line)
         case 0x4B: // CSI K
-            await grid.eraseInLine(mode: p0raw)
+            grid.eraseInLine(mode: p0raw)
 
         // A.10.5 — SGR (Select Graphic Rendition)
         // Handled in dispatch() with full subparameter support
 
         // A.10.6 — DECSTBM (Set Scroll Region)
         case 0x72: // CSI r
-            let gridRows = await grid.rows
+            let gridRows = grid.rows
             let top = param(params, 0, default: 1) - 1
             let bottom = param(params, 1, default: gridRows) - 1
-            await grid.setScrollRegion(top: top, bottom: bottom)
+            grid.setScrollRegion(top: top, bottom: bottom)
 
         // A.10.7 — IL/DL (Insert/Delete Lines)
         case 0x4C: // CSI L — IL
-            await grid.insertLines(p0)
+            grid.insertLines(p0)
         case 0x4D: // CSI M — DL
-            await grid.deleteLines(p0)
+            grid.deleteLines(p0)
 
         // A.10.8 — ICH/DCH (Insert/Delete Characters)
         case 0x40: // CSI @ — ICH
-            await grid.insertCharacters(p0)
+            grid.insertCharacters(p0)
         case 0x50: // CSI P — DCH
-            await grid.deleteCharacters(p0)
+            grid.deleteCharacters(p0)
 
         // A.10.9 — ECH (Erase Characters)
         case 0x58: // CSI X
-            await grid.eraseCharacters(p0)
+            grid.eraseCharacters(p0)
 
         // A.10.10 — SU/SD (Scroll Up/Down)
         case 0x53: // CSI S — SU
-            await grid.scrollUp(lines: p0)
+            grid.scrollUp(lines: p0)
         case 0x54: // CSI T — SD
-            await grid.scrollDown(lines: p0)
+            grid.scrollDown(lines: p0)
 
         // A.10.11 — VPA/CHA (Absolute Positioning)
         case 0x64: // CSI d — VPA (1-based → 0-based)
-            await grid.setCursorRow(p0 - 1)
+            grid.setCursorRow(p0 - 1)
         case 0x47: // CSI G — CHA (1-based → 0-based)
-            await grid.setCursorColumn(p0 - 1)
+            grid.setCursorColumn(p0 - 1)
 
         // A.10.12 — CNL/CPL (Cursor Next/Previous Line)
         case 0x45: // CSI E — CNL
-            await grid.moveCursorNextLine(p0)
+            grid.moveCursorNextLine(p0)
         case 0x46: // CSI F — CPL
-            await grid.moveCursorPreviousLine(p0)
+            grid.moveCursorPreviousLine(p0)
 
         // A.10.13 — REP (Repeat Preceding Character)
         case 0x62: // CSI b
-            await grid.repeatLastCharacter(p0)
+            grid.repeatLastCharacter(p0)
 
         // A.10.14 — TBC (Tab Clear)
         case 0x67: // CSI g
-            await grid.clearTabStop(mode: p0raw)
+            grid.clearTabStop(mode: p0raw)
 
         // A.10.15 — CHT/CBT (Tab Forward/Backward)
         case 0x49: // CSI I — CHT
-            await grid.tabForward(count: p0)
+            grid.tabForward(count: p0)
         case 0x5A: // CSI Z — CBT
-            await grid.tabBackward(count: p0)
+            grid.tabBackward(count: p0)
 
         // A.10.16 — DSR (Device Status Report)
         case 0x6E: // CSI n
@@ -212,15 +212,15 @@ nonisolated enum CSIHandler {
 
         // A.10.18 — SM/RM (Set/Reset Mode)
         case 0x68: // CSI h — SM
-            await handleSetMode(params: params, grid: grid)
+            handleSetMode(params: params, grid: grid)
         case 0x6C: // CSI l — RM
-            await handleResetMode(params: params, grid: grid)
+            handleResetMode(params: params, grid: grid)
 
         // A.10.20 — SCP/RCP (Save/Restore Cursor Position)
         case 0x73: // CSI s — SCP
-            await grid.saveCursor()
+            grid.saveCursor()
         case 0x75: // CSI u — RCP
-            await grid.restoreCursor()
+            grid.restoreCursor()
 
         default:
             break // Unknown CSI — ignore
@@ -285,9 +285,10 @@ nonisolated enum CSIHandler {
         grid: TerminalGrid,
         inputModeState: InputModeState?
     ) async {
-        await grid.applyDECPrivateMode(mode, enabled: enabled)
+        grid.applyDECPrivateMode(mode, enabled: enabled)
         if let inputModeState {
-            await inputModeState.syncFromGrid(grid)
+            let snap = grid.inputModeSnapshot()
+            await inputModeState.syncFromSnapshot(snap)
         }
     }
 
@@ -304,9 +305,10 @@ nonisolated enum CSIHandler {
         guard let intermediate = intermediates.first else { return }
 
         if intermediate == 0x21 && byte == 0x70 { // CSI ! p — DECSTR
-            await grid.softReset()
+            grid.softReset()
             if let inputModeState {
-                await inputModeState.syncFromGrid(grid)
+                let snap = grid.inputModeSnapshot()
+                await inputModeState.syncFromSnapshot(snap)
             }
         } else if intermediate == 0x20 && byte == 0x71 { // CSI Ps SP q — DECSCUSR (cursor style)
             let p = param(params, 0, default: 0, raw: true)
@@ -315,14 +317,14 @@ nonisolated enum CSIHandler {
             // 5 = blinking bar, 6 = steady bar
             switch p {
             case 0, 1, 2:
-                await grid.setCursorStyle(.block)
-                await grid.setCursorBlink(p != 2)
+                grid.setCursorStyle(.block)
+                grid.setCursorBlink(p != 2)
             case 3, 4:
-                await grid.setCursorStyle(.underline)
-                await grid.setCursorBlink(p == 3)
+                grid.setCursorStyle(.underline)
+                grid.setCursorBlink(p == 3)
             case 5, 6:
-                await grid.setCursorStyle(.bar)
-                await grid.setCursorBlink(p == 5)
+                grid.setCursorStyle(.bar)
+                grid.setCursorBlink(p == 5)
             default:
                 break
             }
@@ -343,32 +345,32 @@ nonisolated enum CSIHandler {
 
         switch mode {
         case DECPrivateMode.DECCKM:
-            pm = await grid.applicationCursorKeys ? 1 : 2
+            pm = grid.applicationCursorKeys ? 1 : 2
         case DECPrivateMode.DECSCNM:
-            pm = await grid.reverseVideo ? 1 : 2
+            pm = grid.reverseVideo ? 1 : 2
         case DECPrivateMode.DECOM:
-            pm = await grid.originMode ? 1 : 2
+            pm = grid.originMode ? 1 : 2
         case DECPrivateMode.DECAWM:
-            pm = await grid.autoWrapMode ? 1 : 2
+            pm = grid.autoWrapMode ? 1 : 2
         case DECPrivateMode.DECTCEM:
-            pm = await grid.cursor.visible ? 1 : 2
+            pm = grid.cursor.visible ? 1 : 2
         case DECPrivateMode.altScreenOld,
              DECPrivateMode.altScreenAlt,
              DECPrivateMode.altScreen:
-            pm = await grid.usingAlternateBuffer ? 1 : 2
+            pm = grid.usingAlternateBuffer ? 1 : 2
         case DECPrivateMode.bracketedPaste:
-            pm = await grid.bracketedPasteMode ? 1 : 2
+            pm = grid.bracketedPasteMode ? 1 : 2
         case DECPrivateMode.synchronizedOutput:
-            pm = await grid.synchronizedOutput ? 1 : 2
+            pm = grid.synchronizedOutput ? 1 : 2
         case DECPrivateMode.focusEvent:
-            pm = await grid.focusReporting ? 1 : 2
+            pm = grid.focusReporting ? 1 : 2
         case DECPrivateMode.mouseX10,
              DECPrivateMode.mouseButton,
              DECPrivateMode.mouseAny:
-            let tracking = await grid.mouseTracking
+            let tracking = grid.mouseTracking
             pm = tracking != .none ? 1 : 2
         case DECPrivateMode.mouseSGR:
-            let encoding = await grid.mouseEncoding
+            let encoding = grid.mouseEncoding
             pm = encoding == .sgr ? 1 : 2
         default:
             pm = 0 // Not recognized
@@ -389,7 +391,7 @@ nonisolated enum CSIHandler {
         let code = param(params, 0, default: 0, raw: true)
         if code == 6 {
             // Cursor Position Report: CSI row ; col R (1-based)
-            let pos = await grid.cursorPosition()
+            let pos = grid.cursorPosition()
             let response = "\u{1B}[\(pos.row + 1);\(pos.col + 1)R"
             await responseHandler?(Array(response.utf8))
         }
@@ -409,26 +411,26 @@ nonisolated enum CSIHandler {
 
     // MARK: - A.10.18 SM/RM (ANSI Modes)
 
-    private static func handleSetMode(params: [[Int]], grid: TerminalGrid) async {
+    private static func handleSetMode(params: [[Int]], grid: TerminalGrid) {
         for group in params {
             switch group.first ?? 0 {
             case ANSIMode.IRM:
-                await grid.setInsertMode(true)
+                grid.setInsertMode(true)
             case ANSIMode.LNM:
-                await grid.setLineFeedMode(true)
+                grid.setLineFeedMode(true)
             default:
                 break
             }
         }
     }
 
-    private static func handleResetMode(params: [[Int]], grid: TerminalGrid) async {
+    private static func handleResetMode(params: [[Int]], grid: TerminalGrid) {
         for group in params {
             switch group.first ?? 0 {
             case ANSIMode.IRM:
-                await grid.setInsertMode(false)
+                grid.setInsertMode(false)
             case ANSIMode.LNM:
-                await grid.setLineFeedMode(false)
+                grid.setLineFeedMode(false)
             default:
                 break
             }

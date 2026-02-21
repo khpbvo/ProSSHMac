@@ -44,8 +44,7 @@ final class SessionManager: ObservableObject {
     private let sessionRecorder: SessionRecorder
     private var shellChannels: [UUID: any SSHShellChannel] = [:]
     private var parserReaderTasks: [UUID: Task<Void, Never>] = [:]
-    private var terminalGrids: [UUID: TerminalGrid] = [:]
-    private var vtParsers: [UUID: VTParser] = [:]
+    private var engines: [UUID: TerminalEngine] = [:]
     private var desiredPTYBySessionID: [UUID: PTYConfiguration] = [:]
     private var hostBySessionID: [UUID: Host] = [:]
     private(set) var lastActivityBySessionID: [UUID: Date] = [:]
@@ -158,18 +157,16 @@ final class SessionManager: ObservableObject {
         )
 
         sessions.insert(session, at: 0)
-        let grid = TerminalGrid(columns: PTYConfiguration.default.columns, rows: PTYConfiguration.default.rows, maxScrollbackLines: configuredScrollbackLines)
-        await grid.setLineFeedMode(true)
-        terminalGrids[sessionID] = grid
+        let engine = TerminalEngine(columns: PTYConfiguration.default.columns, rows: PTYConfiguration.default.rows, maxScrollbackLines: configuredScrollbackLines)
+        await engine.setLineFeedMode(true)
+        engines[sessionID] = engine
         desiredPTYBySessionID[sessionID] = .default
-        let parser = VTParser(grid: grid)
-        vtParsers[sessionID] = parser
 
-        gridSnapshotsBySessionID[sessionID] = await grid.snapshot()
+        gridSnapshotsBySessionID[sessionID] = await engine.snapshot()
         gridSnapshotNonceBySessionID[sessionID] = 0
         shellBuffers[sessionID] = []
         bellEventNonceBySessionID[sessionID] = 0
-        inputModeSnapshotsBySessionID[sessionID] = await grid.inputModeSnapshot()
+        inputModeSnapshotsBySessionID[sessionID] = await engine.inputModeSnapshot()
         isRecordingBySessionID[sessionID] = false
         hasRecordingBySessionID[sessionID] = false
         isPlaybackRunningBySessionID[sessionID] = false
@@ -188,9 +185,9 @@ final class SessionManager: ObservableObject {
 
             // Wire response handler so the parser can send CPR/DA responses
             // back through the shell channel.
-            if let parser = vtParsers[sessionID] {
+            if let engine = engines[sessionID] {
                 let shellRef: any SSHShellChannel = channel
-                await parser.setResponseHandler { @Sendable bytes in
+                await engine.setResponseHandler { @Sendable bytes in
                     let response = String(bytes: bytes, encoding: .utf8) ?? ""
                     guard !response.isEmpty else { return }
                     try? await shellRef.send(response)
@@ -299,18 +296,16 @@ final class SessionManager: ObservableObject {
         )
 
         sessions.insert(session, at: 0)
-        let grid = TerminalGrid(columns: PTYConfiguration.default.columns, rows: PTYConfiguration.default.rows, maxScrollbackLines: configuredScrollbackLines)
-        await grid.setLineFeedMode(true)
-        terminalGrids[sessionID] = grid
+        let engine = TerminalEngine(columns: PTYConfiguration.default.columns, rows: PTYConfiguration.default.rows, maxScrollbackLines: configuredScrollbackLines)
+        await engine.setLineFeedMode(true)
+        engines[sessionID] = engine
         desiredPTYBySessionID[sessionID] = .default
-        let parser = VTParser(grid: grid)
-        vtParsers[sessionID] = parser
 
-        gridSnapshotsBySessionID[sessionID] = await grid.snapshot()
+        gridSnapshotsBySessionID[sessionID] = await engine.snapshot()
         gridSnapshotNonceBySessionID[sessionID] = 0
         shellBuffers[sessionID] = []
         bellEventNonceBySessionID[sessionID] = 0
-        inputModeSnapshotsBySessionID[sessionID] = await grid.inputModeSnapshot()
+        inputModeSnapshotsBySessionID[sessionID] = await engine.inputModeSnapshot()
         isRecordingBySessionID[sessionID] = false
         hasRecordingBySessionID[sessionID] = false
         isPlaybackRunningBySessionID[sessionID] = false
@@ -603,9 +598,9 @@ final class SessionManager: ObservableObject {
         )
 
         // Resize the local terminal grid immediately (no debounce needed).
-        if let grid = terminalGrids[sessionID] {
-            await grid.resize(newColumns: columns, newRows: rows)
-            let snapshot = await grid.snapshot()
+        if let engine = engines[sessionID] {
+            await engine.resize(newColumns: columns, newRows: rows)
+            let snapshot = await engine.snapshot()
             gridSnapshotsBySessionID[sessionID] = snapshot
             gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
         }
@@ -627,14 +622,14 @@ final class SessionManager: ObservableObject {
     }
 
     func clearShellBuffer(sessionID: UUID) {
-        guard let grid = terminalGrids[sessionID] else { return }
+        guard let engine = engines[sessionID] else { return }
         Task { @MainActor in
-            await grid.eraseInDisplay(mode: 3)
-            await grid.moveCursorTo(row: 0, col: 0)
-            let snapshot = await grid.snapshot()
+            await engine.eraseInDisplay(mode: 3)
+            await engine.moveCursorTo(row: 0, col: 0)
+            let snapshot = await engine.snapshot()
             gridSnapshotsBySessionID[sessionID] = snapshot
             gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
-            shellBuffers[sessionID] = await grid.visibleText()
+            shellBuffers[sessionID] = await engine.visibleText()
         }
     }
 
@@ -643,13 +638,13 @@ final class SessionManager: ObservableObject {
     /// Scroll the terminal viewport for a session by the given number of lines.
     /// Positive delta scrolls up (into scrollback), negative scrolls down (toward live).
     func scrollTerminal(sessionID: UUID, delta: Int) {
-        guard let grid = terminalGrids[sessionID] else { return }
+        guard let engine = engines[sessionID] else { return }
         let current = scrollOffsetBySessionID[sessionID, default: 0]
         Task { @MainActor in
-            let maxOffset = await grid.scrollbackCount
+            let maxOffset = await engine.scrollbackCount
             let newOffset = max(0, min(current + delta, maxOffset))
             scrollOffsetBySessionID[sessionID] = newOffset
-            let snapshot = await grid.snapshot(scrollOffset: newOffset)
+            let snapshot = await engine.snapshot(scrollOffset: newOffset)
             gridSnapshotsBySessionID[sessionID] = snapshot
             gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
         }
@@ -657,10 +652,10 @@ final class SessionManager: ObservableObject {
 
     /// Reset scroll position to the live terminal view (bottom).
     func scrollToBottom(sessionID: UUID) {
-        guard let grid = terminalGrids[sessionID] else { return }
+        guard let engine = engines[sessionID] else { return }
         scrollOffsetBySessionID[sessionID] = 0
         Task { @MainActor in
-            let snapshot = await grid.snapshot()
+            let snapshot = await engine.snapshot()
             gridSnapshotsBySessionID[sessionID] = snapshot
             gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
         }
@@ -853,9 +848,9 @@ final class SessionManager: ObservableObject {
 
         // Wire response handler so the parser can send CPR/DA responses
         // back through the shell channel.
-        if let parser = vtParsers[session.id] {
+        if let engine = engines[session.id] {
             let shellRef: any SSHShellChannel = channel
-            await parser.setResponseHandler { @Sendable bytes in
+            await engine.setResponseHandler { @Sendable bytes in
                 let response = String(bytes: bytes, encoding: .utf8) ?? ""
                 guard !response.isEmpty else { return }
                 try? await shellRef.send(response)
@@ -884,8 +879,7 @@ final class SessionManager: ObservableObject {
 
     private func startParserReader(for sessionID: UUID, rawOutput: AsyncStream<Data>) {
         parserReaderTasks[sessionID]?.cancel()
-        guard let parser = vtParsers[sessionID],
-              let grid = terminalGrids[sessionID] else {
+        guard let engine = engines[sessionID] else {
             return
         }
 
@@ -894,7 +888,7 @@ final class SessionManager: ObservableObject {
                 if Task.isCancelled {
                     break
                 }
-                await parser.feed(chunk)
+                await engine.feed(chunk)
                 await self?.recordParsedChunk(sessionID: sessionID, chunk: chunk)
 
                 // When the terminal is in synchronized output mode (DECSET 2026),
@@ -907,35 +901,35 @@ final class SessionManager: ObservableObject {
                 // single chunk, we must publish the intermediate visible frame
                 // captured when sync re-enables — otherwise that frame is lost
                 // and stale content ("ghost characters") persists on screen.
-                if let syncExitSnap = await grid.consumeSyncExitSnapshot() {
+                if let syncExitSnap = await engine.consumeSyncExitSnapshot() {
                     await self?.publishSyncExitSnapshot(
                         sessionID: sessionID,
-                        grid: grid,
+                        engine: engine,
                         snapshotOverride: syncExitSnap
                     )
                 }
 
-                let inSyncMode = await grid.synchronizedOutput
+                let inSyncMode = await engine.synchronizedOutput
                 if inSyncMode { continue }
 
                 // Auto-reset scroll offset when new output arrives.
                 await self?.scheduleParsedChunkPublish(
                     sessionID: sessionID,
-                    grid: grid
+                    engine: engine
                 )
             }
 
             await self?.flushPendingSnapshotPublishIfNeeded(
                 for: sessionID,
-                grid: grid
+                engine: engine
             )
 
             // Stream ended — force-exit alternate buffer if the program
             // crashed or exited without sending ESC[?1049l. This prevents
             // alternate screen content from leaking into the primary buffer.
-            if await grid.usingAlternateBuffer {
-                await grid.disableAlternateBuffer()
-                await self?.publishGridState(for: sessionID, grid: grid)
+            if await engine.usingAlternateBuffer {
+                await engine.disableAlternateBuffer()
+                await self?.publishGridState(for: sessionID, engine: engine)
             }
 
             // Detect disconnection.
@@ -957,28 +951,28 @@ final class SessionManager: ObservableObject {
 
     private func publishSyncExitSnapshot(
         sessionID: UUID,
-        grid: TerminalGrid,
+        engine: TerminalEngine,
         snapshotOverride: GridSnapshot
     ) async {
         scrollOffsetBySessionID[sessionID] = 0
         cancelPendingSnapshotPublish(for: sessionID)
         await publishGridState(
             for: sessionID,
-            grid: grid,
+            engine: engine,
             snapshotOverride: snapshotOverride
         )
     }
 
     private func scheduleParsedChunkPublish(
         sessionID: UUID,
-        grid: TerminalGrid
+        engine: TerminalEngine
     ) {
         scrollOffsetBySessionID[sessionID] = 0
         // Frame-coalesced publish: parse every chunk immediately,
         // but publish at most once per display interval.
         scheduleCoalescedGridPublish(
             for: sessionID,
-            grid: grid
+            engine: engine
         )
     }
 
@@ -1037,8 +1031,7 @@ final class SessionManager: ObservableObject {
     }
 
     private func appendShellLine(_ line: String, to sessionID: UUID) async {
-        guard let parser = vtParsers[sessionID],
-              let grid = terminalGrids[sessionID] else { return }
+        guard let engine = engines[sessionID] else { return }
         // Prepend CAN (0x18) to abort any in-progress escape sequence before
         // injecting the system message. Without this, if the previous SSH chunk
         // ended mid-escape (e.g. the last byte was ESC), the system message
@@ -1048,30 +1041,29 @@ final class SessionManager: ObservableObject {
         let data = Data(bytes)
         // Feed directly instead of spawning a detached Task to avoid racing
         // with the reader loop for snapshot updates. If another feed() is
-        // in progress (reader loop), the data is queued by the VTParser's
+        // in progress (reader loop), the data is queued by the engine's
         // reentrancy guard and the active feeder will process it — we skip
         // the snapshot because the reader loop will take one after draining
         // the queue.
-        let didProcess = await parser.feed(data)
+        let didProcess = await engine.feed(data)
         if didProcess {
-            let snapshot = await grid.snapshot()
+            let snapshot = await engine.snapshot()
             gridSnapshotsBySessionID[sessionID] = snapshot
             gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
-            shellBuffers[sessionID] = await grid.visibleText()
+            shellBuffers[sessionID] = await engine.visibleText()
         }
     }
 
     private func applyPlaybackStep(_ step: SessionPlaybackStep, to sessionID: UUID) async {
         guard step.stream == .output else { return }
-        guard let parser = vtParsers[sessionID],
-              let grid = terminalGrids[sessionID] else { return }
+        guard let engine = engines[sessionID] else { return }
         let data = Data(step.text.utf8)
-        let didProcess = await parser.feed(data)
+        let didProcess = await engine.feed(data)
         if didProcess {
-            let snapshot = await grid.snapshot()
+            let snapshot = await engine.snapshot()
             gridSnapshotsBySessionID[sessionID] = snapshot
             gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
-            shellBuffers[sessionID] = await grid.visibleText()
+            shellBuffers[sessionID] = await engine.visibleText()
         }
     }
 
@@ -1121,8 +1113,7 @@ final class SessionManager: ObservableObject {
         parserReaderTasks.removeValue(forKey: sessionID)
         cancelPendingSnapshotPublish(for: sessionID)
         shellChannels.removeValue(forKey: sessionID)
-        terminalGrids.removeValue(forKey: sessionID)
-        vtParsers.removeValue(forKey: sessionID)
+        engines.removeValue(forKey: sessionID)
         desiredPTYBySessionID.removeValue(forKey: sessionID)
         shellBuffers.removeValue(forKey: sessionID)
         lastShellBufferPublishAtBySessionID.removeValue(forKey: sessionID)
@@ -1151,7 +1142,7 @@ final class SessionManager: ObservableObject {
 
     private func scheduleCoalescedGridPublish(
         for sessionID: UUID,
-        grid: TerminalGrid
+        engine: TerminalEngine
     ) {
         guard pendingSnapshotPublishTasksBySessionID[sessionID] == nil else {
             return
@@ -1162,19 +1153,19 @@ final class SessionManager: ObservableObject {
             try? await Task.sleep(for: self.snapshotPublishInterval)
             guard !Task.isCancelled else { return }
             self.pendingSnapshotPublishTasksBySessionID.removeValue(forKey: sessionID)
-            await self.publishGridState(for: sessionID, grid: grid)
+            await self.publishGridState(for: sessionID, engine: engine)
         }
     }
 
     private func flushPendingSnapshotPublishIfNeeded(
         for sessionID: UUID,
-        grid: TerminalGrid
+        engine: TerminalEngine
     ) async {
         guard pendingSnapshotPublishTasksBySessionID[sessionID] != nil else {
             return
         }
         cancelPendingSnapshotPublish(for: sessionID)
-        await publishGridState(for: sessionID, grid: grid)
+        await publishGridState(for: sessionID, engine: engine)
     }
 
     private func cancelPendingSnapshotPublish(for sessionID: UUID) {
@@ -1184,11 +1175,11 @@ final class SessionManager: ObservableObject {
 
     private func publishGridState(
         for sessionID: UUID,
-        grid: TerminalGrid,
+        engine: TerminalEngine,
         snapshotOverride: GridSnapshot? = nil
     ) async {
         // Session may have been torn down while a scheduled publish was pending.
-        guard terminalGrids[sessionID] != nil else { return }
+        guard engines[sessionID] != nil else { return }
         #if DEBUG
         let signpostID = OSSignpostID(log: perfSignpostLog)
         os_signpost(
@@ -1211,32 +1202,32 @@ final class SessionManager: ObservableObject {
         if let snapshotOverride {
             snapshot = snapshotOverride
         } else {
-            snapshot = await grid.snapshot()
+            snapshot = await engine.snapshot()
         }
         gridSnapshotsBySessionID[sessionID] = snapshot
         gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
 
         // Derive text lines from grid for fallback view, search, and password detection.
         if shouldPublishShellBuffer(for: sessionID) {
-            shellBuffers[sessionID] = await grid.visibleText()
+            shellBuffers[sessionID] = await engine.visibleText()
         }
 
-        // F.8: Propagate bell events from VTParser → grid → UI.
-        let bellCount = await grid.consumeBellCount()
+        // F.8: Propagate bell events from engine → UI.
+        let bellCount = await engine.consumeBellCount()
         if bellCount > 0 {
             bellEventNonceBySessionID[sessionID, default: 0] += bellCount
         }
 
-        inputModeSnapshotsBySessionID[sessionID] = await grid.inputModeSnapshot()
+        inputModeSnapshotsBySessionID[sessionID] = await engine.inputModeSnapshot()
 
         // F.7: Propagate window title changes to published state.
-        let title = await grid.windowTitle
+        let title = await engine.windowTitle
         if !title.isEmpty {
             windowTitleBySessionID[sessionID] = title
         }
 
         // Propagate working directory from OSC 7.
-        let cwd = await grid.workingDirectory
+        let cwd = await engine.workingDirectory
         if !cwd.isEmpty {
             workingDirectoryBySessionID[sessionID] = cwd
         }
@@ -1419,15 +1410,12 @@ final class SessionManager: ObservableObject {
         sessions = sampleSessions
 
         for session in sampleSessions {
-            let grid = TerminalGrid(
+            let engine = TerminalEngine(
                 columns: 80, rows: 24,
                 maxScrollbackLines: 1000
             )
-            await grid.setLineFeedMode(true)
-            terminalGrids[session.id] = grid
-
-            let parser = VTParser(grid: grid)
-            vtParsers[session.id] = parser
+            await engine.setLineFeedMode(true)
+            engines[session.id] = engine
 
             desiredPTYBySessionID[session.id] = .default
             shellBuffers[session.id] = []
@@ -1444,14 +1432,14 @@ final class SessionManager: ObservableObject {
             if session.id == sampleSessions.first?.id {
                 let terminalText = ScreenshotSampleData.terminalOutput
                 let data = Data(terminalText.utf8)
-                await parser.feed(data)
+                await engine.feed(data)
             }
 
-            let snapshot = await grid.snapshot()
+            let snapshot = await engine.snapshot()
             gridSnapshotsBySessionID[session.id] = snapshot
             gridSnapshotNonceBySessionID[session.id] = 1
-            inputModeSnapshotsBySessionID[session.id] = await grid.inputModeSnapshot()
-            shellBuffers[session.id] = await grid.visibleText()
+            inputModeSnapshotsBySessionID[session.id] = await engine.inputModeSnapshot()
+            shellBuffers[session.id] = await engine.visibleText()
         }
     }
 }

@@ -27,7 +27,7 @@ nonisolated enum CharsetHandler {
     ///   - g: The slot (0 = G0, 1 = G1)
     ///   - designator: The final byte selecting the charset
     ///   - grid: The terminal grid to update
-    static func designate(g: Int, designator: UInt8, grid: TerminalGrid) async {
+    static func designate(g: Int, designator: UInt8, grid: TerminalGrid) {
         let charset: Charset
         switch designator {
         case 0x30: // '0' — DEC Special Graphics
@@ -39,7 +39,7 @@ nonisolated enum CharsetHandler {
         default:
             return // Unknown designator — ignore
         }
-        await grid.setCharset(g: g, charset: charset)
+        grid.setCharset(g: g, charset: charset)
     }
 
     // MARK: - A.12.2 Charset Invocation (SO/SI)
@@ -49,8 +49,8 @@ nonisolated enum CharsetHandler {
     /// - Parameters:
     ///   - n: The charset number (0 = G0, 1 = G1)
     ///   - grid: The terminal grid to update
-    static func invoke(_ n: Int, grid: TerminalGrid) async {
-        await grid.setActiveCharset(n)
+    static func invoke(_ n: Int, grid: TerminalGrid) {
+        grid.setActiveCharset(n)
     }
 
     // MARK: - A.12.3 DEC Special Graphics Character Map

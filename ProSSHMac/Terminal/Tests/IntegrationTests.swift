@@ -18,16 +18,16 @@ import XCTest
 
 class IntegrationTestBase: XCTestCase {
 
+    var engine: TerminalEngine!
     var grid: TerminalGrid!
-    var parser: VTParser!
     var responses: [[UInt8]]!
 
     override func setUp() async throws {
-        grid = TerminalGrid(columns: 80, rows: 24)
-        parser = VTParser(grid: grid)
+        engine = TerminalEngine(columns: 80, rows: 24)
+        grid = await engine.grid
         responses = []
 
-        await parser.setResponseHandler { @Sendable [weak self] bytes in
+        await engine.setResponseHandler { @Sendable [weak self] bytes in
             self?.responses.append(bytes)
         }
     }
@@ -36,12 +36,12 @@ class IntegrationTestBase: XCTestCase {
 
     /// Feed a string as UTF-8 bytes into the parser.
     func feed(_ string: String) async {
-        await parser.feed(Array(string.utf8))
+        await engine.feed(Array(string.utf8))
     }
 
     /// Feed raw bytes into the parser.
     func feedBytes(_ bytes: [UInt8]) async {
-        await parser.feed(bytes)
+        await engine.feed(bytes)
     }
 
     /// Read the character at a grid position.

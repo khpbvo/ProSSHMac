@@ -165,6 +165,38 @@ nonisolated struct TerminalCell: Sendable {
         self.isDirty = isDirty
     }
 
+    /// Fast initializer that accepts pre-computed codepoint and packed RGBA values.
+    /// Pure field assignment — zero computation. Used by the ASCII hot path
+    /// where packed colors are cached per-run and codepoint is just UInt32(byte).
+    init(codepoint: UInt32, graphemeCluster: String,
+         fgColor: TerminalColor, bgColor: TerminalColor, underlineColor: TerminalColor,
+         fgPacked: UInt32, bgPacked: UInt32, underlinePacked: UInt32,
+         attributes: CellAttributes, underlineStyle: UnderlineStyle, width: UInt8) {
+        self.graphemeCluster = graphemeCluster
+        self.fgColor = fgColor
+        self.bgColor = bgColor
+        self.underlineColor = underlineColor
+        self.primaryCodepoint = codepoint
+        self.fgPackedRGBA = fgPacked
+        self.bgPackedRGBA = bgPacked
+        self.underlinePackedRGBA = underlinePacked
+        self.attributes = attributes
+        self.underlineStyle = underlineStyle
+        self.width = width
+        self.isDirty = true
+    }
+
+    /// Construct a pre-erased cell without triggering 4 didSet handlers.
+    /// Used by erase operations and makeBlankRow() on the hot path.
+    static func erased(bgColor: TerminalColor, bgPacked: UInt32) -> TerminalCell {
+        TerminalCell(
+            codepoint: 0, graphemeCluster: "",
+            fgColor: .default, bgColor: bgColor, underlineColor: .default,
+            fgPacked: 0, bgPacked: bgPacked, underlinePacked: 0,
+            attributes: [], underlineStyle: .none, width: 1
+        )
+    }
+
     /// Returns true if this cell is visually blank (space or empty, default colors, no attributes).
     var isBlank: Bool {
         (graphemeCluster.isEmpty || graphemeCluster == " ")
