@@ -68,7 +68,6 @@ enum ThroughputBenchmarkRunner {
         fflush(stdout)
         fflush(stderr)
         exit(0)
-        return true
     }
 
     private static func runScenario(
