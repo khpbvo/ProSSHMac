@@ -2226,6 +2226,15 @@ struct TerminalView: View {
 
     private func handleHardwareCommandShortcut(_ action: HardwareKeyCommandAction) {
         switch action {
+        case .copy:
+            copyActiveContentToClipboard()
+        case .paste:
+            let targetSessionID = paneManager.focusedSessionID ?? focusedSessionID ?? tabManager.selectedSessionID
+            if let sessionID = targetSessionID {
+                pasteClipboardToSession(sessionID)
+            }
+        case .clearScrollback:
+            clearSelectedBuffer()
         case .increaseFontSize:
             adjustTerminalFontSize(by: 1)
         case .decreaseFontSize:
@@ -2542,6 +2551,25 @@ final class DirectTerminalInputNSView: NSView {
             return false
         }
 
+        // First handle common edit shortcuts to keep copy/paste/select behavior
+        // working even when this NSView is first responder.
+        let key = (event.charactersIgnoringModifiers ?? "").lowercased()
+        if !flags.contains(.shift) {
+            switch key {
+            case "c":
+                onCommandShortcut(.copy)
+                return true
+            case "v":
+                onCommandShortcut(.paste)
+                return true
+            case "k":
+                onCommandShortcut(.clearScrollback)
+                return true
+            default:
+                break
+            }
+        }
+
         // Common keycodes:
         // 24 = '=' / '+', 27 = '-' / '_', 29 = '0'
         switch event.keyCode {
@@ -2565,7 +2593,6 @@ final class DirectTerminalInputNSView: NSView {
         }
 
         // Fallback for non-US layouts.
-        let key = event.charactersIgnoringModifiers ?? ""
         if key == "=" || key == "+" {
             onCommandShortcut(.increaseFontSize)
             return true

@@ -196,6 +196,16 @@ struct ExternalTerminalWindowView: View {
 
     private func handleHardwareCommandShortcut(_ action: HardwareKeyCommandAction) {
         switch action {
+        case .copy:
+            copyActiveContentToClipboard()
+        case .paste:
+            if let sessionID = session?.id {
+                pasteClipboardToSession(sessionID)
+            }
+        case .clearScrollback:
+            if let sessionID = session?.id {
+                sessionManager.clearShellBuffer(sessionID: sessionID)
+            }
         case .increaseFontSize:
             adjustTerminalFontSize(by: 1)
         case .decreaseFontSize:
@@ -204,6 +214,27 @@ struct ExternalTerminalWindowView: View {
             terminalUIFontSize = 12.0
         default:
             break
+        }
+    }
+
+    private func copyActiveContentToClipboard() {
+        guard let sessionID = session?.id else { return }
+        if let selectedText = selectionCoordinator.copySelection(sessionID: sessionID) {
+            _ = PlatformClipboard.writeString(selectedText)
+            return
+        }
+        if let lastLine = sessionManager.shellBuffers[sessionID]?.last, !lastLine.isEmpty {
+            _ = PlatformClipboard.writeString(lastLine)
+        }
+    }
+
+    private func pasteClipboardToSession(_ sessionID: UUID) {
+        let bracketedPaste = sessionManager.inputModeSnapshotsBySessionID[sessionID]?.bracketedPasteMode ?? false
+        let sequences = PasteHandler.readClipboardSequences(bracketedPasteEnabled: bracketedPaste)
+        for sequence in sequences {
+            Task {
+                await sessionManager.sendRawShellInput(sessionID: sessionID, input: sequence)
+            }
         }
     }
 
