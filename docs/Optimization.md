@@ -10,6 +10,16 @@ PTY read (LocalShellChannel) → AsyncStream<Data> → SessionManager (MainActor
   → VTParser actor → TerminalGrid actor → GridSnapshot → CellBuffer → Metal GPU
 ```
 
+Benchmark command path (local parser/grid throughput harness):
+```bash
+./scripts/benchmark-throughput.sh --benchmark-bytes 2097152 --benchmark-runs 2 --benchmark-chunk 4096
+```
+
+Latest sample (2026-02-21):
+- fullscreen avg: 1.34 MB/s
+- partial scroll-region avg: 1.38 MB/s
+- parser state after run: `ground`
+
 ---
 
 ## P0 — CRITICAL (the 400x slowdown lives here)
@@ -111,9 +121,10 @@ PTY read (LocalShellChannel) → AsyncStream<Data> → SessionManager (MainActor
   the parser and grid could share an actor.
   **Fix:** If parser + grid merge onto one actor, these become synchronous calls.
 
-- [ ] **`setPrivateMode` iterates params for single-param sequences** — `CSIHandler.swift:251-258`
+- [x] **`setPrivateMode` iterates params for single-param sequences** — `CSIHandler.swift:251-258`
   Most DECSET/DECRST have one parameter. The `for p in params` loop adds overhead.
   **Fix:** Fast-path: `if params.count == 1 { handle(params[0]) } else { for p in ... }`.
+  **Done:** Added single-parameter fast path in `dispatchPrivateMode` for DECSET/DECRST.
 
 ### Snapshot Generation
 
@@ -173,14 +184,16 @@ PTY read (LocalShellChannel) → AsyncStream<Data> → SessionManager (MainActor
   **Fix:** Use a flat array-based LRU with integer indices. Dictionary maps
   `GlyphKey → Int` (index into the flat array). Eliminates per-entry heap allocations.
 
-- [ ] **`GlyphCache.insert` clears `lastEvictedKeys` every time** — `GlyphCache.swift:134`
+- [x] **`GlyphCache.insert` clears `lastEvictedKeys` every time** — `GlyphCache.swift:134`
   `lastEvictedKeys.removeAll(keepingCapacity: true)` on every cache miss. The evicted keys
   are never consumed (atlas has no region recycling).
   **Fix:** Remove `lastEvictedKeys` tracking entirely, or only track when atlas recycling is added.
+  **Done:** Removed `lastEvictedKeys` state and per-insert clearing/appending overhead.
 
-- [ ] **`GlyphCache.trackedLookup` double function call** — `GlyphCache.swift:261-268`
+- [x] **`GlyphCache.trackedLookup` double function call** — `GlyphCache.swift:261-268`
   Wraps `lookup()` adding an extra function call on the hottest render path.
   **Fix:** Mark as `@inline(__always)` or merge into the call site.
+  **Done:** Marked `trackedLookup` as `@inline(__always)`.
 
 - [ ] **`GlyphRasterizer` allocates pixel buffer per glyph** — `GlyphRasterizer.swift:146`
   `[UInt8](repeating: 0, count: bufferSize)` — heap allocation per rasterization.
@@ -200,18 +213,20 @@ PTY read (LocalShellChannel) → AsyncStream<Data> → SessionManager (MainActor
   **Fix:** Cache the base CTFont and bold/italic/boldItalic variants as instance vars.
   Only recreate on font/scale change.
 
-- [ ] **`CGColorSpaceCreateDeviceRGB()` per glyph** — `GlyphRasterizer.swift:155, 160`
+- [x] **`CGColorSpaceCreateDeviceRGB()` per glyph** — `GlyphRasterizer.swift:155, 160`
   May or may not return a cached singleton.
   **Fix:** Cache as a `static let` property.
+  **Done:** Added static cached device RGB color space in `GlyphRasterizer`.
 
 - [ ] **BGRA→RGBA swizzle is scalar** — `GlyphRasterizer.swift:351-361`
   Processes one pixel at a time in a loop.
   **Fix:** Process as `UInt32` words (swap bytes with bitwise ops), or use SIMD/Accelerate.
   Better yet, use `.bgra8Unorm` texture format and skip the swizzle entirely.
 
-- [ ] **`computeSubpixelPenX` is a no-op** — `GlyphRasterizer.swift:239-250`
+- [x] **`computeSubpixelPenX` is a no-op** — `GlyphRasterizer.swift:239-250`
   Discards both parameters and returns 0. Dead code.
   **Fix:** Remove the function, replace calls with `0`.
+  **Done:** Removed helper and set pen X directly to `0` at call sites.
 
 - [ ] **`resolveRenderFont` allocates String + CFString + Arrays per cache miss** —
   `MetalTerminalRenderer.swift:445-475`
@@ -229,11 +244,13 @@ PTY read (LocalShellChannel) → AsyncStream<Data> → SessionManager (MainActor
 
 ### Tab Stops
 
-- [ ] **`tabStops` uses `Set<Int>` — hashes on every lookup** — `CursorState.swift:178-186`
+- [x] **`tabStops` uses `Set<Int>` — hashes on every lookup** — `CursorState.swift:178-186`
   `!tabStops.contains(nextCol)` hashes an Int up to 7 times per tab.
   **Fix:** Replace with `[Bool]` lookup array indexed by column. 80 bytes, O(1) direct indexing.
+  **Done:** Migrated runtime tab-stop storage to `[Bool]` mask with direct index checks.
 
-- [ ] **`reverseToTab` has the same Set lookup issue** — `CursorState.swift:189-196`
+- [x] **`reverseToTab` has the same Set lookup issue** — `CursorState.swift:189-196`
+  **Done:** Reverse tab path now uses the same `[Bool]` tab-stop mask.
 
 ### CellBuffer
 

@@ -31,9 +31,13 @@ actor TerminalGrid {
 
     /// Primary screen buffer (normal shell output).
     private var primaryCells: [[TerminalCell]]
+    /// Ring-buffer base offset for primaryCells (logical row 0 -> physical row base).
+    private var primaryRowBase: Int = 0
 
     /// Alternate screen buffer (for full-screen TUI apps: htop, vim, etc.).
     private var alternateCells: [[TerminalCell]]
+    /// Ring-buffer base offset for alternateCells.
+    private var alternateRowBase: Int = 0
 
     /// Which buffer is currently active.
     private(set) var usingAlternateBuffer: Bool = false
@@ -87,7 +91,17 @@ actor TerminalGrid {
 
     // MARK: - Tab Stops
 
-    var tabStops: Set<Int>
+    /// Internal tab-stop mask indexed by column (true = tab stop).
+    private var tabStopMask: [Bool]
+
+    /// Tab stops as column indices (used by tests and diagnostics).
+    var tabStops: Set<Int> {
+        var result = Set<Int>()
+        for (col, hasStop) in tabStopMask.enumerated() where hasStop {
+            result.insert(col)
+        }
+        return result
+    }
 
     // MARK: - Window Title
 
@@ -182,7 +196,7 @@ actor TerminalGrid {
         self.rows = rows
         self.maxScrollbackLines = maxScrollbackLines
         self.scrollBottom = rows - 1
-        self.tabStops = TerminalDefaults.defaultTabStops(columns: columns)
+        self.tabStopMask = TerminalDefaults.defaultTabStopMask(columns: columns)
         self.scrollback = ScrollbackBuffer(maxLines: maxScrollbackLines)
 
         let blankRow = [TerminalCell](repeating: .blank, count: columns)
@@ -204,13 +218,44 @@ actor TerminalGrid {
         }
     }
 
-    /// Mutate the active screen buffer in place (primary or alternate).
-    private func withActiveCells(_ body: (inout [[TerminalCell]]) -> Void) {
-        if usingAlternateBuffer {
-            body(&alternateCells)
-        } else {
-            body(&primaryCells)
+    /// Active buffer ring base (logical row 0 -> physical row index).
+    private var activeRowBase: Int {
+        get { usingAlternateBuffer ? alternateRowBase : primaryRowBase }
+        set {
+            if usingAlternateBuffer {
+                alternateRowBase = newValue
+            } else {
+                primaryRowBase = newValue
+            }
         }
+    }
+
+    /// Mutate the active buffer and its ring base together.
+    private func withActiveBuffer(_ body: (inout [[TerminalCell]], inout Int) -> Void) {
+        if usingAlternateBuffer {
+            body(&alternateCells, &alternateRowBase)
+        } else {
+            body(&primaryCells, &primaryRowBase)
+        }
+    }
+
+    /// Translate a logical row index into the backing physical row index.
+    @inline(__always)
+    private func physicalRow(_ logicalRow: Int, base: Int) -> Int {
+        guard rows > 0 else { return 0 }
+        let idx = logicalRow + base
+        return idx >= rows ? idx - rows : idx
+    }
+
+    /// Return a logically ordered copy of a ring-backed screen buffer.
+    private func linearizedRows(_ buffer: [[TerminalCell]], base: Int) -> [[TerminalCell]] {
+        guard rows > 0, base != 0 else { return buffer }
+        var ordered = [[TerminalCell]]()
+        ordered.reserveCapacity(rows)
+        for logicalRow in 0..<rows {
+            ordered.append(buffer[physicalRow(logicalRow, base: base)])
+        }
+        return ordered
     }
 
     // MARK: - A.6.1 Cell Read/Write
@@ -218,7 +263,8 @@ actor TerminalGrid {
     /// Read the cell at the given position.
     func cellAt(row: Int, col: Int) -> TerminalCell? {
         guard row >= 0 && row < rows && col >= 0 && col < columns else { return nil }
-        return cells[row][col]
+        let base = activeRowBase
+        return cells[physicalRow(row, base: base)][col]
     }
 
     /// Write a cell at the given position and mark it dirty.
@@ -226,8 +272,8 @@ actor TerminalGrid {
         guard row >= 0 && row < rows && col >= 0 && col < columns else { return }
         var c = cell
         c.isDirty = true
-        withActiveCells { buffer in
-            buffer[row][col] = c
+        withActiveBuffer { buffer, base in
+            buffer[physicalRow(row, base: base)][col] = c
         }
         markDirty(row: row)
     }
@@ -336,8 +382,9 @@ actor TerminalGrid {
         let attributes = isWide ? currentAttributes.union(.wideChar) : currentAttributes
 
         // Write the cell(s) in place.
-        withActiveCells { buffer in
-            buffer[row][col] = TerminalCell(
+        withActiveBuffer { buffer, base in
+            let physical = physicalRow(row, base: base)
+            buffer[physical][col] = TerminalCell(
                 graphemeCluster: charStr,
                 fgColor: currentFgColor,
                 bgColor: currentBgColor,
@@ -350,7 +397,7 @@ actor TerminalGrid {
 
             // For wide characters, write a continuation cell.
             if isWide && col + 1 < columns {
-                buffer[row][col + 1] = TerminalCell(
+                buffer[physical][col + 1] = TerminalCell(
                     graphemeCluster: "",
                     fgColor: currentFgColor,
                     bgColor: currentBgColor,
@@ -432,7 +479,7 @@ actor TerminalGrid {
         let charset: Charset = (activeCharset == 1) ? g1Charset : g0Charset
         let needsCharsetMapping = charset != .ascii
 
-        withActiveCells { buf in
+        withActiveBuffer { buf, base in
             var dirtyRowLo = Int.max
             var dirtyRowHi = -1
 
@@ -444,10 +491,11 @@ actor TerminalGrid {
                 if cursor.pendingWrap {
                     // Mark the current line as wrapped
                     let lastCol = columns - 1
-                    var lastCell = buf[cursor.row][lastCol]
+                    let wrappedPhysical = physicalRow(cursor.row, base: base)
+                    var lastCell = buf[wrappedPhysical][lastCol]
                     lastCell.attributes.insert(.wrapped)
                     lastCell.isDirty = true
-                    buf[cursor.row][lastCol] = lastCell
+                    buf[wrappedPhysical][lastCol] = lastCell
 
                     dirtyRowLo = min(dirtyRowLo, cursor.row)
                     dirtyRowHi = max(dirtyRowHi, cursor.row)
@@ -456,16 +504,28 @@ actor TerminalGrid {
                     cursor.pendingWrap = false
 
                     if cursor.row == scrollBottom {
-                        // Inline scrollUp(lines: 1)
+                        // Inline scrollUp(lines: 1), using O(1) ring rotation
+                        // for the common full-screen scroll region.
                         if !usingAlternateBuffer {
-                            let topRow = buf[scrollTop]
+                            let topPhysical = physicalRow(scrollTop, base: base)
+                            let topRow = buf[topPhysical]
                             let isWrapped = topRow.last.map { $0.attributes.contains(.wrapped) } ?? false
                             scrollback.push(cells: topRow, isWrapped: isWrapped)
                         }
-                        for row in scrollTop..<scrollBottom {
-                            buf[row] = buf[row + 1]
+
+                        if scrollTop == 0 && scrollBottom == rows - 1 {
+                            base += 1
+                            if base == rows { base = 0 }
+                        } else {
+                            for row in scrollTop..<scrollBottom {
+                                let dst = physicalRow(row, base: base)
+                                let src = physicalRow(row + 1, base: base)
+                                buf[dst] = buf[src]
+                            }
                         }
-                        buf[scrollBottom] = makeBlankRow()
+
+                        let bottomPhysical = physicalRow(scrollBottom, base: base)
+                        buf[bottomPhysical] = makeBlankRow()
                         dirtyRowLo = min(dirtyRowLo, scrollTop)
                         dirtyRowHi = max(dirtyRowHi, scrollBottom)
                     } else if cursor.row < rows - 1 {
@@ -495,8 +555,9 @@ actor TerminalGrid {
 
                 let row = cursor.row
                 let col = cursor.col
+                let physical = physicalRow(row, base: base)
 
-                buf[row][col] = TerminalCell(
+                buf[physical][col] = TerminalCell(
                     graphemeCluster: charStr,
                     fgColor: currentFgColor,
                     bgColor: currentBgColor,
@@ -578,11 +639,12 @@ actor TerminalGrid {
         if cursor.col < columns {
             let row = cursor.row
             let lastCol = columns - 1
-            withActiveCells { buffer in
-                var lastCell = buffer[row][lastCol]
+            withActiveBuffer { buffer, base in
+                let physical = physicalRow(row, base: base)
+                var lastCell = buffer[physical][lastCol]
                 lastCell.attributes.insert(.wrapped)
                 lastCell.isDirty = true
-                buffer[row][lastCol] = lastCell
+                buffer[physical][lastCol] = lastCell
             }
         }
 
@@ -602,26 +664,47 @@ actor TerminalGrid {
     /// Top lines go to scrollback (primary buffer only). Bottom lines become blank.
     func scrollUp(lines n: Int) {
         let count = max(n, 1)
+        let regionHeight = scrollBottom - scrollTop + 1
+        guard regionHeight > 0 else { return }
+        let lines = min(count, regionHeight)
 
-        withActiveCells { buf in
-            for _ in 0..<count {
-                // Save the top line to scrollback (only for primary buffer)
-                if !usingAlternateBuffer {
-                    let topRow = buf[scrollTop]
+        withActiveBuffer { buf, base in
+            // Save top lines to scrollback (primary buffer only), preserving order.
+            if !usingAlternateBuffer {
+                for i in 0..<lines {
+                    let topPhysical = physicalRow(scrollTop + i, base: base)
+                    let topRow = buf[topPhysical]
                     let isWrapped = topRow.last.map { $0.attributes.contains(.wrapped) } ?? false
                     scrollback.push(cells: topRow, isWrapped: isWrapped)
                 }
-
-                // Shift lines up within scroll region
-                for row in scrollTop..<scrollBottom {
-                    buf[row] = buf[row + 1]
-                    markDirty(row: row)
-                }
-
-                // Clear the bottom line
-                buf[scrollBottom] = makeBlankRow()
-                markDirty(row: scrollBottom)
             }
+
+            if scrollTop == 0 && scrollBottom == rows - 1 {
+                // Full-screen scroll: rotate logical row base by N in O(1).
+                base += lines
+                if base >= rows { base %= rows }
+            } else {
+                // Partial scroll region: shift once by N logical rows.
+                let lastDst = scrollBottom - lines
+                if scrollTop <= lastDst {
+                    for row in scrollTop...lastDst {
+                        let dst = physicalRow(row, base: base)
+                        let src = physicalRow(row + lines, base: base)
+                        buf[dst] = buf[src]
+                    }
+                }
+            }
+
+            // Clear newly exposed bottom lines.
+            for row in (scrollBottom - lines + 1)...scrollBottom {
+                let physical = physicalRow(row, base: base)
+                buf[physical] = makeBlankRow()
+            }
+        }
+
+        if lines > 0 {
+            markDirty(row: scrollTop)
+            markDirty(row: scrollBottom)
         }
     }
 
@@ -629,19 +712,37 @@ actor TerminalGrid {
     /// Bottom lines are discarded. Top lines become blank.
     func scrollDown(lines n: Int) {
         let count = max(n, 1)
+        let regionHeight = scrollBottom - scrollTop + 1
+        guard regionHeight > 0 else { return }
+        let lines = min(count, regionHeight)
 
-        withActiveCells { buf in
-            for _ in 0..<count {
-                // Shift lines down within scroll region
-                for row in stride(from: scrollBottom, through: scrollTop + 1, by: -1) {
-                    buf[row] = buf[row - 1]
-                    markDirty(row: row)
+        withActiveBuffer { buf, base in
+            if scrollTop == 0 && scrollBottom == rows - 1 {
+                // Full-screen reverse scroll: rotate base by N in O(1).
+                base -= lines
+                while base < 0 { base += rows }
+            } else {
+                // Partial scroll region: shift once by N logical rows.
+                let firstSrc = scrollTop + lines
+                if firstSrc <= scrollBottom {
+                    for row in stride(from: scrollBottom, through: firstSrc, by: -1) {
+                        let dst = physicalRow(row, base: base)
+                        let src = physicalRow(row - lines, base: base)
+                        buf[dst] = buf[src]
+                    }
                 }
-
-                // Clear the top line of the scroll region
-                buf[scrollTop] = makeBlankRow()
-                markDirty(row: scrollTop)
             }
+
+            // Clear newly exposed top lines.
+            for row in scrollTop..<(scrollTop + lines) {
+                let physical = physicalRow(row, base: base)
+                buf[physical] = makeBlankRow()
+            }
+        }
+
+        if lines > 0 {
+            markDirty(row: scrollTop)
+            markDirty(row: scrollBottom)
         }
     }
 
@@ -693,10 +794,11 @@ actor TerminalGrid {
     /// - 1: From beginning of line to cursor (inclusive)
     /// - 2: Entire line
     func eraseInLine(mode: Int) {
-        let row = cursor.row
+        let logicalRow = cursor.row
         let bgColor = currentBgColor
 
-        withActiveCells { buf in
+        withActiveBuffer { buf, base in
+            let row = physicalRow(logicalRow, base: base)
             switch mode {
             case 0: // Cursor to end
                 for col in cursor.col..<columns {
@@ -714,7 +816,7 @@ actor TerminalGrid {
                 break
             }
         }
-        markDirty(row: row)
+        markDirty(row: logicalRow)
     }
 
     // MARK: - A.6.6 Erase in Display (ED — CSI J)
@@ -727,18 +829,20 @@ actor TerminalGrid {
     func eraseInDisplay(mode: Int) {
         let bgColor = currentBgColor
 
-        withActiveCells { buf in
+        withActiveBuffer { buf, base in
             switch mode {
             case 0: // Cursor to end
                 // Rest of current line
+                let cursorPhysical = physicalRow(cursor.row, base: base)
                 for col in cursor.col..<columns {
-                    buf[cursor.row][col].erase(bgColor: bgColor)
+                    buf[cursorPhysical][col].erase(bgColor: bgColor)
                 }
                 markDirty(row: cursor.row)
                 // All lines below
                 for row in (cursor.row + 1)..<rows {
+                    let physical = physicalRow(row, base: base)
                     for col in 0..<columns {
-                        buf[row][col].erase(bgColor: bgColor)
+                        buf[physical][col].erase(bgColor: bgColor)
                     }
                     markDirty(row: row)
                 }
@@ -746,29 +850,33 @@ actor TerminalGrid {
             case 1: // Beginning to cursor
                 // All lines above
                 for row in 0..<cursor.row {
+                    let physical = physicalRow(row, base: base)
                     for col in 0..<columns {
-                        buf[row][col].erase(bgColor: bgColor)
+                        buf[physical][col].erase(bgColor: bgColor)
                     }
                     markDirty(row: row)
                 }
                 // Start of current line to cursor
+                let cursorPhysical = physicalRow(cursor.row, base: base)
                 for col in 0...cursor.col {
-                    buf[cursor.row][col].erase(bgColor: bgColor)
+                    buf[cursorPhysical][col].erase(bgColor: bgColor)
                 }
                 markDirty(row: cursor.row)
 
             case 2: // Entire screen
                 for row in 0..<rows {
+                    let physical = physicalRow(row, base: base)
                     for col in 0..<columns {
-                        buf[row][col].erase(bgColor: bgColor)
+                        buf[physical][col].erase(bgColor: bgColor)
                     }
                     markDirty(row: row)
                 }
 
             case 3: // Entire screen + scrollback
                 for row in 0..<rows {
+                    let physical = physicalRow(row, base: base)
                     for col in 0..<columns {
-                        buf[row][col].erase(bgColor: bgColor)
+                        buf[physical][col].erase(bgColor: bgColor)
                     }
                     markDirty(row: row)
                 }
@@ -783,15 +891,16 @@ actor TerminalGrid {
     /// Erase characters at cursor position (ECH — CSI X).
     func eraseCharacters(_ n: Int) {
         let count = max(n, 1)
-        let row = cursor.row
+        let logicalRow = cursor.row
         let bgColor = currentBgColor
 
-        withActiveCells { buf in
+        withActiveBuffer { buf, base in
+            let row = physicalRow(logicalRow, base: base)
             for col in cursor.col..<min(cursor.col + count, columns) {
                 buf[row][col].erase(bgColor: bgColor)
             }
         }
-        markDirty(row: row)
+        markDirty(row: logicalRow)
     }
 
     // MARK: - A.6.7 Insert/Delete Characters
@@ -807,10 +916,11 @@ actor TerminalGrid {
     /// Shifts remaining characters left. Blank characters fill from the right.
     func deleteCharacters(_ n: Int) {
         let count = max(n, 1)
-        let row = cursor.row
+        let logicalRow = cursor.row
         let bgColor = currentBgColor
 
-        withActiveCells { buf in
+        withActiveBuffer { buf, base in
+            let row = physicalRow(logicalRow, base: base)
             // Shift left
             for col in cursor.col..<columns {
                 let srcCol = col + count
@@ -822,23 +932,24 @@ actor TerminalGrid {
                 buf[row][col].isDirty = true
             }
         }
-        markDirty(row: row)
+        markDirty(row: logicalRow)
     }
 
     /// Helper: insert blank characters at a specific position in a row.
     private func insertBlanks(count: Int, atRow row: Int, col: Int) {
         let bgColor = currentBgColor
 
-        withActiveCells { buf in
+        withActiveBuffer { buf, base in
+            let physical = physicalRow(row, base: base)
             // Shift right
             for c in stride(from: columns - 1, through: col + count, by: -1) {
-                buf[row][c] = buf[row][c - count]
-                buf[row][c].isDirty = true
+                buf[physical][c] = buf[physical][c - count]
+                buf[physical][c].isDirty = true
             }
 
             // Fill blanks
             for c in col..<min(col + count, columns) {
-                buf[row][c] = TerminalCell(bgColor: bgColor)
+                buf[physical][c] = TerminalCell(bgColor: bgColor)
             }
         }
         markDirty(row: row)
@@ -854,14 +965,17 @@ actor TerminalGrid {
         // Only operates within scroll region, starting from cursor row
         let top = max(cursor.row, scrollTop)
 
-        withActiveCells { buf in
+        withActiveBuffer { buf, base in
             for _ in 0..<count {
                 // Shift lines down
                 for row in stride(from: scrollBottom, through: top + 1, by: -1) {
-                    buf[row] = buf[row - 1]
+                    let dst = physicalRow(row, base: base)
+                    let src = physicalRow(row - 1, base: base)
+                    buf[dst] = buf[src]
                     markDirty(row: row)
                 }
-                buf[top] = makeBlankRow()
+                let topPhysical = physicalRow(top, base: base)
+                buf[topPhysical] = makeBlankRow()
                 markDirty(row: top)
             }
         }
@@ -876,14 +990,17 @@ actor TerminalGrid {
 
         let top = max(cursor.row, scrollTop)
 
-        withActiveCells { buf in
+        withActiveBuffer { buf, base in
             for _ in 0..<count {
                 // Shift lines up
                 for row in top..<scrollBottom {
-                    buf[row] = buf[row + 1]
+                    let dst = physicalRow(row, base: base)
+                    let src = physicalRow(row + 1, base: base)
+                    buf[dst] = buf[src]
                     markDirty(row: row)
                 }
-                buf[scrollBottom] = makeBlankRow()
+                let bottomPhysical = physicalRow(scrollBottom, base: base)
+                buf[bottomPhysical] = makeBlankRow()
                 markDirty(row: scrollBottom)
             }
         }
@@ -945,6 +1062,7 @@ actor TerminalGrid {
         // Clear the alternate buffer
         let blankRow = makeBlankRow()
         alternateCells = [[TerminalCell]](repeating: blankRow, count: rows)
+        alternateRowBase = 0
 
         // Reset cursor position
         cursor.moveTo(row: 0, col: 0, gridRows: rows, gridCols: columns)
@@ -1029,20 +1147,21 @@ actor TerminalGrid {
     /// Advance cursor to the next tab stop (HT / CHT).
     func tabForward(count: Int = 1) {
         for _ in 0..<max(count, 1) {
-            cursor.advanceToTab(tabStops: tabStops, gridCols: columns)
+            cursor.advanceToTab(tabStops: tabStopMask, gridCols: columns)
         }
     }
 
     /// Move cursor to the previous tab stop (CBT — CSI Z).
     func tabBackward(count: Int = 1) {
         for _ in 0..<max(count, 1) {
-            cursor.reverseToTab(tabStops: tabStops)
+            cursor.reverseToTab(tabStops: tabStopMask)
         }
     }
 
     /// Set a tab stop at the current cursor column (HTS — ESC H).
     func setTabStop() {
-        tabStops.insert(cursor.col)
+        guard cursor.col >= 0 && cursor.col < tabStopMask.count else { return }
+        tabStopMask[cursor.col] = true
     }
 
     /// Clear tab stops (TBC — CSI g).
@@ -1051,9 +1170,11 @@ actor TerminalGrid {
     func clearTabStop(mode: Int) {
         switch mode {
         case 0:
-            tabStops.remove(cursor.col)
+            if cursor.col >= 0 && cursor.col < tabStopMask.count {
+                tabStopMask[cursor.col] = false
+            }
         case 3:
-            tabStops.removeAll()
+            tabStopMask = [Bool](repeating: false, count: columns)
         default:
             break
         }
@@ -1061,7 +1182,7 @@ actor TerminalGrid {
 
     /// Reset tab stops to default (every 8 columns).
     func resetTabStops() {
-        tabStops = TerminalDefaults.defaultTabStops(columns: columns)
+        tabStopMask = TerminalDefaults.defaultTabStopMask(columns: columns)
     }
 
     // MARK: - A.6.13 Dirty Tracking
@@ -1103,7 +1224,8 @@ actor TerminalGrid {
             return cached
         }
 
-        let activeCells = cells
+        let activeCells = usingAlternateBuffer ? alternateCells : primaryCells
+        let rowBase = activeRowBase
         let hasDirtyRange = hasDirtyCells && dirtyRowMin <= dirtyRowMax
         let dirtyMin = dirtyRowMin
         let dirtyMax = dirtyRowMax
@@ -1131,9 +1253,10 @@ actor TerminalGrid {
         // Fill by index — no append overhead (no bounds check + count increment per cell).
         var idx = 0
         for row in 0..<rows {
+            let physicalRowIndex = physicalRow(row, base: rowBase)
             let rowIsDirty = hasDirtyRange && row >= dirtyMin && row <= dirtyMax
             for col in 0..<columns {
-                let cell = activeCells[row][col]
+                let cell = activeCells[physicalRowIndex][col]
                 let isCursor = (row == cursor.row && col == cursor.col && cursor.visible)
 
                 var flags: UInt8 = 0
@@ -1220,7 +1343,8 @@ actor TerminalGrid {
             return snapshot()
         }
 
-        let activeCells = cells
+        let activeCells = usingAlternateBuffer ? alternateCells : primaryCells
+        let rowBase = activeRowBase
 
         // Clamp offset to available scrollback
         let clampedOffset = min(scrollOffset, scrollback.count)
@@ -1291,8 +1415,9 @@ actor TerminalGrid {
             } else {
                 // This row comes from the live grid
                 let gridRow = scrollbackIndex - scrollback.count
+                let physicalRowIndex = physicalRow(gridRow, base: rowBase)
                 for col in 0..<columns {
-                    let cell = activeCells[gridRow][col]
+                    let cell = activeCells[physicalRowIndex][col]
                     let isCursor = (gridRow == cursor.row && col == cursor.col && cursor.visible && clampedOffset == 0)
 
                     var flags: UInt8 = CellInstance.flagDirty
@@ -1351,14 +1476,16 @@ actor TerminalGrid {
     /// Extract visible rows as an array of strings (trailing whitespace trimmed).
     /// Used by the text-based fallback view, password detection, and search.
     func visibleText() -> [String] {
-        let activeCells = cells
+        let activeCells = usingAlternateBuffer ? alternateCells : primaryCells
+        let rowBase = activeRowBase
 
         var lines = [String]()
         lines.reserveCapacity(rows)
         for row in 0..<rows {
+            let physicalRowIndex = physicalRow(row, base: rowBase)
             var line = ""
             for col in 0..<columns {
-                let cell = activeCells[row][col]
+                let cell = activeCells[physicalRowIndex][col]
                 if cell.width == 0 { continue } // skip wide-char continuation
                 if cell.graphemeCluster.isEmpty {
                     line.append(" ")
@@ -1384,6 +1511,8 @@ actor TerminalGrid {
         let blankRow = makeBlankRow()
         primaryCells = [[TerminalCell]](repeating: blankRow, count: rows)
         alternateCells = [[TerminalCell]](repeating: blankRow, count: rows)
+        primaryRowBase = 0
+        alternateRowBase = 0
         usingAlternateBuffer = false
 
         // Reset cursor
@@ -1466,10 +1595,11 @@ actor TerminalGrid {
 
     /// Fill screen with 'E' for alignment test (DECALN — ESC # 8).
     func screenAlignmentPattern() {
-        withActiveCells { buf in
+        withActiveBuffer { buf, base in
             for row in 0..<rows {
+                let physical = physicalRow(row, base: base)
                 for col in 0..<columns {
-                    buf[row][col] = TerminalCell(
+                    buf[physical][col] = TerminalCell(
                         graphemeCluster: "E",
                         fgColor: .default,
                         bgColor: .default,
@@ -1505,9 +1635,11 @@ actor TerminalGrid {
             ? (cursor.savedPrimary?.col ?? 0)
             : cursor.col
 
+        let primaryForReflow = linearizedRows(primaryCells, base: primaryRowBase)
+
         // Reflow primary buffer (the one with scrollback that needs proper reflow)
         let reflowResult = GridReflow.reflow(
-            screenRows: primaryCells,
+            screenRows: primaryForReflow,
             scrollback: scrollback,
             cursorRow: primaryCursorRow,
             cursorCol: primaryCursorCol,
@@ -1517,6 +1649,7 @@ actor TerminalGrid {
         )
 
         primaryCells = reflowResult.screenRows
+        primaryRowBase = 0
 
         // Rebuild scrollback from reflow result
         scrollback = ScrollbackBuffer(maxLines: maxScrollbackLines)
@@ -1525,9 +1658,11 @@ actor TerminalGrid {
         }
 
         // Simple resize for alternate buffer (TUI apps redraw on SIGWINCH)
+        let alternateForResize = linearizedRows(alternateCells, base: alternateRowBase)
         alternateCells = simpleResizeBuffer(
-            alternateCells, newRows: newRows, newColumns: newColumns
+            alternateForResize, newRows: newRows, newColumns: newColumns
         )
+        alternateRowBase = 0
 
         // Update cursor from reflow result
         if !usingAlternateBuffer {
@@ -1553,7 +1688,7 @@ actor TerminalGrid {
         scrollBottom = newRows - 1
 
         // Reset tab stops for new width
-        tabStops = TerminalDefaults.defaultTabStops(columns: newColumns)
+        tabStopMask = TerminalDefaults.defaultTabStopMask(columns: newColumns)
 
         markAllDirty()
     }

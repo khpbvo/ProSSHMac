@@ -68,6 +68,7 @@ struct RasterizedGlyph: Sendable {
 /// All methods are static and thread-safe. No instance state is required
 /// because rasterization is a pure function of its inputs.
 enum GlyphRasterizer {
+    private static let deviceRGBColorSpace = CGColorSpaceCreateDeviceRGB()
 
     // MARK: - B.2.1 Primary Rasterization Entry Point
 
@@ -108,22 +109,11 @@ enum GlyphRasterizer {
         let attrString = NSAttributedString(string: string, attributes: attributes)
         let line = CTLineCreateWithAttributedString(attrString)
 
-        // Get typographic bounds for bearing calculation
-        var ascent: CGFloat = 0
-        var descent: CGFloat = 0
-        var leading: CGFloat = 0
-        let typographicWidth = CTLineGetTypographicBounds(line, &ascent, &descent, &leading)
-
         // Compute the image bounds (actual pixel coverage) for precise bearing
         let imageBounds = CTLineGetImageBounds(line, nil)
 
-        // B.2.2: Compute subpixel-aware pen position
-        // Center the glyph horizontally within the cell(s)
-        let glyphAdvance = CGFloat(typographicWidth)
-        let penX = computeSubpixelPenX(
-            glyphAdvance: glyphAdvance,
-            cellWidth: CGFloat(rasterWidth)
-        )
+        // Terminal cells are fixed-advance slots; draw at the cell origin.
+        let penX: CGFloat = 0
 
         // Vertically position so the baseline sits at the correct place within the cell
         // Baseline is positioned so that ascent fills from top and descent fills at bottom
@@ -152,13 +142,13 @@ enum GlyphRasterizer {
         if isColor {
             // Color emoji: Apple renders these in BGRA premultiplied alpha
             // We render in BGRA and then swizzle to RGBA for Metal
-            colorSpace = CGColorSpaceCreateDeviceRGB()
+            colorSpace = deviceRGBColorSpace
             bitmapInfo = CGBitmapInfo.byteOrder32Little.rawValue
                 | CGImageAlphaInfo.premultipliedFirst.rawValue
         } else {
             // Normal text: render as white text on transparent background
             // The shader will apply the actual foreground color using alpha as coverage
-            colorSpace = CGColorSpaceCreateDeviceRGB()
+            colorSpace = deviceRGBColorSpace
             bitmapInfo = CGBitmapInfo.byteOrder32Big.rawValue
                 | CGImageAlphaInfo.premultipliedLast.rawValue
         }
@@ -224,29 +214,6 @@ enum GlyphRasterizer {
             isColor: isColor,
             isWide: isWide
         )
-    }
-
-    // MARK: - B.2.2 Subpixel Positioning
-
-    /// Compute the horizontal pen position with subpixel precision.
-    /// Centers the glyph within the available cell width, using fractional
-    /// pixel positioning for sharper rendering at small sizes.
-    ///
-    /// - Parameters:
-    ///   - glyphAdvance: The typographic advance width of the glyph.
-    ///   - cellWidth: The total pixel width of the target cell(s).
-    /// - Returns: The X coordinate for the pen position, with subpixel precision.
-    private static func computeSubpixelPenX(
-        glyphAdvance: CGFloat,
-        cellWidth: CGFloat
-    ) -> CGFloat {
-        // Terminal cells are fixed-advance slots; centering each glyph inside
-        // the slot inflates inter-character spacing and breaks perceived layout.
-        // Anchor rendering at the cell origin and let font sidebearings/advance
-        // shape the glyph naturally.
-        _ = glyphAdvance
-        _ = cellWidth
-        return 0
     }
 
     // MARK: - B.2.3 Color Emoji Detection
@@ -417,17 +384,8 @@ enum GlyphRasterizer {
         let attrString = NSAttributedString(string: graphemeCluster, attributes: attributes)
         let line = CTLineCreateWithAttributedString(attrString)
 
-        // Get typographic bounds
-        var ascent: CGFloat = 0
-        var descent: CGFloat = 0
-        var leading: CGFloat = 0
-        let typographicWidth = CTLineGetTypographicBounds(line, &ascent, &descent, &leading)
-
-        // Compute pen position
-        let penX = computeSubpixelPenX(
-            glyphAdvance: CGFloat(typographicWidth),
-            cellWidth: CGFloat(rasterWidth)
-        )
+        // Terminal cells are fixed-advance slots; draw at the cell origin.
+        let penX: CGFloat = 0
 
         let fontAscent = CTFontGetAscent(font)
         let fontDescent = CTFontGetDescent(font)
@@ -447,7 +405,7 @@ enum GlyphRasterizer {
         var pixelBuffer = [UInt8](repeating: 0, count: bufferSize)
 
         // Set up color space and bitmap info
-        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let colorSpace = deviceRGBColorSpace
         let bitmapInfo: UInt32
 
         if isColor {

@@ -18,6 +18,7 @@ struct ProSSHMacApp: App {
         WindowGroup {
             configuredRoot(content: ContentView())
                 .onChange(of: scenePhase) { _, newPhase in
+                    guard !ThroughputBenchmarkRunner.isEnabled else { return }
                     switch newPhase {
                     case .active:
                         dependencies.sessionManager.applicationDidBecomeActive()
@@ -44,6 +45,9 @@ struct ProSSHMacApp: App {
                     }
                 }
                 .task {
+                    if await ThroughputBenchmarkRunner.runIfRequested() {
+                        return
+                    }
                     await handlePendingLaunchCommandIfNeeded()
                 }
         }

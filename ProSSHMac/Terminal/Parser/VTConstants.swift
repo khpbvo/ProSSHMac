@@ -430,15 +430,26 @@ nonisolated enum TerminalDefaults {
     /// Note: Only mutated during app setup, before any concurrent access.
     nonisolated(unsafe) static var boldIsBright: Bool = true
 
-    /// Default tab stops: every 8 columns for a given column count.
-    static func defaultTabStops(columns: Int) -> Set<Int> {
-        var stops = Set<Int>()
+    /// Default tab-stop mask: every 8 columns for a given column count.
+    /// `true` means the column has a tab stop.
+    static func defaultTabStopMask(columns: Int) -> [Bool] {
+        guard columns > 0 else { return [] }
+        var stops = [Bool](repeating: false, count: columns)
         var col = tabInterval
         while col < columns {
-            stops.insert(col)
+            stops[col] = true
             col += tabInterval
         }
         return stops
+    }
+
+    /// Default tab stops as a set (legacy/test compatibility).
+    static func defaultTabStops(columns: Int) -> Set<Int> {
+        var result = Set<Int>()
+        for (col, hasStop) in defaultTabStopMask(columns: columns).enumerated() where hasStop {
+            result.insert(col)
+        }
+        return result
     }
 }
 

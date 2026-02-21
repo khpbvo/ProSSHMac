@@ -238,6 +238,15 @@ nonisolated enum CSIHandler {
     ) async {
         switch byte {
         case 0x68: // CSI ? h — DECSET
+            if params.count == 1 {
+                await setPrivateMode(
+                    params[0].first ?? 0,
+                    enabled: true,
+                    grid: grid,
+                    inputModeState: inputModeState
+                )
+                return
+            }
             for group in params {
                 await setPrivateMode(
                     group.first ?? 0,
@@ -247,6 +256,15 @@ nonisolated enum CSIHandler {
                 )
             }
         case 0x6C: // CSI ? l — DECRST
+            if params.count == 1 {
+                await setPrivateMode(
+                    params[0].first ?? 0,
+                    enabled: false,
+                    grid: grid,
+                    inputModeState: inputModeState
+                )
+                return
+            }
             for group in params {
                 await setPrivateMode(
                     group.first ?? 0,

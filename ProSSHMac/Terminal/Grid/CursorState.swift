@@ -175,10 +175,10 @@ nonisolated struct CursorState: Sendable {
 
     /// Handle a tab stop advance. Moves cursor to the next tab stop
     /// without exceeding the last column.
-    mutating func advanceToTab(tabStops: Set<Int>, gridCols: Int) {
+    mutating func advanceToTab(tabStops: [Bool], gridCols: Int) {
         let maxCol = gridCols - 1
         var nextCol = col + 1
-        while nextCol < maxCol && !tabStops.contains(nextCol) {
+        while nextCol < maxCol && (nextCol >= tabStops.count || !tabStops[nextCol]) {
             nextCol += 1
         }
         col = min(nextCol, maxCol)
@@ -186,9 +186,9 @@ nonisolated struct CursorState: Sendable {
     }
 
     /// Handle a reverse tab stop. Moves cursor to the previous tab stop.
-    mutating func reverseToTab(tabStops: Set<Int>) {
+    mutating func reverseToTab(tabStops: [Bool]) {
         var prevCol = col - 1
-        while prevCol > 0 && !tabStops.contains(prevCol) {
+        while prevCol > 0 && (prevCol >= tabStops.count || !tabStops[prevCol]) {
             prevCol -= 1
         }
         col = max(prevCol, 0)

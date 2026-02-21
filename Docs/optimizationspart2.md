@@ -211,12 +211,15 @@ Keep non-render side work from stealing throughput and make future regressions e
 
 ## Session Notes (append-only)
 
-### YYYY-MM-DD Session Start
-- Baseline local shell flood:
-- Baseline remote shell flood:
-- Profiler hot spots:
-- Workstream started:
-- Commits made:
-- Regressions observed:
+### 2026-02-21 Session Start
+- Baseline local shell flood: `time sh -c 'dd if=/dev/urandom bs=1024 count=100000 2>/dev/null | base64 > /dev/null'` -> `0.373s` total (host shell only).
+- Baseline remote shell flood: not measured in this session.
+- Profiler hot spots: not captured in this session.
+- Workstream started: Workstream 2 (`TerminalGrid` ring-buffer scroll model + mapped row indexing).
+- Commits made: none (working tree changes only).
+- Regressions observed: none in Debug build; scheme still has no test action configured for `xcodebuild test`.
 - Next handoff note:
-
+  Added a repeatable parser/grid benchmark mode and wrapper script:
+  `./scripts/benchmark-throughput.sh --benchmark-bytes 2097152 --benchmark-runs 2 --benchmark-chunk 4096`
+  Latest run:
+  fullscreen avg `1.34 MB/s`, partial scroll-region avg `1.38 MB/s`, parser state `ground`.

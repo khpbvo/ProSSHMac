@@ -74,10 +74,6 @@ final class GlyphCache {
     /// Sentinel tail node (least recently used entries are near tail.prev).
     private let tail: Node
 
-    /// Keys evicted during the most recent insert batch, available for the caller
-    /// to free corresponding atlas regions. Cleared on each call to `insert`.
-    private(set) var lastEvictedKeys: [GlyphKey] = []
-
     // MARK: - Initialization
 
     /// Create a glyph cache with the specified maximum capacity.
@@ -131,8 +127,6 @@ final class GlyphCache {
     ///   - key: The glyph key.
     ///   - entry: The atlas entry describing the glyph's texture location.
     func insert(_ key: GlyphKey, entry: AtlasEntry) {
-        lastEvictedKeys.removeAll(keepingCapacity: true)
-
         if let existingNode = map[key] {
             // Update existing entry and promote to MRU
             existingNode.entry = entry
@@ -144,7 +138,6 @@ final class GlyphCache {
         while map.count >= maxCapacity {
             if let lruNode = removeTail() {
                 map.removeValue(forKey: lruNode.key)
-                lastEvictedKeys.append(lruNode.key)
             }
         }
 
@@ -171,7 +164,6 @@ final class GlyphCache {
         map.removeAll(keepingCapacity: true)
         head.next = tail
         tail.prev = head
-        lastEvictedKeys.removeAll()
     }
 
     // MARK: - Pre-Population
@@ -258,6 +250,7 @@ final class GlyphCache {
     ///
     /// - Parameter key: The glyph key to look up.
     /// - Returns: The cached `AtlasEntry`, or `nil` if not present.
+    @inline(__always)
     func trackedLookup(_ key: GlyphKey) -> AtlasEntry? {
         if let entry = lookup(key) {
             hits += 1

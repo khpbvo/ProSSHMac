@@ -87,6 +87,13 @@ final class AppDependencies: ObservableObject {
 
         self.idleScreensaverManager = IdleScreensaverManager()
 
+        if ThroughputBenchmarkRunner.isEnabled {
+            Task { @MainActor in
+                _ = await ThroughputBenchmarkRunner.runIfRequested()
+            }
+            return
+        }
+
         if screenshotMode {
             Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .milliseconds(300))
