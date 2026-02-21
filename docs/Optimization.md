@@ -2,7 +2,7 @@
 
 **Target:** `dd if=/dev/urandom bs=1024 count=100000 | base64` completes in 1.5 seconds (~89 MB/s throughput).
 
-**Current:** **1.70 MB/s** fullscreen, **1.51 MB/s** partial scroll (parser/grid benchmark, 52x gap remaining).
+**Current:** **1.60 MB/s** fullscreen, **1.37 MB/s** partial scroll (parser/grid benchmark, 56x gap remaining).
 **Previous:** ~220 KB/s initial estimate → 1.13 MB/s post-merge → 1.34 MB/s post-ring → 1.70 MB/s post-pack.
 
 Data pipeline (current — after TerminalEngine merge):
@@ -24,11 +24,12 @@ Benchmark command paths:
 ./scripts/benchmark-ssh.sh --host <hostname> --user <username>
 ```
 
-Latest sample (2026-02-21, after Workstream 3 packed cell migration):
+Latest sample (2026-02-21, post renderer/parser micro-optimization batch):
 - command: `./scripts/benchmark-throughput.sh --benchmark-bytes 2097152 --benchmark-runs 3 --benchmark-chunk 4096 --no-build`
-- fullscreen avg: **1.70 MB/s** (+27% vs pre-pack baseline of 1.34 MB/s)
-- partial scroll-region avg: **1.51 MB/s** (+9% vs 1.38 MB/s)
+- fullscreen avg: **1.60 MB/s**
+- partial scroll-region avg: **1.37 MB/s**
 - parser state after run: `ground`
+- note: `--pty-local` wrapper no longer crashes on empty args; benchmark run still needs interactive-local validation.
 
 Previous samples (2026-02-21):
 - Pre-packed-cell baseline: fullscreen 1.34 MB/s, partial 1.38 MB/s
@@ -82,22 +83,24 @@ reduced visual responsiveness (frame rate) in exchange for higher data throughpu
 
 ### Grid
 
-- [ ] **`scrollUp()` COW trap** — `TerminalGrid.swift:467-490`
+- [x] **`scrollUp()` COW trap** — `TerminalGrid.swift`
   `var buf = cells` / `cells = buf` triggers a full copy-on-write of the entire `[[TerminalCell]]`
   array on every scroll. Base64 output at 76 chars/line = ~1.75 million scrolls. Each scroll copies
   10,000 cells (each containing a heap String). This alone accounts for minutes of runtime.
   **Fix:** Use `withActiveCells { buf in ... }` (already exists) instead of the local copy pattern.
 
-- [ ] **Same COW trap in `eraseInLine()`** — `TerminalGrid.swift:564`
-- [ ] **Same COW trap in `eraseInDisplay()`** — `TerminalGrid.swift:596`
-- [ ] **Same COW trap in `eraseCharacters()`** — `TerminalGrid.swift:655`
-- [ ] **Same COW trap in `insertBlanks()`** — `TerminalGrid.swift:700`
-- [ ] **Same COW trap in `deleteCharacters()`** — `TerminalGrid.swift:680`
-- [ ] **Same COW trap in `insertLines()`** — `TerminalGrid.swift:723`
-- [ ] **Same COW trap in `deleteLines()`** — `TerminalGrid.swift:746`
-- [ ] **Same COW trap in `screenAlignmentPattern()`** — `TerminalGrid.swift:1309`
+- [x] **Same COW trap in `eraseInLine()`** — `TerminalGrid.swift`
+- [x] **Same COW trap in `eraseInDisplay()`** — `TerminalGrid.swift`
+- [x] **Same COW trap in `eraseCharacters()`** — `TerminalGrid.swift`
+- [x] **Same COW trap in `insertBlanks()`** — `TerminalGrid.swift`
+- [x] **Same COW trap in `deleteCharacters()`** — `TerminalGrid.swift`
+- [x] **Same COW trap in `insertLines()`** — `TerminalGrid.swift`
+- [x] **Same COW trap in `deleteLines()`** — `TerminalGrid.swift`
+- [x] **Same COW trap in `screenAlignmentPattern()`** — `TerminalGrid.swift`
+  **Done:** Grid mutating paths now operate through buffer accessors (`withActiveBuffer` /
+  `withActiveBufferState`) and row indirection, avoiding whole-grid COW copies.
 
-- [ ] **Per-character `printCharacter()` overhead** — `TerminalGrid.swift:290-361`
+- [x] **Per-character `printCharacter()` overhead** — `TerminalGrid.swift`
   `processGroundTextBytes` → `printASCIIBytes` calls `printCharacter()` for every single byte.
   Each call does: pendingWrap check, ASCII cache lookup, `char.isWideCharacter` (Unicode check on
   ASCII!), TerminalCell construction, `withActiveCells` closure, `markDirty`, cursor advance.
@@ -108,17 +111,21 @@ reduced visual responsiveness (frame rate) in exchange for higher data throughpu
   - Calls `markDirty` once for the affected row range, not per character
   - Inlines cursor advance (simple `col += 1` / pending wrap)
   - Handles `performWrap` → `scrollUp` inline within the buffer closure
+  **Done:** `printASCIIBytesBulk(_:,range:)` fast path is in place and used by
+  `processGroundTextBytes`.
 
 ### Parser
 
-- [ ] **`Data` → `Array<UInt8>` copy in `feed()`** — `VTParser.swift:152`
+- [x] **`Data` → `Array<UInt8>` copy in `feed()`** — `TerminalEngine.swift`
   `let bytes = Array(next)` copies the entire chunk (~32KB) into a new Array every time.
   **Fix:** Iterate `Data` directly (it conforms to `RandomAccessCollection<UInt8>`) or use
   `data.withUnsafeBytes`.
 
-- [ ] **Second copy for fast-path slice** — `VTParser.swift:164`
+- [x] **Second copy for fast-path slice** — `TerminalEngine.swift`
   `Array(bytes[start..<index])` creates yet another Array copy for `processGroundTextBytes`.
   **Fix:** Pass `ArraySlice<UInt8>` or `UnsafeBufferPointer<UInt8>` instead.
+  **Done:** `TerminalEngine.feed(_:)` now iterates `Data` directly and passes `Data + Range<Int>`
+  into `processGroundTextBytes` (no intermediate `Array<UInt8>` chunk copies).
 
 ### PTY Reader
 
@@ -304,19 +311,22 @@ reduced visual responsiveness (frame rate) in exchange for higher data throughpu
   **Fix:** Remove the function, replace calls with `0`.
   **Done:** Removed helper and set pen X directly to `0` at call sites.
 
-- [ ] **`resolveRenderFont` allocates String + CFString + Arrays per cache miss** —
+- [x] **`resolveRenderFont` allocates String + CFString + Arrays per cache miss** —
   `MetalTerminalRenderer.swift:445-475`
   **Fix:** For BMP codepoints (value ≤ 0xFFFF), use a stack-allocated `UInt16` directly with
   `CTFontGetGlyphsForCharacters`. No String/Array needed.
+  **Done:** BMP path now uses stack `UInt16` + `CGGlyph` check before any String/CFString allocation.
 
-- [ ] **`isEmojiRange` cascading if-chain** — `MetalTerminalRenderer.swift:480-521`
+- [x] **`isEmojiRange` cascading if-chain** — `MetalTerminalRenderer.swift`
   ~20 `ClosedRange.contains()` checks in sequence.
   **Fix:** Early exit at `v < 0x2300`, then binary search over a sorted range table.
+  **Done:** Routed through shared `UnicodeClassification`.
 
-- [ ] **Duplicate emoji/CJK/Powerline range tables** — 4 files
+- [x] **Duplicate emoji/CJK/Powerline range tables** — 4 files
   `MetalTerminalRenderer.isEmojiRange`, `GlyphRasterizer.isEmojiCodepoint`,
   `CharacterWidth.isWide`, `FontManager.isEmojiScalar/isCJKScalar/isPowerlineScalar`.
   **Fix:** Consolidate into a single `UnicodeClassification` module.
+  **Done (partial):** Added shared `UnicodeClassification` and wired renderer/font/glyph paths.
 
 ### Tab Stops
 
@@ -335,9 +345,10 @@ reduced visual responsiveness (frame rate) in exchange for higher data throughpu
   **Fix:** `memcpy` the dirty range first, then fix up glyph indices in a second pass. Most cells
   don't need glyph changes between frames.
 
-- [ ] **`isContinuationCell` re-reads previous cell every iteration** — `CellBuffer.swift:234-251`
+- [x] **`isContinuationCell` re-reads previous cell every iteration** — `CellBuffer.swift`
   `snapshot.cells[index - 1]` — array bounds check + struct copy per cell.
   **Fix:** Carry a `previousWasWide: Bool` through the loop.
+  **Done:** Continuation detection now carries previous snapshot cell through the update loop.
 
 - [ ] **`glyphLookup` closure called per non-empty cell** — `CellBuffer.swift:212`
   Closure capture involves retain/release cycle.
@@ -351,9 +362,10 @@ reduced visual responsiveness (frame rate) in exchange for higher data throughpu
 - [ ] **`push` calls `trimTrailingBlanks` on every line** — `ScrollbackBuffer.swift:89`
   **Fix:** Trim lazily (on access) or batch-trim periodically.
 
-- [ ] **`allLines()` copies entire ring buffer** — `ScrollbackBuffer.swift:159-167`
+- [x] **`allLines()` copies entire ring buffer** — `ScrollbackBuffer.swift`
   Per-element subscript with modulo arithmetic.
   **Fix:** Return a lazy view, or bulk copy the two contiguous segments.
+  **Done:** `allLines()` now bulk-appends up to two contiguous segments.
 
 - [x] **`search()` allocates String per scrollback line** — `ScrollbackBuffer.swift:184-197`
   `line.cells.map { $0.graphemeCluster }.joined()` — N allocations per search iteration.
@@ -379,15 +391,18 @@ reduced visual responsiveness (frame rate) in exchange for higher data throughpu
   **Fix:** Use `enableSetNeedsDisplay = true` and call `setNeedsDisplay` only when a new
   snapshot arrives. Or gate the encoder path on `isDirty`.
 
-- [ ] **`CACurrentMediaTime()` called twice per frame** — `MetalTerminalRenderer.swift:669, 706`
+- [x] **`CACurrentMediaTime()` called twice per frame** — `MetalTerminalRenderer.swift`
   **Fix:** Call once, reuse the value.
+  **Done:** draw loop now captures one `frameNow` value and reuses it.
 
-- [ ] **Performance monitor creates `OSSignpostID` every frame** — `RendererPerformanceMonitor.swift:36`
+- [x] **Performance monitor creates `OSSignpostID` every frame** — `RendererPerformanceMonitor.swift`
   Heap allocation 60-120 times/sec.
   **Fix:** Gate behind `#if DEBUG` or use a single reusable signpost ID.
+  **Done:** Signpost begin/end now compile-time gated to DEBUG.
 
-- [ ] **`commandBuffer.label = "TerminalFrame"` per frame** — `MetalTerminalRenderer.swift:653`
+- [x] **`commandBuffer.label = "TerminalFrame"` per frame** — `MetalTerminalRenderer.swift`
   **Fix:** Gate behind `#if DEBUG`.
+  **Done:** Label assignment is now DEBUG-only.
 
 - [ ] **Performance monitor `removeFirst` is O(n)** — `RendererPerformanceMonitor.swift:87-92`
   Shifts up to 240 elements every frame.
@@ -399,8 +414,9 @@ reduced visual responsiveness (frame rate) in exchange for higher data throughpu
 
 ### Selection
 
-- [ ] **`applySelection` always called even with no selection** — `MetalTerminalRenderer.swift:538`
+- [x] **`applySelection` always called even with no selection** — `MetalTerminalRenderer.swift`
   **Fix:** Check `selection == nil && !needsFullRefresh` before calling.
+  **Done:** Renderer now skips selection projection unless `SelectionRenderer.needsProjection()`.
 
 - [ ] **`applySelection` iterates ALL cells to clear flags** — `SelectionRenderer.swift:73-78`
   Maps over every cell just to clear one bit, triggering a full Array copy.
@@ -416,9 +432,10 @@ reduced visual responsiveness (frame rate) in exchange for higher data throughpu
 
 ### Cursor
 
-- [ ] **`CursorRenderer.frame(at:)` lerps every frame even when static** — `CursorRenderer.swift:114`
+- [x] **`CursorRenderer.frame(at:)` lerps every frame even when static** — `CursorRenderer.swift`
   Asymptotic lerp never converges exactly.
   **Fix:** Snap to target when `abs(delta) < epsilon`.
+  **Done:** Cursor now snaps at epsilon and exposes `requiresContinuousFrames()`.
 
 ### SwiftUI / View Layer
 
@@ -444,23 +461,27 @@ reduced visual responsiveness (frame rate) in exchange for higher data throughpu
   `String(bytes:encoding:)` allocates heap Strings for OSC code parsing.
   **Fix:** Parse OSC code number directly from ASCII digit bytes. No String needed.
 
-- [ ] **`hexPair` uses `String(format:)`** — `OSCHandler.swift:358-359`
+- [x] **`hexPair` uses `String(format:)`** — `OSCHandler.swift`
   Foundation/ObjC call for trivial hex conversion.
   **Fix:** Lookup table or manual hex conversion.
+  **Done:** Replaced with manual LUT-based hex formatting.
 
-- [ ] **DSR/DECRQM response uses String interpolation** — `CSIHandler.swift:429-432`
+- [x] **DSR/DECRQM response uses String interpolation** — `CSIHandler.swift`
   Creates String + `Array(response.utf8)` — two allocations.
   **Fix:** Build byte array directly from integer digits.
+  **Done:** Responses are now constructed directly as byte arrays.
 
 ### Font Manager
 
-- [ ] **`fontContainsGlyph` allocates arrays** — `FontManager.swift:648-653`
+- [x] **`fontContainsGlyph` allocates arrays** — `FontManager.swift`
   `Array(String(scalar).utf16)` + `[CGGlyph]` per glyph check.
   **Fix:** For BMP codepoints, use stack variables: `var char: UInt16; var glyph: CGGlyph`.
+  **Done:** BMP glyph checks now use stack variables; array fallback kept only for non-BMP.
 
-- [ ] **`createFontIfAvailable` uses `lowercased()`** — `FontManager.swift:431, 437`
+- [x] **`createFontIfAvailable` uses `lowercased()`** — `FontManager.swift`
   Allocates new Strings for comparison.
   **Fix:** Use `caseInsensitiveCompare` instead.
+  **Done:** Replaced with case-insensitive comparison/range APIs.
 
 ### GridReflow
 
@@ -481,9 +502,10 @@ reduced visual responsiveness (frame rate) in exchange for higher data throughpu
   Atlas is append-only. Evicted glyphs leave dead space.
   **Fix:** Implement region recycling, or full rebuild when nearing capacity.
 
-- [ ] **`texture(forPage:)` bounds-checks every frame** — `GlyphAtlas.swift:107-109`
+- [x] **`texture(forPage:)` bounds-checks every frame** — `GlyphAtlas.swift`
   Page count is almost always 1.
   **Fix:** Cache the page-0 texture as a direct reference.
+  **Done:** Added page-0 fast path.
 
 ### Charset
 

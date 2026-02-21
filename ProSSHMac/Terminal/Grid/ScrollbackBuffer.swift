@@ -190,12 +190,21 @@ nonisolated struct ScrollbackBuffer: Sendable {
 
     /// Return all lines as an array, ordered from oldest to newest.
     func allLines() -> [ScrollbackLine] {
-        guard count > 0 else { return [] }
-        var result = [ScrollbackLine]()
+        guard count > 0, !storage.isEmpty else { return [] }
+
+        var result: [ScrollbackLine] = []
         result.reserveCapacity(count)
-        for i in 0..<count {
-            result.append(self[i])
+
+        let firstChunkCount = min(count, storage.count - head)
+        if firstChunkCount > 0 {
+            result.append(contentsOf: storage[head..<(head + firstChunkCount)])
         }
+
+        let remaining = count - firstChunkCount
+        if remaining > 0 {
+            result.append(contentsOf: storage[0..<remaining])
+        }
+
         return result
     }
 

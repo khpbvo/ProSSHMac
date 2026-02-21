@@ -86,6 +86,7 @@ final class CursorRenderer {
     private var renderRow: Float = 0
     private var renderCol: Float = 0
     private var seeded = false
+    private let snapEpsilon: Float = 0.001
 
     // MARK: - Public API
 
@@ -114,6 +115,8 @@ final class CursorRenderer {
     func frame(at time: CFTimeInterval) -> CursorRenderFrame {
         renderRow = CursorEffects.lerp(current: renderRow, target: targetRow, factor: positionLerpFactor)
         renderCol = CursorEffects.lerp(current: renderCol, target: targetCol, factor: positionLerpFactor)
+        if abs(renderRow - targetRow) < snapEpsilon { renderRow = targetRow }
+        if abs(renderCol - targetCol) < snapEpsilon { renderCol = targetCol }
 
         let t = Float(time)
         let phase = computeBlinkPhase(time: t)
@@ -126,6 +129,12 @@ final class CursorRenderer {
             phase: phase,
             glowIntensity: glow
         )
+    }
+
+    /// Whether the cursor requires continuous frame updates.
+    func requiresContinuousFrames() -> Bool {
+        let moving = abs(renderRow - targetRow) >= snapEpsilon || abs(renderCol - targetCol) >= snapEpsilon
+        return moving || (cursorVisible && blinkEnabled)
     }
 
     // MARK: - Internals

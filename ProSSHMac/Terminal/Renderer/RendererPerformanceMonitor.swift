@@ -78,9 +78,13 @@ final class RendererPerformanceMonitor: @unchecked Sendable {
 
     @discardableResult
     func beginFrame() -> OSSignpostID {
+        #if DEBUG
         let id = OSSignpostID(log: log)
         os_signpost(.begin, log: log, name: "TerminalFrame", signpostID: id)
         return id
+        #else
+        return .invalid
+        #endif
     }
 
     func endFrame(
@@ -109,15 +113,19 @@ final class RendererPerformanceMonitor: @unchecked Sendable {
         }
         lock.unlock()
 
-        os_signpost(
-            .end,
-            log: log,
-            name: "TerminalFrame",
-            signpostID: signpostID,
-            "cpu_ms=%.3f draw_calls=%d",
-            cpuMs,
-            drawCalls
-        )
+        #if DEBUG
+        if signpostID != .invalid {
+            os_signpost(
+                .end,
+                log: log,
+                name: "TerminalFrame",
+                signpostID: signpostID,
+                "cpu_ms=%.3f draw_calls=%d",
+                cpuMs,
+                drawCalls
+            )
+        }
+        #endif
     }
 
     func snapshot() -> RendererPerformanceSnapshot {

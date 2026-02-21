@@ -377,8 +377,12 @@ nonisolated enum CSIHandler {
         }
 
         // Response: CSI ? mode ; pm $ y
-        let response = "\u{1B}[?\(mode);\(pm)$y"
-        await responseHandler?(Array(response.utf8))
+        var response: [UInt8] = [0x1B, 0x5B, 0x3F] // ESC [ ?
+        appendDecimal(mode, to: &response)
+        response.append(0x3B) // ;
+        appendDecimal(pm, to: &response)
+        response.append(contentsOf: [0x24, 0x79]) // $y
+        await responseHandler?(response)
     }
 
     // MARK: - A.10.16 DSR Handler
@@ -392,8 +396,12 @@ nonisolated enum CSIHandler {
         if code == 6 {
             // Cursor Position Report: CSI row ; col R (1-based)
             let pos = grid.cursorPosition()
-            let response = "\u{1B}[\(pos.row + 1);\(pos.col + 1)R"
-            await responseHandler?(Array(response.utf8))
+            var response: [UInt8] = [0x1B, 0x5B] // ESC [
+            appendDecimal(pos.row + 1, to: &response)
+            response.append(0x3B) // ;
+            appendDecimal(pos.col + 1, to: &response)
+            response.append(0x52) // R
+            await responseHandler?(response)
         }
     }
 
@@ -450,5 +458,29 @@ nonisolated enum CSIHandler {
         let v = params[index].first ?? 0
         if raw { return v }
         return v == 0 ? defaultValue : v
+    }
+
+    private static func appendDecimal(_ value: Int, to bytes: inout [UInt8]) {
+        if value == 0 {
+            bytes.append(0x30)
+            return
+        }
+
+        var n = value
+        if n < 0 {
+            bytes.append(0x2D) // -
+            n = -n
+        }
+
+        var digits: [UInt8] = []
+        digits.reserveCapacity(11)
+        while n > 0 {
+            digits.append(UInt8(n % 10) + 0x30)
+            n /= 10
+        }
+
+        for d in digits.reversed() {
+            bytes.append(d)
+        }
     }
 }

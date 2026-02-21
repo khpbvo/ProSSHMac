@@ -215,9 +215,19 @@ final class CellBuffer {
 
         // Copy dirty slice first, then resolve glyphs in a second pass.
         copyCells(from: snapshot, range: effectiveRange, to: dst)
+        var previousSnapshotCell: CellInstance? = effectiveRange.lowerBound > 0
+            ? snapshot.cells[effectiveRange.lowerBound - 1]
+            : nil
         for i in effectiveRange {
             var cell = dst[i]
-            let isContinuation = isContinuationCell(cell, at: i, in: snapshot)
+            let isContinuation: Bool
+            if let previous = previousSnapshotCell {
+                let previousIsWide = (previous.attributes & CellAttributes.wideChar.rawValue) != 0
+                let currentIsWide = (cell.attributes & CellAttributes.wideChar.rawValue) != 0
+                isContinuation = previousIsWide && previous.row == cell.row && !currentIsWide
+            } else {
+                isContinuation = false
+            }
 
             if isContinuation {
                 // Continuation cell: no glyph, preserve colors from primary.
@@ -235,6 +245,7 @@ final class CellBuffer {
             }
 
             dst[i] = cell
+            previousSnapshotCell = snapshot.cells[i]
         }
     }
 
@@ -250,40 +261,6 @@ final class CellBuffer {
                 count: range.count
             )
         }
-    }
-
-    // MARK: - Wide Character Helpers
-
-    /// Determines whether the cell at the given index is a continuation cell
-    /// for a wide character (i.e., the second column of a double-width glyph).
-    ///
-    /// A continuation cell is identified by:
-    /// - Not having the wideChar attribute itself (it belongs to the primary cell).
-    /// - Being preceded by a cell with the wideChar attribute set.
-    /// - Having a glyphIndex of 0 (set by the grid snapshot).
-    ///
-    /// - Parameters:
-    ///   - cell: The cell instance to check.
-    ///   - index: The index of the cell in the snapshot's cell array.
-    ///   - snapshot: The grid snapshot containing all cells.
-    /// - Returns: `true` if this cell is a wide-character continuation cell.
-    private func isContinuationCell(
-        _ cell: CellInstance,
-        at index: Int,
-        in snapshot: GridSnapshot
-    ) -> Bool {
-        // A continuation cell must have a predecessor and be on the same row.
-        guard index > 0 else { return false }
-
-        let previous = snapshot.cells[index - 1]
-        let previousIsWide = (previous.attributes & CellAttributes.wideChar.rawValue) != 0
-
-        // The continuation cell is on the same row as its primary, in the next column.
-        guard previousIsWide, previous.row == cell.row else { return false }
-
-        // The current cell itself should not have the wideChar attribute.
-        let currentIsWide = (cell.attributes & CellAttributes.wideChar.rawValue) != 0
-        return !currentIsWide
     }
 
     // MARK: - Resize

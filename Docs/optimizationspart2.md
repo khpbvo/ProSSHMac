@@ -260,7 +260,7 @@ Keep non-render side work from stealing throughput and make future regressions e
 
 ## Test matrix (run before each merge)
 
-- [ ] Debug build succeeds.
+- [x] Debug build succeeds.
 - [ ] Performance validation tests relevant to parser/grid pass.
 - [ ] Integration tests for alternate screen and scroll region pass.
 - [ ] Unicode and input tests pass.
@@ -361,3 +361,27 @@ Keep non-render side work from stealing throughput and make future regressions e
 - Build: **SUCCEEDED** (Debug, macOS).
 - All five workstreams now complete. Remaining 52x gap to 89 MB/s target lives in
   P2/P3 items (glyph pipeline, renderer, cell buffer) — future workstreams.
+
+### 2026-02-21 Session 5 — Throughput Recovery Plan Implementation (Batch 1)
+- **Guardrails:**
+  - Fixed `scripts/benchmark-throughput.sh` empty-argument crash in `--pty-local` mode under `set -u`.
+  - Verified parser/grid benchmark wrapper still runs.
+- **Renderer/Glyph/Font changes:**
+  - `GlyphCache`: migrated to index-based flat-slot LRU (removed per-entry heap node allocations).
+  - Added shared `Terminal/UnicodeClassification.swift`; wired renderer/font/glyph emoji/CJK/Powerline checks.
+  - `GlyphRasterizer`: single-BMP non-color fast path now draws via `CTFontDrawGlyphs`; BGRA→RGBA swizzle switched to word-wise path.
+  - `MetalTerminalRenderer`: selection projection now conditional; per-frame command label debug-gated; single timestamp reused.
+  - `RendererPerformanceMonitor`: signposts gated to DEBUG.
+  - `CursorRenderer`: epsilon snap + `requiresContinuousFrames()` for idle frame gating.
+  - `FontManager`: stack glyph checks for BMP in hot paths; case-insensitive comparisons avoid `lowercased()` allocations.
+- **Parser/Cell/Buffer changes:**
+  - `CSIHandler`: DSR/DECRQM responses now byte-assembled (no string interpolation path).
+  - `OSCHandler`: OSC code parsed directly from digit bytes; `hexPair` now LUT/manual.
+  - `CellBuffer`: continuation detection no longer re-reads previous snapshot cell each iteration.
+  - `ScrollbackBuffer`: `allLines()` now bulk-copies contiguous ring segments.
+  - `GlyphAtlas`: added page-0 fast path in `texture(forPage:)`.
+- **Validation:**
+  - Build: **SUCCEEDED** (`xcodebuild ... Debug build`).
+  - Parser/grid benchmark (`2MB`, `3 runs`, `4096 chunk`): fullscreen **1.60 MB/s**, partial **1.37 MB/s**.
+  - `xcodebuild test` status: still blocked (scheme has no test action configured).
+  - PTY-local benchmark wrapper no longer fails at shell expansion; interactive run completion still pending.

@@ -3,7 +3,7 @@
 //
 // LRU glyph cache for the Metal terminal renderer.
 // Maps GlyphKey (codepoint + style) to AtlasEntry (texture atlas location)
-// using a doubly-linked list + dictionary for O(1) lookup and O(1) eviction.
+// using a flat-slot LRU list + dictionary for O(1) lookup and O(1) eviction.
 
 import Foundation
 
@@ -35,8 +35,9 @@ struct AtlasEntry: Sendable {
 
 /// LRU cache mapping `GlyphKey` to `AtlasEntry` for the Metal terminal renderer.
 ///
-/// Uses a doubly-linked list combined with a hash map to achieve O(1) lookup,
-/// O(1) insertion, and O(1) eviction of the least-recently-used entry.
+/// Uses a flat-slot doubly-linked list (integer indices) combined with a hash map
+/// to achieve O(1) lookup, O(1) insertion, and O(1) eviction of the least-
+/// recently-used entry.
 /// This class is **not** thread-safe — the owning renderer is responsible for
 /// synchronization (it runs on a dedicated render thread / actor).
 ///
@@ -44,20 +45,17 @@ struct AtlasEntry: Sendable {
 /// (285 entries) plus a generous pool for CJK, emoji, and extended Unicode.
 final class GlyphCache {
 
-    // MARK: - Linked List Node
+    private static let noIndex = -1
 
-    /// Doubly-linked list node holding a cached key-entry pair.
-    /// Nodes form a most-recently-used (head) to least-recently-used (tail) chain.
-    private final class Node {
-        let key: GlyphKey
+    // MARK: - Slot Storage
+
+    /// Flat slot for one cache entry plus LRU links (index-based).
+    private struct Slot {
+        var key: GlyphKey
         var entry: AtlasEntry
-        var prev: Node?
-        var next: Node?
-
-        init(key: GlyphKey, entry: AtlasEntry) {
-            self.key = key
-            self.entry = entry
-        }
+        var prev: Int
+        var next: Int
+        var inUse: Bool
     }
 
     // MARK: - Properties
@@ -65,14 +63,16 @@ final class GlyphCache {
     /// Maximum number of entries before LRU eviction kicks in.
     let maxCapacity: Int
 
-    /// O(1) lookup dictionary from glyph key to linked-list node.
-    private var map: [GlyphKey: Node]
-
-    /// Sentinel head node (most recently used entries are near head.next).
-    private let head: Node
-
-    /// Sentinel tail node (least recently used entries are near tail.prev).
-    private let tail: Node
+    /// O(1) lookup dictionary from glyph key to slot index.
+    private var map: [GlyphKey: Int]
+    /// Flat slot storage. Slots are reused via `freeList`.
+    private var slots: ContiguousArray<Slot>
+    /// Free slot indices available for reuse.
+    private var freeList: [Int]
+    /// Most recently used slot index.
+    private var headIndex: Int
+    /// Least recently used slot index.
+    private var tailIndex: Int
 
     // MARK: - Initialization
 
@@ -85,16 +85,12 @@ final class GlyphCache {
         precondition(maxCapacity > 0, "GlyphCache capacity must be positive")
         self.maxCapacity = maxCapacity
         self.map = Dictionary(minimumCapacity: maxCapacity)
-
-        // Create sentinel nodes. Their key/entry values are never read.
-        let sentinelKey = GlyphKey(codepoint: 0, bold: false, italic: false)
-        let sentinelEntry = AtlasEntry(
-            atlasPage: 0, x: 0, y: 0, width: 0, bearingX: 0, bearingY: 0
-        )
-        self.head = Node(key: sentinelKey, entry: sentinelEntry)
-        self.tail = Node(key: sentinelKey, entry: sentinelEntry)
-        self.head.next = self.tail
-        self.tail.prev = self.head
+        self.slots = []
+        self.slots.reserveCapacity(maxCapacity)
+        self.freeList = []
+        self.freeList.reserveCapacity(maxCapacity)
+        self.headIndex = Self.noIndex
+        self.tailIndex = Self.noIndex
     }
 
     // MARK: - Public API
@@ -112,9 +108,9 @@ final class GlyphCache {
     /// - Parameter key: The glyph key to look up.
     /// - Returns: The cached `AtlasEntry`, or `nil` if not present.
     func lookup(_ key: GlyphKey) -> AtlasEntry? {
-        guard let node = map[key] else { return nil }
-        moveToHead(node)
-        return node.entry
+        guard let index = map[key], slots[index].inUse else { return nil }
+        moveToHead(index)
+        return slots[index].entry
     }
 
     /// Insert or update a glyph entry in the cache.
@@ -127,24 +123,48 @@ final class GlyphCache {
     ///   - key: The glyph key.
     ///   - entry: The atlas entry describing the glyph's texture location.
     func insert(_ key: GlyphKey, entry: AtlasEntry) {
-        if let existingNode = map[key] {
+        if let existingIndex = map[key], slots[existingIndex].inUse {
             // Update existing entry and promote to MRU
-            existingNode.entry = entry
-            moveToHead(existingNode)
+            slots[existingIndex].entry = entry
+            moveToHead(existingIndex)
             return
         }
 
-        // Evict LRU entries until we have room
-        while map.count >= maxCapacity {
-            if let lruNode = removeTail() {
-                map.removeValue(forKey: lruNode.key)
-            }
+        // Evict exactly one LRU entry when at capacity, then reuse the slot.
+        if map.count >= maxCapacity, tailIndex != Self.noIndex {
+            let lruIndex = tailIndex
+            map.removeValue(forKey: slots[lruIndex].key)
+            detach(lruIndex)
+
+            slots[lruIndex].key = key
+            slots[lruIndex].entry = entry
+            slots[lruIndex].inUse = true
+            addToHead(lruIndex)
+            map[key] = lruIndex
+            return
         }
 
-        // Insert new node at head (most recently used)
-        let newNode = Node(key: key, entry: entry)
-        map[key] = newNode
-        addToHead(newNode)
+        let index: Int
+        if let recycled = freeList.popLast() {
+            index = recycled
+            slots[index].key = key
+            slots[index].entry = entry
+            slots[index].prev = Self.noIndex
+            slots[index].next = Self.noIndex
+            slots[index].inUse = true
+        } else {
+            index = slots.count
+            slots.append(Slot(
+                key: key,
+                entry: entry,
+                prev: Self.noIndex,
+                next: Self.noIndex,
+                inUse: true
+            ))
+        }
+
+        addToHead(index)
+        map[key] = index
     }
 
     /// Remove a specific entry from the cache.
@@ -153,17 +173,30 @@ final class GlyphCache {
     /// - Returns: The removed `AtlasEntry`, or `nil` if the key was not cached.
     @discardableResult
     func remove(_ key: GlyphKey) -> AtlasEntry? {
-        guard let node = map.removeValue(forKey: key) else { return nil }
-        detach(node)
-        return node.entry
+        guard let index = map.removeValue(forKey: key), slots[index].inUse else { return nil }
+        let entry = slots[index].entry
+        detach(index)
+        slots[index].inUse = false
+        freeList.append(index)
+        return entry
     }
 
     /// Remove all entries from the cache.
     /// Typically called when the font changes and all cached glyphs become invalid.
     func clear() {
         map.removeAll(keepingCapacity: true)
-        head.next = tail
-        tail.prev = head
+        headIndex = Self.noIndex
+        tailIndex = Self.noIndex
+        freeList.removeAll(keepingCapacity: true)
+
+        if !slots.isEmpty {
+            for idx in slots.indices.reversed() {
+                slots[idx].inUse = false
+                slots[idx].prev = Self.noIndex
+                slots[idx].next = Self.noIndex
+                freeList.append(idx)
+            }
+        }
     }
 
     // MARK: - Pre-Population
@@ -268,33 +301,46 @@ final class GlyphCache {
 
     // MARK: - Private Helpers
 
-    /// Add a node immediately after the head sentinel (most-recently-used position).
-    private func addToHead(_ node: Node) {
-        node.prev = head
-        node.next = head.next
-        head.next?.prev = node
-        head.next = node
+    /// Add a slot to the MRU position.
+    private func addToHead(_ index: Int) {
+        slots[index].prev = Self.noIndex
+        slots[index].next = headIndex
+
+        if headIndex != Self.noIndex {
+            slots[headIndex].prev = index
+        }
+
+        headIndex = index
+        if tailIndex == Self.noIndex {
+            tailIndex = index
+        }
     }
 
-    /// Detach a node from its current position in the doubly-linked list.
-    private func detach(_ node: Node) {
-        node.prev?.next = node.next
-        node.next?.prev = node.prev
-        node.prev = nil
-        node.next = nil
+    /// Detach a slot from its current position in the LRU chain.
+    private func detach(_ index: Int) {
+        let prev = slots[index].prev
+        let next = slots[index].next
+
+        if prev != Self.noIndex {
+            slots[prev].next = next
+        } else {
+            headIndex = next
+        }
+
+        if next != Self.noIndex {
+            slots[next].prev = prev
+        } else {
+            tailIndex = prev
+        }
+
+        slots[index].prev = Self.noIndex
+        slots[index].next = Self.noIndex
     }
 
-    /// Move an existing node to the head (most-recently-used position).
-    private func moveToHead(_ node: Node) {
-        detach(node)
-        addToHead(node)
-    }
-
-    /// Remove and return the node immediately before the tail sentinel
-    /// (the least-recently-used entry). Returns `nil` if the list is empty.
-    private func removeTail() -> Node? {
-        guard let lruNode = tail.prev, lruNode !== head else { return nil }
-        detach(lruNode)
-        return lruNode
+    /// Move an existing slot to MRU position.
+    private func moveToHead(_ index: Int) {
+        guard headIndex != index else { return }
+        detach(index)
+        addToHead(index)
     }
 }

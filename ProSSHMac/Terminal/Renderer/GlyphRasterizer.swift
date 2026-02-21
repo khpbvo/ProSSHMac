@@ -100,17 +100,30 @@ enum GlyphRasterizer {
             return .empty
         }
 
-        // Create the attributed string for this codepoint
-        let string = String(codepoint)
-        let attributes: [NSAttributedString.Key: Any] = [
-            NSAttributedString.Key(kCTFontAttributeName as String): font,
-            NSAttributedString.Key(kCTForegroundColorFromContextAttributeName as String): true
-        ]
-        let attrString = NSAttributedString(string: string, attributes: attributes)
-        let line = CTLineCreateWithAttributedString(attrString)
+        // Fast path for the dominant case: single BMP scalar, non-color glyph.
+        var line: CTLine?
+        var imageBounds = CGRect.zero
+        var directGlyph: CGGlyph = 0
+        var hasDirectGlyph = false
+        if !isColor, codepoint.value <= 0xFFFF {
+            var char = UInt16(truncatingIfNeeded: codepoint.value)
+            if CTFontGetGlyphsForCharacters(font, &char, &directGlyph, 1), directGlyph != 0 {
+                imageBounds = CTFontGetBoundingRectsForGlyphs(font, .default, &directGlyph, nil, 1)
+                hasDirectGlyph = true
+            }
+        }
 
-        // Compute the image bounds (actual pixel coverage) for precise bearing
-        let imageBounds = CTLineGetImageBounds(line, nil)
+        if !hasDirectGlyph {
+            let string = String(codepoint)
+            let attributes: [NSAttributedString.Key: Any] = [
+                NSAttributedString.Key(kCTFontAttributeName as String): font,
+                NSAttributedString.Key(kCTForegroundColorFromContextAttributeName as String): true
+            ]
+            let attrString = NSAttributedString(string: string, attributes: attributes)
+            let textLine = CTLineCreateWithAttributedString(attrString)
+            line = textLine
+            imageBounds = CTLineGetImageBounds(textLine, nil)
+        }
 
         // Terminal cells are fixed-advance slots; draw at the cell origin.
         let penX: CGFloat = 0
@@ -186,7 +199,13 @@ enum GlyphRasterizer {
         context.textPosition = CGPoint(x: penX, y: penY)
 
         // Draw the glyph
-        CTLineDraw(line, context)
+        if hasDirectGlyph {
+            var glyph = directGlyph
+            var position = CGPoint(x: penX, y: penY)
+            CTFontDrawGlyphs(font, &glyph, &position, 1, context)
+        } else if let line {
+            CTLineDraw(line, context)
+        }
 
         // B.2.3: For BGRA rendering (color emoji), swizzle to RGBA
         if isColor {
@@ -261,39 +280,7 @@ enum GlyphRasterizer {
     /// This covers the majority of emoji without needing to query the font.
     /// Includes pictographs, emoticons, symbols, flags, and modifier sequences.
     private static func isEmojiCodepoint(_ scalar: UnicodeScalar) -> Bool {
-        let v = scalar.value
-
-        // Miscellaneous Symbols and Pictographs
-        if (0x1F300...0x1F5FF).contains(v) { return true }
-        // Emoticons
-        if (0x1F600...0x1F64F).contains(v) { return true }
-        // Transport and Map Symbols
-        if (0x1F680...0x1F6FF).contains(v) { return true }
-        // Supplemental Symbols and Pictographs
-        if (0x1F900...0x1F9FF).contains(v) { return true }
-        // Symbols and Pictographs Extended-A
-        if (0x1FA00...0x1FA6F).contains(v) { return true }
-        // Symbols and Pictographs Extended-B (chess, hand symbols, etc.)
-        if (0x1FA70...0x1FAFF).contains(v) { return true }
-        // Dingbats
-        if (0x2700...0x27BF).contains(v) { return true }
-        // Miscellaneous Symbols
-        if (0x2600...0x26FF).contains(v) { return true }
-        // Variation selectors indicate emoji presentation
-        if (0xFE00...0xFE0F).contains(v) { return true }
-        // Regional indicator symbols (flags)
-        if (0x1F1E0...0x1F1FF).contains(v) { return true }
-        // Skin tone modifiers
-        if (0x1F3FB...0x1F3FF).contains(v) { return true }
-        // Zero-width joiner (used in emoji sequences)
-        if v == 0x200D { return true }
-        // Keycap sequences: #, *, 0-9 followed by U+FE0F U+20E3
-        // (the combining enclosing keycap is the indicator)
-        if v == 0x20E3 { return true }
-        // Copyright, Registered, Trademark (emoji presentation with VS16)
-        if v == 0x00A9 || v == 0x00AE || v == 0x2122 { return true }
-
-        return false
+        UnicodeClassification.isEmojiScalar(scalar)
     }
 
     // MARK: - B.2.4 Wide Character Detection
@@ -317,13 +304,13 @@ enum GlyphRasterizer {
     ///   - count: Total number of bytes in the buffer.
     private static func swizzleBGRAtoRGBA(_ buffer: inout [UInt8], count: Int) {
         let pixelCount = count / 4
-        for i in 0..<pixelCount {
-            let offset = i * 4
-            // BGRA layout: [B, G, R, A] -> RGBA: [R, G, B, A]
-            let b = buffer[offset]
-            let r = buffer[offset + 2]
-            buffer[offset] = r
-            buffer[offset + 2] = b
+        buffer.withUnsafeMutableBytes { raw in
+            let words = raw.bindMemory(to: UInt32.self)
+            guard pixelCount <= words.count else { return }
+            for i in 0..<pixelCount {
+                let value = words[i] // BGRA bytes in memory => 0xAARRGGBB on little-endian
+                words[i] = (value & 0xFF00_FF00) | ((value & 0x00FF_0000) >> 16) | ((value & 0x0000_00FF) << 16)
+            }
         }
     }
 

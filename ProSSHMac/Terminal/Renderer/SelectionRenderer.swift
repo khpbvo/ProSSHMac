@@ -63,6 +63,11 @@ final class SelectionRenderer {
         selection = nil
     }
 
+    /// Whether snapshot projection is needed for current/previous selection state.
+    func needsProjection() -> Bool {
+        selection != nil || previousSelectionLinearRange != nil || needsFullRefresh
+    }
+
     /// Applies selection flags to snapshot cells.
     ///
     /// When selection changes, this forces a full update to ensure stale

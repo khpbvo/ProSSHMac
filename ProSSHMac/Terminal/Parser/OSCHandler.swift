@@ -47,8 +47,7 @@ nonisolated enum OSCHandler {
             stringPart = [][...]
         }
 
-        guard let numberStr = String(bytes: numberPart, encoding: .utf8),
-              let oscCode = Int(numberStr) else {
+        guard let oscCode = parseASCIIInt(numberPart) else {
             return
         }
 
@@ -364,6 +363,19 @@ nonisolated enum OSCHandler {
 
     /// Format a UInt8 as a two-character hex string.
     private static func hexPair(_ v: UInt8) -> String {
-        String(format: "%02x%02x", v, v) // X11 format duplicates: ff → ffff
+        let lut: [UInt8] = Array("0123456789abcdef".utf8)
+        let hi = lut[Int((v >> 4) & 0x0F)]
+        let lo = lut[Int(v & 0x0F)]
+        return String(decoding: [hi, lo, hi, lo], as: UTF8.self) // X11 format duplicates: ff -> ffff
+    }
+
+    private static func parseASCIIInt(_ bytes: ArraySlice<UInt8>) -> Int? {
+        guard !bytes.isEmpty else { return nil }
+        var value = 0
+        for b in bytes {
+            guard b >= 0x30, b <= 0x39 else { return nil }
+            value = value * 10 + Int(b - 0x30)
+        }
+        return value
     }
 }

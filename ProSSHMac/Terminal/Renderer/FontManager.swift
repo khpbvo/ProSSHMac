@@ -428,13 +428,14 @@ actor FontManager {
         // CTFontCreateWithName never returns nil, but may substitute a different font.
         // Verify we got what we asked for by checking the family name.
         let resolvedFamily = CTFontCopyFamilyName(font) as String
-        if resolvedFamily.lowercased() == name.lowercased() {
+        if resolvedFamily.caseInsensitiveCompare(name) == .orderedSame {
             return font
         }
 
         // Also try matching the PostScript name or display name.
         let resolvedPostScript = CTFontCopyPostScriptName(font) as String
-        if resolvedPostScript.lowercased().contains(name.lowercased().replacingOccurrences(of: " ", with: "")) {
+        let normalizedName = name.replacingOccurrences(of: " ", with: "")
+        if resolvedPostScript.range(of: normalizedName, options: [.caseInsensitive]) != nil {
             return font
         }
 
@@ -619,13 +620,22 @@ actor FontManager {
         for scalar: Unicode.Scalar,
         baseFont: CTFont
     ) -> CTFont? {
-        let utf16 = Array(String(scalar).utf16)
-        var glyphs = [CGGlyph](repeating: 0, count: utf16.count)
-        let found = CTFontGetGlyphsForCharacters(baseFont, utf16, &glyphs, utf16.count)
-
-        if found && glyphs[0] != 0 {
-            // The base font already has it — should not reach here, but be safe.
-            return baseFont
+        let scalarValue = scalar.value
+        if scalarValue <= 0xFFFF {
+            var char = UInt16(truncatingIfNeeded: scalarValue)
+            var glyph: CGGlyph = 0
+            let found = CTFontGetGlyphsForCharacters(baseFont, &char, &glyph, 1)
+            if found && glyph != 0 {
+                return baseFont
+            }
+        } else {
+            let utf16 = Array(String(scalar).utf16)
+            var glyphs = [CGGlyph](repeating: 0, count: utf16.count)
+            let found = CTFontGetGlyphsForCharacters(baseFont, utf16, &glyphs, utf16.count)
+            if found && glyphs[0] != 0 {
+                // The base font already has it — should not reach here, but be safe.
+                return baseFont
+            }
         }
 
         // Use CTFontCreateForString to find a system fallback.
@@ -646,6 +656,14 @@ actor FontManager {
 
     /// Check whether a CTFont contains a glyph for the given Unicode scalar.
     private static func fontContainsGlyph(_ font: CTFont, scalar: Unicode.Scalar) -> Bool {
+        let value = scalar.value
+        if value <= 0xFFFF {
+            var char = UInt16(truncatingIfNeeded: value)
+            var glyph: CGGlyph = 0
+            let found = CTFontGetGlyphsForCharacters(font, &char, &glyph, 1)
+            return found && glyph != 0
+        }
+
         let utf16 = Array(String(scalar).utf16)
         var glyphs = [CGGlyph](repeating: 0, count: utf16.count)
         let found = CTFontGetGlyphsForCharacters(font, utf16, &glyphs, utf16.count)
@@ -656,78 +674,17 @@ actor FontManager {
 
     /// Check if a scalar is in an emoji range.
     private static func isEmojiScalar(_ scalar: Unicode.Scalar) -> Bool {
-        let v = scalar.value
-
-        // Common emoji ranges.
-        if (0x1F600...0x1F64F).contains(v) { return true }  // Emoticons
-        if (0x1F300...0x1F5FF).contains(v) { return true }  // Misc Symbols and Pictographs
-        if (0x1F680...0x1F6FF).contains(v) { return true }  // Transport and Map
-        if (0x1F700...0x1F77F).contains(v) { return true }  // Alchemical Symbols
-        if (0x1F900...0x1F9FF).contains(v) { return true }  // Supplemental Symbols
-        if (0x1FA00...0x1FA6F).contains(v) { return true }  // Chess Symbols
-        if (0x1FA70...0x1FAFF).contains(v) { return true }  // Symbols Extended-A
-        if (0x2600...0x26FF).contains(v)   { return true }  // Misc Symbols
-        if (0x2700...0x27BF).contains(v)   { return true }  // Dingbats
-        if (0xFE00...0xFE0F).contains(v)   { return true }  // Variation Selectors
-        if (0x200D...0x200D).contains(v)   { return true }  // ZWJ
-        if v == 0x20E3                     { return true }   // Combining Enclosing Keycap
-        if (0xE0020...0xE007F).contains(v) { return true }  // Tags
-        if (0x231A...0x231B).contains(v)   { return true }  // Watch, Hourglass
-        if (0x23E9...0x23F3).contains(v)   { return true }  // Various symbols
-        if (0x23F8...0x23FA).contains(v)   { return true }  // Various symbols
-
-        return false
+        UnicodeClassification.isEmojiScalar(scalar)
     }
 
     /// Check if a scalar is in a CJK range (unified ideographs, kana, hangul, etc.).
     private static func isCJKScalar(_ scalar: Unicode.Scalar) -> Bool {
-        let v = scalar.value
-
-        if (0x4E00...0x9FFF).contains(v)   { return true }  // CJK Unified Ideographs
-        if (0x3400...0x4DBF).contains(v)   { return true }  // CJK Extension A
-        if (0x20000...0x2A6DF).contains(v) { return true }  // CJK Extension B
-        if (0x2A700...0x2FA1F).contains(v) { return true }  // CJK Extensions C-F + Compat
-        if (0xF900...0xFAFF).contains(v)   { return true }  // CJK Compat Ideographs
-        if (0xAC00...0xD7AF).contains(v)   { return true }  // Hangul Syllables
-        if (0x3040...0x309F).contains(v)   { return true }  // Hiragana
-        if (0x30A0...0x30FF).contains(v)   { return true }  // Katakana
-        if (0x3000...0x303F).contains(v)   { return true }  // CJK Symbols and Punctuation
-        if (0xFF01...0xFF60).contains(v)   { return true }  // Fullwidth Forms
-        if (0xFFE0...0xFFE6).contains(v)   { return true }  // Fullwidth Signs
-        if (0x3100...0x312F).contains(v)   { return true }  // Bopomofo
-        if (0x31A0...0x31BF).contains(v)   { return true }  // Bopomofo Extended
-        if (0x2E80...0x2FDF).contains(v)   { return true }  // CJK Radicals, Kangxi
-        if (0x3200...0x33FF).contains(v)   { return true }  // Enclosed CJK
-
-        return false
+        UnicodeClassification.isCJKScalar(scalar)
     }
 
     /// Check if a scalar is in a Powerline / Nerd Font private-use-area range.
     private static func isPowerlineScalar(_ scalar: Unicode.Scalar) -> Bool {
-        let v = scalar.value
-
-        // Powerline symbols (standard range).
-        if (0xE0A0...0xE0A3).contains(v) { return true }
-        if (0xE0B0...0xE0B3).contains(v) { return true }
-
-        // Powerline Extra symbols.
-        if (0xE0A4...0xE0A7).contains(v) { return true }
-        if (0xE0B4...0xE0C8).contains(v) { return true }
-        if (0xE0CA...0xE0CA).contains(v) { return true }
-        if (0xE0CC...0xE0D4).contains(v) { return true }
-
-        // Nerd Fonts: Seti-UI + Custom, Devicons, Font Awesome, etc.
-        if (0xE5FA...0xE6AC).contains(v) { return true }  // Seti-UI + Custom
-        if (0xE700...0xE7C5).contains(v) { return true }  // Devicons
-        if (0xF000...0xF2E0).contains(v) { return true }  // Font Awesome
-        if (0xE200...0xE2A9).contains(v) { return true }  // Font Awesome Extension
-        if (0xF0001...0xF1AF0).contains(v) { return true } // Material Design Icons
-        if (0xE300...0xE3E3).contains(v) { return true }  // Weather
-        if (0xF500...0xFD46).contains(v) { return true }  // Octicons + others
-        if (0xE000...0xE00A).contains(v) { return true }  // Pomicons
-        if (0x2800...0x28FF).contains(v) { return true }  // Braille Patterns (used by some TUIs)
-
-        return false
+        UnicodeClassification.isPowerlineScalar(scalar)
     }
 
     // MARK: - Internal: Rebuild

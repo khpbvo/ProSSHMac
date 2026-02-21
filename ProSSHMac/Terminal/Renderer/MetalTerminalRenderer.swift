@@ -493,14 +493,15 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         for scalar: Unicode.Scalar,
         primaryFont: CTFont
     ) -> CTFont {
-        let string = String(scalar)
-        let cfString = string as CFString
-        let range = CFRange(location: 0, length: CFStringGetLength(cfString))
+        let scalarValue = scalar.value
 
         // For emoji codepoints, always prefer the system emoji font.
         // Monospace fonts (SF Mono, Menlo, etc.) often have placeholder glyphs
         // for emoji that pass CTFontGetGlyphsForCharacters but render as "?".
-        if isEmojiRange(scalar.value) {
+        if isEmojiRange(scalarValue) {
+            let string = String(scalar)
+            let cfString = string as CFString
+            let range = CFRange(location: 0, length: CFStringGetLength(cfString))
             let fallback = CTFontCreateForString(primaryFont, cfString, range)
             let fallbackFamily = CTFontCopyFamilyName(fallback) as String
             let primaryFamily = CTFontCopyFamilyName(primaryFont) as String
@@ -512,15 +513,26 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         }
 
         // For non-emoji: check if the primary font has the glyph.
-        let utf16 = Array(string.utf16)
-        var glyphs = [CGGlyph](repeating: 0, count: utf16.count)
-        let found = CTFontGetGlyphsForCharacters(primaryFont, utf16, &glyphs, utf16.count)
-
-        if found && glyphs[0] != 0 {
-            return primaryFont
+        if scalarValue <= 0xFFFF {
+            var char = UInt16(truncatingIfNeeded: scalarValue)
+            var glyph: CGGlyph = 0
+            if CTFontGetGlyphsForCharacters(primaryFont, &char, &glyph, 1), glyph != 0 {
+                return primaryFont
+            }
+        } else {
+            let string = String(scalar)
+            let utf16 = Array(string.utf16)
+            var glyphs = [CGGlyph](repeating: 0, count: utf16.count)
+            let found = CTFontGetGlyphsForCharacters(primaryFont, utf16, &glyphs, utf16.count)
+            if found && glyphs[0] != 0 {
+                return primaryFont
+            }
         }
 
         // Primary font lacks the glyph — use CoreText system fallback.
+        let string = String(scalar)
+        let cfString = string as CFString
+        let range = CFRange(location: 0, length: CFStringGetLength(cfString))
         let fallback = CTFontCreateForString(primaryFont, cfString, range)
         return fallback
     }
@@ -529,46 +541,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     /// These ranges should use a color emoji font rather than the monospace
     /// terminal font, which typically renders placeholders for these codepoints.
     private static func isEmojiRange(_ v: UInt32) -> Bool {
-        // Miscellaneous Symbols and Pictographs + Emoticons
-        if (0x1F300...0x1F64F).contains(v) { return true }
-        // Transport and Map Symbols
-        if (0x1F680...0x1F6FF).contains(v) { return true }
-        // Supplemental Symbols and Pictographs
-        if (0x1F900...0x1F9FF).contains(v) { return true }
-        // Symbols and Pictographs Extended-A/B
-        if (0x1FA00...0x1FAFF).contains(v) { return true }
-        // Alchemical Symbols
-        if (0x1F700...0x1F77F).contains(v) { return true }
-        // Regional indicator symbols (flags)
-        if (0x1F1E0...0x1F1FF).contains(v) { return true }
-        // Miscellaneous Symbols (snowman, lightning, stars, etc.)
-        if (0x2600...0x26FF).contains(v) { return true }
-        // Dingbats (arrows, pencils, scissors, etc.)
-        if (0x2700...0x27BF).contains(v) { return true }
-        // Miscellaneous Technical (keyboard, etc.)
-        if (0x2300...0x23FF).contains(v) { return true }
-        // Geometric Shapes (circles, squares used as icons)
-        if (0x25A0...0x25FF).contains(v) { return true }
-        // Enclosed Alphanumerics / Symbols
-        if (0x2460...0x24FF).contains(v) { return true }
-        // Box-drawing and block elements are NOT emoji — handled by primary font
-        // Variation selectors (emoji vs text presentation)
-        if (0xFE00...0xFE0F).contains(v) { return true }
-        // Zero-width joiner (emoji sequences)
-        if v == 0x200D { return true }
-        // Combining Enclosing Keycap
-        if v == 0x20E3 { return true }
-        // Skin tone modifiers
-        if (0x1F3FB...0x1F3FF).contains(v) { return true }
-        // Copyright, Registered, Trademark
-        if v == 0x00A9 || v == 0x00AE || v == 0x2122 { return true }
-        // Arrows supplement (used by some TUIs)
-        if (0x2B05...0x2B55).contains(v) { return true }
-        // Mahjong, dominos
-        if (0x1F000...0x1F02F).contains(v) { return true }
-        // Tags block (emoji flag sequences)
-        if (0xE0020...0xE007F).contains(v) { return true }
-        return false
+        UnicodeClassification.isEmojiCodepoint(v)
     }
 
     // MARK: - Snapshot Update (B.8.4)
@@ -586,7 +559,12 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     /// - Parameter snapshot: The grid snapshot to render.
     func updateSnapshot(_ snapshot: GridSnapshot) {
         latestSnapshot = snapshot
-        let renderSnapshot = selectionRenderer.applySelection(to: snapshot)
+        let renderSnapshot: GridSnapshot
+        if selectionRenderer.needsProjection() {
+            renderSnapshot = selectionRenderer.applySelection(to: snapshot)
+        } else {
+            renderSnapshot = snapshot
+        }
         if pendingRenderSnapshot != nil {
             forceFullUploadForPendingSnapshot = true
         }
@@ -681,6 +659,11 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     ///
     /// - Parameter view: The MTKView requesting a draw.
     func draw(in view: MTKView) {
+        let frameNow = CACurrentMediaTime()
+        if pendingRenderSnapshot == nil, !isDirty, !cursorRenderer.requiresContinuousFrames() {
+            return
+        }
+
         if usesNativeRefreshRate {
             let targetFPS = max(60, currentScreenMaximumFPS())
             if view.preferredFramesPerSecond != targetFPS {
@@ -707,7 +690,9 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
             inflightSemaphore.signal()
             return
         }
+        #if DEBUG
         commandBuffer.label = "TerminalFrame"
+        #endif
 
         let drawableSize = view.drawableSize
         let scannerActive = scannerConfiguration.isEnabled && isLocalSession
@@ -724,7 +709,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         applyPendingSnapshotIfNeeded()
 
         // Update uniforms for this frame via the TerminalUniformBuffer.
-        let cursorFrame = cursorRenderer.frame(at: CACurrentMediaTime())
+        let cursorFrame = cursorRenderer.frame(at: frameNow)
         let frameDelta = max(0, uniformBuffer.currentTime - previousUniformTime)
         let phosphorBlend = (postProcessingReady && hasCapturedPreviousFrame)
             ? CRTEffect.phosphorBlend(
@@ -761,7 +746,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         )
         previousUniformTime = uniformBuffer.currentTime
 
-        let frameStart = CACurrentMediaTime()
+        let frameStart = frameNow
         let frameSignpostID = performanceMonitor.beginFrame()
         var drawCalls = 0
 

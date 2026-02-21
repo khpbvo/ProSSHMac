@@ -105,6 +105,9 @@ final class GlyphAtlas {
     /// - Parameter page: Zero-based page index.
     /// - Returns: The `MTLTexture` for that page, or nil.
     func texture(forPage page: Int) -> MTLTexture? {
+        if page == 0 {
+            return pages.first?.texture
+        }
         guard page >= 0, page < pages.count else { return nil }
         return pages[page].texture
     }

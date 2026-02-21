@@ -69,7 +69,15 @@ pkill -9 -x "$APP_NAME" 2>/dev/null || true
 sleep 1
 
 if [[ "$PTY_LOCAL" -eq 1 ]]; then
-    "$APP_PATH/Contents/MacOS/$APP_NAME" --benchmark-pty-local "${EXTRA_ARGS[@]}"
+    if [[ ${#EXTRA_ARGS[@]} -gt 0 ]]; then
+        "$APP_PATH/Contents/MacOS/$APP_NAME" --benchmark-pty-local "${EXTRA_ARGS[@]}"
+    else
+        "$APP_PATH/Contents/MacOS/$APP_NAME" --benchmark-pty-local
+    fi
 else
-    "$APP_PATH/Contents/MacOS/$APP_NAME" --benchmark-base64 "${EXTRA_ARGS[@]}"
+    if [[ ${#EXTRA_ARGS[@]} -gt 0 ]]; then
+        "$APP_PATH/Contents/MacOS/$APP_NAME" --benchmark-base64 "${EXTRA_ARGS[@]}"
+    else
+        "$APP_PATH/Contents/MacOS/$APP_NAME" --benchmark-base64
+    fi
 fi
