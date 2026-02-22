@@ -35,6 +35,8 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 - 2026-02-22: Baseline feature checklist rewritten with phased plan and corrected claims.
 - 2026-02-22: Working-memory loop established in `AGENTS.md`; long-term memory source pinned to this file.
 - 2026-02-22: Fixed `TerminalView.swift` main-actor isolation warnings in `DirectTerminalInputNSView` observer/deinit paths; build re-verified.
+- 2026-02-22: Fixed live SFTP failure ("session must be blocking") by forcing blocking mode only during SFTP calls in `ProSSHLibSSHWrapper.c`, then restoring prior interactive mode.
+- 2026-02-22: Updated transfer download destination to the user Downloads folder (`~/Downloads`) instead of app support storage.
 
 ## How to Use This File
 
@@ -93,12 +95,13 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 
 ### Checklist
 
-- [ ] Validate whether current shared `ProSSHLibSSHHandle` causes contention under real usage (shell output + concurrent SFTP actions).
-- [ ] Choose one approach and document rationale in this file:
+- [x] Validate whether current shared `ProSSHLibSSHHandle` causes contention under real usage (shell output + concurrent SFTP actions).
+- [x] Choose one approach and document rationale in this file:
   - Keep shared transport with serialized SFTP usage.
   - Add dedicated SFTP-only connection/session.
+- Decision (current): keep shared transport for now; enforce temporary session blocking during SFTP operations and restore non-blocking shell behavior afterward.
 - [ ] If dedicated connection is chosen, implement lifecycle handling tied to SSH session connect/disconnect.
-- [ ] Keep `TransferManager` compatibility (do not break Transfers tab).
+- [x] Keep `TransferManager` compatibility (do not break Transfers tab).
 - [ ] Add/extend tests for chosen architecture in `ProSSHMac/Terminal/Tests`.
 
 ## Phase 2 - Left Sidebar File Browser in Terminal

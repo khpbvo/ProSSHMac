@@ -286,19 +286,16 @@ final class TransferManager: ObservableObject {
     }
 
     private static func defaultDownloadDirectory() throws -> URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? FileManager.default.temporaryDirectory
-
-        let directory = base
-            .appendingPathComponent("ProSSHV2", isDirectory: true)
-            .appendingPathComponent("Downloads", isDirectory: true)
+        let downloadsURL =
+            FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads", isDirectory: true)
 
         try FileManager.default.createDirectory(
-            at: directory,
+            at: downloadsURL,
             withIntermediateDirectories: true,
             attributes: nil
         )
-        return directory
+        return downloadsURL
     }
 
     private func normalizeRemotePath(_ path: String) -> String {
