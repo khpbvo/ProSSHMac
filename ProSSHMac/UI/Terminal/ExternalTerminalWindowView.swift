@@ -12,6 +12,7 @@ struct ExternalTerminalWindowView: View {
     @AppStorage("terminal.ui.fontFamily") private var terminalUIFontFamily = FontManager.platformDefaultFontFamily
     @AppStorage("terminal.renderer.useMetal") private var useMetalRenderer = true
     @StateObject private var selectionCoordinator = TerminalSelectionCoordinator()
+    @State private var directInputActivationNonce: Int = 0
 
     private var session: Session? {
         guard let sessionID else { return nil }
@@ -104,7 +105,9 @@ struct ExternalTerminalWindowView: View {
                 fontSize: terminalUIFontSize,
                 fontFamily: terminalUIFontFamily,
                 backgroundOpacityPercent: terminalBackgroundOpacityPercent,
-                onTap: nil,
+                onTap: { _ in
+                    directInputActivationNonce &+= 1
+                },
                 onTerminalResize: { columns, rows in
                     Task {
                         await sessionManager.resizeTerminal(
@@ -131,6 +134,7 @@ struct ExternalTerminalWindowView: View {
                 DirectTerminalInputCaptureView(
                     isEnabled: session.state == .connected,
                     sessionID: session.id,
+                    activationNonce: directInputActivationNonce,
                     keyEncoderOptions: { keyEncoderOptions(for: session.id) },
                     onCommandShortcut: { action in
                         handleHardwareCommandShortcut(action)

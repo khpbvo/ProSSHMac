@@ -50,6 +50,7 @@ struct TerminalView: View {
     @State private var directInputBufferBySessionID: [UUID: String] = [:]
     @State private var expandedMetadataSessions: Set<UUID> = []
     @State private var hoveredTabID: UUID?
+    @State private var directInputActivationNonce: Int = 0
     private let linkDetector = LinkDetector()
 
     var body: some View {
@@ -624,6 +625,7 @@ struct TerminalView: View {
     }
 
     private func focusSessionAndPane(_ sessionID: UUID, paneID: UUID? = nil) {
+        directInputActivationNonce &+= 1
         focusedSessionID = sessionID
         if tabManager.selectedSessionID != sessionID {
             tabManager.select(sessionID: sessionID)
@@ -1597,6 +1599,7 @@ struct TerminalView: View {
         DirectTerminalInputCaptureView(
             isEnabled: shouldEnableDirectTerminalInput(for: session),
             sessionID: session.id,
+            activationNonce: directInputActivationNonce,
             keyEncoderOptions: { hardwareKeyEncoderOptions() },
             onCommandShortcut: { action in
                 handleHardwareCommandShortcut(action)
@@ -2374,6 +2377,7 @@ private struct SafeTerminalRenderedLine: Identifiable {
 struct DirectTerminalInputCaptureView: NSViewRepresentable {
     let isEnabled: Bool
     let sessionID: UUID
+    let activationNonce: Int
     let keyEncoderOptions: () -> KeyEncoderOptions
     var onCommandShortcut: ((HardwareKeyCommandAction) -> Void)?
     let onSendSequence: (UUID, String) -> Void
@@ -2382,6 +2386,7 @@ struct DirectTerminalInputCaptureView: NSViewRepresentable {
         let view = DirectTerminalInputNSView(frame: .zero)
         view.isEnabled = isEnabled
         view.sessionID = sessionID
+        view.activationNonce = activationNonce
         view.keyEncoderOptions = keyEncoderOptions
         view.onCommandShortcut = onCommandShortcut
         view.onSendSequence = onSendSequence
@@ -2392,6 +2397,7 @@ struct DirectTerminalInputCaptureView: NSViewRepresentable {
     func updateNSView(_ nsView: DirectTerminalInputNSView, context: Context) {
         nsView.isEnabled = isEnabled
         nsView.sessionID = sessionID
+        nsView.activationNonce = activationNonce
         nsView.keyEncoderOptions = keyEncoderOptions
         nsView.onCommandShortcut = onCommandShortcut
         nsView.onSendSequence = onSendSequence
@@ -2402,9 +2408,18 @@ struct DirectTerminalInputCaptureView: NSViewRepresentable {
 final class DirectTerminalInputNSView: NSView {
     var isEnabled = false
     var sessionID: UUID?
+    var activationNonce: Int = 0 {
+        didSet {
+            if activationNonce != oldValue {
+                armForKeyboardInputIfNeeded()
+            }
+        }
+    }
     var keyEncoderOptions: (() -> KeyEncoderOptions)?
     var onCommandShortcut: ((HardwareKeyCommandAction) -> Void)?
     var onSendSequence: ((UUID, String) -> Void)?
+    private var windowDidBecomeKeyObserver: NSObjectProtocol?
+    private var appDidBecomeActiveObserver: NSObjectProtocol?
 
     override var acceptsFirstResponder: Bool {
         isEnabled
@@ -2414,11 +2429,47 @@ final class DirectTerminalInputNSView: NSView {
         nil
     }
 
+    deinit {
+        removeActivationObservers()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        removeActivationObservers()
+
+        guard let window else { return }
+        windowDidBecomeKeyObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            self?.armForKeyboardInputIfNeeded()
+        }
+        appDidBecomeActiveObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.armForKeyboardInputIfNeeded()
+        }
+    }
+
     func armForKeyboardInputIfNeeded() {
         guard isEnabled else { return }
         DispatchQueue.main.async { [weak self] in
             guard let self, self.isEnabled else { return }
             _ = self.window?.makeFirstResponder(self)
+        }
+    }
+
+    private func removeActivationObservers() {
+        if let windowDidBecomeKeyObserver {
+            NotificationCenter.default.removeObserver(windowDidBecomeKeyObserver)
+            self.windowDidBecomeKeyObserver = nil
+        }
+        if let appDidBecomeActiveObserver {
+            NotificationCenter.default.removeObserver(appDidBecomeActiveObserver)
+            self.appDidBecomeActiveObserver = nil
         }
     }
 
