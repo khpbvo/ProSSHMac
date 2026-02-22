@@ -2430,7 +2430,9 @@ final class DirectTerminalInputNSView: NSView {
     }
 
     deinit {
-        removeActivationObservers()
+        MainActor.assumeIsolated {
+            removeActivationObservers()
+        }
     }
 
     override func viewDidMoveToWindow() {
@@ -2443,14 +2445,18 @@ final class DirectTerminalInputNSView: NSView {
             object: window,
             queue: .main
         ) { [weak self] _ in
-            self?.armForKeyboardInputIfNeeded()
+            Task { @MainActor [weak self] in
+                self?.armForKeyboardInputIfNeeded()
+            }
         }
         appDidBecomeActiveObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didBecomeActiveNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.armForKeyboardInputIfNeeded()
+            Task { @MainActor [weak self] in
+                self?.armForKeyboardInputIfNeeded()
+            }
         }
     }
 

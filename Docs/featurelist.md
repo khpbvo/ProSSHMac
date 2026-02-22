@@ -7,6 +7,35 @@ Required assistant model for this work: `gpt-5.1-codex`
 
 Ship two terminal sidebars (left: remote file browser, right: AI assistant) on top of the current terminal architecture, with safe command execution and reliable context retrieval.
 
+## Loop Kickoff Snapshot (2026-02-22)
+
+### Starting Point
+
+- Current app has terminal panes, Transfers-tab SFTP, and OSC parsing, but no terminal sidebars for file browser + AI.
+- AI stack (services, tools, chat UI, follow mode) is not implemented.
+- Command-block indexing is not implemented; OSC 133 semantic handling is still placeholder-only.
+- Working-memory loop is now established via `AGENTS.md` + this file.
+
+### End Point (Definition of Done)
+
+- Terminal has production-ready left SFTP file sidebar and right AI sidebar.
+- AI uses Responses API with model pinned to `gpt-5.1-codex`.
+- Command-block index supports reliable context retrieval for AI tools.
+- Execution safety is enforced (explicit confirmation before AI command execution).
+- Regression checks pass for existing pane splitting and Transfers behavior.
+- This file and `AGENTS.md` remain current at task completion.
+
+### Current Focus
+
+- Active phase: Phase 1 (SFTP architecture decision + foundation).
+- Immediate objective: decide and validate shared-session vs dedicated-SFTP strategy with tests.
+
+## Loop Log
+
+- 2026-02-22: Baseline feature checklist rewritten with phased plan and corrected claims.
+- 2026-02-22: Working-memory loop established in `AGENTS.md`; long-term memory source pinned to this file.
+- 2026-02-22: Fixed `TerminalView.swift` main-actor isolation warnings in `DirectTerminalInputNSView` observer/deinit paths; build re-verified.
+
 ## How to Use This File
 
 - Use this as the source of truth for sequencing and progress.
@@ -46,14 +75,14 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 ### Checklist
 
 - [ ] Confirm active model is `gpt-5.1-codex`.
-- [ ] Re-read key files before coding:
+- [x] Re-read key files before coding:
   - `ProSSHMac/UI/Terminal/TerminalView.swift`
   - `ProSSHMac/Services/SessionManager.swift`
   - `ProSSHMac/Services/SSHTransport.swift`
   - `ProSSHMac/UI/Transfers/TransfersView.swift`
   - `ProSSHMac/Services/TransferManager.swift`
   - `ProSSHMac/Terminal/Parser/OSCHandler.swift`
-- [ ] Decide whether to preserve existing `ObservableObject` conventions for all new types (recommended: yes for consistency).
+- [x] Decide whether to preserve existing `ObservableObject` conventions for all new types (recommended: yes for consistency).
 
 ## Phase 1 - SFTP Architecture Decision and Foundation
 
@@ -176,4 +205,3 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 - [ ] No regressions in Transfers tab.
 - [ ] Command execution from AI cannot happen silently.
 - [ ] Network/API failures fail safely with user-visible errors.
-
