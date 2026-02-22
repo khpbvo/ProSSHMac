@@ -5,14 +5,8 @@ import Combine
 import AppKit
 
 struct TerminalView: View {
-    private struct LocalFileBrowserEntry: Identifiable, Hashable {
-        let path: String
-        let name: String
-        let isDirectory: Bool
-        let size: Int64
-
-        var id: String { path }
-    }
+    private typealias FileBrowserEntry = TerminalFileBrowserEntry
+    private typealias FileBrowserRow = TerminalFileBrowserRow
 
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.openWindow) private var openWindow
@@ -64,10 +58,13 @@ struct TerminalView: View {
     @State private var directInputActivationNonce: Int = 0
     @State private var selectedFileBrowserPath: String?
     @State private var fileBrowserSessionID: UUID?
-    @State private var localFileBrowserPath: String = FileManager.default.homeDirectoryForCurrentUser.path
-    @State private var localFileBrowserEntries: [LocalFileBrowserEntry] = []
-    @State private var isLocalFileBrowserLoading = false
-    @State private var localFileBrowserError: String?
+    @State private var fileBrowserCurrentPath: String = "/"
+    @State private var fileBrowserRows: [FileBrowserRow] = []
+    @State private var fileBrowserChildrenByPath: [String: [FileBrowserEntry]] = [:]
+    @State private var fileBrowserExpandedPaths: Set<String> = []
+    @State private var fileBrowserLoadingPaths: Set<String> = []
+    @State private var isFileBrowserRootLoading = false
+    @State private var fileBrowserError: String?
     private let linkDetector = LinkDetector()
 
     var body: some View {
@@ -478,21 +475,19 @@ struct TerminalView: View {
                     .foregroundStyle(.secondary)
             }
 
-            if let session = selectedSession, session.state == .connected, !session.isLocal {
+            if let session = selectedSession, session.state == .connected {
                 HStack(spacing: 8) {
                     Button {
-                        transferManager.navigateUp()
+                        navigateUpFileBrowserRoot(for: session)
                         selectedFileBrowserPath = nil
                     } label: {
                         Image(systemName: "arrow.up.to.line")
                     }
                     .buttonStyle(.bordered)
-                    .disabled(transferManager.currentRemotePath == "/")
+                    .disabled(fileBrowserCurrentPath == "/" || fileBrowserCurrentPath.isEmpty)
 
                     Button {
-                        Task {
-                            await transferManager.refreshDirectory()
-                        }
+                        refreshFileBrowserRoot(for: session)
                     } label: {
                         Image(systemName: "arrow.clockwise")
                     }
@@ -504,68 +499,25 @@ struct TerminalView: View {
                         Image(systemName: "square.and.arrow.down")
                     }
                     .buttonStyle(.bordered)
-                    .disabled(selectedFileBrowserEntry?.isDirectory != false)
+                    .disabled(session.isLocal || selectedFileBrowserItem?.isDirectory != false)
                 }
 
-                Text(transferManager.currentRemotePath)
+                Text(fileBrowserCurrentPath)
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
 
                 Divider()
 
-                if transferManager.isListing {
+                if isFileBrowserRootLoading && fileBrowserRows.isEmpty {
                     ProgressView("Loading directory...")
                         .padding(.top, 6)
-                } else if transferManager.remoteEntries.isEmpty {
-                    Text("Directory is empty.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(.top, 6)
-                } else {
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 2) {
-                            ForEach(transferManager.remoteEntries) { entry in
-                                fileBrowserEntryRow(entry)
-                            }
-                        }
-                    }
-                }
-            } else if let session = selectedSession, session.state == .connected, session.isLocal {
-                HStack(spacing: 8) {
-                    Button {
-                        navigateUpLocalDirectory()
-                        selectedFileBrowserPath = nil
-                    } label: {
-                        Image(systemName: "arrow.up.to.line")
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(localFileBrowserPath == "/" || localFileBrowserPath.isEmpty)
-
-                    Button {
-                        loadLocalDirectory(path: localFileBrowserPath)
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                    .buttonStyle(.bordered)
-                }
-
-                Text(localFileBrowserPath)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-
-                Divider()
-
-                if isLocalFileBrowserLoading {
-                    ProgressView("Loading directory...")
-                        .padding(.top, 6)
-                } else if let localFileBrowserError {
-                    Text(localFileBrowserError)
+                } else if let fileBrowserError {
+                    Text(fileBrowserError)
                         .font(.caption)
                         .foregroundStyle(.red)
                         .padding(.top, 6)
-                } else if localFileBrowserEntries.isEmpty {
+                } else if fileBrowserRows.isEmpty {
                     Text("Directory is empty.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -573,8 +525,8 @@ struct TerminalView: View {
                 } else {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 2) {
-                            ForEach(localFileBrowserEntries) { entry in
-                                localFileBrowserEntryRow(entry)
+                            ForEach(fileBrowserRows) { row in
+                                fileBrowserRow(row, session: session)
                             }
                         }
                     }
@@ -594,28 +546,38 @@ struct TerminalView: View {
     }
 
     @ViewBuilder
-    private func fileBrowserEntryRow(_ entry: SFTPDirectoryEntry) -> some View {
+    private func fileBrowserRow(_ row: FileBrowserRow, session: Session) -> some View {
+        let entry = row.entry
         let isSelected = selectedFileBrowserPath == entry.path
+        let isExpanded = entry.isDirectory && fileBrowserExpandedPaths.contains(entry.path)
+        let isLoading = entry.isDirectory && fileBrowserLoadingPaths.contains(entry.path)
         Button {
             if entry.isDirectory {
                 selectedFileBrowserPath = nil
-                transferManager.openDirectory(entry)
+                toggleFileBrowserDirectory(entry, for: session)
             } else {
                 selectedFileBrowserPath = entry.path
             }
         } label: {
             HStack(spacing: 8) {
-                Image(systemName: entry.isDirectory ? "folder.fill" : "doc")
+                Image(systemName: entry.isDirectory
+                      ? (isExpanded ? "folder.fill.badge.minus" : "folder.fill")
+                      : "doc")
                     .foregroundStyle(entry.isDirectory ? .blue : .secondary)
                 Text(entry.name)
                     .lineLimit(1)
                 Spacer()
+                if isLoading {
+                    ProgressView()
+                        .controlSize(.mini)
+                }
                 if !entry.isDirectory {
                     Text(byteCount(entry.size))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
             }
+            .padding(.leading, CGFloat(8 + (row.depth * 14)))
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
             .background(
@@ -625,62 +587,16 @@ struct TerminalView: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
-            if !entry.isDirectory {
-                Button("Download") {
-                    transferManager.enqueueDownload(entry: entry)
-                }
-                Button("Open in nano") {
-                    openFileInTerminal(entry.path, editor: "nano")
-                }
-                Button("Open in vim") {
-                    openFileInTerminal(entry.path, editor: "vim")
-                }
-                Button("View with less") {
-                    openFileInTerminal(entry.path, editor: "less")
-                }
-                Button("Cat to terminal") {
-                    openFileInTerminal(entry.path, editor: "cat")
-                }
-            }
-            Button("Copy Path") {
-                PlatformClipboard.writeString(entry.path)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func localFileBrowserEntryRow(_ entry: LocalFileBrowserEntry) -> some View {
-        let isSelected = selectedFileBrowserPath == entry.path
-        Button {
             if entry.isDirectory {
-                selectedFileBrowserPath = nil
-                loadLocalDirectory(path: entry.path)
-            } else {
-                selectedFileBrowserPath = entry.path
-            }
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: entry.isDirectory ? "folder.fill" : "doc")
-                    .foregroundStyle(entry.isDirectory ? .blue : .secondary)
-                Text(entry.name)
-                    .lineLimit(1)
-                Spacer()
-                if !entry.isDirectory {
-                    Text(byteCount(entry.size))
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                Button(isExpanded ? "Collapse" : "Expand") {
+                    toggleFileBrowserDirectory(entry, for: session)
                 }
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(isSelected ? Color.accentColor.opacity(0.22) : Color.clear)
-            )
-        }
-        .buttonStyle(.plain)
-        .contextMenu {
-            if !entry.isDirectory {
+            } else {
+                if !session.isLocal {
+                    Button("Download") {
+                        downloadFileBrowserFile(entry)
+                    }
+                }
                 Button("Open in nano") {
                     openFileInTerminal(entry.path, editor: "nano")
                 }
@@ -2078,9 +1994,17 @@ struct TerminalView: View {
         }
     }
 
-    private var selectedFileBrowserEntry: SFTPDirectoryEntry? {
+    private var selectedFileBrowserItem: FileBrowserEntry? {
         guard let path = selectedFileBrowserPath else { return nil }
-        return transferManager.remoteEntries.first(where: { $0.path == path })
+        if let rowMatch = fileBrowserRows.first(where: { $0.entry.path == path }) {
+            return rowMatch.entry
+        }
+        for entries in fileBrowserChildrenByPath.values {
+            if let match = entries.first(where: { $0.path == path }) {
+                return match
+            }
+        }
+        return nil
     }
 
     private func syncFileBrowserSession() {
@@ -2092,9 +2016,13 @@ struct TerminalView: View {
             transferManager.setActiveSession(nil)
             fileBrowserSessionID = nil
             selectedFileBrowserPath = nil
-            isLocalFileBrowserLoading = false
-            localFileBrowserError = nil
-            localFileBrowserEntries = []
+            fileBrowserCurrentPath = "/"
+            fileBrowserRows = []
+            fileBrowserChildrenByPath = [:]
+            fileBrowserExpandedPaths = []
+            fileBrowserLoadingPaths = []
+            isFileBrowserRootLoading = false
+            fileBrowserError = nil
             return
         }
 
@@ -2106,40 +2034,49 @@ struct TerminalView: View {
 
         if session.isLocal {
             transferManager.setActiveSession(nil)
+        } else if transferManager.activeSessionID != session.id {
+            transferManager.setActiveSession(session.id)
+        }
 
-            if didSwitchSession {
-                localFileBrowserPath = initialLocalBrowserPath(for: session)
-                localFileBrowserEntries = []
-                localFileBrowserError = nil
-            }
+        if didSwitchSession {
+            loadFileBrowserRoot(for: session, path: initialFileBrowserRootPath(for: session))
+            return
+        }
 
-            if localFileBrowserEntries.isEmpty {
-                loadLocalDirectory(path: localFileBrowserPath)
-            }
-        } else {
-            if didSwitchSession {
-                isLocalFileBrowserLoading = false
-                localFileBrowserError = nil
-                localFileBrowserEntries = []
-            }
-            if transferManager.activeSessionID != session.id {
-                transferManager.setActiveSession(session.id)
-            }
+        if fileBrowserChildrenByPath[fileBrowserCurrentPath] == nil && !isFileBrowserRootLoading {
+            loadFileBrowserRoot(for: session, path: fileBrowserCurrentPath)
         }
     }
 
-    private func initialLocalBrowserPath(for session: Session) -> String {
-        let workingDirectory = sessionManager.workingDirectoryBySessionID[session.id]?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if let workingDirectory, !workingDirectory.isEmpty {
-            return workingDirectory
+    private func initialFileBrowserRootPath(for session: Session) -> String {
+        if session.isLocal {
+            let workingDirectory = sessionManager.workingDirectoryBySessionID[session.id]?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if let workingDirectory, !workingDirectory.isEmpty {
+                return normalizeFileBrowserPath(workingDirectory, isLocal: true)
+            }
+            return FileManager.default.homeDirectoryForCurrentUser.path
         }
-        return FileManager.default.homeDirectoryForCurrentUser.path
+        return normalizeFileBrowserPath(transferManager.currentRemotePath, isLocal: false)
     }
 
     private func downloadSelectedFileFromSidebar() {
-        guard let entry = selectedFileBrowserEntry, !entry.isDirectory else { return }
-        transferManager.enqueueDownload(entry: entry)
+        guard let session = selectedSession, !session.isLocal,
+              let entry = selectedFileBrowserItem, !entry.isDirectory else { return }
+        downloadFileBrowserFile(entry)
+    }
+
+    private func downloadFileBrowserFile(_ entry: FileBrowserEntry) {
+        transferManager.enqueueDownload(
+            entry: SFTPDirectoryEntry(
+                path: entry.path,
+                name: entry.name,
+                isDirectory: entry.isDirectory,
+                size: entry.size,
+                permissions: 0,
+                modifiedAt: nil
+            )
+        )
     }
 
     private func openFileInTerminal(_ path: String, editor: String) {
@@ -2158,82 +2095,141 @@ struct TerminalView: View {
         ByteCountFormatter.string(fromByteCount: value, countStyle: .file)
     }
 
-    private func navigateUpLocalDirectory() {
-        let currentURL = URL(fileURLWithPath: localFileBrowserPath)
-        let parentURL = currentURL.deletingLastPathComponent()
-        if parentURL.path == currentURL.path {
+    private func navigateUpFileBrowserRoot(for session: Session) {
+        guard let parentPath = parentFileBrowserPath(of: fileBrowserCurrentPath, isLocal: session.isLocal) else {
             return
         }
-        loadLocalDirectory(path: parentURL.path)
+        loadFileBrowserRoot(for: session, path: parentPath)
     }
 
-    private func loadLocalDirectory(path: String) {
-        let targetPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !targetPath.isEmpty else { return }
+    private func refreshFileBrowserRoot(for session: Session) {
+        loadFileBrowserRoot(for: session, path: fileBrowserCurrentPath)
+    }
 
-        isLocalFileBrowserLoading = true
-        localFileBrowserError = nil
+    private func loadFileBrowserRoot(for session: Session, path: String) {
+        let normalizedPath = normalizeFileBrowserPath(path, isLocal: session.isLocal)
+        fileBrowserCurrentPath = normalizedPath
+        fileBrowserRows = []
+        fileBrowserChildrenByPath = [:]
+        fileBrowserExpandedPaths = []
+        fileBrowserLoadingPaths = []
+        fileBrowserError = nil
+        selectedFileBrowserPath = nil
+        loadFileBrowserDirectory(path: normalizedPath, for: session, isRoot: true)
+    }
 
-        Task.detached(priority: .userInitiated) {
-            let directoryURL = URL(fileURLWithPath: targetPath, isDirectory: true)
-            var isDirectoryFlag: ObjCBool = false
+    private func toggleFileBrowserDirectory(_ entry: FileBrowserEntry, for session: Session) {
+        guard entry.isDirectory else { return }
+        if fileBrowserExpandedPaths.contains(entry.path) {
+            collapseFileBrowserDirectory(entry.path)
+            return
+        }
 
-            guard FileManager.default.fileExists(atPath: directoryURL.path, isDirectory: &isDirectoryFlag),
-                  isDirectoryFlag.boolValue else {
-                await MainActor.run {
-                    self.isLocalFileBrowserLoading = false
-                    self.localFileBrowserEntries = []
-                    self.selectedFileBrowserPath = nil
-                    self.localFileBrowserError = "Local directory not found: \(targetPath)"
-                }
-                return
-            }
+        fileBrowserExpandedPaths.insert(entry.path)
+        if fileBrowserChildrenByPath[entry.path] == nil {
+            loadFileBrowserDirectory(path: entry.path, for: session, isRoot: false)
+        }
+        rebuildFileBrowserRows()
+    }
 
+    private func collapseFileBrowserDirectory(_ path: String) {
+        fileBrowserExpandedPaths = TerminalFileBrowserTree.collapseExpandedPaths(
+            fileBrowserExpandedPaths,
+            collapsing: path
+        )
+        rebuildFileBrowserRows()
+    }
+
+    private func loadFileBrowserDirectory(path: String, for session: Session, isRoot: Bool) {
+        let normalizedPath = normalizeFileBrowserPath(path, isLocal: session.isLocal)
+        guard !fileBrowserLoadingPaths.contains(normalizedPath) else { return }
+
+        if isRoot {
+            isFileBrowserRootLoading = true
+        }
+        fileBrowserError = nil
+        fileBrowserLoadingPaths.insert(normalizedPath)
+
+        Task {
             do {
-                let keys: Set<URLResourceKey> = [.isDirectoryKey, .fileSizeKey]
-                let urls = try FileManager.default.contentsOfDirectory(
-                    at: directoryURL,
-                    includingPropertiesForKeys: Array(keys),
-                    options: []
-                )
-
-                let entries: [LocalFileBrowserEntry] = urls.compactMap { url in
-                    guard let values = try? url.resourceValues(forKeys: keys) else {
-                        return nil
-                    }
-                    return LocalFileBrowserEntry(
-                        path: url.path,
-                        name: url.lastPathComponent,
-                        isDirectory: values.isDirectory ?? false,
-                        size: Int64(values.fileSize ?? 0)
-                    )
-                }
-                .sorted { lhs, rhs in
-                    if lhs.isDirectory != rhs.isDirectory {
-                        return lhs.isDirectory && !rhs.isDirectory
-                    }
-                    return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
-                }
-
+                let entries = try await listFileBrowserEntries(for: session, path: normalizedPath)
                 await MainActor.run {
-                    self.localFileBrowserPath = directoryURL.path
-                    self.localFileBrowserEntries = entries
-                    if let selectedPath = self.selectedFileBrowserPath,
-                       !entries.contains(where: { $0.path == selectedPath }) {
-                        self.selectedFileBrowserPath = nil
+                    guard showFileBrowser, fileBrowserSessionID == session.id else { return }
+
+                    fileBrowserLoadingPaths.remove(normalizedPath)
+                    if isRoot {
+                        isFileBrowserRootLoading = false
+                        fileBrowserCurrentPath = normalizedPath
                     }
-                    self.isLocalFileBrowserLoading = false
+
+                    fileBrowserError = nil
+                    fileBrowserChildrenByPath[normalizedPath] = entries
+                    if let selectedPath = selectedFileBrowserPath, !fileBrowserContainsPath(selectedPath) {
+                        selectedFileBrowserPath = nil
+                    }
+                    rebuildFileBrowserRows()
                 }
             } catch {
                 await MainActor.run {
-                    self.localFileBrowserPath = directoryURL.path
-                    self.isLocalFileBrowserLoading = false
-                    self.localFileBrowserEntries = []
-                    self.selectedFileBrowserPath = nil
-                    self.localFileBrowserError = "Failed to list local directory: \(error.localizedDescription)"
+                    guard showFileBrowser, fileBrowserSessionID == session.id else { return }
+
+                    fileBrowserLoadingPaths.remove(normalizedPath)
+                    if isRoot {
+                        isFileBrowserRootLoading = false
+                        fileBrowserCurrentPath = normalizedPath
+                    }
+
+                    let scopeLabel = session.isLocal ? "local" : "remote"
+                    fileBrowserError = "Failed to list \(scopeLabel) directory: \(error.localizedDescription)"
+                    if isRoot {
+                        fileBrowserChildrenByPath[normalizedPath] = []
+                    }
+                    rebuildFileBrowserRows()
                 }
             }
         }
+    }
+
+    private func listFileBrowserEntries(for session: Session, path: String) async throws -> [FileBrowserEntry] {
+        if session.isLocal {
+            return try await Task.detached(priority: .userInitiated) {
+                try TerminalFileBrowserTree.listLocalEntries(path: path)
+            }.value
+        }
+
+        let remoteEntries = try await sessionManager.listRemoteDirectory(sessionID: session.id, path: path)
+        return remoteEntries.map {
+            FileBrowserEntry(
+                path: $0.path,
+                name: $0.name,
+                isDirectory: $0.isDirectory,
+                size: $0.size
+            )
+        }
+    }
+
+    private func rebuildFileBrowserRows() {
+        fileBrowserRows = TerminalFileBrowserTree.rebuildRows(
+            rootPath: fileBrowserCurrentPath,
+            childrenByPath: fileBrowserChildrenByPath,
+            expandedPaths: fileBrowserExpandedPaths
+        )
+    }
+
+    private func fileBrowserContainsPath(_ path: String) -> Bool {
+        TerminalFileBrowserTree.containsPath(
+            path,
+            rows: fileBrowserRows,
+            childrenByPath: fileBrowserChildrenByPath
+        )
+    }
+
+    private func normalizeFileBrowserPath(_ rawPath: String, isLocal: Bool) -> String {
+        TerminalFileBrowserTree.normalizePath(rawPath, isLocal: isLocal)
+    }
+
+    private func parentFileBrowserPath(of path: String, isLocal: Bool) -> String? {
+        TerminalFileBrowserTree.parentPath(of: path, isLocal: isLocal)
     }
 
     private func tabBackground(for session: Session) -> Color {

@@ -1,6 +1,6 @@
 # ProSSHMac AI + File Browser Expansion Checklist
 
-Last verified against repo: 2026-02-22
+Last verified against repo: 2026-02-23
 Required assistant model for this work: `gpt-5.1-codex`
 
 ## Goal
@@ -27,8 +27,8 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 
 ### Current Focus
 
-- Active phase: Phase 2 (left sidebar file browser).
-- Immediate objective: finish remaining file-browser hardening items (tree/lazy-load model and tests) before AI work begins.
+- Active phase: Phase 3 (command block history index).
+- Immediate objective: implement `CommandBlock` + `TerminalHistoryIndex` foundation and OSC 133 prompt-boundary handling.
 
 ## Loop Log
 
@@ -43,6 +43,8 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 - 2026-02-22: Completed local-session fallback in terminal file browser: local connected sessions now browse via `FileManager` (initial CWD/home, up/refresh, row click open/select, and local editor actions) while remote SFTP state is cleanly detached.
 - 2026-02-22: Fixed local terminal TUI rendering lag/artifacts (notably `nano`) by replacing PTY read coalescing with a poll+drain loop in `LocalShellChannel`, eliminating fragmented character-by-character frame updates.
 - 2026-02-22: Further tuned local TUI behavior by adding short-burst PTY read coalescing and robust nonblocking write retries in `LocalShellChannel`, reducing slow redraw while navigating inside full-screen apps like `nano`.
+- 2026-02-23: Implemented lazy file-tree browser in `TerminalView` for both remote and local sessions (expand/collapse folders on click, per-directory loading states, cached children, root up/refresh navigation).
+- 2026-02-23: Added file-browser logic test coverage in `ProSSHMac/Terminal/Tests/TerminalFileBrowserTreeTests.swift` and extracted reusable tree/path helpers into `ProSSHMac/Terminal/Features/TerminalFileBrowserTree.swift`; `TerminalView` now uses these helpers for row-building, path normalization, collapse semantics, and local listing.
 
 ## How to Use This File
 
@@ -108,7 +110,7 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 - Decision (current): keep shared transport for now; enforce temporary session blocking during SFTP operations and restore non-blocking shell behavior afterward.
 - [ ] If dedicated connection is chosen, implement lifecycle handling tied to SSH session connect/disconnect.
 - [x] Keep `TransferManager` compatibility (do not break Transfers tab).
-- [ ] Add/extend tests for chosen architecture in `ProSSHMac/Terminal/Tests`.
+- [x] Add/extend tests for chosen architecture in `ProSSHMac/Terminal/Tests`.
 
 ## Phase 2 - Left Sidebar File Browser in Terminal
 
@@ -119,8 +121,8 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 
 ### Checklist
 
-- [ ] Introduce sidebar tree model + view model (reuse `SFTPDirectoryEntry` where practical; avoid duplicate models unless needed).
-- [ ] Implement lazy directory expansion and loading states.
+- [x] Introduce sidebar tree model + view model (reuse `SFTPDirectoryEntry` where practical; avoid duplicate models unless needed).
+- [x] Implement lazy directory expansion and loading states.
 - [x] Integrate left sidebar into `TerminalView` layout without regressing `PaneManager` behavior.
 - [x] Implement file actions that send commands through `SessionManager.sendShellInput`:
   - Open in `nano`

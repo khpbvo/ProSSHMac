@@ -25,3 +25,8 @@ This file is the project working memory for future assistants in this repository
 
 - Keep both `AGENTS.md` and `Docs/featurelist.md` current at all times.
 - This is mandatory to preserve continuity across assistant handoffs and in cases of context loss, overflow, or truncated history.
+
+## Current Status Snapshot
+
+- Latest milestone (2026-02-23): terminal file-browser tree/lazy-load work now has dedicated helper logic and test coverage.
+- Next implementation phase is tracked in `Docs/featurelist.md` under Phase 3 (command-block history index).
