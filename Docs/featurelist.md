@@ -27,8 +27,8 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 
 ### Current Focus
 
-- Active phase: Phase 1 (SFTP architecture decision + foundation).
-- Immediate objective: decide and validate shared-session vs dedicated-SFTP strategy with tests.
+- Active phase: Phase 2 (left sidebar file browser).
+- Immediate objective: finish remaining file-browser hardening items (tree/lazy-load model and tests) before AI work begins.
 
 ## Loop Log
 
@@ -38,7 +38,11 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 - 2026-02-22: Fixed live SFTP failure ("session must be blocking") by forcing blocking mode only during SFTP calls in `ProSSHLibSSHWrapper.c`, then restoring prior interactive mode.
 - 2026-02-22: Updated transfer download destination to the user Downloads folder (`~/Downloads`) instead of app support storage.
 - 2026-02-22: Fixed SFTP binary-download instability ("Decryption error") by serializing libssh session access with a per-handle mutex across shell I/O and SFTP paths.
+- 2026-02-22: Started Phase 2 in `TerminalView` with a toggleable left file browser sidebar (`⌘B`), row-click behavior (folder open/file select), download action reuse, and context-menu editor actions.
 - 2026-02-22: Improved Transfers UX so clicking a remote row activates it directly (folder opens, file starts download) instead of requiring the trailing button.
+- 2026-02-22: Completed local-session fallback in terminal file browser: local connected sessions now browse via `FileManager` (initial CWD/home, up/refresh, row click open/select, and local editor actions) while remote SFTP state is cleanly detached.
+- 2026-02-22: Fixed local terminal TUI rendering lag/artifacts (notably `nano`) by replacing PTY read coalescing with a poll+drain loop in `LocalShellChannel`, eliminating fragmented character-by-character frame updates.
+- 2026-02-22: Further tuned local TUI behavior by adding short-burst PTY read coalescing and robust nonblocking write retries in `LocalShellChannel`, reducing slow redraw while navigating inside full-screen apps like `nano`.
 
 ## How to Use This File
 
@@ -61,7 +65,7 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 
 ### Not implemented yet (or previous doc was inaccurate)
 
-- [ ] `TerminalView` does not yet have left/right sidebars for file browser + AI.
+- [ ] `TerminalView` still does not have the right AI sidebar and AI workflows.
 - [ ] OSC 133 semantic prompt handling is currently a placeholder in `ProSSHMac/Terminal/Parser/OSCHandler.swift`.
 - [ ] There is no `TerminalHistoryIndex` or `CommandBlock` implementation yet.
 - [ ] There is no AI agent service, tool executor, agent sidebar, or follow mode in the app yet.
@@ -117,16 +121,16 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 
 - [ ] Introduce sidebar tree model + view model (reuse `SFTPDirectoryEntry` where practical; avoid duplicate models unless needed).
 - [ ] Implement lazy directory expansion and loading states.
-- [ ] Integrate left sidebar into `TerminalView` layout without regressing `PaneManager` behavior.
-- [ ] Implement file actions that send commands through `SessionManager.sendShellInput`:
+- [x] Integrate left sidebar into `TerminalView` layout without regressing `PaneManager` behavior.
+- [x] Implement file actions that send commands through `SessionManager.sendShellInput`:
   - Open in `nano`
   - Open in `vim`
   - View with `less`
   - `cat` to terminal
-- [ ] Add safe shell quoting for file paths before sending commands.
-- [ ] Add "Download" action by reusing existing transfer flow where possible.
-- [ ] Add local-session fallback behavior (FileManager-based browsing or clear local-mode UX decision).
-- [ ] Add keyboard shortcut for toggling file browser and verify no conflict with existing shortcuts.
+- [x] Add safe shell quoting for file paths before sending commands.
+- [x] Add "Download" action by reusing existing transfer flow where possible.
+- [x] Add local-session fallback behavior (FileManager-based browsing or clear local-mode UX decision).
+- [x] Add keyboard shortcut for toggling file browser and verify no conflict with existing shortcuts.
 
 ## Phase 3 - Command Block History Index
 

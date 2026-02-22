@@ -5,10 +5,20 @@ import Combine
 import AppKit
 
 struct TerminalView: View {
+    private struct LocalFileBrowserEntry: Identifiable, Hashable {
+        let path: String
+        let name: String
+        let isDirectory: Bool
+        let size: Int64
+
+        var id: String { path }
+    }
+
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.openWindow) private var openWindow
     @EnvironmentObject private var navigationCoordinator: AppNavigationCoordinator
     @EnvironmentObject private var sessionManager: SessionManager
+    @EnvironmentObject private var transferManager: TransferManager
     @EnvironmentObject private var portForwardingManager: PortForwardingManager
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage(BellEffectController.settingsKey) private var bellFeedbackModeRawValue = BellFeedbackMode.none.rawValue
@@ -18,6 +28,7 @@ struct TerminalView: View {
     @AppStorage("terminal.renderer.useMetal") private var useMetalRenderer = true
     @AppStorage("terminal.renderer.migration.restoreMetal.v1") private var didRestoreMetalPreference = false
     @AppStorage("terminal.renderer.migration.defaultMetal.v2") private var didApplyMetalDefaultV2 = false
+    @AppStorage("terminal.sidebar.fileBrowser.visible") private var showFileBrowser = false
     @State private var pendingInput: [UUID: String] = [:]
     @StateObject private var bellEffect = BellEffectController()
     @StateObject private var scrollIndicator = ScrollIndicatorController()
@@ -51,11 +62,17 @@ struct TerminalView: View {
     @State private var expandedMetadataSessions: Set<UUID> = []
     @State private var hoveredTabID: UUID?
     @State private var directInputActivationNonce: Int = 0
+    @State private var selectedFileBrowserPath: String?
+    @State private var fileBrowserSessionID: UUID?
+    @State private var localFileBrowserPath: String = FileManager.default.homeDirectoryForCurrentUser.path
+    @State private var localFileBrowserEntries: [LocalFileBrowserEntry] = []
+    @State private var isLocalFileBrowserLoading = false
+    @State private var localFileBrowserError: String?
     private let linkDetector = LinkDetector()
 
     var body: some View {
         ZStack {
-            macOSBody
+            terminalContentWithFileBrowser
 
             terminalShortcutLayer
                 .frame(width: 0, height: 0)
@@ -72,6 +89,7 @@ struct TerminalView: View {
             quickCommandDrawerLayer
         }
         .animation(.easeInOut(duration: 0.2), value: quickCommands.isDrawerPresented)
+        .animation(.easeInOut(duration: 0.2), value: showFileBrowser)
         .navigationTitle("Terminal")
         .onAppear {
             if !didRestoreMetalPreference {
@@ -88,6 +106,7 @@ struct TerminalView: View {
             synchronizeSelection()
             updateSearchLines()
             syncPaneManagerSessions()
+            syncFileBrowserSession()
         }
         .onChange(of: sessionManager.sessions.map(\.id)) { _, _ in
             Task { @MainActor in
@@ -95,12 +114,17 @@ struct TerminalView: View {
                 synchronizeSelection()
                 updateSearchLines()
                 syncPaneManagerSessions()
+                syncFileBrowserSession()
             }
         }
         .onChange(of: tabManager.selectedSessionID) { _, _ in
             scrollIndicator.reset()
             resizeEffect.reset()
             updateSearchLines()
+            syncFileBrowserSession()
+        }
+        .onChange(of: showFileBrowser) { _, _ in
+            syncFileBrowserSession()
         }
         .onChange(of: paneManager.focusedPaneId) { _, newPaneID in
             // When the user clicks a different pane, sync tab selection
@@ -416,6 +440,264 @@ struct TerminalView: View {
             return tabManager.tabs.first(where: { $0.id == selectedSessionID })?.session
         }
         return tabManager.tabs.first?.session
+    }
+
+    private var terminalContentWithFileBrowser: some View {
+        HStack(spacing: 0) {
+            if showFileBrowser {
+                fileBrowserSidebar
+                    .frame(minWidth: 220, idealWidth: 260, maxWidth: 360)
+                    .transition(.move(edge: .leading))
+            }
+            macOSBody
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private var fileBrowserSidebar: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label("Files", systemImage: "folder")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    showFileBrowser = false
+                } label: {
+                    Image(systemName: "xmark")
+                }
+                .buttonStyle(.borderless)
+            }
+
+            if let session = selectedSession {
+                Text("\(session.username)@\(session.hostname)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("No active session selected.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let session = selectedSession, session.state == .connected, !session.isLocal {
+                HStack(spacing: 8) {
+                    Button {
+                        transferManager.navigateUp()
+                        selectedFileBrowserPath = nil
+                    } label: {
+                        Image(systemName: "arrow.up.to.line")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(transferManager.currentRemotePath == "/")
+
+                    Button {
+                        Task {
+                            await transferManager.refreshDirectory()
+                        }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button {
+                        downloadSelectedFileFromSidebar()
+                    } label: {
+                        Image(systemName: "square.and.arrow.down")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(selectedFileBrowserEntry?.isDirectory != false)
+                }
+
+                Text(transferManager.currentRemotePath)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+
+                Divider()
+
+                if transferManager.isListing {
+                    ProgressView("Loading directory...")
+                        .padding(.top, 6)
+                } else if transferManager.remoteEntries.isEmpty {
+                    Text("Directory is empty.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 6)
+                } else {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 2) {
+                            ForEach(transferManager.remoteEntries) { entry in
+                                fileBrowserEntryRow(entry)
+                            }
+                        }
+                    }
+                }
+            } else if let session = selectedSession, session.state == .connected, session.isLocal {
+                HStack(spacing: 8) {
+                    Button {
+                        navigateUpLocalDirectory()
+                        selectedFileBrowserPath = nil
+                    } label: {
+                        Image(systemName: "arrow.up.to.line")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(localFileBrowserPath == "/" || localFileBrowserPath.isEmpty)
+
+                    Button {
+                        loadLocalDirectory(path: localFileBrowserPath)
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                Text(localFileBrowserPath)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+
+                Divider()
+
+                if isLocalFileBrowserLoading {
+                    ProgressView("Loading directory...")
+                        .padding(.top, 6)
+                } else if let localFileBrowserError {
+                    Text(localFileBrowserError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .padding(.top, 6)
+                } else if localFileBrowserEntries.isEmpty {
+                    Text("Directory is empty.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 6)
+                } else {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 2) {
+                            ForEach(localFileBrowserEntries) { entry in
+                                localFileBrowserEntryRow(entry)
+                            }
+                        }
+                    }
+                }
+            } else {
+                Text("Connect to a host to browse remote files.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(10)
+        .background(.ultraThinMaterial)
+        .overlay(alignment: .trailing) {
+            Divider()
+        }
+    }
+
+    @ViewBuilder
+    private func fileBrowserEntryRow(_ entry: SFTPDirectoryEntry) -> some View {
+        let isSelected = selectedFileBrowserPath == entry.path
+        Button {
+            if entry.isDirectory {
+                selectedFileBrowserPath = nil
+                transferManager.openDirectory(entry)
+            } else {
+                selectedFileBrowserPath = entry.path
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: entry.isDirectory ? "folder.fill" : "doc")
+                    .foregroundStyle(entry.isDirectory ? .blue : .secondary)
+                Text(entry.name)
+                    .lineLimit(1)
+                Spacer()
+                if !entry.isDirectory {
+                    Text(byteCount(entry.size))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(isSelected ? Color.accentColor.opacity(0.22) : Color.clear)
+            )
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            if !entry.isDirectory {
+                Button("Download") {
+                    transferManager.enqueueDownload(entry: entry)
+                }
+                Button("Open in nano") {
+                    openFileInTerminal(entry.path, editor: "nano")
+                }
+                Button("Open in vim") {
+                    openFileInTerminal(entry.path, editor: "vim")
+                }
+                Button("View with less") {
+                    openFileInTerminal(entry.path, editor: "less")
+                }
+                Button("Cat to terminal") {
+                    openFileInTerminal(entry.path, editor: "cat")
+                }
+            }
+            Button("Copy Path") {
+                PlatformClipboard.writeString(entry.path)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func localFileBrowserEntryRow(_ entry: LocalFileBrowserEntry) -> some View {
+        let isSelected = selectedFileBrowserPath == entry.path
+        Button {
+            if entry.isDirectory {
+                selectedFileBrowserPath = nil
+                loadLocalDirectory(path: entry.path)
+            } else {
+                selectedFileBrowserPath = entry.path
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: entry.isDirectory ? "folder.fill" : "doc")
+                    .foregroundStyle(entry.isDirectory ? .blue : .secondary)
+                Text(entry.name)
+                    .lineLimit(1)
+                Spacer()
+                if !entry.isDirectory {
+                    Text(byteCount(entry.size))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(isSelected ? Color.accentColor.opacity(0.22) : Color.clear)
+            )
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            if !entry.isDirectory {
+                Button("Open in nano") {
+                    openFileInTerminal(entry.path, editor: "nano")
+                }
+                Button("Open in vim") {
+                    openFileInTerminal(entry.path, editor: "vim")
+                }
+                Button("View with less") {
+                    openFileInTerminal(entry.path, editor: "less")
+                }
+                Button("Cat to terminal") {
+                    openFileInTerminal(entry.path, editor: "cat")
+                }
+            }
+            Button("Copy Path") {
+                PlatformClipboard.writeString(entry.path)
+            }
+        }
     }
 
     private var sessionTabs: some View {
@@ -1796,6 +2078,164 @@ struct TerminalView: View {
         }
     }
 
+    private var selectedFileBrowserEntry: SFTPDirectoryEntry? {
+        guard let path = selectedFileBrowserPath else { return nil }
+        return transferManager.remoteEntries.first(where: { $0.path == path })
+    }
+
+    private func syncFileBrowserSession() {
+        guard showFileBrowser else {
+            transferManager.setActiveSession(nil)
+            return
+        }
+        guard let session = selectedSession, session.state == .connected else {
+            transferManager.setActiveSession(nil)
+            fileBrowserSessionID = nil
+            selectedFileBrowserPath = nil
+            isLocalFileBrowserLoading = false
+            localFileBrowserError = nil
+            localFileBrowserEntries = []
+            return
+        }
+
+        let didSwitchSession = fileBrowserSessionID != session.id
+        if didSwitchSession {
+            fileBrowserSessionID = session.id
+            selectedFileBrowserPath = nil
+        }
+
+        if session.isLocal {
+            transferManager.setActiveSession(nil)
+
+            if didSwitchSession {
+                localFileBrowserPath = initialLocalBrowserPath(for: session)
+                localFileBrowserEntries = []
+                localFileBrowserError = nil
+            }
+
+            if localFileBrowserEntries.isEmpty {
+                loadLocalDirectory(path: localFileBrowserPath)
+            }
+        } else {
+            if didSwitchSession {
+                isLocalFileBrowserLoading = false
+                localFileBrowserError = nil
+                localFileBrowserEntries = []
+            }
+            if transferManager.activeSessionID != session.id {
+                transferManager.setActiveSession(session.id)
+            }
+        }
+    }
+
+    private func initialLocalBrowserPath(for session: Session) -> String {
+        let workingDirectory = sessionManager.workingDirectoryBySessionID[session.id]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let workingDirectory, !workingDirectory.isEmpty {
+            return workingDirectory
+        }
+        return FileManager.default.homeDirectoryForCurrentUser.path
+    }
+
+    private func downloadSelectedFileFromSidebar() {
+        guard let entry = selectedFileBrowserEntry, !entry.isDirectory else { return }
+        transferManager.enqueueDownload(entry: entry)
+    }
+
+    private func openFileInTerminal(_ path: String, editor: String) {
+        guard let session = selectedSession, session.state == .connected else { return }
+        let escapedPath = shellEscapeForTerminal(path)
+        Task { @MainActor in
+            await sessionManager.sendShellInput(sessionID: session.id, input: "\(editor) \(escapedPath)")
+        }
+    }
+
+    private func shellEscapeForTerminal(_ path: String) -> String {
+        "'" + path.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
+    }
+
+    private func byteCount(_ value: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: value, countStyle: .file)
+    }
+
+    private func navigateUpLocalDirectory() {
+        let currentURL = URL(fileURLWithPath: localFileBrowserPath)
+        let parentURL = currentURL.deletingLastPathComponent()
+        if parentURL.path == currentURL.path {
+            return
+        }
+        loadLocalDirectory(path: parentURL.path)
+    }
+
+    private func loadLocalDirectory(path: String) {
+        let targetPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !targetPath.isEmpty else { return }
+
+        isLocalFileBrowserLoading = true
+        localFileBrowserError = nil
+
+        Task.detached(priority: .userInitiated) {
+            let directoryURL = URL(fileURLWithPath: targetPath, isDirectory: true)
+            var isDirectoryFlag: ObjCBool = false
+
+            guard FileManager.default.fileExists(atPath: directoryURL.path, isDirectory: &isDirectoryFlag),
+                  isDirectoryFlag.boolValue else {
+                await MainActor.run {
+                    self.isLocalFileBrowserLoading = false
+                    self.localFileBrowserEntries = []
+                    self.selectedFileBrowserPath = nil
+                    self.localFileBrowserError = "Local directory not found: \(targetPath)"
+                }
+                return
+            }
+
+            do {
+                let keys: Set<URLResourceKey> = [.isDirectoryKey, .fileSizeKey]
+                let urls = try FileManager.default.contentsOfDirectory(
+                    at: directoryURL,
+                    includingPropertiesForKeys: Array(keys),
+                    options: []
+                )
+
+                let entries: [LocalFileBrowserEntry] = urls.compactMap { url in
+                    guard let values = try? url.resourceValues(forKeys: keys) else {
+                        return nil
+                    }
+                    return LocalFileBrowserEntry(
+                        path: url.path,
+                        name: url.lastPathComponent,
+                        isDirectory: values.isDirectory ?? false,
+                        size: Int64(values.fileSize ?? 0)
+                    )
+                }
+                .sorted { lhs, rhs in
+                    if lhs.isDirectory != rhs.isDirectory {
+                        return lhs.isDirectory && !rhs.isDirectory
+                    }
+                    return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+                }
+
+                await MainActor.run {
+                    self.localFileBrowserPath = directoryURL.path
+                    self.localFileBrowserEntries = entries
+                    if let selectedPath = self.selectedFileBrowserPath,
+                       !entries.contains(where: { $0.path == selectedPath }) {
+                        self.selectedFileBrowserPath = nil
+                    }
+                    self.isLocalFileBrowserLoading = false
+                }
+            } catch {
+                await MainActor.run {
+                    self.localFileBrowserPath = directoryURL.path
+                    self.isLocalFileBrowserLoading = false
+                    self.localFileBrowserEntries = []
+                    self.selectedFileBrowserPath = nil
+                    self.localFileBrowserError = "Failed to list local directory: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
     private func tabBackground(for session: Session) -> Color {
         if tabManager.selectedSessionID == session.id {
             return colorScheme == .dark ? Color.accentColor.opacity(0.34) : Color.accentColor.opacity(0.2)
@@ -1867,6 +2307,12 @@ struct TerminalView: View {
                 quickCommands.toggleDrawer()
             }
             .keyboardShortcut("p", modifiers: [.command, .shift])
+
+            Button("Toggle File Browser") {
+                showFileBrowser.toggle()
+                syncFileBrowserSession()
+            }
+            .keyboardShortcut("b", modifiers: [.command])
 
             Button("Clear Buffer") {
                 clearSelectedBuffer()
