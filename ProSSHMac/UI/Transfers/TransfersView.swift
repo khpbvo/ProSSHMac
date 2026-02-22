@@ -127,35 +127,33 @@ struct TransfersView: View {
 
     @ViewBuilder
     private func remoteRow(for entry: SFTPDirectoryEntry) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: entry.isDirectory ? "folder.fill" : "doc")
-                .foregroundStyle(entry.isDirectory ? .blue : .secondary)
+        Button {
+            activateRemoteEntry(entry)
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: entry.isDirectory ? "folder.fill" : "doc")
+                    .foregroundStyle(entry.isDirectory ? .blue : .secondary)
 
-            VStack(alignment: .leading, spacing: 3) {
-                Text(entry.name)
-                    .lineLimit(1)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(entry.name)
+                        .lineLimit(1)
 
-                if entry.isDirectory == false {
-                    Text(byteCount(entry.size))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    if entry.isDirectory == false {
+                        Text(byteCount(entry.size))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
-            }
 
-            Spacer()
+                Spacer()
 
-            if entry.isDirectory {
-                Button("Open") {
-                    transferManager.openDirectory(entry)
-                }
-                .buttonStyle(.bordered)
-            } else {
-                Button("Download") {
-                    transferManager.enqueueDownload(entry: entry)
-                }
-                .buttonStyle(.bordered)
+                Text(entry.isDirectory ? "Open" : "Download")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
+        .buttonStyle(.plain)
+        .contentShape(Rectangle())
     }
 
     @ViewBuilder
@@ -258,6 +256,14 @@ struct TransfersView: View {
             return .red
         case .cancelled:
             return .gray
+        }
+    }
+
+    private func activateRemoteEntry(_ entry: SFTPDirectoryEntry) {
+        if entry.isDirectory {
+            transferManager.openDirectory(entry)
+        } else {
+            transferManager.enqueueDownload(entry: entry)
         }
     }
 

@@ -38,6 +38,7 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 - 2026-02-22: Fixed live SFTP failure ("session must be blocking") by forcing blocking mode only during SFTP calls in `ProSSHLibSSHWrapper.c`, then restoring prior interactive mode.
 - 2026-02-22: Updated transfer download destination to the user Downloads folder (`~/Downloads`) instead of app support storage.
 - 2026-02-22: Fixed SFTP binary-download instability ("Decryption error") by serializing libssh session access with a per-handle mutex across shell I/O and SFTP paths.
+- 2026-02-22: Improved Transfers UX so clicking a remote row activates it directly (folder opens, file starts download) instead of requiring the trailing button.
 
 ## How to Use This File
 
