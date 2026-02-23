@@ -224,7 +224,7 @@ struct OpenAIResponsesResponse: Decodable, Sendable, Equatable {
 
 @MainActor
 final class OpenAIResponsesService: OpenAIResponsesServicing {
-    static let requiredModel = "gpt-5.1-codex"
+    static let requiredModel = "gpt-5.1-codex-max"
 
     private let apiKeyProvider: any OpenAIAPIKeyProviding
     private let session: any OpenAIHTTPSessioning

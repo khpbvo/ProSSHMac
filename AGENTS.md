@@ -28,6 +28,8 @@ This file is the project working memory for future assistants in this repository
 
 ## Current Status Snapshot
 
+- Latest model preference update (2026-02-23): project planning/docs now track `gpt-5.1-codex-max` as the required assistant model for long-running implementation tasks.
+- Latest AI tooling milestone (2026-02-23): `OpenAIAgentService` now supports `read_files` for batched chunk reads across multiple files (up to 10 per call, 200 lines each), with leaner tool-output schemas and grouped content-search hits to improve token efficiency during project exploration.
 - Latest docs/help sync (2026-02-23): user-facing shortcut/help text is now aligned with current Ask-only copilot flow and keyboard shortcuts in both `SettingsView` and the AI pane composer hint.
 - Latest AI token-efficiency + UX hardening (2026-02-23): reduced default screen/context payload sizes (`get_current_screen` default 60/max 160, command `output_preview` 300 chars), capped `get_command_output` via `max_chars` with truncation metadata, and suppressed remote internal tool-command echo to reduce noisy terminal/context loops.
 - Latest test-stability fix (2026-02-23): resolved the `PaneManagerTests` host-process malloc/free crash by avoiding actor-isolated deallocation for pane-layout lifecycle objects (`nonisolated deinit` in `PaneManager` and `PaneLayoutStore`); `PaneManagerTests` quarantine was removed and targeted suite now passes.

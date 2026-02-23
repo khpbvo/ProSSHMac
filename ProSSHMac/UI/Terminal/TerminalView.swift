@@ -1638,11 +1638,10 @@ struct TerminalView: View {
     @ViewBuilder
     private func terminalSurfaceContextMenu(for session: Session) -> some View {
         Button {
-            copyActiveContentToClipboard()
+            _ = copyContentToClipboard(sessionID: session.id)
         } label: {
             Label("Copy", systemImage: "doc.on.doc")
         }
-        .disabled(!selectionCoordinator.hasSelection(sessionID: session.id))
 
         Button {
             pasteClipboardToSession(session.id)
@@ -2813,24 +2812,37 @@ struct TerminalView: View {
 
     private func copyActiveContentToClipboard() {
         let targetSessionID = paneManager.focusedSessionID ?? focusedSessionID ?? tabManager.selectedSessionID
-        guard let sessionID = targetSessionID else { return }
-
-        // Check for Metal renderer text selection first
-        if let selectedText = selectionCoordinator.copySelection(sessionID: sessionID) {
+        if let sessionID = targetSessionID,
+           copyContentToClipboard(sessionID: sessionID) {
+            return
+        }
+        if let selectedText = selectionCoordinator.copySelection(preferredSessionID: targetSessionID) {
             _ = PlatformClipboard.writeString(selectedText)
             return
         }
+        if NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil) {
+            return
+        }
+    }
 
+    @discardableResult
+    private func copyContentToClipboard(sessionID: UUID) -> Bool {
+        if let selectedText = selectionCoordinator.copySelection(sessionID: sessionID), !selectedText.isEmpty {
+            _ = PlatformClipboard.writeString(selectedText)
+            return true
+        }
         let draft = pendingInput[sessionID, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
         if !draft.isEmpty {
             _ = PlatformClipboard.writeString(draft)
-            return
+            return true
         }
 
         if let lastLine = sessionManager.shellBuffers[sessionID]?.last,
            !lastLine.isEmpty {
             _ = PlatformClipboard.writeString(lastLine)
+            return true
         }
+        return false
     }
 
     private func pasteClipboardToSession(_ sessionID: UUID) {
@@ -3176,6 +3188,25 @@ final class DirectTerminalInputNSView: NSView {
             return
         }
         onSendSequence?(sessionID, sequence)
+    }
+
+    @objc func copy(_ sender: Any?) {
+        guard isEnabled else { return }
+        onCommandShortcut?(.copy)
+    }
+
+    @objc func paste(_ sender: Any?) {
+        guard isEnabled else { return }
+        onCommandShortcut?(.paste)
+    }
+
+    func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        switch item.action {
+        case #selector(copy(_:)), #selector(paste(_:)):
+            return isEnabled
+        default:
+            return true
+        }
     }
 
     // MARK: - Unified Encoding

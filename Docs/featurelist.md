@@ -1,7 +1,7 @@
 # ProSSHMac AI + File Browser Expansion Checklist
 
 Last verified against repo: 2026-02-23
-Required assistant model for this work: `gpt-5.1-codex`
+Required assistant model for this work: `gpt-5.1-codex-max`
 
 ## Goal
 
@@ -19,7 +19,7 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 ### End Point (Definition of Done)
 
 - Terminal has production-ready left SFTP file sidebar and right AI sidebar.
-- AI uses Responses API with model pinned to `gpt-5.1-codex`.
+- AI uses Responses API with model pinned to `gpt-5.1-codex-max`.
 - Command-block index supports reliable context retrieval for AI tools.
 - Execution safety is enforced by intent-based execution in Ask mode (execute only on explicit run/open/edit/check intent).
 - Regression checks pass for existing pane splitting and Transfers behavior.
@@ -50,7 +50,7 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 - 2026-02-23: Settings pane scrollability fixed by wrapping the settings form in an explicit scroll container so long settings content (including future API key controls) remains reachable.
 - 2026-02-23: Phase 4/6 plan adjusted to make API key handling user-configurable in Settings and treated as a prerequisite for AI agent usage.
 - 2026-02-23: Completed API-key prerequisite for Phase 4: added Keychain-backed OpenAI API key store/provider wiring in app dependencies plus Settings UI for save/remove/status, with fail-safe provider behavior when key retrieval fails.
-- 2026-02-23: Added `OpenAIResponsesService` foundation using native `URLSession` with explicit model pinning to `gpt-5.1-codex`, request/response types (including tool-call fields), API-key gating, HTTP/decode error handling, and dependency wiring in `AppDependencies`.
+- 2026-02-23: Added `OpenAIResponsesService` foundation using native `URLSession` with explicit model pinning to `gpt-5.1-codex-max`, request/response types (including tool-call fields), API-key gating, HTTP/decode error handling, and dependency wiring in `AppDependencies`.
 - 2026-02-23: Completed Phase 4 tool loop foundation: added `OpenAIAgentService` with minimum tool definitions + local tool execution pipeline (`search_terminal_history`, `get_command_output`, `get_current_screen`, `get_recent_commands`, `execute_command`, `get_session_info`), execute-command safety gating via mode checks, `previous_response_id` continuity with invalid-ID recovery retry, and bounded timeout/iteration guards; wired service into `AppDependencies` and added focused unit tests (`OpenAIAgentServiceTests`).
 - 2026-02-23: Updated shared `ProSSHMac` scheme `TestAction` so `xcodebuild test` is now recognized as configured (it advances past scheme-configuration failure); current remaining blocker is project-level absence of test bundles.
 - 2026-02-23: Added `ProSSHMacTests` unit-test bundle target + shared-scheme wiring (hosted by `ProSSHMac`), fixed test-target signing/isolation settings, and verified `xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -configuration Debug test` succeeds (smoke test baseline).
@@ -90,13 +90,15 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 - 2026-02-23: Hardened file-browser async loading against stale completions: if a stale callback arrives after request-ID rollover and no active request exists for that path, loading flags are now cleared to prevent indefinite spinner states.
 - 2026-02-23: Re-ran targeted regression tests after the above fixes: `OpenAIAgentServiceTests` and `TerminalAIAssistantViewModelTests` pass, including the previously quarantined clear-conversation test.
 - 2026-02-23: Updated user-facing shortcut/help text in `SettingsView` and AI pane composer hints to match current Ask-only copilot flow and terminal/file-browser/AI keyboard shortcuts.
+- 2026-02-23: Added `read_files` tool support in `OpenAIAgentService` for batch chunked file reads (max 10 files/request, 200 lines/file), tightened tool payload shapes for lower token usage, and expanded `OpenAIAgentServiceTests` coverage for batch file reads and grouped content-search hits.
+- 2026-02-23: Fixed terminal copy UX reliability in both embedded and external terminal windows: preserved Metal selection on focus tap, enabled context-menu copy regardless of stale selection state, added fallback copy from any active terminal selection/AppKit responder copy chain, and wired direct input capture view to respond to standard AppKit `copy:`/`paste:` menu actions.
 
 ## How to Use This File
 
 - Use this as the source of truth for sequencing and progress.
 - Check boxes as you complete work.
 - Keep this file updated when scope or architecture decisions change.
-- Do not start implementation until model is confirmed to `gpt-5.1-codex`.
+- Do not start implementation until model is confirmed to `gpt-5.1-codex-max`.
 
 ## Reality Check (Claims Verified in Current Codebase)
 
@@ -130,8 +132,7 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 - Scope is locked to phased delivery below.
 
 ### Checklist
-
-- [ ] Confirm active model is `gpt-5.1-codex`.
+- [ ] Confirm active model is `gpt-5.1-codex-max`.
 - [x] Re-read key files before coding:
   - `ProSSHMac/UI/Terminal/TerminalView.swift`
   - `ProSSHMac/Services/SessionManager.swift`
@@ -203,12 +204,12 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 ### Exit criteria
 
 - AI service can answer questions using session tools (local + remote) and stream responses.
-- Model is explicitly pinned to `gpt-5.1-codex`.
+- Model is explicitly pinned to `gpt-5.1-codex-max`.
 
 ### Checklist
 
 - [x] Build agent service around Responses API using native Swift networking.
-- [x] Explicitly set request model to `gpt-5.1-codex`.
+- [x] Explicitly set request model to `gpt-5.1-codex-max`.
 - [x] Add API-key provider wiring for the agent service (read from secure app settings path; fail safely when key is missing).
 - [x] Implement tool definitions and local tool execution pipeline.
 - [x] Implement minimum tool set:
@@ -219,6 +220,7 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
   - `execute_command`
   - `get_session_info`
 - [x] Ensure filesystem tools work in both local and remote sessions with safe read-only command execution on SSH hosts.
+- [x] Add `read_files` batch file-read tool (chunked windows, max 10 files/call) to reduce multi-file tool-call churn.
 - [x] Map `execute_command` to `SessionManager.sendShellInput` with Ask-mode explicit-intent safety policy.
 - [x] Persist `previous_response_id` safely (best-effort continuity; handle invalid/expired IDs).
 - [x] Add robust timeout/error handling for tool loops and network failures.
@@ -268,7 +270,7 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 
 ## Final QA Gate (Do Not Skip)
 
-- [ ] Model used for implementation and validation was `gpt-5.1-codex`.
+- [ ] Model used for implementation and validation was `gpt-5.1-codex-max`.
 - [ ] No regressions in existing terminal split panes.
 - [ ] No regressions in Transfers tab.
 - [x] Command execution from AI requires explicit user intent in the prompt.

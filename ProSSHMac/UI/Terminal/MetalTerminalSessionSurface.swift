@@ -31,7 +31,6 @@ struct MetalTerminalSessionSurface: View {
                     renderer: renderer,
                     onTerminalResize: onTerminalResize,
                     onTap: { point in
-                        model.clearSelection()
                         onTap?(point)
                     },
                     onDrag: { point, phase in
@@ -104,11 +103,32 @@ final class TerminalSelectionCoordinator: ObservableObject {
     }
 
     func copySelection(sessionID: UUID) -> String? {
-        models[sessionID]?.model?.copySelection()
+        model(for: sessionID)?.copySelection()
+    }
+
+    func copySelection(preferredSessionID: UUID?) -> String? {
+        if let preferredSessionID,
+           let selected = model(for: preferredSessionID)?.copySelection(),
+           !selected.isEmpty {
+            return selected
+        }
+
+        for (sessionID, weakModel) in models {
+            if sessionID == preferredSessionID { continue }
+            guard let model = weakModel.model else {
+                models.removeValue(forKey: sessionID)
+                continue
+            }
+            if let selected = model.copySelection(), !selected.isEmpty {
+                return selected
+            }
+        }
+
+        return nil
     }
 
     func hasSelection(sessionID: UUID) -> Bool {
-        models[sessionID]?.model?.hasSelection ?? false
+        model(for: sessionID)?.hasSelection ?? false
     }
 
     func selectAll(sessionID: UUID) {
@@ -116,7 +136,16 @@ final class TerminalSelectionCoordinator: ObservableObject {
     }
 
     func clearSelection(sessionID: UUID) {
-        models[sessionID]?.model?.clearSelection()
+        model(for: sessionID)?.clearSelection()
+    }
+
+    private func model(for sessionID: UUID) -> MetalTerminalSurfaceModel? {
+        guard let weakModel = models[sessionID],
+              let model = weakModel.model else {
+            models.removeValue(forKey: sessionID)
+            return nil
+        }
+        return model
     }
 }
 

@@ -51,7 +51,7 @@ final class OpenAIResponsesServiceTests: XCTestCase {
 
         let body = try XCTUnwrap(capturedRequest?.httpBody)
         let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
-        XCTAssertEqual(json["model"] as? String, "gpt-5.1-codex")
+        XCTAssertEqual(json["model"] as? String, "gpt-5.1-codex-max")
     }
 
     @MainActor
