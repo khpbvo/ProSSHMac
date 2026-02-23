@@ -115,7 +115,7 @@ ProSSHMac/
 - **SwiftUI state mutations during `updateNSView`** cause warnings and bugs. All NSView bridge callbacks use `DispatchQueue.main.async` or `Task { @MainActor in await Task.yield() }` deferral.
 - **SourceKit diagnostics** for `TerminalView.swift` often show false "Cannot find type" errors because SourceKit can't resolve types from other files in the project. The build itself succeeds fine — always verify with `xcodebuild build`.
 - **Bugs doc**: `docs/bugs.md` contains a comprehensive 68-bug audit organized by subsystem/severity. Check it before working on a subsystem.
-- **Test quarantines**: Previously quarantined tests (`PaneManagerTests`, `testClearConversation`) have been fixed via `nonisolated deinit`. No active quarantines remain.
+- **Test quarantines**: Previously quarantined tests (`PaneManagerTests`, `testClearConversation`) have been fixed via `nonisolated deinit`. `SessionTabManager` also uses `nonisolated deinit` for the same reason. No active quarantines remain.
 
 ---
 

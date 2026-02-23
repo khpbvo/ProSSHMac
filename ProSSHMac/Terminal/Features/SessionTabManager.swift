@@ -39,6 +39,9 @@ final class SessionTabManager: ObservableObject {
     private let selectedSessionIDKey: String
     private let pinnedSessionIDsKey: String
 
+    // Prevent actor-isolated deallocation crash during XCTest teardown.
+    nonisolated deinit {}
+
     init(defaults: UserDefaults = .standard, keyPrefix: String = "terminal.tabs") {
         self.defaults = defaults
         self.orderedSessionIDsKey = "\(keyPrefix).orderedSessionIDs"
