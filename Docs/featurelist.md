@@ -81,6 +81,14 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 - 2026-02-23: Fixed post-polish spinner regression: multiline `NSTextView` composer no longer mutates SwiftUI state synchronously during `updateNSView`/delegate layout callbacks. Binding writes are deferred async on main, removing `Modifying state during view update` warnings and preventing stuck AI/file-browser loading spinners.
 - 2026-02-23: Cleared remaining composer warning at `TerminalAIAssistantPane.swift:415` by removing focus-state `Binding` updates from the AppKit wrapper path; focus changes are now callback-driven to avoid any state mutation during SwiftUI view updates.
 - 2026-02-23: Added stronger anti-reentrancy deferral in composer bridge: focus/text/height propagation now runs on main actor after `Task.yield()`, avoiding same-pass state mutation during representable update/layout callbacks.
+- 2026-02-23: Fixed file-browser spinner stall in terminal sidebar by introducing per-path async request IDs and guaranteed active-request cleanup for loading flags before result guards, preventing stale completion paths from leaving root loading stuck until pane changes.
+- 2026-02-23: Improved AI answer readability + streaming feel: dense one-line replies are reflowed into short paragraphs, assistant prompt now enforces structured markdown output, streaming chunk cadence is slower/smaller for visible progression, and in-flight rendering uses lightweight plain text until streaming completes.
+- 2026-02-23: Added renderer-level readability fallback in `TerminalAIAssistantPane`: long dense markdown/plain text responses are auto-split into paragraph blocks before markdown parsing, ensuring multi-paragraph display even when upstream model output is a single wall of text.
+- 2026-02-23: Reduced macOS AppKit menu inconsistency errors triggered by the AI composer `NSTextView` by disabling broad text-checking services and returning a minimal explicit contextual menu instead of default rich-text submenu stacks (Font/Substitutions/Writing Direction/Speech).
+- 2026-02-23: Improved AI token efficiency and reduced noisy context payloads in `OpenAIAgentService`: `get_current_screen` now defaults to 60 lines (max 160), command history previews are capped to 300 chars, `get_command_output` now supports bounded `max_chars` with truncation metadata, and remote internal tool wrappers run with `suppressEcho=true` to avoid terminal echo noise.
+- 2026-02-23: Fixed remaining AI pane update-loop warnings and text-density issues: `TerminalAIAssistantPane` composer callback writes now defer via `DispatchQueue.main.async` with focus-state de-duplication, streaming assistant content now renders through markdown formatting, and sentence-splitting now handles punctuation boundaries even without trailing spaces.
+- 2026-02-23: Hardened file-browser async loading against stale completions: if a stale callback arrives after request-ID rollover and no active request exists for that path, loading flags are now cleared to prevent indefinite spinner states.
+- 2026-02-23: Re-ran targeted regression tests after the above fixes: `OpenAIAgentServiceTests` and `TerminalAIAssistantViewModelTests` pass (1 known skipped test remains: `testClearConversationResetsMessagesAndCallsService`).
 
 ## How to Use This File
 
@@ -231,6 +239,8 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 - [x] Allow command execution in Ask mode only when the user explicitly requests run/open/edit/check actions.
 - [x] Add keyboard shortcut for AI sidebar toggle and verify no collisions.
 - [x] Improve copilot readability/input ergonomics: markdown-rendered assistant text, visible resizable sidebar handle, multiline auto-growing composer with `Enter` send and `Shift+Enter` newline.
+- [x] Eliminate stuck file-browser loading states caused by stale async completions (request-ID based root/child load tracking with deterministic loading-flag cleanup).
+- [x] Improve AI response readability and incremental rendering behavior for long replies (paragraph reflow + visible chunk streaming + lighter in-flight rendering).
 
 ## Phase 6 - Settings, Persistence, and Hardening
 
@@ -249,7 +259,7 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
   - [x] Command block indexing
   - [x] Tool execution safety checks
   - [x] AI service error handling
-- [ ] Run project tests and document any failures/gaps.
+- [x] Run project tests and document any failures/gaps.
 - [ ] TODO: root-cause and fix host-process crash in `PaneManagerTests` (currently quarantined with `XCTSkip` to avoid repeated app crash respawn dialogs).
 - [ ] TODO: root-cause and fix host-process crash in `TerminalAIAssistantViewModelTests.testClearConversationResetsMessagesAndCallsService` (currently quarantined with `XCTSkip`).
 - [ ] Note: `xcodebuild ... test` now succeeds via `ProSSHMacTests` smoke baseline; most existing test files are still compiled under app sources and should be migrated into the test bundle for full coverage.
@@ -260,6 +270,6 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 - [ ] Model used for implementation and validation was `gpt-5.1-codex`.
 - [ ] No regressions in existing terminal split panes.
 - [ ] No regressions in Transfers tab.
-- [ ] Command execution from AI requires explicit user intent in the prompt.
-- [ ] Network/API failures fail safely with user-visible errors.
+- [x] Command execution from AI requires explicit user intent in the prompt.
+- [x] Network/API failures fail safely with user-visible errors.
 - [x] AI file ingestion uses bounded chunk reads (max 200 lines) instead of full-file reads.

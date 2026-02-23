@@ -41,6 +41,44 @@ final class OpenAIAgentServiceTests: XCTestCase {
         XCTAssertTrue(requests[1].toolOutputs[0].output.contains("\"ok\":true"))
     }
 
+    func testGetCommandOutputToolCapsOutputAndMarksTruncated() async throws {
+        let sessionProvider = MockAgentSessionProvider()
+        guard let blockID = sessionProvider.commandBlocks.first?.id else {
+            XCTFail("Expected seeded command block")
+            return
+        }
+        sessionProvider.commandOutputByBlockID[blockID] = String(repeating: "x", count: 2000)
+
+        let responses = MockOpenAIResponsesService()
+        responses.enqueueResponse(
+            makeFunctionCallResponse(
+                id: "resp_1",
+                callID: "call_out",
+                toolName: "get_command_output",
+                arguments: #"{"block_id":"\#(blockID.uuidString.lowercased())","max_chars":300}"#
+            )
+        )
+        responses.enqueueResponse(
+            makeTextResponse(id: "resp_2", text: "Done.")
+        )
+
+        let service = OpenAIAgentService(
+            responsesService: responses,
+            sessionProvider: sessionProvider
+        )
+
+        _ = try await service.generateReply(
+            sessionID: sessionProvider.sessionID,
+            prompt: "show output"
+        )
+
+        let toolOutput = responses.capturedRequests[1].toolOutputs.first?.output ?? ""
+        XCTAssertTrue(toolOutput.contains(#""truncated":true"#))
+        XCTAssertTrue(toolOutput.contains(#""max_chars":300"#))
+        XCTAssertTrue(toolOutput.contains(#""total_chars":2000"#))
+        XCTAssertTrue(toolOutput.contains(#""returned_chars":300"#))
+    }
+
     func testExecuteCommandToolRunsWhenRequested() async throws {
         let sessionProvider = MockAgentSessionProvider()
         let responses = MockOpenAIResponsesService()
@@ -245,6 +283,7 @@ final class OpenAIAgentServiceTests: XCTestCase {
         XCTAssertEqual(reply.text, "Found.")
         XCTAssertEqual(reply.toolCallsExecuted, 1)
         XCTAssertTrue(sessionProvider.sentCommands.contains { $0.contains("__PROSSH_AI_TOOL_EXIT_") })
+        XCTAssertTrue(sessionProvider.sentCommandsSuppressEcho.contains(true))
         let toolOutput = responses.capturedRequests[1].toolOutputs.first?.output ?? ""
         let normalizedOutput = toolOutput.replacingOccurrences(of: #"\/"#, with: "/")
         XCTAssertTrue(toolOutput.contains(#""ok":true"#))
@@ -283,6 +322,7 @@ final class OpenAIAgentServiceTests: XCTestCase {
         )
 
         XCTAssertTrue(sessionProvider.sentCommands.contains { $0.contains("__PROSSH_AI_TOOL_EXIT_") })
+        XCTAssertTrue(sessionProvider.sentCommandsSuppressEcho.contains(true))
         let toolOutput = responses.capturedRequests[1].toolOutputs.first?.output ?? ""
         let normalizedOutput = toolOutput.replacingOccurrences(of: #"\/"#, with: "/")
         XCTAssertTrue(toolOutput.contains(#""ok":true"#))
@@ -345,6 +385,7 @@ private final class MockAgentSessionProvider: OpenAIAgentSessionProviding {
     var bytesReceivedBySessionID: [UUID: Int64]
     var bytesSentBySessionID: [UUID: Int64]
     var sentCommands: [String] = []
+    var sentCommandsSuppressEcho: [Bool] = []
     var commandBlocks: [CommandBlock]
     var commandOutputByBlockID: [UUID: String]
     var simulatedRemoteFilesystemLines: [String] = []
@@ -394,6 +435,7 @@ private final class MockAgentSessionProvider: OpenAIAgentSessionProviding {
 
     func sendShellInput(sessionID: UUID, input: String, suppressEcho: Bool) async {
         sentCommands.append(input)
+        sentCommandsSuppressEcho.append(suppressEcho)
         guard let marker = Self.extractRemoteToolMarker(from: input) else {
             return
         }

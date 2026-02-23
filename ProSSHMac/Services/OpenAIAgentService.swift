@@ -263,15 +263,27 @@ final class OpenAIAgentService: OpenAIAgentServicing {
                 )
             }
 
+            let maxChars = Self.clamp(
+                Self.optionalInt(key: "max_chars", in: arguments) ?? 1200,
+                min: 100,
+                max: 4000
+            )
             let output = await sessionProvider.commandOutput(sessionID: sessionID, blockID: blockID)
+            let cappedOutput = output.map { String($0.prefix(maxChars)) }
+            let totalChars = output.map { $0.count }
+            let returnedChars = cappedOutput.map { $0.count }
             return Self.jsonString(from: .object([
                 "ok": .bool(true),
                 "block_id": .string(blockID.uuidString.lowercased()),
-                "output": output.map(OpenAIJSONValue.string) ?? .null,
+                "output": cappedOutput.map(OpenAIJSONValue.string) ?? .null,
+                "max_chars": .number(Double(maxChars)),
+                "returned_chars": returnedChars.map { .number(Double($0)) } ?? .null,
+                "total_chars": totalChars.map { .number(Double($0)) } ?? .null,
+                "truncated": .bool((totalChars ?? 0) > (returnedChars ?? 0)),
             ]))
 
         case "get_current_screen":
-            let limit = Self.clamp(Self.optionalInt(key: "max_lines", in: arguments) ?? 120, min: 10, max: 400)
+            let limit = Self.clamp(Self.optionalInt(key: "max_lines", in: arguments) ?? 60, min: 10, max: 160)
             let allLines = sessionProvider.shellBuffers[sessionID] ?? []
             let lines = Array(allLines.suffix(limit))
             return Self.jsonString(from: .object([
@@ -707,7 +719,7 @@ final class OpenAIAgentService: OpenAIAgentServicing {
         await sessionProvider.sendShellInput(
             sessionID: sessionID,
             input: wrappedCommand,
-            suppressEcho: false
+            suppressEcho: true
         )
 
         let deadline = Date().addingTimeInterval(timeoutSeconds)
@@ -1320,7 +1332,7 @@ final class OpenAIAgentService: OpenAIAgentServicing {
         .object([
             "id": .string(block.id.uuidString.lowercased()),
             "command": .string(block.command),
-            "output_preview": .string(String(block.output.prefix(800))),
+            "output_preview": .string(String(block.output.prefix(300))),
             "started_at": .string(ISO8601DateFormatter().string(from: block.startedAt)),
             "completed_at": .string(ISO8601DateFormatter().string(from: block.completedAt)),
             "exit_code": block.exitCode.map { .number(Double($0)) } ?? .null,
@@ -1463,6 +1475,11 @@ final class OpenAIAgentService: OpenAIAgentServicing {
         - Do not repeat the same tool call with identical arguments unless the user asked for a retry.
         - Batch discovery (for example one filesystem search, then one focused content search) before summarizing.
         - If sufficient evidence is already gathered, stop calling tools and answer directly.
+        Format responses as readable markdown:
+        - Use short paragraphs.
+        - Use bullet points for lists.
+        - Add a brief heading when it improves scanning.
+        - Avoid one long unbroken paragraph.
         Keep responses concise.
         """
     }
@@ -1504,7 +1521,7 @@ final class OpenAIAgentService: OpenAIAgentServicing {
             ),
             OpenAIResponsesToolDefinition(
                 name: "get_command_output",
-                description: "Get full output for a command block id.",
+                description: "Get output for a command block id, capped to max_chars.",
                 parameters: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -1512,8 +1529,13 @@ final class OpenAIAgentService: OpenAIAgentServicing {
                             "type": .string("string"),
                             "description": .string("UUID of the command block."),
                         ]),
+                        "max_chars": .object([
+                            "type": .string("integer"),
+                            "minimum": .number(100),
+                            "maximum": .number(4000),
+                        ]),
                     ]),
-                    "required": .array([.string("block_id")]),
+                    "required": .array([.string("block_id"), .string("max_chars")]),
                     "additionalProperties": commonNoExtraProperties,
                 ]),
                 strict: true
@@ -1527,7 +1549,7 @@ final class OpenAIAgentService: OpenAIAgentServicing {
                         "max_lines": .object([
                             "type": .string("integer"),
                             "minimum": .number(10),
-                            "maximum": .number(400),
+                            "maximum": .number(160),
                         ]),
                     ]),
                     "required": .array([.string("max_lines")]),

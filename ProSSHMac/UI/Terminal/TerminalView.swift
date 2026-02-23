@@ -67,6 +67,7 @@ struct TerminalView: View {
     @State private var fileBrowserChildrenByPath: [String: [FileBrowserEntry]] = [:]
     @State private var fileBrowserExpandedPaths: Set<String> = []
     @State private var fileBrowserLoadingPaths: Set<String> = []
+    @State private var fileBrowserLoadRequestIDByPath: [String: UUID] = [:]
     @State private var isFileBrowserRootLoading = false
     @State private var fileBrowserError: String?
     @State private var isAIAssistantComposerFocused = false
@@ -204,7 +205,7 @@ struct TerminalView: View {
             syncFileBrowserSession()
             restoreSidebarLayoutForSelection()
         }
-        .onChange(of: sessionManager.sessions.map(\.id)) { _, _ in
+        .onChange(of: sessionManager.sessions) { _, _ in
             Task { @MainActor in
                 tabManager.sync(with: sessionManager.sessions)
                 synchronizeSelection()
@@ -2192,6 +2193,7 @@ struct TerminalView: View {
             fileBrowserChildrenByPath = [:]
             fileBrowserExpandedPaths = []
             fileBrowserLoadingPaths = []
+            fileBrowserLoadRequestIDByPath = [:]
             isFileBrowserRootLoading = false
             fileBrowserError = nil
             return
@@ -2284,6 +2286,7 @@ struct TerminalView: View {
         fileBrowserChildrenByPath = [:]
         fileBrowserExpandedPaths = []
         fileBrowserLoadingPaths = []
+        fileBrowserLoadRequestIDByPath = [:]
         fileBrowserError = nil
         selectedFileBrowserPath = nil
         loadFileBrowserDirectory(path: normalizedPath, for: session, isRoot: true)
@@ -2313,7 +2316,11 @@ struct TerminalView: View {
 
     private func loadFileBrowserDirectory(path: String, for session: Session, isRoot: Bool) {
         let normalizedPath = normalizeFileBrowserPath(path, isLocal: session.isLocal)
-        guard !fileBrowserLoadingPaths.contains(normalizedPath) else { return }
+        if !isRoot, fileBrowserLoadRequestIDByPath[normalizedPath] != nil {
+            return
+        }
+        let requestID = UUID()
+        fileBrowserLoadRequestIDByPath[normalizedPath] = requestID
 
         if isRoot {
             isFileBrowserRootLoading = true
@@ -2325,11 +2332,25 @@ struct TerminalView: View {
             do {
                 let entries = try await listFileBrowserEntries(for: session, path: normalizedPath)
                 await MainActor.run {
-                    guard showFileBrowser, fileBrowserSessionID == session.id else { return }
+                    guard fileBrowserLoadRequestIDByPath[normalizedPath] == requestID else {
+                        if fileBrowserLoadRequestIDByPath[normalizedPath] == nil {
+                            fileBrowserLoadingPaths.remove(normalizedPath)
+                            if isRoot && normalizedPath == fileBrowserCurrentPath {
+                                isFileBrowserRootLoading = false
+                            }
+                        }
+                        return
+                    }
 
+                    fileBrowserLoadRequestIDByPath[normalizedPath] = nil
                     fileBrowserLoadingPaths.remove(normalizedPath)
                     if isRoot {
                         isFileBrowserRootLoading = false
+                    }
+
+                    guard showFileBrowser, fileBrowserSessionID == session.id else { return }
+
+                    if isRoot {
                         fileBrowserCurrentPath = normalizedPath
                     }
 
@@ -2342,11 +2363,25 @@ struct TerminalView: View {
                 }
             } catch {
                 await MainActor.run {
-                    guard showFileBrowser, fileBrowserSessionID == session.id else { return }
+                    guard fileBrowserLoadRequestIDByPath[normalizedPath] == requestID else {
+                        if fileBrowserLoadRequestIDByPath[normalizedPath] == nil {
+                            fileBrowserLoadingPaths.remove(normalizedPath)
+                            if isRoot && normalizedPath == fileBrowserCurrentPath {
+                                isFileBrowserRootLoading = false
+                            }
+                        }
+                        return
+                    }
 
+                    fileBrowserLoadRequestIDByPath[normalizedPath] = nil
                     fileBrowserLoadingPaths.remove(normalizedPath)
                     if isRoot {
                         isFileBrowserRootLoading = false
+                    }
+
+                    guard showFileBrowser, fileBrowserSessionID == session.id else { return }
+
+                    if isRoot {
                         fileBrowserCurrentPath = normalizedPath
                     }
 

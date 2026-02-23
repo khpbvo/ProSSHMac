@@ -54,6 +54,35 @@ final class TerminalAIAssistantViewModelTests: XCTestCase {
         XCTAssertEqual(service.clearedSessionIDs, [sessionID])
     }
 
+    func testSubmitPromptReflowsDenseAssistantReplyIntoParagraphs() async throws {
+        let sessionID = UUID()
+        let denseReply = """
+        This repository contains a CLI orchestrator for document workflows. It includes configuration and runtime integration for external tools. The project also wires approval-aware execution paths for safe editing. It supports retrieval and summarization flows for large document sets.
+        """
+        let service = MockOpenAIAgentService(
+            nextReply: OpenAIAgentReply(
+                text: denseReply,
+                responseID: "resp_456",
+                toolCallsExecuted: 3
+            )
+        )
+        let viewModel = TerminalAIAssistantViewModel(
+            agentService: service,
+            streamChunkDelayNanoseconds: 0
+        )
+
+        viewModel.draftPrompt = "Summarize"
+        viewModel.submitPrompt(for: sessionID)
+
+        try await waitUntil(timeout: 1.5) {
+            !viewModel.isSending
+        }
+
+        XCTAssertEqual(viewModel.messages.count, 2)
+        let assistantText = viewModel.messages[1].content
+        XCTAssertTrue(assistantText.contains("\n\n"))
+    }
+
     private func waitUntil(
         timeout: TimeInterval,
         condition: @escaping @MainActor () -> Bool

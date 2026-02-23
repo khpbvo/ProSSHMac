@@ -215,12 +215,21 @@ private struct AIAssistantMessageCard: View {
             }
             .foregroundStyle(.secondary)
 
-            ForEach(AIAssistantRenderer.parseSegments(from: message.content)) { segment in
-                switch segment.kind {
-                case let .text(text):
-                    AIAssistantMarkdownText(markdown: text)
-                case let .code(language, code):
-                    AIAssistantCodeBlock(language: language, code: code)
+            if message.isStreaming {
+                Text(AIAssistantRenderer.markdownText(message.content))
+                    .font(.system(size: 13))
+                    .lineSpacing(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            } else {
+                ForEach(AIAssistantRenderer.parseSegments(from: message.content)) { segment in
+                    switch segment.kind {
+                    case let .text(text):
+                        AIAssistantMarkdownText(markdown: text)
+                    case let .code(language, code):
+                        AIAssistantCodeBlock(language: language, code: code)
+                    }
                 }
             }
         }
@@ -295,7 +304,9 @@ private struct AIAssistantMarkdownText: View {
     var body: some View {
         Text(AIAssistantRenderer.markdownText(markdown))
             .font(.system(size: 13))
+            .lineSpacing(2)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
             .textSelection(.enabled)
     }
 }
@@ -336,6 +347,10 @@ private struct AIAssistantComposerTextView: NSViewRepresentable {
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
         textView.isAutomaticSpellingCorrectionEnabled = false
+        textView.isContinuousSpellCheckingEnabled = false
+        textView.isGrammarCheckingEnabled = false
+        textView.isAutomaticDataDetectionEnabled = false
+        textView.enabledTextCheckingTypes = 0
         textView.isHorizontallyResizable = false
         textView.isVerticallyResizable = true
         textView.textContainerInset = NSSize(width: 8, height: 7)
@@ -383,6 +398,7 @@ private struct AIAssistantComposerTextView: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: AIAssistantComposerTextView
         weak var textView: ComposerTextView?
+        private var lastFocusState: Bool?
 
         init(parent: AIAssistantComposerTextView) {
             self.parent = parent
@@ -408,8 +424,9 @@ private struct AIAssistantComposerTextView: NSViewRepresentable {
         }
 
         func updateFocus(_ focused: Bool) {
-            Task { @MainActor [weak self] in
-                await Task.yield()
+            if lastFocusState == focused { return }
+            lastFocusState = focused
+            DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.parent.onFocusChanged(focused)
             }
@@ -429,8 +446,7 @@ private struct AIAssistantComposerTextView: NSViewRepresentable {
             let contentHeight = max(lineHeight, ceil(usedRect.height))
             let targetHeight = min(parent.maxHeight, max(parent.minHeight, contentHeight + (textView.textContainerInset.height * 2)))
 
-            Task { @MainActor [weak self] in
-                await Task.yield()
+            DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 if abs(self.parent.dynamicHeight - targetHeight) > 0.5 {
                     self.parent.dynamicHeight = targetHeight
@@ -439,8 +455,7 @@ private struct AIAssistantComposerTextView: NSViewRepresentable {
         }
 
         private func setDraftText(_ value: String) {
-            Task { @MainActor [weak self] in
-                await Task.yield()
+            DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 if self.parent.text != value {
                     self.parent.text = value
@@ -449,8 +464,7 @@ private struct AIAssistantComposerTextView: NSViewRepresentable {
         }
 
         func recalculateHeightDeferred() {
-            Task { @MainActor [weak self] in
-                await Task.yield()
+            DispatchQueue.main.async { [weak self] in
                 self?.recalculateHeight()
             }
         }
@@ -498,6 +512,33 @@ private final class ComposerTextView: NSTextView {
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         onFrameChanged?()
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = NSMenu(title: "Composer")
+        menu.autoenablesItems = true
+
+        let cutItem = NSMenuItem(title: "Cut", action: #selector(cut(_:)), keyEquivalent: "")
+        cutItem.target = self
+        cutItem.isEnabled = isEditable
+        menu.addItem(cutItem)
+
+        let copyItem = NSMenuItem(title: "Copy", action: #selector(copy(_:)), keyEquivalent: "")
+        copyItem.target = self
+        menu.addItem(copyItem)
+
+        let pasteItem = NSMenuItem(title: "Paste", action: #selector(paste(_:)), keyEquivalent: "")
+        pasteItem.target = self
+        pasteItem.isEnabled = isEditable
+        menu.addItem(pasteItem)
+
+        menu.addItem(.separator())
+
+        let selectAllItem = NSMenuItem(title: "Select All", action: #selector(selectAll(_:)), keyEquivalent: "")
+        selectAllItem.target = self
+        menu.addItem(selectAllItem)
+
+        return menu
     }
 }
 
@@ -611,18 +652,96 @@ private enum AIAssistantRenderer {
     }
 
     static func markdownText(_ text: String) -> AttributedString {
-        guard !text.isEmpty else { return AttributedString("") }
+        let formatted = makeReadableMarkdown(text)
+        guard !formatted.isEmpty else { return AttributedString("") }
 
         let options = AttributedString.MarkdownParsingOptions(
             interpretedSyntax: .full,
             failurePolicy: .returnPartiallyParsedIfPossible
         )
 
-        if let parsed = try? AttributedString(markdown: text, options: options) {
+        if let parsed = try? AttributedString(markdown: formatted, options: options) {
             return parsed
         }
 
-        return AttributedString(text)
+        return AttributedString(formatted)
+    }
+
+    private static func makeReadableMarkdown(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+
+        // Respect already-structured markdown.
+        if trimmed.contains("```")
+            || trimmed.contains("\n\n")
+            || trimmed.contains("\n#")
+            || trimmed.contains("\n- ")
+            || trimmed.contains("\n* ")
+            || trimmed.contains("\n1. ")
+            || trimmed.contains("\n2. ")
+            || trimmed.contains("\n3. ") {
+            return trimmed
+        }
+
+        guard trimmed.count >= 180 else { return trimmed }
+
+        var sentences = splitSentences(from: trimmed)
+        if sentences.count < 2 {
+            sentences = splitSemicolonClauses(from: trimmed)
+        }
+        guard sentences.count >= 2 else { return trimmed }
+
+        var paragraphs: [String] = []
+        paragraphs.reserveCapacity((sentences.count + 1) / 2)
+
+        var index = 0
+        while index < sentences.count {
+            let end = min(sentences.count, index + 2)
+            paragraphs.append(sentences[index..<end].joined(separator: " "))
+            index = end
+        }
+
+        return paragraphs.joined(separator: "\n\n")
+    }
+
+    private static func splitSentences(from text: String) -> [String] {
+        let pattern = #"(?<=[.!?])\s*(?=[A-Z0-9\"'`])"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+
+        let nsText = text as NSString
+        let fullRange = NSRange(location: 0, length: nsText.length)
+        var segments: [String] = []
+        var cursor = 0
+
+        regex.enumerateMatches(in: text, options: [], range: fullRange) { match, _, _ in
+            guard let match else { return }
+            let boundary = match.range.location
+            let segmentRange = NSRange(location: cursor, length: max(0, boundary - cursor))
+            let segment = nsText.substring(with: segmentRange).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !segment.isEmpty {
+                segments.append(segment)
+            }
+            cursor = match.range.location + match.range.length
+        }
+
+        if cursor < nsText.length {
+            let tailRange = NSRange(location: cursor, length: nsText.length - cursor)
+            let tail = nsText.substring(with: tailRange).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !tail.isEmpty {
+                segments.append(tail)
+            }
+        }
+
+        return segments
+    }
+
+    private static func splitSemicolonClauses(from text: String) -> [String] {
+        text.split(separator: ";")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .map { clause in
+                clause.hasSuffix(".") ? clause : clause + "."
+            }
     }
 
     private static func applyRegex(_ pattern: String, color: NSColor, to attributed: NSMutableAttributedString) {

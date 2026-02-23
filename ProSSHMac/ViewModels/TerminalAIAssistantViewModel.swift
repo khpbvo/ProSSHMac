@@ -29,9 +29,9 @@ final class TerminalAIAssistantViewModel: ObservableObject {
 
     init(
         agentService: any OpenAIAgentServicing,
-        streamChunkDelayNanoseconds: UInt64 = 14_000_000,
-        minChunkSize: Int = 8,
-        maxChunkSize: Int = 36
+        streamChunkDelayNanoseconds: UInt64 = 28_000_000,
+        minChunkSize: Int = 6,
+        maxChunkSize: Int = 18
     ) {
         self.agentService = agentService
         self.streamChunkDelayNanoseconds = streamChunkDelayNanoseconds
@@ -101,7 +101,7 @@ final class TerminalAIAssistantViewModel: ObservableObject {
     }
 
     private func streamReply(_ fullText: String, into messageID: UUID) async {
-        let normalized = fullText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = normalizeAssistantReply(fullText)
         let text = normalized.isEmpty
             ? "No response from assistant."
             : normalized
@@ -135,7 +135,7 @@ final class TerminalAIAssistantViewModel: ObservableObject {
     private func streamingChunks(for text: String) -> [String] {
         guard text.count > maxChunkSize else { return [text] }
 
-        let targetChunkCount = 48
+        let targetChunkCount = 80
         let estimated = max(
             minChunkSize,
             min(maxChunkSize, text.count / max(1, targetChunkCount))
@@ -152,5 +152,54 @@ final class TerminalAIAssistantViewModel: ObservableObject {
         }
 
         return result
+    }
+
+    private func normalizeAssistantReply(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        guard !trimmed.contains("```") else { return trimmed }
+        guard !trimmed.contains("\n\n") else { return trimmed }
+        return Self.reflowDenseParagraphs(trimmed)
+    }
+
+    private static func reflowDenseParagraphs(_ text: String) -> String {
+        let pattern = #"(?<=[.!?])\s*(?=[A-Z0-9\"'`])"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            return text
+        }
+
+        let nsText = text as NSString
+        let fullRange = NSRange(location: 0, length: nsText.length)
+        var parts: [String] = []
+        var cursor = 0
+        regex.enumerateMatches(in: text, options: [], range: fullRange) { match, _, _ in
+            guard let match else { return }
+            let boundary = match.range.location
+            let segmentRange = NSRange(location: cursor, length: max(0, boundary - cursor))
+            let segment = nsText.substring(with: segmentRange).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !segment.isEmpty {
+                parts.append(segment)
+            }
+            cursor = match.range.location + match.range.length
+        }
+
+        if cursor < nsText.length {
+            let tailRange = NSRange(location: cursor, length: nsText.length - cursor)
+            let tail = nsText.substring(with: tailRange).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !tail.isEmpty {
+                parts.append(tail)
+            }
+        }
+
+        guard parts.count >= 3 else { return text }
+
+        var paragraphs: [String] = []
+        var index = 0
+        while index < parts.count {
+            let end = min(parts.count, index + 2)
+            paragraphs.append(parts[index..<end].joined(separator: " "))
+            index = end
+        }
+        return paragraphs.joined(separator: "\n\n")
     }
 }
