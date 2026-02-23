@@ -28,7 +28,7 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 ### Current Focus
 
 - Active phase: Phase 6 (persistence + hardening + remaining test coverage).
-- Immediate objective: complete remaining hardening/documentation gaps (user-facing shortcut/help docs) and continue migrating legacy tests into the shared test bundle.
+- Immediate objective: continue migrating legacy tests into the shared test bundle while keeping targeted regressions green during migration.
 - Test stability TODOs: no active crash quarantines remain for previously skipped pane/AI view-model tests.
 
 ## Loop Log
@@ -89,6 +89,7 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 - 2026-02-23: Fixed remaining AI pane update-loop warnings and text-density issues: `TerminalAIAssistantPane` composer callback writes now defer via `DispatchQueue.main.async` with focus-state de-duplication, streaming assistant content now renders through markdown formatting, and sentence-splitting now handles punctuation boundaries even without trailing spaces.
 - 2026-02-23: Hardened file-browser async loading against stale completions: if a stale callback arrives after request-ID rollover and no active request exists for that path, loading flags are now cleared to prevent indefinite spinner states.
 - 2026-02-23: Re-ran targeted regression tests after the above fixes: `OpenAIAgentServiceTests` and `TerminalAIAssistantViewModelTests` pass, including the previously quarantined clear-conversation test.
+- 2026-02-23: Updated user-facing shortcut/help text in `SettingsView` and AI pane composer hints to match current Ask-only copilot flow and terminal/file-browser/AI keyboard shortcuts.
 
 ## How to Use This File
 
@@ -263,7 +264,7 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 - [x] Fixed host-process crash in `PaneManagerTests` and removed quarantine (`XCTSkip` no longer needed).
 - [x] Fixed host-process crash in `TerminalAIAssistantViewModelTests.testClearConversationResetsMessagesAndCallsService` and removed quarantine (`XCTSkip` no longer needed).
 - [ ] Note: `xcodebuild ... test` now succeeds via `ProSSHMacTests` smoke baseline; most existing test files are still compiled under app sources and should be migrated into the test bundle for full coverage.
-- [ ] Update user-facing docs and shortcut reference in settings/help text.
+- [x] Update user-facing docs and shortcut reference in settings/help text.
 
 ## Final QA Gate (Do Not Skip)
 

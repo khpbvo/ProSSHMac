@@ -28,6 +28,7 @@ This file is the project working memory for future assistants in this repository
 
 ## Current Status Snapshot
 
+- Latest docs/help sync (2026-02-23): user-facing shortcut/help text is now aligned with current Ask-only copilot flow and keyboard shortcuts in both `SettingsView` and the AI pane composer hint.
 - Latest AI token-efficiency + UX hardening (2026-02-23): reduced default screen/context payload sizes (`get_current_screen` default 60/max 160, command `output_preview` 300 chars), capped `get_command_output` via `max_chars` with truncation metadata, and suppressed remote internal tool-command echo to reduce noisy terminal/context loops.
 - Latest test-stability fix (2026-02-23): resolved the `PaneManagerTests` host-process malloc/free crash by avoiding actor-isolated deallocation for pane-layout lifecycle objects (`nonisolated deinit` in `PaneManager` and `PaneLayoutStore`); `PaneManagerTests` quarantine was removed and targeted suite now passes.
 - Latest test-stability fix (2026-02-23): resolved the `TerminalAIAssistantViewModelTests.testClearConversationResetsMessagesAndCallsService` host-process malloc/free crash by making the AI view-model deallocation path nonisolated (`nonisolated deinit`) and removing the temporary `XCTSkip` quarantine; targeted suite now passes.
@@ -55,4 +56,4 @@ This file is the project working memory for future assistants in this repository
 - Latest UX fix (2026-02-23): `SettingsView` AI section now shows a reliable bordered API-key input and clipboard paste button; key entry/save is no longer blocked by form-row rendering quirks.
 - Settings pane scrolling has been fixed; long settings content is now reachable.
 - Shared `ProSSHMac` scheme now has a working test pipeline: `ProSSHMacTests` bundle target is wired and `xcodebuild ... test` passes with a smoke baseline.
-- Next implementation phase is tracked in `Docs/featurelist.md` under remaining Phase 6 work (user-facing doc/shortcut updates and broader test-bundle migration coverage).
+- Next implementation phase is tracked in `Docs/featurelist.md` under remaining Phase 6 work (broader test-bundle migration coverage).

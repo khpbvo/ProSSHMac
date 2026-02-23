@@ -206,6 +206,10 @@ struct SettingsView: View {
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
+
+                    Text("AI Copilot lives in Terminal. Use ⌥⌘I to toggle it. In the composer: Enter sends, Shift+Enter inserts a new line.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
 
                 if supportsMultitaskingControls {
@@ -224,7 +228,13 @@ struct SettingsView: View {
                     Text("Navigation: ⌘1 Hosts, ⌘2 Terminal, ⌘3 KeyForge, ⌘4 Certificates, ⌘5 Transfers, ⌘6 Settings")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
-                    Text("Terminal: ⌘↩ send, ⌃C interrupt, ⌃D EOF, ⇧⌘[ previous session, ⇧⌘] next session, ⇧⌘X disconnect/close, ⌘K clear buffer")
+                    Text("Terminal Core: ⌘↩ send, ⌃C interrupt, ⌃D EOF, ⌘F find, ⌘K clear buffer, ⇧⌘X disconnect/close")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Text("Panes & Sessions: ⌘D split right, ⇧⌘D split down, ⌘[ previous pane, ⌘] next pane, ⇧⌘↩ maximize/restore pane, ⇧⌘[ previous session, ⇧⌘] next session")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Text("Sidebar & Tools: ⌘B file browser, ⌥⌘I AI copilot, ⇧⌘P quick commands, ⇧⌘F toggle terminal maximize")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }

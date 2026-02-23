@@ -168,6 +168,10 @@ struct TerminalAIAssistantPane: View {
                 )
             }
 
+            Text("Enter to send. Shift+Enter for newline.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
             if let lastError = viewModel.lastError, !lastError.isEmpty {
                 Text(lastError)
                     .font(.caption)
