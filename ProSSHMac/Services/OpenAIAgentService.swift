@@ -70,7 +70,7 @@ final class OpenAIAgentService: OpenAIAgentServicing {
         responsesService: any OpenAIResponsesServicing,
         sessionProvider: any OpenAIAgentSessionProviding,
         requestTimeoutSeconds: Int = 60,
-        maxToolIterations: Int = 99
+        maxToolIterations: Int = 200
     ) {
         self.responsesService = responsesService
         self.sessionProvider = sessionProvider
@@ -1139,6 +1139,11 @@ final class OpenAIAgentService: OpenAIAgentServicing {
         For filesystem questions, use search_filesystem and search_file_contents.
         Execute commands only when the user explicitly asks to run, open, edit, or check something.
         This includes interactive commands when requested (for example: nano, vim, less, top).
+        Be tool-efficient:
+        - Prefer the minimum number of tool calls needed to answer.
+        - Do not repeat the same tool call with identical arguments unless the user asked for a retry.
+        - Batch discovery (for example one filesystem search, then one focused content search) before summarizing.
+        - If sufficient evidence is already gathered, stop calling tools and answer directly.
         Keep responses concise.
         """
     }

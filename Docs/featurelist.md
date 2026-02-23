@@ -75,6 +75,7 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 - 2026-02-23: Consolidated AI pane UX to single visible Ask mode: removed Ask/Follow/Execute mode picker and execute confirmation dialog from `TerminalView`/`TerminalAIAssistantPane`; Ask mode now auto-routes to tools and can execute commands when user intent is explicit, while Follow mode remains execution-blocked internally. Targeted tests pass (`OpenAIAgentServiceTests`, `TerminalAIAssistantViewModelTests`, with one known skipped test).
 - 2026-02-23: Completed Ask-only cleanup across backend + UI: removed `OpenAIAgentMode` and all Follow/Execute branching from `OpenAIAgentService`, removed follow auto-trigger paths from `TerminalView` and `TerminalAIAssistantViewModel`, and simplified AI tests to Ask-only contract; targeted tests pass (`OpenAIAgentServiceTests`, `TerminalAIAssistantViewModelTests`, 1 known skipped test unchanged).
 - 2026-02-23: Increased AI tool-loop ceiling from 8 to 99 iterations in `OpenAIAgentService` (and explicitly via `AppDependencies`) to avoid premature `toolLoopExceeded` failures on multi-step requests; re-verified with `OpenAIAgentServiceTests`.
+- 2026-02-23: Increased AI tool-loop ceiling again to 200 iterations and tightened Ask-mode developer guidance for tool efficiency (avoid duplicate calls, batch discovery, stop once evidence is sufficient); re-verified with `OpenAIAgentServiceTests`.
 
 ## How to Use This File
 

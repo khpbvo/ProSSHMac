@@ -28,7 +28,7 @@ This file is the project working memory for future assistants in this repository
 
 ## Current Status Snapshot
 
-- Latest tuning (2026-02-23): AI tool-loop cap is now `99` iterations (was `8`) via `OpenAIAgentService` default plus explicit `AppDependencies` wiring, reducing premature `toolLoopExceeded` responses on complex requests.
+- Latest tuning (2026-02-23): AI tool-loop cap is now `200` iterations (was `99`) via `OpenAIAgentService` default plus explicit `AppDependencies` wiring; Ask-mode instructions were also tightened to reduce redundant tool calls and stop earlier when enough evidence is gathered.
 - Latest UX change (2026-02-23): AI copilot is now fully Ask-only in both UI and backend. Ask/Follow/Execute switcher and mode-specific backend branches were removed; command execution is routed from Ask when user intent is explicit.
 - Latest milestone (2026-02-23): Phase 6 hardening now includes SFTP sidebar regression coverage. `SessionManagerSFTPSidebarTests` validates connected-session remote listing success, disconnected-session guard behavior, and transport error propagation, and targeted test runs are green.
 - Latest API fix (2026-02-23): OpenAI Responses tool definitions now encode with top-level `name`/`description`/`parameters` (no nested `function` object), resolving runtime 400 errors like `Missing required parameter: 'tools[0].name'`.
