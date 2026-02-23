@@ -291,6 +291,19 @@ fragment float4 terminal_fragment(
     }
 
     // -------------------------------------------------------------------
+    // Minimum contrast safety net: if both fg and bg are very dark,
+    // replace fg with white. Catches invisible dark-on-dark text caused
+    // by TUI programs leaving corrupted SGR state on exit.
+    // -------------------------------------------------------------------
+    if (!(attrs & ATTR_HIDDEN)) {
+        float fgLum = 0.2126 * fg.r + 0.7152 * fg.g + 0.0722 * fg.b;
+        float bgLum = 0.2126 * bg.r + 0.7152 * bg.g + 0.0722 * bg.b;
+        if (fgLum < 0.06 && bgLum < 0.06) {
+            fg = float4(1.0, 1.0, 1.0, 1.0);
+        }
+    }
+
+    // -------------------------------------------------------------------
     // B.5.5: Dim attribute — reduce fg brightness
     // -------------------------------------------------------------------
     if (attrs & ATTR_DIM) {

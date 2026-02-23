@@ -1317,18 +1317,23 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
         // Restore cursor from saved primary state
         if let saved = cursor.savedPrimary {
             cursor.restore(from: saved, gridRows: rows, gridCols: columns)
-            currentAttributes = saved.attributes
-            currentFgColor = saved.fgColor
-            currentBgColor = saved.bgColor
-            currentUnderlineColor = saved.underlineColor
-            currentUnderlineStyle = saved.underlineStyle
             originMode = saved.originMode
             autoWrapMode = saved.autoWrapMode
             activeCharset = saved.activeCharset
             g0Charset = saved.g0Charset
             g1Charset = saved.g1Charset
-            invalidatePackedColors()
         }
+
+        // Always reset SGR attributes to defaults when leaving alternate buffer.
+        // TUI programs may exit without resetting colors (especially on Ctrl+C),
+        // leaving dark fg colors that render invisible on dark backgrounds.
+        // The shell will re-apply its own prompt colors immediately after.
+        currentAttributes = []
+        currentFgColor = .default
+        currentBgColor = .default
+        currentUnderlineColor = .default
+        currentUnderlineStyle = .none
+        invalidatePackedColors()
 
         markAllDirty()
     }

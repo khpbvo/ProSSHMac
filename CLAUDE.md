@@ -123,6 +123,7 @@ ProSSHMac/
 
 - **2026-02-23**: Fixed terminal focus loss after clicking AI chat composer. Root cause: clicking the chat input made the `ComposerTextView` first responder, but clicking back on the terminal couldn't reclaim focus because `armForKeyboardInputIfNeeded()` bailed out when `isTextInputFocused` detected the still-active NSTextView. Fix: `focusSessionAndPane()` now explicitly calls `window.makeFirstResponder(nil)` to resign any active NSTextView before setting SwiftUI state, allowing the normal `armForKeyboardInputIfNeeded()` path to succeed.
 - **2026-02-23**: Implemented Shell Integration / Device Type configuration. Per-host `ShellIntegrationType` (none, zsh/bash/fish/posixSh, 8 network vendors, custom regex) stored in `ShellIntegrationConfig` on `Host`. UI picker in `HostFormView`. `ShellIntegrationScripts` provides OSC 133 injection for Unix shells (zsh precmd/preexec, bash PROMPT_COMMAND/DEBUG, fish events, POSIX sh PS1 wrapping). Vendor types use regex prompt detection in `TerminalHistoryIndex.looksLikePrompt()`. Local shells inject via overlay rc files; SSH sessions inject via post-connect raw input with 500ms delay. Key new file: `Terminal/Features/ShellIntegrationScripts.swift`.
+- **2026-02-23**: Fixed invisible text after TUI programs exit. `disableAlternateBuffer()` now resets SGR attributes to defaults instead of restoring saved (potentially corrupted) colors. Metal shader now has a minimum-contrast safety net: if both fg and bg luminance < 0.06, fg is replaced with white (skipped when `hidden` attribute is set).
 
 ---
 
