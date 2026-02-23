@@ -993,6 +993,13 @@ struct TerminalView: View {
     }
 
     private func focusSessionAndPane(_ sessionID: UUID, paneID: UUID? = nil) {
+        // If a text input (e.g. AI composer) holds first-responder status,
+        // resign it at the AppKit level so the terminal can reclaim focus.
+        if let window = NSApp.keyWindow,
+           let responder = window.firstResponder,
+           responder is NSTextView {
+            window.makeFirstResponder(nil)
+        }
         isAIAssistantComposerFocused = false
         directInputActivationNonce &+= 1
         focusedSessionID = sessionID
