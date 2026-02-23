@@ -250,6 +250,38 @@ final class OpenAIAgentServiceTests: XCTestCase {
         XCTAssertNil(requests[2].previousResponseID)
     }
 
+    func testReadFilesToolReturnsBatchResults() async throws {
+        let sessionProvider = MockAgentSessionProvider()
+        let responses = MockOpenAIResponsesService()
+        responses.enqueueResponse(
+            makeFunctionCallResponse(
+                id: "resp_1",
+                callID: "call_batch",
+                toolName: "read_files",
+                arguments: #"{"files":[{"path":"/tmp/test_batch_a.txt","start_line":1,"line_count":50},{"path":"/tmp/test_batch_b.txt","start_line":1,"line_count":50}]}"#
+            )
+        )
+        responses.enqueueResponse(
+            makeTextResponse(id: "resp_2", text: "Batch done.")
+        )
+
+        let service = OpenAIAgentService(
+            responsesService: responses,
+            sessionProvider: sessionProvider
+        )
+
+        let reply = try await service.generateReply(
+            sessionID: sessionProvider.sessionID,
+            prompt: "read these files"
+        )
+
+        XCTAssertEqual(reply.text, "Batch done.")
+        XCTAssertEqual(reply.toolCallsExecuted, 1)
+        let toolOutput = responses.capturedRequests[1].toolOutputs.first?.output ?? ""
+        XCTAssertTrue(toolOutput.contains(#""ok":true"#))
+        XCTAssertTrue(toolOutput.contains(#""results":"#))
+    }
+
     func testSearchFilesystemToolRunsInRemoteSession() async throws {
         let sessionProvider = MockAgentSessionProvider(isLocal: false)
         sessionProvider.simulatedRemoteFilesystemLines = [
@@ -328,7 +360,7 @@ final class OpenAIAgentServiceTests: XCTestCase {
         XCTAssertTrue(toolOutput.contains(#""ok":true"#))
         XCTAssertTrue(toolOutput.contains(#""source":"remote_command""#))
         XCTAssertTrue(normalizedOutput.contains("/home/kevin/projects/README.md"))
-        XCTAssertTrue(toolOutput.contains(#""line_number":12"#))
+        XCTAssertTrue(toolOutput.contains(#""n":12"#))
         XCTAssertFalse(toolOutput.contains("local sessions only"))
     }
 

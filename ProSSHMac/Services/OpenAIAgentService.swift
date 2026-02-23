@@ -246,7 +246,6 @@ final class OpenAIAgentService: OpenAIAgentServicing {
             )
             return Self.jsonString(from: .object([
                 "ok": .bool(true),
-                "query": .string(query),
                 "results": .array(blocks.map(Self.commandBlockSummary)),
             ]))
 
@@ -274,7 +273,6 @@ final class OpenAIAgentService: OpenAIAgentServicing {
             let returnedChars = cappedOutput.map { $0.count }
             return Self.jsonString(from: .object([
                 "ok": .bool(true),
-                "block_id": .string(blockID.uuidString.lowercased()),
                 "output": cappedOutput.map(OpenAIJSONValue.string) ?? .null,
                 "max_chars": .number(Double(maxChars)),
                 "returned_chars": returnedChars.map { .number(Double($0)) } ?? .null,
@@ -436,6 +434,65 @@ final class OpenAIAgentService: OpenAIAgentServicing {
             }
             return Self.jsonString(from: result)
 
+        case "read_files":
+            guard let session = sessionProvider.sessions.first(where: { $0.id == sessionID }) else {
+                throw OpenAIAgentServiceError.sessionNotFound
+            }
+
+            guard case let .array(filesArray) = arguments["files"] else {
+                throw OpenAIAgentServiceError.invalidToolArguments(
+                    toolName: toolCall.name,
+                    message: "missing 'files' array"
+                )
+            }
+
+            let capped = filesArray.prefix(10)
+            var results: [OpenAIJSONValue] = []
+            results.reserveCapacity(capped.count)
+
+            for fileEntry in capped {
+                guard case let .object(fileDict) = fileEntry,
+                      case let .string(path)? = fileDict["path"],
+                      case let .number(startNum)? = fileDict["start_line"],
+                      case let .number(countNum)? = fileDict["line_count"] else {
+                    results.append(.object([
+                        "ok": .bool(false),
+                        "error": .string("Invalid file entry — requires path, start_line, line_count."),
+                    ]))
+                    continue
+                }
+
+                let startLine = Self.clamp(Int(startNum.rounded()), min: 1, max: 2_000_000_000)
+                let lineCount = Self.clamp(Int(countNum.rounded()), min: 1, max: 200)
+
+                let result: OpenAIJSONValue
+                if session.isLocal {
+                    let workingDirectory = sessionProvider.workingDirectoryBySessionID[sessionID]
+                    result = (try? await Self.readLocalFileChunk(
+                        path: path,
+                        startLine: startLine,
+                        lineCount: lineCount,
+                        workingDirectory: workingDirectory
+                    )) ?? .object([
+                        "ok": .bool(false),
+                        "error": .string("Failed to read: \(path)"),
+                    ])
+                } else {
+                    result = await readRemoteFileChunk(
+                        sessionID: sessionID,
+                        path: path,
+                        startLine: startLine,
+                        lineCount: lineCount
+                    )
+                }
+                results.append(result)
+            }
+
+            return Self.jsonString(from: .object([
+                "ok": .bool(true),
+                "results": .array(results),
+            ]))
+
         case "execute_command":
             let command = try Self.requiredString(
                 key: "command",
@@ -449,7 +506,6 @@ final class OpenAIAgentService: OpenAIAgentServicing {
                     "status": .string("read_window_required"),
                     "message": .string(message),
                     "hint": .string("Use read_file_chunk with line_count <= 200 and iterate by start_line."),
-                    "command": .string(command),
                 ]))
             }
 
@@ -462,7 +518,6 @@ final class OpenAIAgentService: OpenAIAgentServicing {
             return Self.jsonString(from: .object([
                 "ok": .bool(true),
                 "status": .string("queued"),
-                "command": .string(command),
             ]))
 
         case "get_session_info":
@@ -472,7 +527,6 @@ final class OpenAIAgentService: OpenAIAgentServicing {
 
             return Self.jsonString(from: .object([
                 "ok": .bool(true),
-                "session_id": .string(session.id.uuidString.lowercased()),
                 "state": .string(session.state.rawValue),
                 "host_label": .string(session.hostLabel),
                 "username": .string(session.username),
@@ -481,8 +535,6 @@ final class OpenAIAgentService: OpenAIAgentServicing {
                 "is_local": .bool(session.isLocal),
                 "started_at": .string(iso8601Formatter.string(from: session.startedAt)),
                 "working_directory": sessionProvider.workingDirectoryBySessionID[sessionID].map(OpenAIJSONValue.string) ?? .null,
-                "bytes_received": .number(Double(sessionProvider.bytesReceivedBySessionID[sessionID] ?? 0)),
-                "bytes_sent": .number(Double(sessionProvider.bytesSentBySessionID[sessionID] ?? 0)),
             ]))
 
         default:
@@ -800,19 +852,14 @@ final class OpenAIAgentService: OpenAIAgentServicing {
 
         for line in lines.prefix(maxResults) {
             guard let parsed = Self.parseRemoteFilesystemResultLine(line) else { continue }
-            let name = (parsed.path as NSString).lastPathComponent
             results.append(.object([
                 "path": .string(parsed.path),
-                "name": .string(name),
                 "is_directory": .bool(parsed.isDirectory),
             ]))
         }
 
         var payload: [String: OpenAIJSONValue] = [
             "ok": .bool(true),
-            "path": .string(path),
-            "name_pattern": .string(namePattern),
-            "scanned_entries": .null,
             "truncated": .bool(results.count >= maxResults),
             "results": .array(results),
             "source": .string("remote_command"),
@@ -858,11 +905,8 @@ final class OpenAIAgentService: OpenAIAgentServicing {
 
         var payload: [String: OpenAIJSONValue] = [
             "ok": .bool(true),
-            "path": .string(path),
-            "text_pattern": .string(textPattern),
-            "scanned_files": .null,
             "truncated": .bool(matches.count >= maxResults),
-            "matches": .array(matches),
+            "matches": .array(groupMatchesByFile(matches)),
             "source": .string("remote_command"),
         ]
         if matches.isEmpty, !normalized.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -1026,14 +1070,11 @@ final class OpenAIAgentService: OpenAIAgentServicing {
                 if filenameMatches(rootURL.lastPathComponent, pattern: namePattern) {
                     results.append(.object([
                         "path": .string(rootURL.path),
-                        "name": .string(rootURL.lastPathComponent),
                         "is_directory": .bool(false),
                     ]))
                 }
                 return .object([
                     "ok": .bool(true),
-                    "path": .string(rootURL.path),
-                    "name_pattern": .string(namePattern),
                     "scanned_entries": .number(1),
                     "truncated": .bool(false),
                     "results": .array(results),
@@ -1064,7 +1105,6 @@ final class OpenAIAgentService: OpenAIAgentServicing {
                     let directory = values?.isDirectory ?? false
                     results.append(.object([
                         "path": .string(item.path),
-                        "name": .string(name),
                         "is_directory": .bool(directory),
                     ]))
                 }
@@ -1073,8 +1113,6 @@ final class OpenAIAgentService: OpenAIAgentServicing {
             let truncated = scannedEntries > maxScannedEntries || results.count >= maxResults
             return .object([
                 "ok": .bool(true),
-                "path": .string(rootURL.path),
-                "name_pattern": .string(namePattern),
                 "scanned_entries": .number(Double(scannedEntries)),
                 "truncated": .bool(truncated),
                 "results": .array(results),
@@ -1115,11 +1153,9 @@ final class OpenAIAgentService: OpenAIAgentServicing {
                 }
                 return .object([
                     "ok": .bool(true),
-                    "path": .string(rootURL.path),
-                    "text_pattern": .string(textPattern),
                     "scanned_files": .number(1),
                     "truncated": .bool(matches.count >= maxResults),
-                    "matches": .array(Array(matches.prefix(maxResults))),
+                    "matches": .array(groupMatchesByFile(Array(matches.prefix(maxResults)))),
                 ])
             }
 
@@ -1159,11 +1195,9 @@ final class OpenAIAgentService: OpenAIAgentServicing {
             let truncated = matches.count >= maxResults || scannedFiles >= maxScannedFiles
             return .object([
                 "ok": .bool(true),
-                "path": .string(rootURL.path),
-                "text_pattern": .string(textPattern),
                 "scanned_files": .number(Double(scannedFiles)),
                 "truncated": .bool(truncated),
-                "matches": .array(Array(matches.prefix(maxResults))),
+                "matches": .array(groupMatchesByFile(Array(matches.prefix(maxResults)))),
             ])
         }.value
     }
@@ -1223,37 +1257,26 @@ final class OpenAIAgentService: OpenAIAgentServicing {
             if startIndex >= splitLines.count {
                 return OpenAIJSONValue.object([
                     "ok": .bool(true),
-                    "path": .string(fileURL.path),
-                    "start_line": .number(Double(safeStartLine)),
-                    "line_count": .number(Double(safeLineCount)),
-                    "lines": .array([]),
-                    "source": .string("local_file"),
-                    "maybe_more_lines": .bool(false),
+                    "content": .string(""),
+                    "lines_returned": .number(0),
+                    "has_more": .bool(false),
                     "next_start_line": .null,
                 ])
             }
 
             let endExclusive = min(splitLines.count, startIndex + safeLineCount)
             let slice = splitLines[startIndex..<endExclusive]
-            let lineValues: [OpenAIJSONValue] = slice.enumerated().map { offset, line in
-                .object([
-                    "line_number": .number(Double(safeStartLine + offset)),
-                    "line": .string(String(line)),
-                ])
-            }
-            let maybeMore = endExclusive < splitLines.count
-            let nextStart: OpenAIJSONValue = maybeMore
+            let chunkContent = slice.map(String.init).joined(separator: "\n")
+            let hasMore = endExclusive < splitLines.count
+            let nextStart: OpenAIJSONValue = hasMore
                 ? .number(Double(endExclusive + 1))
                 : .null
 
             return OpenAIJSONValue.object([
                 "ok": .bool(true),
-                "path": .string(fileURL.path),
-                "start_line": .number(Double(safeStartLine)),
-                "line_count": .number(Double(safeLineCount)),
-                "lines": .array(lineValues),
-                "source": .string("local_file"),
-                "maybe_more_lines": .bool(maybeMore),
+                "content": .string(chunkContent),
+                "lines_returned": .number(Double(slice.count)),
+                "has_more": .bool(hasMore),
                 "next_start_line": nextStart,
             ])
         }.value
@@ -1286,6 +1309,32 @@ final class OpenAIAgentService: OpenAIAgentServicing {
             return wildcard.evaluate(with: filename)
         }
         return filename.range(of: trimmed, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+    }
+
+    private nonisolated static func groupMatchesByFile(_ matches: [OpenAIJSONValue]) -> [OpenAIJSONValue] {
+        var fileOrder: [String] = []
+        var hitsByFile: [String: [OpenAIJSONValue]] = [:]
+
+        for match in matches {
+            guard case let .object(dict) = match,
+                  case let .string(path)? = dict["path"],
+                  case let .number(lineNum)? = dict["line_number"],
+                  case let .string(lineText)? = dict["line"] else { continue }
+            if hitsByFile[path] == nil {
+                fileOrder.append(path)
+            }
+            hitsByFile[path, default: []].append(.object([
+                "n": .number(lineNum),
+                "line": .string(lineText),
+            ]))
+        }
+
+        return fileOrder.map { path in
+            .object([
+                "path": .string(path),
+                "hits": .array(hitsByFile[path] ?? []),
+            ])
+        }
     }
 
     private nonisolated static func contentMatchesForFile(
@@ -1332,11 +1381,9 @@ final class OpenAIAgentService: OpenAIAgentServicing {
         .object([
             "id": .string(block.id.uuidString.lowercased()),
             "command": .string(block.command),
-            "output_preview": .string(String(block.output.prefix(300))),
+            "output_preview": .string(String(block.output.prefix(150))),
             "started_at": .string(ISO8601DateFormatter().string(from: block.startedAt)),
-            "completed_at": .string(ISO8601DateFormatter().string(from: block.completedAt)),
             "exit_code": block.exitCode.map { .number(Double($0)) } ?? .null,
-            "boundary_source": .string(block.boundarySource.rawValue),
         ])
     }
 
@@ -1372,26 +1419,17 @@ final class OpenAIAgentService: OpenAIAgentServicing {
         }
 
         let boundedCount = max(1, min(200, lineCount))
-        let boundedStart = max(1, startLine)
-        let lineValues: [OpenAIJSONValue] = lines.enumerated().map { offset, line in
-            .object([
-                "line_number": .number(Double(boundedStart + offset)),
-                "line": .string(line),
-            ])
-        }
-        let maybeMore = lines.count >= boundedCount
-        let nextStart: OpenAIJSONValue = maybeMore
-            ? .number(Double(boundedStart + lines.count))
+        let content = lines.joined(separator: "\n")
+        let hasMore = lines.count >= boundedCount
+        let nextStart: OpenAIJSONValue = hasMore
+            ? .number(Double(max(1, startLine) + lines.count))
             : .null
 
         return .object([
             "ok": .bool(true),
-            "path": .string(path),
-            "start_line": .number(Double(boundedStart)),
-            "line_count": .number(Double(boundedCount)),
-            "lines": .array(lineValues),
-            "source": .string(source),
-            "maybe_more_lines": .bool(maybeMore),
+            "content": .string(content),
+            "lines_returned": .number(Double(lines.count)),
+            "has_more": .bool(hasMore),
             "next_start_line": nextStart,
         ])
     }
@@ -1470,11 +1508,17 @@ final class OpenAIAgentService: OpenAIAgentServicing {
         Never ingest an entire file at once. Always read in windows of at most 200 lines using read_file_chunk and iterate by line numbers.
         Execute commands only when the user explicitly asks to run, open, edit, or check something.
         This includes interactive commands when requested (for example: nano, vim, less, top).
-        Be tool-efficient:
-        - Prefer the minimum number of tool calls needed to answer.
+
+        COST RULES — every tool call adds to conversation cost. Minimize calls:
+        - Prefer read_files (batch) over multiple read_file_chunk calls when reading 2+ files.
+        - Start with 30-50 lines for exploration; expand only if needed.
+        - Use search_file_contents to pinpoint lines before reading whole files.
+        - Stop calling tools once you have enough to answer — do not exhaustively explore.
+        - If a first chunk already answers the question, do not read further chunks.
         - Do not repeat the same tool call with identical arguments unless the user asked for a retry.
         - Batch discovery (for example one filesystem search, then one focused content search) before summarizing.
         - If sufficient evidence is already gathered, stop calling tools and answer directly.
+
         Format responses as readable markdown:
         - Use short paragraphs.
         - Use bullet points for lists.
@@ -1628,6 +1672,44 @@ final class OpenAIAgentService: OpenAIAgentServicing {
                         ]),
                     ]),
                     "required": .array([.string("path"), .string("start_line"), .string("line_count")]),
+                    "additionalProperties": commonNoExtraProperties,
+                ]),
+                strict: true
+            ),
+            OpenAIResponsesToolDefinition(
+                name: "read_files",
+                description: "Read chunks from multiple files in one call. Use instead of multiple read_file_chunk calls. Max 10 files.",
+                parameters: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "files": .object([
+                            "type": .string("array"),
+                            "description": .string("Array of file read requests."),
+                            "items": .object([
+                                "type": .string("object"),
+                                "properties": .object([
+                                    "path": .object([
+                                        "type": .string("string"),
+                                        "description": .string("File path (absolute, ~, or relative)."),
+                                    ]),
+                                    "start_line": .object([
+                                        "type": .string("integer"),
+                                        "minimum": .number(1),
+                                    ]),
+                                    "line_count": .object([
+                                        "type": .string("integer"),
+                                        "minimum": .number(1),
+                                        "maximum": .number(200),
+                                    ]),
+                                ]),
+                                "required": .array([.string("path"), .string("start_line"), .string("line_count")]),
+                                "additionalProperties": commonNoExtraProperties,
+                            ]),
+                            "minItems": .number(1),
+                            "maxItems": .number(10),
+                        ]),
+                    ]),
+                    "required": .array([.string("files")]),
                     "additionalProperties": commonNoExtraProperties,
                 ]),
                 strict: true
