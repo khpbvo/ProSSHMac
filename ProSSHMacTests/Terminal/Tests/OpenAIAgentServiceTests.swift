@@ -250,6 +250,71 @@ final class OpenAIAgentServiceTests: XCTestCase {
         XCTAssertNil(requests[2].previousResponseID)
     }
 
+    func testGenerateReplyDoesNotPersistPreviousResponseWhenDisabled() async throws {
+        let sessionProvider = MockAgentSessionProvider()
+        let responses = MockOpenAIResponsesService()
+        responses.enqueueResponse(
+            makeTextResponse(id: "resp_one", text: "First response")
+        )
+        responses.enqueueResponse(
+            makeTextResponse(id: "resp_two", text: "Second response")
+        )
+
+        let service = OpenAIAgentService(
+            responsesService: responses,
+            sessionProvider: sessionProvider,
+            persistConversationContext: false
+        )
+
+        _ = try await service.generateReply(
+            sessionID: sessionProvider.sessionID,
+            prompt: "first"
+        )
+        _ = try await service.generateReply(
+            sessionID: sessionProvider.sessionID,
+            prompt: "second"
+        )
+
+        let requests = responses.capturedRequests
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertNil(requests[0].previousResponseID)
+        XCTAssertNil(requests[1].previousResponseID)
+    }
+
+    func testDirectActionPromptUsesMinimalToolSet() async throws {
+        let sessionProvider = MockAgentSessionProvider()
+        let responses = MockOpenAIResponsesService()
+        responses.enqueueResponse(
+            makeFunctionCallResponse(
+                id: "resp_1",
+                callID: "call_exec",
+                toolName: "execute_command",
+                arguments: #"{"command":"cd ~/Documents/Testing"}"#
+            )
+        )
+        responses.enqueueResponse(
+            makeTextResponse(id: "resp_2", text: "Done.")
+        )
+
+        let service = OpenAIAgentService(
+            responsesService: responses,
+            sessionProvider: sessionProvider
+        )
+
+        _ = try await service.generateReply(
+            sessionID: sessionProvider.sessionID,
+            prompt: "Change directory to Documents/Testing please."
+        )
+
+        let firstTools = responses.capturedRequests.first?.tools.map(\.name) ?? []
+        XCTAssertTrue(firstTools.contains("execute_command"))
+        XCTAssertTrue(firstTools.contains("get_current_screen"))
+        XCTAssertTrue(firstTools.contains("get_session_info"))
+        XCTAssertFalse(firstTools.contains("search_terminal_history"))
+        XCTAssertFalse(firstTools.contains("search_filesystem"))
+        XCTAssertFalse(firstTools.contains("get_recent_commands"))
+    }
+
     func testReadFilesToolReturnsBatchResults() async throws {
         let sessionProvider = MockAgentSessionProvider()
         let responses = MockOpenAIResponsesService()

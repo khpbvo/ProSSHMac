@@ -110,6 +110,95 @@ final class OpenAIResponsesServiceTests: XCTestCase {
                 error,
                 .httpError(statusCode: 400, message: "Invalid request payload.")
             )
+            let requestCount = await mockSession.requestCount()
+            XCTAssertEqual(requestCount, 1)
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
+    @MainActor
+    func testCreateResponseRetriesTransientServerFailureThenSucceeds() async throws {
+        let provider = StaticAPIKeyProvider(key: "sk-test-123")
+        let mockSession = MockOpenAIHTTPSession()
+
+        let serverErrorBody = """
+        {
+          "error": {
+            "message": "An error occurred while processing your request."
+          }
+        }
+        """
+        let successBody = """
+        {
+          "id": "resp_retry_ok",
+          "status": "completed",
+          "output": [
+            {
+              "type": "message",
+              "role": "assistant",
+              "content": [
+                { "type": "output_text", "text": "Recovered after retry." }
+              ]
+            }
+          ]
+        }
+        """
+        await mockSession.enqueueResponse(
+            data: Data(serverErrorBody.utf8),
+            response: Self.makeHTTPResponse(statusCode: 500)
+        )
+        await mockSession.enqueueResponse(
+            data: Data(successBody.utf8),
+            response: Self.makeHTTPResponse(statusCode: 200)
+        )
+
+        let service = OpenAIResponsesService(
+            apiKeyProvider: provider,
+            session: mockSession,
+            endpointURL: URL(string: "https://example.com/v1/responses")!,
+            maxRetryAttempts: 2,
+            baseRetryDelayMilliseconds: 1
+        )
+
+        let result = try await service.createResponse(
+            OpenAIResponsesRequest(messages: [.init(role: .user, text: "Retry please")])
+        )
+
+        XCTAssertEqual(result.id, "resp_retry_ok")
+        XCTAssertEqual(result.text, "Recovered after retry.")
+        let requestCount = await mockSession.requestCount()
+        XCTAssertEqual(requestCount, 2)
+    }
+
+    @MainActor
+    func testCreateResponseDoesNotRetryCancelledTransportFailure() async {
+        let provider = StaticAPIKeyProvider(key: "sk-test-123")
+        let mockSession = MockOpenAIHTTPSession()
+        await mockSession.enqueueThrownError(URLError(.cancelled))
+
+        let service = OpenAIResponsesService(
+            apiKeyProvider: provider,
+            session: mockSession,
+            endpointURL: URL(string: "https://example.com/v1/responses")!,
+            maxRetryAttempts: 2,
+            baseRetryDelayMilliseconds: 1
+        )
+
+        do {
+            _ = try await service.createResponse(
+                OpenAIResponsesRequest(
+                    messages: [.init(role: .user, text: "test")]
+                )
+            )
+            XCTFail("Expected transport failure")
+        } catch let error as OpenAIResponsesServiceError {
+            if case .transportFailure = error {
+                let requestCount = await mockSession.requestCount()
+                XCTAssertEqual(requestCount, 1)
+            } else {
+                XCTFail("Unexpected error type: \(error)")
+            }
         } catch {
             XCTFail("Unexpected error: \(error)")
         }
@@ -203,19 +292,43 @@ private actor MockOpenAIHTTPSession: OpenAIHTTPSessioning {
         httpVersion: nil,
         headerFields: nil
     )!
+    private var queuedResponses: [(Data, URLResponse)] = []
+    private var queuedErrors: [Error] = []
+    private var callCount = 0
 
     func setResponse(data: Data, response: URLResponse) {
         self.data = data
         self.response = response
+        self.queuedResponses.removeAll()
+    }
+
+    func enqueueResponse(data: Data, response: URLResponse) {
+        queuedResponses.append((data, response))
+    }
+
+    func enqueueThrownError(_ error: Error) {
+        queuedErrors.append(error)
     }
 
     func data(for request: URLRequest) async throws -> (Data, URLResponse) {
         self.request = request
+        callCount += 1
+        if !queuedErrors.isEmpty {
+            throw queuedErrors.removeFirst()
+        }
+        if !queuedResponses.isEmpty {
+            let next = queuedResponses.removeFirst()
+            return next
+        }
         return (data, response)
     }
 
     func lastRequest() -> URLRequest? {
         request
+    }
+
+    func requestCount() -> Int {
+        callCount
     }
 }
 #endif

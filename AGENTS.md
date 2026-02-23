@@ -28,6 +28,10 @@ This file is the project working memory for future assistants in this repository
 
 ## Current Status Snapshot
 
+- Latest AI latency/conflict fix (2026-02-23): Ask-mode now applies a direct-action fast path for explicit run/open/edit/navigate prompts (minimal tool set + lower per-turn iteration cap) to prevent unnecessary exploratory tool chains; canceled transport failures (`URLError.cancelled` / `NSURLErrorCancelled`) are now treated as terminal failures (no retry), avoiding avoidable 35s timeout stalls.
+- Latest AI observability upgrade (2026-02-23): added structured service logs for latency analysis (trace IDs, per-iteration timings, tool-call timings, retries, and recovery paths) in `OpenAIAgentService` and `OpenAIResponsesService`, so slow turns can be diagnosed from logs without extra UI instrumentation.
+- Latest AI latency improvement (2026-02-23): app wiring now runs the terminal copilot in stateless-turn mode (`persistConversationContext: false`) to prevent slow requests from bloated prior context, uses a 35s request timeout for faster recovery on stalls, and ships faster UI streaming defaults (larger chunks, lower delay) so short/medium replies complete noticeably quicker.
+- Latest OpenAI reliability fix (2026-02-23): `OpenAIResponsesService` now auto-retries transient upstream failures (`429`/`5xx`) and transport errors with bounded exponential backoff, reducing visible copilot failures on temporary OpenAI-side errors.
 - Latest model preference update (2026-02-23): project planning/docs now track `gpt-5.1-codex-max` as the required assistant model for long-running implementation tasks.
 - Latest AI tooling milestone (2026-02-23): `OpenAIAgentService` now supports `read_files` for batched chunk reads across multiple files (up to 10 per call, 200 lines each), with leaner tool-output schemas and grouped content-search hits to improve token efficiency during project exploration.
 - Latest docs/help sync (2026-02-23): user-facing shortcut/help text is now aligned with current Ask-only copilot flow and keyboard shortcuts in both `SettingsView` and the AI pane composer hint.

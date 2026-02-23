@@ -1,4 +1,5 @@
 import Foundation
+import os.log
 
 @MainActor
 protocol OpenAIResponsesServicing: Sendable {
@@ -225,19 +226,26 @@ struct OpenAIResponsesResponse: Decodable, Sendable, Equatable {
 @MainActor
 final class OpenAIResponsesService: OpenAIResponsesServicing {
     static let requiredModel = "gpt-5.1-codex-max"
+    private static let logger = Logger(subsystem: "com.prossh", category: "AICopilot.Responses")
 
     private let apiKeyProvider: any OpenAIAPIKeyProviding
     private let session: any OpenAIHTTPSessioning
     private let endpointURL: URL
+    private let maxRetryAttempts: Int
+    private let baseRetryDelayNanoseconds: UInt64
 
     init(
         apiKeyProvider: any OpenAIAPIKeyProviding,
         session: any OpenAIHTTPSessioning = URLSession.shared,
-        endpointURL: URL = URL(string: "https://api.openai.com/v1/responses")!
+        endpointURL: URL = URL(string: "https://api.openai.com/v1/responses")!,
+        maxRetryAttempts: Int = 2,
+        baseRetryDelayMilliseconds: UInt64 = 450
     ) {
         self.apiKeyProvider = apiKeyProvider
         self.session = session
         self.endpointURL = endpointURL
+        self.maxRetryAttempts = max(0, maxRetryAttempts)
+        self.baseRetryDelayNanoseconds = max(100, baseRetryDelayMilliseconds) * 1_000_000
     }
 
     func createResponse(_ request: OpenAIResponsesRequest) async throws -> OpenAIResponsesResponse {
@@ -246,6 +254,46 @@ final class OpenAIResponsesService: OpenAIResponsesServicing {
             throw OpenAIResponsesServiceError.missingAPIKey
         }
 
+        let traceID = Self.shortTraceID()
+        Self.logger.debug(
+            "[\(traceID, privacy: .public)] request_start messages=\(request.messages.count) tools=\(request.tools.count) tool_outputs=\(request.toolOutputs.count) prev_id_present=\(request.previousResponseID != nil)"
+        )
+        var attempt = 0
+        while true {
+            let attemptStart = DispatchTime.now().uptimeNanoseconds
+            do {
+                let response = try await performRequest(apiKey: apiKey, request: request)
+                let ms = Self.elapsedMillis(since: attemptStart)
+                Self.logger.info(
+                    "[\(traceID, privacy: .public)] request_ok attempt=\(attempt + 1) ms=\(ms) response_id=\(response.id, privacy: .public) output_items=\(response.output.count)"
+                )
+                return response
+            } catch let serviceError as OpenAIResponsesServiceError {
+                let ms = Self.elapsedMillis(since: attemptStart)
+                let willRetry = shouldRetry(after: serviceError, attempt: attempt)
+                if willRetry {
+                    let nextAttempt = attempt + 2
+                    Self.logger.warning(
+                        "[\(traceID, privacy: .public)] request_retry attempt=\(attempt + 1) ms=\(ms) next_attempt=\(nextAttempt) reason=\(serviceError.localizedDescription, privacy: .public)"
+                    )
+                } else {
+                    Self.logger.error(
+                        "[\(traceID, privacy: .public)] request_failed attempt=\(attempt + 1) ms=\(ms) reason=\(serviceError.localizedDescription, privacy: .public)"
+                    )
+                }
+                guard willRetry else {
+                    throw serviceError
+                }
+                attempt += 1
+                try await sleepBeforeRetry(attempt: attempt)
+            }
+        }
+    }
+
+    private func performRequest(
+        apiKey: String,
+        request: OpenAIResponsesRequest
+    ) async throws -> OpenAIResponsesResponse {
         let payload = CreateRequestPayload(
             model: Self.requiredModel,
             input: request.messages.map { .message(CreateInputMessage(message: $0)) }
@@ -273,6 +321,13 @@ final class OpenAIResponsesService: OpenAIResponsesServicing {
         do {
             (data, response) = try await session.data(for: urlRequest)
         } catch {
+            if let urlError = error as? URLError, urlError.code == .cancelled {
+                throw OpenAIResponsesServiceError.transportFailure("cancelled")
+            }
+            let nsError = error as NSError
+            if nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorCancelled {
+                throw OpenAIResponsesServiceError.transportFailure("cancelled")
+            }
             throw OpenAIResponsesServiceError.transportFailure(error.localizedDescription)
         }
 
@@ -293,6 +348,40 @@ final class OpenAIResponsesService: OpenAIResponsesServicing {
         } catch {
             throw OpenAIResponsesServiceError.decodingFailure(error.localizedDescription)
         }
+    }
+
+    private func shouldRetry(after error: OpenAIResponsesServiceError, attempt: Int) -> Bool {
+        guard attempt < maxRetryAttempts else { return false }
+
+        switch error {
+        case let .httpError(statusCode, _):
+            return statusCode == 429 || (500...599).contains(statusCode)
+        case let .transportFailure(message):
+            let lowered = message.lowercased()
+            if lowered.contains("cancelled") || lowered.contains("canceled") {
+                return false
+            }
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func sleepBeforeRetry(attempt: Int) async throws {
+        let exponent = max(0, attempt - 1)
+        let multiplier = UInt64(1 << min(exponent, 6))
+        let delay = min(baseRetryDelayNanoseconds * multiplier, 5_000_000_000)
+        try await Task.sleep(nanoseconds: delay)
+    }
+
+    private nonisolated static func shortTraceID() -> String {
+        String(UUID().uuidString.prefix(8)).lowercased()
+    }
+
+    private nonisolated static func elapsedMillis(since startNanoseconds: UInt64) -> Int {
+        let now = DispatchTime.now().uptimeNanoseconds
+        let delta = now >= startNanoseconds ? now - startNanoseconds : 0
+        return Int(delta / 1_000_000)
     }
 
     private static func extractErrorMessage(from data: Data) -> String {
@@ -338,6 +427,7 @@ private struct CreateInputMessage: Encodable {
         var text: String
     }
 
+    var type = "message"
     var role: String
     var content: [Content]
 

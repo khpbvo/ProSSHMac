@@ -91,7 +91,11 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 - 2026-02-23: Re-ran targeted regression tests after the above fixes: `OpenAIAgentServiceTests` and `TerminalAIAssistantViewModelTests` pass, including the previously quarantined clear-conversation test.
 - 2026-02-23: Updated user-facing shortcut/help text in `SettingsView` and AI pane composer hints to match current Ask-only copilot flow and terminal/file-browser/AI keyboard shortcuts.
 - 2026-02-23: Added `read_files` tool support in `OpenAIAgentService` for batch chunked file reads (max 10 files/request, 200 lines/file), tightened tool payload shapes for lower token usage, and expanded `OpenAIAgentServiceTests` coverage for batch file reads and grouped content-search hits.
-- 2026-02-23: Fixed terminal copy UX reliability in both embedded and external terminal windows: preserved Metal selection on focus tap, enabled context-menu copy regardless of stale selection state, added fallback copy from any active terminal selection/AppKit responder copy chain, and wired direct input capture view to respond to standard AppKit `copy:`/`paste:` menu actions.
+- 2026-02-23: Fixed terminal copy UX reliability in both embedded and external terminal windows: preserved Metal selection on focus tap, enabled context-menu copy regardless of stale selection state, added fallback copy from any active terminal selection, and wired direct input capture view to respond to standard AppKit `copy:`/`paste:` menu actions.
+- 2026-02-23: Hardened OpenAI request reliability against transient upstream failures: `OpenAIResponsesService` now retries recoverable API failures (`429` and `5xx`) and transport failures with bounded exponential backoff, with regression coverage in `OpenAIResponsesServiceTests` (`500 -> retry -> success` and non-retry `400` assertion).
+- 2026-02-23: Improved AI latency for routine asks: `OpenAIAgentService` now defaults to stateless turn handling in app wiring (`persistConversationContext: false`) to avoid large accumulated server-side context, request timeout is reduced to 35s for faster stall recovery, direct-command guidance was strengthened to prefer one-shot `execute_command`, and assistant UI streaming now uses larger chunks + lower delay for faster visible completion.
+- 2026-02-23: Added structured AI performance logging for diagnosis without UI changes: `OpenAIAgentService` now logs per-turn trace IDs, iteration timings, tool-call timings, and recovery/loop-failure markers; `OpenAIResponsesService` now logs per-attempt request timing, retry decisions, and terminal success/failure events.
+- 2026-02-23: Fixed Ask-mode slow second-turn conflict on direct command requests: explicit action prompts now use a direct-action fast path (restricted tools: `execute_command`, `get_current_screen`, `get_session_info`; low per-turn iteration cap) to avoid unnecessary exploratory tool loops, and canceled transport errors are now normalized (`URLError.cancelled` / `NSURLErrorCancelled`) and not retried, preventing avoidable 35s retry stalls.
 
 ## How to Use This File
 
@@ -219,6 +223,7 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
   - `get_recent_commands`
   - `execute_command`
   - `get_session_info`
+- [x] Route explicit direct-action prompts (run/open/edit/navigate) through a minimal Ask-mode fast path to reduce tool-call churn and latency.
 - [x] Ensure filesystem tools work in both local and remote sessions with safe read-only command execution on SSH hosts.
 - [x] Add `read_files` batch file-read tool (chunked windows, max 10 files/call) to reduce multi-file tool-call churn.
 - [x] Map `execute_command` to `SessionManager.sendShellInput` with Ask-mode explicit-intent safety policy.

@@ -1,4 +1,5 @@
 import Foundation
+import os.log
 
 @MainActor
 protocol OpenAIAgentServicing {
@@ -57,12 +58,14 @@ extension SessionManager: OpenAIAgentSessionProviding {}
 
 @MainActor
 final class OpenAIAgentService: OpenAIAgentServicing {
+    private static let logger = Logger(subsystem: "com.prossh", category: "AICopilot.Agent")
     let toolDefinitions: [OpenAIResponsesToolDefinition]
 
     private let responsesService: any OpenAIResponsesServicing
     private let sessionProvider: any OpenAIAgentSessionProviding
     private let requestTimeoutSeconds: Int
     private let maxToolIterations: Int
+    private let persistConversationContext: Bool
     private var previousResponseIDBySessionID: [UUID: String] = [:]
     private let iso8601Formatter = ISO8601DateFormatter()
 
@@ -70,12 +73,14 @@ final class OpenAIAgentService: OpenAIAgentServicing {
         responsesService: any OpenAIResponsesServicing,
         sessionProvider: any OpenAIAgentSessionProviding,
         requestTimeoutSeconds: Int = 60,
-        maxToolIterations: Int = 15
+        maxToolIterations: Int = 15,
+        persistConversationContext: Bool = true
     ) {
         self.responsesService = responsesService
         self.sessionProvider = sessionProvider
         self.requestTimeoutSeconds = max(10, requestTimeoutSeconds)
         self.maxToolIterations = max(1, maxToolIterations)
+        self.persistConversationContext = persistConversationContext
         self.toolDefinitions = Self.buildToolDefinitions()
     }
 
@@ -87,16 +92,36 @@ final class OpenAIAgentService: OpenAIAgentServicing {
         sessionID: UUID,
         prompt: String
     ) async throws -> OpenAIAgentReply {
+        let traceID = Self.shortTraceID()
+        let turnStart = DispatchTime.now().uptimeNanoseconds
         guard sessionProvider.sessions.contains(where: { $0.id == sessionID }) else {
+            Self.logger.error("[\(traceID, privacy: .public)] session_not_found session=\(Self.shortSessionID(sessionID), privacy: .public)")
             throw OpenAIAgentServiceError.sessionNotFound
         }
 
         let trimmedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedPrompt.isEmpty else {
+            Self.logger.error("[\(traceID, privacy: .public)] empty_prompt session=\(Self.shortSessionID(sessionID), privacy: .public)")
             throw OpenAIAgentServiceError.emptyPrompt
         }
+        Self.logger.info(
+            "[\(traceID, privacy: .public)] turn_start session=\(Self.shortSessionID(sessionID), privacy: .public) prompt_chars=\(trimmedPrompt.count) persist_context=\(self.persistConversationContext)"
+        )
 
-        var previousResponseID = previousResponseIDBySessionID[sessionID]
+        let directActionMode = Self.isDirectActionPrompt(trimmedPrompt)
+        let activeToolDefinitions = directActionMode
+            ? Self.directActionToolDefinitions(from: toolDefinitions)
+            : toolDefinitions
+        let iterationLimit = directActionMode
+            ? min(maxToolIterations, 4)
+            : maxToolIterations
+        Self.logger.debug(
+            "[\(traceID, privacy: .public)] turn_mode direct_action=\(directActionMode) tools=\(activeToolDefinitions.count) iteration_limit=\(iterationLimit)"
+        )
+
+        var previousResponseID = persistConversationContext
+            ? previousResponseIDBySessionID[sessionID]
+            : nil
         var pendingMessages: [OpenAIResponsesMessage] = [
             .init(role: .developer, text: Self.developerPrompt()),
             .init(role: .user, text: trimmedPrompt),
@@ -104,24 +129,41 @@ final class OpenAIAgentService: OpenAIAgentServicing {
         var pendingToolOutputs: [OpenAIResponsesToolOutput] = []
         var totalToolCalls = 0
 
-        for _ in 0..<maxToolIterations {
+        for iteration in 1...iterationLimit {
+            let iterationStart = DispatchTime.now().uptimeNanoseconds
             let request = OpenAIResponsesRequest(
                 messages: pendingMessages,
                 previousResponseID: previousResponseID,
-                tools: toolDefinitions,
+                tools: activeToolDefinitions,
                 toolOutputs: pendingToolOutputs
+            )
+            Self.logger.debug(
+                "[\(traceID, privacy: .public)] iteration_start i=\(iteration) prev_id_present=\(request.previousResponseID != nil) pending_messages=\(request.messages.count) pending_tool_outputs=\(request.toolOutputs.count)"
             )
 
             let response = try await createResponseWithRecovery(
                 request: request,
-                previousResponseID: &previousResponseID
+                previousResponseID: &previousResponseID,
+                traceID: traceID
             )
+            let responseMs = Self.elapsedMillis(since: iterationStart)
 
             previousResponseID = response.id
-            previousResponseIDBySessionID[sessionID] = response.id
+            if persistConversationContext {
+                previousResponseIDBySessionID[sessionID] = response.id
+            } else {
+                previousResponseIDBySessionID.removeValue(forKey: sessionID)
+            }
 
             let toolCalls = response.toolCalls
+            Self.logger.debug(
+                "[\(traceID, privacy: .public)] iteration_response i=\(iteration) response_ms=\(responseMs) response_id=\(response.id, privacy: .public) tool_calls=\(toolCalls.count) text_chars=\(response.text.count)"
+            )
             guard !toolCalls.isEmpty else {
+                let totalMs = Self.elapsedMillis(since: turnStart)
+                Self.logger.info(
+                    "[\(traceID, privacy: .public)] turn_complete session=\(Self.shortSessionID(sessionID), privacy: .public) iterations=\(iteration) tool_calls=\(totalToolCalls) total_ms=\(totalMs) reply_chars=\(response.text.count)"
+                )
                 return OpenAIAgentReply(
                     text: response.text,
                     responseID: response.id,
@@ -130,19 +172,30 @@ final class OpenAIAgentService: OpenAIAgentServicing {
             }
 
             totalToolCalls += toolCalls.count
+            let toolStart = DispatchTime.now().uptimeNanoseconds
             pendingToolOutputs = await executeToolCalls(
                 sessionID: sessionID,
-                toolCalls: toolCalls
+                toolCalls: toolCalls,
+                traceID: traceID
+            )
+            let toolMs = Self.elapsedMillis(since: toolStart)
+            Self.logger.debug(
+                "[\(traceID, privacy: .public)] iteration_tools i=\(iteration) tool_calls=\(toolCalls.count) tool_ms=\(toolMs)"
             )
             pendingMessages = []
         }
 
-        throw OpenAIAgentServiceError.toolLoopExceeded(limit: maxToolIterations)
+        let totalMs = Self.elapsedMillis(since: turnStart)
+        Self.logger.error(
+            "[\(traceID, privacy: .public)] turn_failed_tool_loop session=\(Self.shortSessionID(sessionID), privacy: .public) limit=\(iterationLimit) total_ms=\(totalMs)"
+        )
+        throw OpenAIAgentServiceError.toolLoopExceeded(limit: iterationLimit)
     }
 
     private func createResponseWithRecovery(
         request: OpenAIResponsesRequest,
-        previousResponseID: inout String?
+        previousResponseID: inout String?,
+        traceID: String
     ) async throws -> OpenAIResponsesResponse {
         let service = responsesService
         do {
@@ -154,9 +207,15 @@ final class OpenAIAgentService: OpenAIAgentServicing {
                   statusCode == 400 || statusCode == 404,
                   request.previousResponseID != nil,
                   Self.isPreviousResponseIDError(message: message) else {
+                Self.logger.error(
+                    "[\(traceID, privacy: .public)] response_failed status_recoverable=false error=\(error.localizedDescription, privacy: .public)"
+                )
                 throw error
             }
 
+            Self.logger.warning(
+                "[\(traceID, privacy: .public)] previous_response_recovery triggered=true status=\(statusCode) message=\(message, privacy: .public)"
+            )
             previousResponseID = nil
             let retryRequest = OpenAIResponsesRequest(
                 messages: request.messages,
@@ -195,18 +254,24 @@ final class OpenAIAgentService: OpenAIAgentServicing {
 
     private func executeToolCalls(
         sessionID: UUID,
-        toolCalls: [OpenAIResponsesResponse.ToolCall]
+        toolCalls: [OpenAIResponsesResponse.ToolCall],
+        traceID: String
     ) async -> [OpenAIResponsesToolOutput] {
         var outputs: [OpenAIResponsesToolOutput] = []
         outputs.reserveCapacity(toolCalls.count)
 
         for toolCall in toolCalls {
+            let toolStart = DispatchTime.now().uptimeNanoseconds
             do {
                 let output = try await executeSingleToolCall(
                     sessionID: sessionID,
                     toolCall: toolCall
                 )
                 outputs.append(.init(callID: toolCall.id, output: output))
+                let toolMs = Self.elapsedMillis(since: toolStart)
+                Self.logger.debug(
+                    "[\(traceID, privacy: .public)] tool_ok name=\(toolCall.name, privacy: .public) call_id=\(toolCall.id, privacy: .public) ms=\(toolMs) output_chars=\(output.count)"
+                )
             } catch {
                 let fallback = Self.jsonString(
                     from: .object([
@@ -216,6 +281,10 @@ final class OpenAIAgentService: OpenAIAgentServicing {
                     ])
                 )
                 outputs.append(.init(callID: toolCall.id, output: fallback))
+                let toolMs = Self.elapsedMillis(since: toolStart)
+                Self.logger.error(
+                    "[\(traceID, privacy: .public)] tool_failed name=\(toolCall.name, privacy: .public) call_id=\(toolCall.id, privacy: .public) ms=\(toolMs) error=\(error.localizedDescription, privacy: .public)"
+                )
             }
         }
 
@@ -1519,6 +1588,8 @@ final class OpenAIAgentService: OpenAIAgentServicing {
         COMMANDS:
         - Execute commands only when the user explicitly asks to run, open, edit, or check something.
         - This includes interactive commands when requested (for example: nano, vim, less, top).
+        - For direct shell-action requests (for example: "navigate to ...", "run ...", "execute ..."), call execute_command once and answer immediately.
+        - After a successful execute_command that satisfies the request, do not call extra verification tools unless the user explicitly asked to verify.
 
         COST RULES — every tool call is expensive. Minimize calls:
         - 1-2 tool calls should answer most questions. If you need more than 3, reconsider your approach.
@@ -1542,6 +1613,39 @@ final class OpenAIAgentService: OpenAIAgentServicing {
         return string
     }
 
+    private nonisolated static func shortTraceID() -> String {
+        String(UUID().uuidString.prefix(8)).lowercased()
+    }
+
+    private nonisolated static func shortSessionID(_ id: UUID) -> String {
+        String(id.uuidString.prefix(8)).lowercased()
+    }
+
+    private nonisolated static func elapsedMillis(since startNanoseconds: UInt64) -> Int {
+        let now = DispatchTime.now().uptimeNanoseconds
+        let delta = now >= startNanoseconds ? now - startNanoseconds : 0
+        return Int(delta / 1_000_000)
+    }
+
+    private nonisolated static func directActionToolDefinitions(
+        from tools: [OpenAIResponsesToolDefinition]
+    ) -> [OpenAIResponsesToolDefinition] {
+        let allowedNames: Set<String> = ["execute_command", "get_current_screen", "get_session_info"]
+        let filtered = tools.filter { allowedNames.contains($0.name) }
+        return filtered.isEmpty ? tools : filtered
+    }
+
+    private nonisolated static func isDirectActionPrompt(_ prompt: String) -> Bool {
+        let lowered = prompt.lowercased()
+        let directSignals = [
+            "run ", "execute ", "change directory", "cd ", "navigate ",
+            "open ", "use nano", "use vim", "create ", "edit ",
+            "write ", "append ", "rename ", "move ", "delete ",
+            "remove ", "install ", "start ", "stop ", "restart "
+        ]
+        return directSignals.contains(where: { lowered.contains($0) })
+    }
+
     private static func buildToolDefinitions() -> [OpenAIResponsesToolDefinition] {
         let commonNoExtraProperties = OpenAIJSONValue.bool(false)
 
@@ -1558,8 +1662,7 @@ final class OpenAIAgentService: OpenAIAgentServicing {
                         ]),
                         "limit": .object([
                             "type": .string("integer"),
-                            "minimum": .number(1),
-                            "maximum": .number(50),
+                            "description": .string("Max results to return (1-50)."),
                         ]),
                     ]),
                     "required": .array([.string("query"), .string("limit")]),
@@ -1579,8 +1682,7 @@ final class OpenAIAgentService: OpenAIAgentServicing {
                         ]),
                         "max_chars": .object([
                             "type": .string("integer"),
-                            "minimum": .number(100),
-                            "maximum": .number(4000),
+                            "description": .string("Maximum characters to return (100-4000)."),
                         ]),
                     ]),
                     "required": .array([.string("block_id"), .string("max_chars")]),
@@ -1596,8 +1698,7 @@ final class OpenAIAgentService: OpenAIAgentServicing {
                     "properties": .object([
                         "max_lines": .object([
                             "type": .string("integer"),
-                            "minimum": .number(10),
-                            "maximum": .number(160),
+                            "description": .string("Maximum lines to return (10-160)."),
                         ]),
                     ]),
                     "required": .array([.string("max_lines")]),
@@ -1621,8 +1722,7 @@ final class OpenAIAgentService: OpenAIAgentServicing {
                         ]),
                         "max_results": .object([
                             "type": .string("integer"),
-                            "minimum": .number(1),
-                            "maximum": .number(200),
+                            "description": .string("Maximum results to return (1-200)."),
                         ]),
                     ]),
                     "required": .array([.string("path"), .string("name_pattern"), .string("max_results")]),
@@ -1646,8 +1746,7 @@ final class OpenAIAgentService: OpenAIAgentServicing {
                         ]),
                         "max_results": .object([
                             "type": .string("integer"),
-                            "minimum": .number(1),
-                            "maximum": .number(200),
+                            "description": .string("Maximum results to return (1-200)."),
                         ]),
                     ]),
                     "required": .array([.string("path"), .string("text_pattern"), .string("max_results")]),
@@ -1667,12 +1766,11 @@ final class OpenAIAgentService: OpenAIAgentServicing {
                         ]),
                         "start_line": .object([
                             "type": .string("integer"),
-                            "minimum": .number(1),
+                            "description": .string("Line number to start reading from (1 or greater)."),
                         ]),
                         "line_count": .object([
                             "type": .string("integer"),
-                            "minimum": .number(1),
-                            "maximum": .number(200),
+                            "description": .string("Number of lines to read (1-200)."),
                         ]),
                     ]),
                     "required": .array([.string("path"), .string("start_line"), .string("line_count")]),
@@ -1688,7 +1786,7 @@ final class OpenAIAgentService: OpenAIAgentServicing {
                     "properties": .object([
                         "files": .object([
                             "type": .string("array"),
-                            "description": .string("Array of file read requests."),
+                            "description": .string("Array of file read requests (1-10 items)."),
                             "items": .object([
                                 "type": .string("object"),
                                 "properties": .object([
@@ -1698,19 +1796,16 @@ final class OpenAIAgentService: OpenAIAgentServicing {
                                     ]),
                                     "start_line": .object([
                                         "type": .string("integer"),
-                                        "minimum": .number(1),
+                                        "description": .string("Line number to start reading from (1 or greater)."),
                                     ]),
                                     "line_count": .object([
                                         "type": .string("integer"),
-                                        "minimum": .number(1),
-                                        "maximum": .number(200),
+                                        "description": .string("Number of lines to read (1-200)."),
                                     ]),
                                 ]),
                                 "required": .array([.string("path"), .string("start_line"), .string("line_count")]),
                                 "additionalProperties": commonNoExtraProperties,
                             ]),
-                            "minItems": .number(1),
-                            "maxItems": .number(10),
                         ]),
                     ]),
                     "required": .array([.string("files")]),
@@ -1726,8 +1821,7 @@ final class OpenAIAgentService: OpenAIAgentServicing {
                     "properties": .object([
                         "limit": .object([
                             "type": .string("integer"),
-                            "minimum": .number(1),
-                            "maximum": .number(50),
+                            "description": .string("Max command blocks to return (1-50)."),
                         ]),
                     ]),
                     "required": .array([.string("limit")]),

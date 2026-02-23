@@ -29,9 +29,9 @@ final class TerminalAIAssistantViewModel: ObservableObject {
 
     init(
         agentService: any OpenAIAgentServicing,
-        streamChunkDelayNanoseconds: UInt64 = 28_000_000,
-        minChunkSize: Int = 6,
-        maxChunkSize: Int = 18
+        streamChunkDelayNanoseconds: UInt64 = 6_000_000,
+        minChunkSize: Int = 28,
+        maxChunkSize: Int = 120
     ) {
         self.agentService = agentService
         self.streamChunkDelayNanoseconds = streamChunkDelayNanoseconds
