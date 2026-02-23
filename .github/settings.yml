@@ -1,0 +1,19 @@
+# Repository settings managed by the Probot Settings App.
+# Install the app at https://github.com/apps/settings to apply these automatically.
+#
+# Alternatively, a repo admin can apply the description manually with:
+#   gh repo edit khpbvo/ProSSHMac \
+#     --description "A native macOS SSH client with GPU-accelerated terminal rendering, AI terminal assistant, multi-pane sessions, SFTP file browser, and SSH key management — built with SwiftUI and Metal"
+
+repository:
+  description: "A native macOS SSH client with GPU-accelerated terminal rendering, AI terminal assistant, multi-pane sessions, SFTP file browser, and SSH key management — built with SwiftUI and Metal"
+
+  topics:
+    - ssh
+    - macos
+    - swift
+    - swiftui
+    - terminal
+    - metal
+    - ai
+    - sftp
