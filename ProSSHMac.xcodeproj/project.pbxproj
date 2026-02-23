@@ -6,8 +6,19 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXContainerItemProxy section */
+		AB100007000000000000000A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AA000009000000000000000A /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = AA000006000000000000000A;
+			remoteInfo = ProSSHMac;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		AA000001000000000000000A /* ProSSHMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ProSSHMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AB100001000000000000000A /* ProSSHMacTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ProSSHMacTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -16,10 +27,22 @@
 			path = ProSSHMac;
 			sourceTree = "<group>";
 		};
+		AB100002000000000000000A /* ProSSHMacTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = ProSSHMacTests;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		AA000003000000000000000A /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AB100003000000000000000A /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -33,6 +56,7 @@
 			isa = PBXGroup;
 			children = (
 				AA000002000000000000000A /* ProSSHMac */,
+				AB100002000000000000000A /* ProSSHMacTests */,
 				AA000005000000000000000A /* Products */,
 			);
 			sourceTree = "<group>";
@@ -41,6 +65,7 @@
 			isa = PBXGroup;
 			children = (
 				AA000001000000000000000A /* ProSSHMac.app */,
+				AB100001000000000000000A /* ProSSHMacTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -70,6 +95,29 @@
 			productReference = AA000001000000000000000A /* ProSSHMac.app */;
 			productType = "com.apple.product-type.application";
 		};
+		AB100006000000000000000A /* ProSSHMacTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AB10000B000000000000000A /* Build configuration list for PBXNativeTarget "ProSSHMacTests" */;
+			buildPhases = (
+				AB100004000000000000000A /* Sources */,
+				AB100003000000000000000A /* Frameworks */,
+				AB100005000000000000000A /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				AB100008000000000000000A /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				AB100002000000000000000A /* ProSSHMacTests */,
+			);
+			name = ProSSHMacTests;
+			packageProductDependencies = (
+			);
+			productName = ProSSHMacTests;
+			productReference = AB100001000000000000000A /* ProSSHMacTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -82,6 +130,10 @@
 				TargetAttributes = {
 					AA000006000000000000000A = {
 						CreatedOnToolsVersion = 26.2;
+					};
+					AB100006000000000000000A = {
+						CreatedOnToolsVersion = 26.2;
+						TestTargetID = AA000006000000000000000A;
 					};
 				};
 			};
@@ -100,12 +152,20 @@
 			projectRoot = "";
 			targets = (
 				AA000006000000000000000A /* ProSSHMac */,
+				AB100006000000000000000A /* ProSSHMacTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		AA000008000000000000000A /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AB100005000000000000000A /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -122,7 +182,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		AB100004000000000000000A /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		AB100008000000000000000A /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = AA000006000000000000000A /* ProSSHMac */;
+			targetProxy = AB100007000000000000000A /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		AA00000C000000000000000A /* Debug */ = {
@@ -343,6 +418,60 @@
 			};
 			name = Release;
 		};
+		AB100009000000000000000A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = KPHHFS89HZ;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = nl.budgetsoft.ProSSHMacTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 5.10;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ProSSHMac.app/Contents/MacOS/ProSSHMac";
+				TEST_TARGET_NAME = ProSSHMac;
+			};
+			name = Debug;
+		};
+		AB10000A000000000000000A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = KPHHFS89HZ;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = nl.budgetsoft.ProSSHMacTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 5.10;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ProSSHMac.app/Contents/MacOS/ProSSHMac";
+				TEST_TARGET_NAME = ProSSHMac;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -360,6 +489,15 @@
 			buildConfigurations = (
 				AA00000E000000000000000A /* Debug */,
 				AA00000F000000000000000A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AB10000B000000000000000A /* Build configuration list for PBXNativeTarget "ProSSHMacTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AB100009000000000000000A /* Debug */,
+				AB10000A000000000000000A /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

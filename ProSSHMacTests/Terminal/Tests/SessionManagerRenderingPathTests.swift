@@ -5,6 +5,7 @@
 
 #if canImport(XCTest)
 import XCTest
+@testable import ProSSHMac
 
 final class SessionManagerRenderingPathTests: XCTestCase {
 

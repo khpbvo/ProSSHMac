@@ -7,6 +7,7 @@
 
 #if canImport(XCTest)
 import XCTest
+@testable import ProSSHMac
 
 // MARK: - UnicodeRenderTest (F.14)
 
@@ -371,6 +372,7 @@ final class MouseTrackingTest: IntegrationTestBase {
     /// Encode a left-press at row 5, col 10.
     /// Verify it produces ESC [ M followed by correct bytes:
     ///   button+32, col+32, row+32
+    @MainActor
     func testMouseEncoderX10Format() {
         let encoder = MouseEncoder(trackingMode: .x10, encoding: .x10)
         let event = MouseEvent(kind: .press, button: .left, row: 5, column: 10)
@@ -396,6 +398,7 @@ final class MouseTrackingTest: IntegrationTestBase {
     /// Create a MouseEncoder with encoding .sgr.
     /// Encode a left-press at row 5, col 10.
     /// Verify it produces `ESC[<0;10;5M` (coordinates passed through).
+    @MainActor
     func testMouseEncoderSGRFormat() {
         let encoder = MouseEncoder(trackingMode: .anyEvent, encoding: .sgr)
         let event = MouseEvent(kind: .press, button: .left, row: 5, column: 10)
@@ -410,6 +413,7 @@ final class MouseTrackingTest: IntegrationTestBase {
     // MARK: F.19.10 — MouseEncoder Release in SGR
 
     /// Encode a release event in SGR mode. Verify it ends with 'm' (lowercase).
+    @MainActor
     func testMouseEncoderRelease() {
         let encoder = MouseEncoder(trackingMode: .buttonEvent, encoding: .sgr)
         let event = MouseEvent(kind: .release, button: .left, row: 5, column: 10)
@@ -464,6 +468,7 @@ final class BracketedPasteTest: IntegrationTestBase {
     // MARK: F.20.3 — PasteHandler With Bracketed Mode
 
     /// Verify PasteHandler wraps text with bracketed paste markers.
+    @MainActor
     func testPasteHandlerWithBracketedMode() async {
         let payload = PasteHandler.payload(
             for: "hello world",
@@ -487,6 +492,7 @@ final class BracketedPasteTest: IntegrationTestBase {
     // MARK: F.20.4 — PasteHandler Without Bracketed Mode
 
     /// Verify PasteHandler does NOT add markers when disabled.
+    @MainActor
     func testPasteHandlerWithoutBracketedMode() async {
         let payload = PasteHandler.payload(
             for: "hello world",
@@ -507,6 +513,7 @@ final class BracketedPasteTest: IntegrationTestBase {
     // MARK: F.20.5 — Newline Normalization
 
     /// Verify CR+LF is normalized to CR only.
+    @MainActor
     func testPasteHandlerNewlineNormalization() async {
         let payload = PasteHandler.payload(
             for: "line1\r\nline2\r\n",
@@ -527,6 +534,7 @@ final class BracketedPasteTest: IntegrationTestBase {
 
     /// Verify chunking respects byte limit and only first/last chunks
     /// have bracketed paste markers.
+    @MainActor
     func testPasteHandlerChunking() async {
         // Create a string that will exceed 100 bytes when UTF-8 encoded.
         let longText = String(repeating: "A", count: 200)

@@ -5,10 +5,11 @@
 
 #if canImport(XCTest)
 import XCTest
+@testable import ProSSHMac
 
-@MainActor
 final class SessionRecorderTests: XCTestCase {
 
+    @MainActor
     func testRecordingPersistsEncryptedPayloadWithTimestampedChunks() async throws {
         let directory = makeTempDirectory(suffix: "persist")
         let recorder = SessionRecorder(recordingsDirectoryURL: directory)
@@ -16,21 +17,27 @@ final class SessionRecorderTests: XCTestCase {
 
         try recorder.startRecording(for: session)
         recorder.recordInput(sessionID: session.id, text: "ls -la\n")
-        Thread.sleep(forTimeInterval: 0.002)
+        try await Task.sleep(nanoseconds: 2_000_000)
         recorder.recordOutput(sessionID: session.id, text: "total 64\n")
 
-        let recordingURL = try await recorder.stopRecording(sessionID: session.id)
+        let recordingURL = try recorder.stopRecording(sessionID: session.id)
 
         let raw = try Data(contentsOf: recordingURL)
         XCTAssertTrue(raw.starts(with: Data("PSSHENC1".utf8)))
 
         let recording = try recorder.loadRecording(from: recordingURL)
-        XCTAssertEqual(recording.chunks.count, 2)
-        XCTAssertEqual(recording.chunks[0].stream, .input)
-        XCTAssertEqual(recording.chunks[1].stream, .output)
-        XCTAssertGreaterThanOrEqual(recording.chunks[1].offsetNanoseconds, recording.chunks[0].offsetNanoseconds)
+        let chunks = recording.chunks
+        let firstStream = chunks[0].stream
+        let secondStream = chunks[1].stream
+        let firstOffset = chunks[0].offsetNanoseconds
+        let secondOffset = chunks[1].offsetNanoseconds
+        XCTAssertEqual(chunks.count, 2)
+        XCTAssertEqual(firstStream, .input)
+        XCTAssertEqual(secondStream, .output)
+        XCTAssertGreaterThanOrEqual(secondOffset, firstOffset)
     }
 
+    @MainActor
     func testPlaybackScheduleSupportsSpeedMultiplier() throws {
         let recorder = SessionRecorder(recordingsDirectoryURL: makeTempDirectory(suffix: "schedule"))
         let recording = SessionRecording(
@@ -49,13 +56,17 @@ final class SessionRecorderTests: XCTestCase {
         )
 
         let steps = try recorder.playbackSchedule(recording: recording, speed: 2.0)
+        let firstDelay = steps[0].delayNanoseconds
+        let secondDelay = steps[1].delayNanoseconds
+        let secondText = steps[1].text
 
         XCTAssertEqual(steps.count, 2)
-        XCTAssertEqual(steps[0].delayNanoseconds, 500_000_000)
-        XCTAssertEqual(steps[1].delayNanoseconds, 1_000_000_000)
-        XCTAssertEqual(steps[1].text, "b")
+        XCTAssertEqual(firstDelay, 500_000_000)
+        XCTAssertEqual(secondDelay, 1_000_000_000)
+        XCTAssertEqual(secondText, "b")
     }
 
+    @MainActor
     func testExportAsciinemaCastWritesHeaderAndEvents() async throws {
         let directory = makeTempDirectory(suffix: "cast")
         let recorder = SessionRecorder(recordingsDirectoryURL: directory)
@@ -73,7 +84,7 @@ final class SessionRecorderTests: XCTestCase {
             ]
         )
 
-        let castURL = try await recorder.exportAsciinemaCast(
+        let castURL = try recorder.exportAsciinemaCast(
             recording: recording,
             columns: 90,
             rows: 30,
@@ -98,6 +109,7 @@ final class SessionRecorderTests: XCTestCase {
         XCTAssertEqual(event[2] as? String, "hello\n")
     }
 
+    @MainActor
     private func makeSession() -> Session {
         Session(
             id: UUID(),

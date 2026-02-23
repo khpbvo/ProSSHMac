@@ -9,6 +9,7 @@
 
 #if canImport(XCTest)
 import XCTest
+@testable import ProSSHMac
 
 // MARK: - F.12: Cisco IOS 12.x Compatibility
 

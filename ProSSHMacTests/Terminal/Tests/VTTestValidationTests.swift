@@ -11,6 +11,7 @@
 
 #if canImport(XCTest)
 import XCTest
+@testable import ProSSHMac
 
 // MARK: - 1. VTTestCursorMovementTest
 

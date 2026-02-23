@@ -8,6 +8,7 @@
 
 #if canImport(XCTest)
 import XCTest
+@testable import ProSSHMac
 
 // MARK: - TerminalGridTests
 
@@ -711,22 +712,35 @@ final class TerminalGridTests: XCTestCase {
         await grid.setScrollRegion(top: 1, bottom: 4)
         await grid.scrollUp(lines: 2)
 
-        XCTAssertEqual((await grid.cellAt(row: 0, col: 0))?.graphemeCluster, "A")
-        XCTAssertEqual((await grid.cellAt(row: 1, col: 0))?.graphemeCluster, "D")
-        XCTAssertEqual((await grid.cellAt(row: 2, col: 0))?.graphemeCluster, "E")
-        XCTAssertTrue((await grid.cellAt(row: 3, col: 0))?.isBlank ?? false)
-        XCTAssertTrue((await grid.cellAt(row: 4, col: 0))?.isBlank ?? false)
-        XCTAssertEqual((await grid.cellAt(row: 5, col: 0))?.graphemeCluster, "F")
-        XCTAssertEqual(await grid.scrollbackCount, 2)
+        let row0AfterUp = await grid.cellAt(row: 0, col: 0)
+        let row1AfterUp = await grid.cellAt(row: 1, col: 0)
+        let row2AfterUp = await grid.cellAt(row: 2, col: 0)
+        let row3AfterUp = await grid.cellAt(row: 3, col: 0)
+        let row4AfterUp = await grid.cellAt(row: 4, col: 0)
+        let row5AfterUp = await grid.cellAt(row: 5, col: 0)
+        let scrollbackAfterUp = await grid.scrollbackCount
+        XCTAssertEqual(row0AfterUp?.graphemeCluster, "A")
+        XCTAssertEqual(row1AfterUp?.graphemeCluster, "D")
+        XCTAssertEqual(row2AfterUp?.graphemeCluster, "E")
+        XCTAssertTrue(row3AfterUp?.isBlank ?? false)
+        XCTAssertTrue(row4AfterUp?.isBlank ?? false)
+        XCTAssertEqual(row5AfterUp?.graphemeCluster, "F")
+        XCTAssertEqual(scrollbackAfterUp, 2)
 
         await grid.scrollDown(lines: 1)
 
-        XCTAssertEqual((await grid.cellAt(row: 0, col: 0))?.graphemeCluster, "A")
-        XCTAssertTrue((await grid.cellAt(row: 1, col: 0))?.isBlank ?? false)
-        XCTAssertEqual((await grid.cellAt(row: 2, col: 0))?.graphemeCluster, "D")
-        XCTAssertEqual((await grid.cellAt(row: 3, col: 0))?.graphemeCluster, "E")
-        XCTAssertTrue((await grid.cellAt(row: 4, col: 0))?.isBlank ?? false)
-        XCTAssertEqual((await grid.cellAt(row: 5, col: 0))?.graphemeCluster, "F")
+        let row0AfterDown = await grid.cellAt(row: 0, col: 0)
+        let row1AfterDown = await grid.cellAt(row: 1, col: 0)
+        let row2AfterDown = await grid.cellAt(row: 2, col: 0)
+        let row3AfterDown = await grid.cellAt(row: 3, col: 0)
+        let row4AfterDown = await grid.cellAt(row: 4, col: 0)
+        let row5AfterDown = await grid.cellAt(row: 5, col: 0)
+        XCTAssertEqual(row0AfterDown?.graphemeCluster, "A")
+        XCTAssertTrue(row1AfterDown?.isBlank ?? false)
+        XCTAssertEqual(row2AfterDown?.graphemeCluster, "D")
+        XCTAssertEqual(row3AfterDown?.graphemeCluster, "E")
+        XCTAssertTrue(row4AfterDown?.isBlank ?? false)
+        XCTAssertEqual(row5AfterDown?.graphemeCluster, "F")
 
         let snapshot = await grid.snapshot()
         XCTAssertEqual(snapshotText(snapshot, row: 0, startCol: 0, count: 1), "A")

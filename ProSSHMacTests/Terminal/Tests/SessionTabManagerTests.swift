@@ -5,22 +5,29 @@
 
 #if canImport(XCTest)
 import XCTest
+@testable import ProSSHMac
 
-@MainActor
 final class SessionTabManagerTests: XCTestCase {
 
+    @MainActor
     func testSyncCreatesTabModelAndSelectsFirst() {
         let manager = makeManager(prefix: "sync_first")
         let sessions = [makeSession(label: "A"), makeSession(label: "B")]
 
         manager.sync(with: sessions)
 
-        XCTAssertEqual(manager.tabs.count, 2)
-        XCTAssertEqual(manager.tabs[0].label, "A")
-        XCTAssertEqual(manager.tabs[1].label, "B")
-        XCTAssertEqual(manager.selectedSessionID, sessions[0].id)
+        let tabs = manager.tabs
+        let selectedSessionID = manager.selectedSessionID
+        let firstTabLabel = tabs[0].label
+        let secondTabLabel = tabs[1].label
+        let firstSessionID = sessions[0].id
+        XCTAssertEqual(tabs.count, 2)
+        XCTAssertEqual(firstTabLabel, "A")
+        XCTAssertEqual(secondTabLabel, "B")
+        XCTAssertEqual(selectedSessionID, firstSessionID)
     }
 
+    @MainActor
     func testMoveTabReordersTabs() {
         let manager = makeManager(prefix: "move")
         let sessions = [makeSession(label: "A"), makeSession(label: "B"), makeSession(label: "C")]
@@ -28,9 +35,13 @@ final class SessionTabManagerTests: XCTestCase {
 
         manager.moveTab(sessionID: sessions[2].id, by: -1)
 
-        XCTAssertEqual(manager.tabs.map { $0.session.id }, [sessions[0].id, sessions[2].id, sessions[1].id])
+        let tabs = manager.tabs
+        let actualIDs = [tabs[0].session.id, tabs[1].session.id, tabs[2].session.id]
+        let expectedIDs = [sessions[0].id, sessions[2].id, sessions[1].id]
+        XCTAssertEqual(actualIDs, expectedIDs)
     }
 
+    @MainActor
     func testRemoveSelectedTabSelectsNeighbor() {
         let manager = makeManager(prefix: "remove")
         let sessions = [makeSession(label: "A"), makeSession(label: "B"), makeSession(label: "C")]
@@ -39,10 +50,14 @@ final class SessionTabManagerTests: XCTestCase {
 
         manager.removeTab(sessionID: sessions[1].id)
 
-        XCTAssertEqual(manager.tabs.count, 2)
-        XCTAssertEqual(manager.selectedSessionID, sessions[2].id)
+        let tabs = manager.tabs
+        let selectedSessionID = manager.selectedSessionID
+        let thirdSessionID = sessions[2].id
+        XCTAssertEqual(tabs.count, 2)
+        XCTAssertEqual(selectedSessionID, thirdSessionID)
     }
 
+    @MainActor
     func testSelectionAndOrderPersistAcrossManagerInstances() {
         let defaults = makeDefaults(suffix: "persist")
         let prefix = "persist"
@@ -58,10 +73,16 @@ final class SessionTabManagerTests: XCTestCase {
         let rehydrated = SessionTabManager(defaults: defaults, keyPrefix: prefix)
         rehydrated.sync(with: sessions)
 
-        XCTAssertEqual(rehydrated.tabs.map { $0.session.id }, [sessions[2].id, sessions[0].id, sessions[1].id])
-        XCTAssertEqual(rehydrated.selectedSessionID, sessions[1].id)
+        let tabs = rehydrated.tabs
+        let actualIDs = [tabs[0].session.id, tabs[1].session.id, tabs[2].session.id]
+        let expectedIDs = [sessions[2].id, sessions[0].id, sessions[1].id]
+        let selectedSessionID = rehydrated.selectedSessionID
+        let expectedSelectedID = sessions[1].id
+        XCTAssertEqual(actualIDs, expectedIDs)
+        XCTAssertEqual(selectedSessionID, expectedSelectedID)
     }
 
+    @MainActor
     private func makeManager(prefix: String) -> SessionTabManager {
         SessionTabManager(defaults: makeDefaults(suffix: prefix), keyPrefix: prefix)
     }
@@ -73,6 +94,7 @@ final class SessionTabManagerTests: XCTestCase {
         return defaults
     }
 
+    @MainActor
     private func makeSession(label: String) -> Session {
         Session(
             id: UUID(),
