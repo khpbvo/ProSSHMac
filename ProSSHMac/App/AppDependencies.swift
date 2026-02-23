@@ -104,9 +104,9 @@ final class AppDependencies: ObservableObject {
         self.openAIAgentService = OpenAIAgentService(
             responsesService: openAIResponsesService,
             sessionProvider: sessionManager,
-            requestTimeoutSeconds: 35,
+            requestTimeoutSeconds: 60,
             maxToolIterations: 200,
-            persistConversationContext: false
+            persistConversationContext: true
         )
         self.terminalAIAssistantViewModel = TerminalAIAssistantViewModel(
             agentService: self.openAIAgentService

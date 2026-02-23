@@ -303,16 +303,87 @@ final class OpenAIAgentServiceTests: XCTestCase {
 
         _ = try await service.generateReply(
             sessionID: sessionProvider.sessionID,
-            prompt: "Change directory to Documents/Testing please."
+            prompt: "cd ~/Documents/Testing"
         )
 
         let firstTools = responses.capturedRequests.first?.tools.map(\.name) ?? []
         XCTAssertTrue(firstTools.contains("execute_command"))
+        XCTAssertTrue(firstTools.contains("execute_and_wait"))
         XCTAssertTrue(firstTools.contains("get_current_screen"))
         XCTAssertTrue(firstTools.contains("get_session_info"))
+        XCTAssertTrue(firstTools.contains("get_recent_commands"))
+        XCTAssertTrue(firstTools.contains("get_command_output"))
         XCTAssertFalse(firstTools.contains("search_terminal_history"))
         XCTAssertFalse(firstTools.contains("search_filesystem"))
-        XCTAssertFalse(firstTools.contains("get_recent_commands"))
+    }
+
+    func testExecuteAndWaitReturnsOutputDirectly() async throws {
+        let sessionProvider = MockAgentSessionProvider()
+        sessionProvider.simulatedExecuteAndWaitOutput = "total 42\ndrwxr-xr-x  5 kevin staff 160 Feb 23 10:00 ."
+        sessionProvider.simulatedExecuteAndWaitExitCode = 0
+
+        let responses = MockOpenAIResponsesService()
+        responses.enqueueResponse(
+            makeFunctionCallResponse(
+                id: "resp_1",
+                callID: "call_exec",
+                toolName: "execute_and_wait",
+                arguments: #"{"command":"ls -la","timeout_seconds":30}"#
+            )
+        )
+        responses.enqueueResponse(
+            makeTextResponse(id: "resp_2", text: "Listed files.")
+        )
+
+        let service = OpenAIAgentService(
+            responsesService: responses,
+            sessionProvider: sessionProvider
+        )
+
+        let reply = try await service.generateReply(
+            sessionID: sessionProvider.sessionID,
+            prompt: "list files"
+        )
+
+        XCTAssertEqual(reply.text, "Listed files.")
+        let toolOutput = responses.capturedRequests[1].toolOutputs.first?.output ?? ""
+        XCTAssertTrue(toolOutput.contains(#""ok":true"#))
+        XCTAssertTrue(toolOutput.contains("total 42"))
+        XCTAssertTrue(toolOutput.contains(#""exit_code":0"#))
+        XCTAssertTrue(toolOutput.contains(#""truncated":false"#))
+    }
+
+    func testExecuteAndWaitReturnsTimeoutWhenCommandHangs() async throws {
+        let sessionProvider = MockAgentSessionProvider()
+        sessionProvider.simulatedExecuteAndWaitTimedOut = true
+
+        let responses = MockOpenAIResponsesService()
+        responses.enqueueResponse(
+            makeFunctionCallResponse(
+                id: "resp_1",
+                callID: "call_exec",
+                toolName: "execute_and_wait",
+                arguments: #"{"command":"sleep 999","timeout_seconds":5}"#
+            )
+        )
+        responses.enqueueResponse(
+            makeTextResponse(id: "resp_2", text: "Timed out.")
+        )
+
+        let service = OpenAIAgentService(
+            responsesService: responses,
+            sessionProvider: sessionProvider
+        )
+
+        let reply = try await service.generateReply(
+            sessionID: sessionProvider.sessionID,
+            prompt: "sleep forever"
+        )
+
+        XCTAssertEqual(reply.text, "Timed out.")
+        let toolOutput = responses.capturedRequests[1].toolOutputs.first?.output ?? ""
+        XCTAssertTrue(toolOutput.contains(#""ok":false"#))
+        XCTAssertTrue(toolOutput.contains("timed_out"))
     }
 
     func testReadFilesToolReturnsBatchResults() async throws {
@@ -487,6 +558,9 @@ private final class MockAgentSessionProvider: OpenAIAgentSessionProviding {
     var commandOutputByBlockID: [UUID: String]
     var simulatedRemoteFilesystemLines: [String] = []
     var simulatedRemoteFileContentLines: [String] = []
+    var simulatedExecuteAndWaitOutput: String = ""
+    var simulatedExecuteAndWaitExitCode: Int? = 0
+    var simulatedExecuteAndWaitTimedOut: Bool = false
 
     init(isLocal: Bool = true) {
         let session = Session(
@@ -568,6 +642,40 @@ private final class MockAgentSessionProvider: OpenAIAgentSessionProviding {
         )
         commandBlocks.append(block)
         commandOutputByBlockID[block.id] = block.output
+    }
+
+    func executeCommandAndWait(
+        sessionID: UUID,
+        command: String,
+        timeoutSeconds: TimeInterval
+    ) async -> CommandExecutionResult {
+        sentCommands.append(command)
+        sentCommandsSuppressEcho.append(true)
+
+        if simulatedExecuteAndWaitTimedOut {
+            return CommandExecutionResult(output: "", exitCode: nil, timedOut: true, blockID: nil)
+        }
+
+        let blockID = UUID()
+        let block = CommandBlock(
+            id: blockID,
+            sessionID: sessionID,
+            command: command,
+            output: simulatedExecuteAndWaitOutput,
+            startedAt: .now,
+            completedAt: .now,
+            exitCode: simulatedExecuteAndWaitExitCode,
+            boundarySource: .userInput
+        )
+        commandBlocks.append(block)
+        commandOutputByBlockID[blockID] = simulatedExecuteAndWaitOutput
+
+        return CommandExecutionResult(
+            output: simulatedExecuteAndWaitOutput,
+            exitCode: simulatedExecuteAndWaitExitCode,
+            timedOut: false,
+            blockID: blockID
+        )
     }
 
     private static func extractRemoteToolMarker(from command: String) -> String? {
