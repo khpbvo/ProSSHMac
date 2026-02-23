@@ -78,6 +78,9 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 - 2026-02-23: Increased AI tool-loop ceiling again to 200 iterations and tightened Ask-mode developer guidance for tool efficiency (avoid duplicate calls, batch discovery, stop once evidence is sufficient); re-verified with `OpenAIAgentServiceTests`.
 - 2026-02-23: Added bounded file-ingestion guardrails for long AI runs: new `read_file_chunk` tool (local + remote) enforces `line_count <= 200`, Ask-mode instructions now require iterative chunk reads, and `execute_command` now returns `read_window_required` when commands attempt unbounded file reads (`cat` full-file, oversized `head`/`tail`/`sed`, scripted full reads). Added regression coverage in `OpenAIAgentServiceTests`.
 - 2026-02-23: Polished AI copilot UX in terminal: assistant plain-text segments now render as Markdown (with fenced code still syntax-highlighted + copyable), AI sidebar resizing now has a visible drag handle with expanded width range, and composer input is now multiline/auto-expanding with `Enter` submit and `Shift+Enter` newline.
+- 2026-02-23: Fixed post-polish spinner regression: multiline `NSTextView` composer no longer mutates SwiftUI state synchronously during `updateNSView`/delegate layout callbacks. Binding writes are deferred async on main, removing `Modifying state during view update` warnings and preventing stuck AI/file-browser loading spinners.
+- 2026-02-23: Cleared remaining composer warning at `TerminalAIAssistantPane.swift:415` by removing focus-state `Binding` updates from the AppKit wrapper path; focus changes are now callback-driven to avoid any state mutation during SwiftUI view updates.
+- 2026-02-23: Added stronger anti-reentrancy deferral in composer bridge: focus/text/height propagation now runs on main actor after `Task.yield()`, avoiding same-pass state mutation during representable update/layout callbacks.
 
 ## How to Use This File
 

@@ -4,7 +4,6 @@ import AppKit
 struct TerminalAIAssistantPane: View {
     @Environment(\.colorScheme) private var colorScheme
     @ObservedObject var viewModel: TerminalAIAssistantViewModel
-    @State private var isComposerFocused = false
     @State private var composerHeight: CGFloat = 38
     var session: Session?
     var onClose: () -> Void
@@ -109,12 +108,16 @@ struct TerminalAIAssistantPane: View {
                 AIAssistantComposerTextView(
                     text: $viewModel.draftPrompt,
                     dynamicHeight: $composerHeight,
-                    isFocused: $isComposerFocused,
                     isEnabled: session != nil && !viewModel.isSending,
                     minHeight: 38,
                     maxHeight: 160,
                     onSubmit: {
                         submitComposer()
+                    },
+                    onFocusChanged: { focused in
+                        DispatchQueue.main.async {
+                            onComposerFocusChanged(focused)
+                        }
                     }
                 )
                 .frame(height: composerHeight)
@@ -173,9 +176,6 @@ struct TerminalAIAssistantPane: View {
             }
         }
         .padding(12)
-        .onChange(of: isComposerFocused) { _, isFocused in
-            onComposerFocusChanged(isFocused)
-        }
         .onDisappear {
             onComposerFocusChanged(false)
         }
@@ -303,11 +303,11 @@ private struct AIAssistantMarkdownText: View {
 private struct AIAssistantComposerTextView: NSViewRepresentable {
     @Binding var text: String
     @Binding var dynamicHeight: CGFloat
-    @Binding var isFocused: Bool
     var isEnabled: Bool
     var minHeight: CGFloat
     var maxHeight: CGFloat
     var onSubmit: () -> Void
+    var onFocusChanged: (Bool) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -366,7 +366,7 @@ private struct AIAssistantComposerTextView: NSViewRepresentable {
 
         if textView.string != text {
             textView.string = text
-            context.coordinator.recalculateHeight()
+            context.coordinator.recalculateHeightDeferred()
         }
 
         if textView.isEditable != isEnabled {
@@ -378,7 +378,6 @@ private struct AIAssistantComposerTextView: NSViewRepresentable {
         }
 
         context.coordinator.parent = self
-        context.coordinator.recalculateHeight()
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
@@ -392,9 +391,7 @@ private struct AIAssistantComposerTextView: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             guard let textView else { return }
             let updatedText = textView.string
-            if parent.text != updatedText {
-                parent.text = updatedText
-            }
+            setDraftText(updatedText)
             recalculateHeight()
         }
 
@@ -411,8 +408,10 @@ private struct AIAssistantComposerTextView: NSViewRepresentable {
         }
 
         func updateFocus(_ focused: Bool) {
-            if parent.isFocused != focused {
-                parent.isFocused = focused
+            Task { @MainActor [weak self] in
+                await Task.yield()
+                guard let self else { return }
+                self.parent.onFocusChanged(focused)
             }
         }
 
@@ -430,8 +429,29 @@ private struct AIAssistantComposerTextView: NSViewRepresentable {
             let contentHeight = max(lineHeight, ceil(usedRect.height))
             let targetHeight = min(parent.maxHeight, max(parent.minHeight, contentHeight + (textView.textContainerInset.height * 2)))
 
-            if abs(parent.dynamicHeight - targetHeight) > 0.5 {
-                parent.dynamicHeight = targetHeight
+            Task { @MainActor [weak self] in
+                await Task.yield()
+                guard let self else { return }
+                if abs(self.parent.dynamicHeight - targetHeight) > 0.5 {
+                    self.parent.dynamicHeight = targetHeight
+                }
+            }
+        }
+
+        private func setDraftText(_ value: String) {
+            Task { @MainActor [weak self] in
+                await Task.yield()
+                guard let self else { return }
+                if self.parent.text != value {
+                    self.parent.text = value
+                }
+            }
+        }
+
+        func recalculateHeightDeferred() {
+            Task { @MainActor [weak self] in
+                await Task.yield()
+                self?.recalculateHeight()
             }
         }
     }

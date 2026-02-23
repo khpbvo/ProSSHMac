@@ -28,6 +28,9 @@ This file is the project working memory for future assistants in this repository
 
 ## Current Status Snapshot
 
+- Latest AI stability fix (2026-02-23): resolved SwiftUI update-loop regression in the multiline AI composer that could leave AI/file-browser loading spinners stuck. Binding updates from `NSTextView` delegate/layout callbacks are now async on main and no longer mutate state synchronously during `updateNSView`.
+- Latest AI stability fix (2026-02-23): removed remaining `Modifying state during view update` warning at `TerminalAIAssistantPane.swift:415` by eliminating focus `Binding` mutations inside the NSView bridge; focus changes now flow through callback routing only.
+- Latest AI stability fix (2026-02-23): hardened NSView bridge callbacks with `Task { @MainActor; await Task.yield() }` deferral before propagating focus/text/height updates, preventing same-turn state writes during SwiftUI view updates.
 - Latest AI UX polish (2026-02-23): assistant text now renders as parsed Markdown (while fenced code remains syntax-highlighted/copyable), AI pane resizing is now visually discoverable via a dedicated drag handle and wider width range, and the chat composer is multiline/auto-expanding with `Enter` to send plus `Shift+Enter` for newline.
 - Latest AI stability guard (2026-02-23): file ingestion is now chunk-bound to `<=200` lines. New `read_file_chunk` tool was added for local/remote sessions, and unbounded reads through `execute_command` are blocked with a `read_window_required` response so long tasks iterate by line windows.
 - Latest tuning (2026-02-23): AI tool-loop cap is now `200` iterations (was `99`) via `OpenAIAgentService` default plus explicit `AppDependencies` wiring; Ask-mode instructions were also tightened to reduce redundant tool calls and stop earlier when enough evidence is gathered.
