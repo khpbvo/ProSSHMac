@@ -4,7 +4,8 @@ import AppKit
 struct TerminalAIAssistantPane: View {
     @Environment(\.colorScheme) private var colorScheme
     @ObservedObject var viewModel: TerminalAIAssistantViewModel
-    @FocusState private var isComposerFocused: Bool
+    @State private var isComposerFocused = false
+    @State private var composerHeight: CGFloat = 38
     var session: Session?
     var onClose: () -> Void
     var onSend: (UUID) -> Void
@@ -104,15 +105,38 @@ struct TerminalAIAssistantPane: View {
 
     private var composer: some View {
         VStack(alignment: .leading, spacing: 8) {
-            TextField("Ask about logs, commands, errors, or ask for runnable examples...", text: $viewModel.draftPrompt)
-                .textFieldStyle(.roundedBorder)
-                .submitLabel(.send)
-                .autocorrectionDisabled(true)
-                .focused($isComposerFocused)
-                .onSubmit {
-                    submitComposer()
+            ZStack(alignment: .topLeading) {
+                AIAssistantComposerTextView(
+                    text: $viewModel.draftPrompt,
+                    dynamicHeight: $composerHeight,
+                    isFocused: $isComposerFocused,
+                    isEnabled: session != nil && !viewModel.isSending,
+                    minHeight: 38,
+                    maxHeight: 160,
+                    onSubmit: {
+                        submitComposer()
+                    }
+                )
+                .frame(height: composerHeight)
+                .padding(.horizontal, 2)
+
+                if viewModel.draftPrompt.isEmpty {
+                    Text("Ask about logs, commands, errors, or ask for runnable examples...")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 12)
+                        .padding(.top, 10)
+                        .allowsHitTesting(false)
                 }
-                .disabled(session == nil || viewModel.isSending)
+            }
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(colorScheme == .dark ? Color.white.opacity(0.06) : Color.black.opacity(0.03))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(colorScheme == .dark ? Color.white.opacity(0.18) : Color.black.opacity(0.14), lineWidth: 1)
+            )
 
             HStack(spacing: 8) {
                 Button("Clear") {
@@ -194,10 +218,7 @@ private struct AIAssistantMessageCard: View {
             ForEach(AIAssistantRenderer.parseSegments(from: message.content)) { segment in
                 switch segment.kind {
                 case let .text(text):
-                    Text(verbatim: text)
-                        .font(.system(size: 13))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
+                    AIAssistantMarkdownText(markdown: text)
                 case let .code(language, code):
                     AIAssistantCodeBlock(language: language, code: code)
                 }
@@ -265,6 +286,198 @@ private struct AIAssistantCodeBlock: View {
         colorScheme == .dark
             ? Color.black.opacity(0.44)
             : Color.black.opacity(0.05)
+    }
+}
+
+private struct AIAssistantMarkdownText: View {
+    let markdown: String
+
+    var body: some View {
+        Text(AIAssistantRenderer.markdownText(markdown))
+            .font(.system(size: 13))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .textSelection(.enabled)
+    }
+}
+
+private struct AIAssistantComposerTextView: NSViewRepresentable {
+    @Binding var text: String
+    @Binding var dynamicHeight: CGFloat
+    @Binding var isFocused: Bool
+    var isEnabled: Bool
+    var minHeight: CGFloat
+    var maxHeight: CGFloat
+    var onSubmit: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+        scrollView.hasVerticalScroller = false
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+
+        let textView = ComposerTextView()
+        textView.delegate = context.coordinator
+        textView.string = text
+        textView.font = NSFont.systemFont(ofSize: 13)
+        textView.textColor = .labelColor
+        textView.backgroundColor = .clear
+        textView.drawsBackground = false
+        textView.isRichText = false
+        textView.importsGraphics = false
+        textView.allowsUndo = true
+        textView.usesFindPanel = false
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.isAutomaticTextReplacementEnabled = false
+        textView.isAutomaticSpellingCorrectionEnabled = false
+        textView.isHorizontallyResizable = false
+        textView.isVerticallyResizable = true
+        textView.textContainerInset = NSSize(width: 8, height: 7)
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.heightTracksTextView = false
+        textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
+        textView.onSubmit = {
+            context.coordinator.submitRequested()
+        }
+        textView.onFocusChanged = { focused in
+            context.coordinator.updateFocus(focused)
+        }
+        textView.onFrameChanged = {
+            context.coordinator.recalculateHeight()
+        }
+        textView.isEditable = isEnabled
+        textView.isSelectable = true
+
+        scrollView.documentView = textView
+        context.coordinator.textView = textView
+        context.coordinator.recalculateHeight()
+        return scrollView
+    }
+
+    func updateNSView(_ nsView: NSScrollView, context: Context) {
+        guard let textView = context.coordinator.textView else { return }
+
+        if textView.string != text {
+            textView.string = text
+            context.coordinator.recalculateHeight()
+        }
+
+        if textView.isEditable != isEnabled {
+            textView.isEditable = isEnabled
+        }
+
+        if !isEnabled, let window = textView.window, window.firstResponder === textView {
+            window.makeFirstResponder(nil)
+        }
+
+        context.coordinator.parent = self
+        context.coordinator.recalculateHeight()
+    }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: AIAssistantComposerTextView
+        weak var textView: ComposerTextView?
+
+        init(parent: AIAssistantComposerTextView) {
+            self.parent = parent
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard let textView else { return }
+            let updatedText = textView.string
+            if parent.text != updatedText {
+                parent.text = updatedText
+            }
+            recalculateHeight()
+        }
+
+        func textDidBeginEditing(_ notification: Notification) {
+            updateFocus(true)
+        }
+
+        func textDidEndEditing(_ notification: Notification) {
+            updateFocus(false)
+        }
+
+        func submitRequested() {
+            parent.onSubmit()
+        }
+
+        func updateFocus(_ focused: Bool) {
+            if parent.isFocused != focused {
+                parent.isFocused = focused
+            }
+        }
+
+        func recalculateHeight() {
+            guard let textView,
+                  let textContainer = textView.textContainer,
+                  let layoutManager = textView.layoutManager else {
+                return
+            }
+
+            layoutManager.ensureLayout(for: textContainer)
+            let glyphRange = layoutManager.glyphRange(for: textContainer)
+            let usedRect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+            let lineHeight = layoutManager.defaultLineHeight(for: textView.font ?? NSFont.systemFont(ofSize: 13))
+            let contentHeight = max(lineHeight, ceil(usedRect.height))
+            let targetHeight = min(parent.maxHeight, max(parent.minHeight, contentHeight + (textView.textContainerInset.height * 2)))
+
+            if abs(parent.dynamicHeight - targetHeight) > 0.5 {
+                parent.dynamicHeight = targetHeight
+            }
+        }
+    }
+}
+
+private final class ComposerTextView: NSTextView {
+    var onSubmit: (() -> Void)?
+    var onFocusChanged: ((Bool) -> Void)?
+    var onFrameChanged: (() -> Void)?
+
+    override func keyDown(with event: NSEvent) {
+        let isReturn = event.keyCode == 36 || event.keyCode == 76
+        if isReturn {
+            let modifiers = event.modifierFlags.intersection([.shift, .option, .control, .command])
+            if modifiers == [.shift] {
+                insertNewline(nil)
+            } else if modifiers.isEmpty {
+                onSubmit?()
+            } else {
+                super.keyDown(with: event)
+            }
+            return
+        }
+
+        super.keyDown(with: event)
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let result = super.becomeFirstResponder()
+        if result {
+            onFocusChanged?(true)
+        }
+        return result
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let result = super.resignFirstResponder()
+        if result {
+            onFocusChanged?(false)
+        }
+        return result
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        onFrameChanged?()
     }
 }
 
@@ -375,6 +588,21 @@ private enum AIAssistantRenderer {
         }
 
         return AttributedString(attributed)
+    }
+
+    static func markdownText(_ text: String) -> AttributedString {
+        guard !text.isEmpty else { return AttributedString("") }
+
+        let options = AttributedString.MarkdownParsingOptions(
+            interpretedSyntax: .full,
+            failurePolicy: .returnPartiallyParsedIfPossible
+        )
+
+        if let parsed = try? AttributedString(markdown: text, options: options) {
+            return parsed
+        }
+
+        return AttributedString(text)
     }
 
     private static func applyRegex(_ pattern: String, color: NSColor, to attributed: NSMutableAttributedString) {

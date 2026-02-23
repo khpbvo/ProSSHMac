@@ -594,23 +594,29 @@ struct TerminalView: View {
                 }
             }
         )
-        .frame(minWidth: 320, idealWidth: CGFloat(clampedAIAssistantWidth), maxWidth: 620)
+        .frame(minWidth: CGFloat(aiAssistantMinWidth), idealWidth: CGFloat(clampedAIAssistantWidth), maxWidth: CGFloat(aiAssistantMaxWidth))
         .overlay(alignment: .leading) {
-            Rectangle()
-                .fill(Color.clear)
-                .frame(width: 8)
-                .contentShape(Rectangle())
-                .gesture(
-                    DragGesture(minimumDistance: 1)
-                        .onChanged { value in
-                            let base = aiAssistantDragBaseWidth ?? clampedAIAssistantWidth
-                            aiAssistantDragBaseWidth = base
-                            aiAssistantWidth = min(620, max(320, base - Double(value.translation.width)))
-                        }
-                        .onEnded { _ in
-                            aiAssistantDragBaseWidth = nil
-                        }
-                )
+            HStack(spacing: 4) {
+                Rectangle()
+                    .fill(Color.primary.opacity(0.14))
+                    .frame(width: 1)
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(Color.primary.opacity(0.26))
+                    .frame(width: 4, height: 40)
+            }
+            .frame(width: 12)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 1)
+                    .onChanged { value in
+                        let base = aiAssistantDragBaseWidth ?? clampedAIAssistantWidth
+                        aiAssistantDragBaseWidth = base
+                        aiAssistantWidth = min(aiAssistantMaxWidth, max(aiAssistantMinWidth, base - Double(value.translation.width)))
+                    }
+                    .onEnded { _ in
+                        aiAssistantDragBaseWidth = nil
+                    }
+            )
         }
     }
 
@@ -2576,12 +2582,16 @@ struct TerminalView: View {
     }
 
     private var clampedAIAssistantWidth: Double {
-        min(620, max(320, aiAssistantWidth))
+        min(aiAssistantMaxWidth, max(aiAssistantMinWidth, aiAssistantWidth))
     }
 
     private var clampedFileBrowserWidth: Double {
         min(460, max(220, fileBrowserWidth))
     }
+
+    private var aiAssistantMinWidth: Double { 280 }
+
+    private var aiAssistantMaxWidth: Double { 920 }
 
     @ViewBuilder
     private func mouseInputOverlay(for session: Session, contentPadding: CGFloat = 8) -> some View {

@@ -77,6 +77,7 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 - 2026-02-23: Increased AI tool-loop ceiling from 8 to 99 iterations in `OpenAIAgentService` (and explicitly via `AppDependencies`) to avoid premature `toolLoopExceeded` failures on multi-step requests; re-verified with `OpenAIAgentServiceTests`.
 - 2026-02-23: Increased AI tool-loop ceiling again to 200 iterations and tightened Ask-mode developer guidance for tool efficiency (avoid duplicate calls, batch discovery, stop once evidence is sufficient); re-verified with `OpenAIAgentServiceTests`.
 - 2026-02-23: Added bounded file-ingestion guardrails for long AI runs: new `read_file_chunk` tool (local + remote) enforces `line_count <= 200`, Ask-mode instructions now require iterative chunk reads, and `execute_command` now returns `read_window_required` when commands attempt unbounded file reads (`cat` full-file, oversized `head`/`tail`/`sed`, scripted full reads). Added regression coverage in `OpenAIAgentServiceTests`.
+- 2026-02-23: Polished AI copilot UX in terminal: assistant plain-text segments now render as Markdown (with fenced code still syntax-highlighted + copyable), AI sidebar resizing now has a visible drag handle with expanded width range, and composer input is now multiline/auto-expanding with `Enter` submit and `Shift+Enter` newline.
 
 ## How to Use This File
 
@@ -226,6 +227,7 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 - [x] Remove Follow/Execute mode plumbing from terminal AI UI and view-model flow.
 - [x] Allow command execution in Ask mode only when the user explicitly requests run/open/edit/check actions.
 - [x] Add keyboard shortcut for AI sidebar toggle and verify no collisions.
+- [x] Improve copilot readability/input ergonomics: markdown-rendered assistant text, visible resizable sidebar handle, multiline auto-growing composer with `Enter` send and `Shift+Enter` newline.
 
 ## Phase 6 - Settings, Persistence, and Hardening
 
