@@ -8,8 +8,9 @@ import XCTest
 @testable import ProSSHMac
 
 final class PaneManagerTests: XCTestCase {
-    override func setUpWithError() throws {
-        throw XCTSkip("Temporarily disabled: creating PaneManager crashes the XCTest host process (malloc invalid free).")
+    @MainActor
+    func testPaneLayoutStoreLifetimeSmoke() {
+        _ = PaneLayoutStore(persistenceEnabled: false)
     }
 
     // MARK: - Initial State

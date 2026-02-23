@@ -4,11 +4,10 @@
 // Manages the recursive split-pane tree for terminal views.
 
 import Foundation
-import Observation
+import Combine
 
-@Observable
 @MainActor
-final class PaneManager {
+final class PaneManager: ObservableObject {
 
     // MARK: - Constants
 
@@ -18,11 +17,11 @@ final class PaneManager {
 
     // MARK: - State
 
-    private(set) var rootNode: SplitNode {
+    @Published private(set) var rootNode: SplitNode {
         didSet { layoutStore.saveLastLayout(rootNode) }
     }
-    var focusedPaneId: UUID
-    var maximizedPaneId: UUID?
+    @Published var focusedPaneId: UUID
+    @Published var maximizedPaneId: UUID?
     private var savedRootNode: SplitNode?
     let layoutStore: PaneLayoutStore
 
@@ -47,6 +46,8 @@ final class PaneManager {
         self.rootNode = rootNode
         self.focusedPaneId = focusedPaneId
     }
+
+    nonisolated deinit {}
 
     // MARK: - Computed
 

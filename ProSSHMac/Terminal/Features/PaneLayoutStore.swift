@@ -23,6 +23,8 @@ final class PaneLayoutStore {
         self.persistenceEnabled = persistenceEnabled
     }
 
+    nonisolated deinit {}
+
     // MARK: - Last Layout (auto-save / auto-restore)
 
     func saveLastLayout(_ node: SplitNode) {

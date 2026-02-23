@@ -28,9 +28,8 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 ### Current Focus
 
 - Active phase: Phase 6 (persistence + hardening + remaining test coverage).
-- Immediate objective: complete remaining hardening gaps: crash-root-cause fixes for quarantined tests and user-facing shortcut/help docs.
+- Immediate objective: complete remaining hardening gaps for the remaining quarantined test and user-facing shortcut/help docs.
 - Test stability TODOs:
-  - investigate XCTest host crash when constructing `PaneManager` (`malloc: pointer being freed was not allocated`); `PaneManagerTests` are temporarily skipped.
   - investigate XCTest host crash observed in `TerminalAIAssistantViewModelTests.testClearConversationResetsMessagesAndCallsService`; this test is temporarily skipped.
 
 ## Loop Log
@@ -57,6 +56,7 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 - 2026-02-23: Updated shared `ProSSHMac` scheme `TestAction` so `xcodebuild test` is now recognized as configured (it advances past scheme-configuration failure); current remaining blocker is project-level absence of test bundles.
 - 2026-02-23: Added `ProSSHMacTests` unit-test bundle target + shared-scheme wiring (hosted by `ProSSHMac`), fixed test-target signing/isolation settings, and verified `xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -configuration Debug test` succeeds (smoke test baseline).
 - 2026-02-23: Stabilized test-run workflow to prevent repeating crash popups: confirmed `PaneManagerTests` trigger an XCTest host malloc crash, added temporary class-level skip quarantine in `PaneManagerTests`, and continued development with build-for-testing + targeted stable tests.
+- 2026-02-23: Closed Phase 6 test blocker for `PaneManagerTests`: removed quarantine skip, added `nonisolated deinit` to `PaneManager` (and `PaneLayoutStore`) to avoid actor-isolated deallocation crash path, and re-verified with `xcodebuild ... -only-testing:ProSSHMacTests/PaneManagerTests` (26/26 passing).
 - 2026-02-23: Completed Phase 5 AI sidebar integration: added rendered right-side copilot pane with Ask/Follow/Execute selector, streaming/copyable syntax-highlighted code blocks, explicit execute confirmation gate, and AI sidebar toggle shortcut (`⌘⌥I`), including width persistence and drag resizing.
 - 2026-02-23: Wired Follow mode to true command-completion events by emitting per-session completion signals from `SessionManager` (`latestCompletedCommandBlockBySessionID` + nonce) sourced from `TerminalHistoryIndex` completion boundaries (OSC 133 + heuristic), and auto-triggering follow prompts only when new command blocks complete.
 - 2026-02-23: Added follow-mode coverage in `TerminalAIAssistantViewModelTests`, hardened `TerminalHistoryIndexTests` timing/expectations, and quarantined unstable `testClearConversationResetsMessagesAndCallsService` with `XCTSkip` due intermittent XCTest host malloc/free crash.
@@ -260,7 +260,7 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
   - [x] Tool execution safety checks
   - [x] AI service error handling
 - [x] Run project tests and document any failures/gaps.
-- [ ] TODO: root-cause and fix host-process crash in `PaneManagerTests` (currently quarantined with `XCTSkip` to avoid repeated app crash respawn dialogs).
+- [x] Fixed host-process crash in `PaneManagerTests` and removed quarantine (`XCTSkip` no longer needed).
 - [ ] TODO: root-cause and fix host-process crash in `TerminalAIAssistantViewModelTests.testClearConversationResetsMessagesAndCallsService` (currently quarantined with `XCTSkip`).
 - [ ] Note: `xcodebuild ... test` now succeeds via `ProSSHMacTests` smoke baseline; most existing test files are still compiled under app sources and should be migrated into the test bundle for full coverage.
 - [ ] Update user-facing docs and shortcut reference in settings/help text.

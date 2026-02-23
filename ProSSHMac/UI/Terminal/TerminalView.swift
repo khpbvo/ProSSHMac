@@ -34,7 +34,7 @@ struct TerminalView: View {
     @StateObject private var tabManager = SessionTabManager()
     @StateObject private var terminalSearch = TerminalSearch()
     @StateObject private var selectionCoordinator = TerminalSelectionCoordinator()
-    @State private var paneManager = PaneManager()
+    @StateObject private var paneManager = PaneManager()
     @State private var pendingPaneSessionCreation: Set<UUID> = []
     @StateObject private var quickCommands = QuickCommands()
     @FocusState private var focusedSessionID: UUID?

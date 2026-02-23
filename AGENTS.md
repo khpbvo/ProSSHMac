@@ -29,6 +29,7 @@ This file is the project working memory for future assistants in this repository
 ## Current Status Snapshot
 
 - Latest AI token-efficiency + UX hardening (2026-02-23): reduced default screen/context payload sizes (`get_current_screen` default 60/max 160, command `output_preview` 300 chars), capped `get_command_output` via `max_chars` with truncation metadata, and suppressed remote internal tool-command echo to reduce noisy terminal/context loops.
+- Latest test-stability fix (2026-02-23): resolved the `PaneManagerTests` host-process malloc/free crash by avoiding actor-isolated deallocation for pane-layout lifecycle objects (`nonisolated deinit` in `PaneManager` and `PaneLayoutStore`); `PaneManagerTests` quarantine was removed and targeted suite now passes.
 - Latest AI pane stability + readability fix (2026-02-23): composer bridge now defers focus/text/height binding writes through `DispatchQueue.main.async` (with focus de-duplication), removing remaining `Modifying state during view update` paths; streaming assistant text now renders through markdown parser and sentence-splitting was hardened to detect boundaries even when spaces are missing after punctuation.
 - Latest file-browser reliability fix (2026-02-23): stale async directory-load completions now clear root/path loading flags when no active request remains, preventing persistent spinner states until pane switching.
 - Latest AI composer stability fix (2026-02-23): eliminated AppKit “Internal inconsistency in menus” spam from the embedded composer text view by replacing default rich-text contextual menus with a minimal explicit menu (`Cut/Copy/Paste/Select All`) and disabling extra text-checking services on that control.
@@ -53,6 +54,5 @@ This file is the project working memory for future assistants in this repository
 - Latest UX fix (2026-02-23): `SettingsView` AI section now shows a reliable bordered API-key input and clipboard paste button; key entry/save is no longer blocked by form-row rendering quirks.
 - Settings pane scrolling has been fixed; long settings content is now reachable.
 - Shared `ProSSHMac` scheme now has a working test pipeline: `ProSSHMacTests` bundle target is wired and `xcodebuild ... test` passes with a smoke baseline.
-- Known test blocker (2026-02-23): constructing `PaneManager` inside XCTest host currently crashes the host app process (`malloc: pointer being freed was not allocated`); `PaneManagerTests` are temporarily quarantined with `XCTSkip` and tracked as a TODO in `Docs/featurelist.md`.
 - Known test blocker (2026-02-23): `TerminalAIAssistantViewModelTests.testClearConversationResetsMessagesAndCallsService` can crash the XCTest host process (malloc/free path); this test is temporarily quarantined with `XCTSkip` and tracked in `Docs/featurelist.md`.
-- Next implementation phase is tracked in `Docs/featurelist.md` under remaining Phase 6 work (crash-root-cause fixes for quarantined tests and user-facing doc/shortcut updates).
+- Next implementation phase is tracked in `Docs/featurelist.md` under remaining Phase 6 work (remaining quarantined AI-view-model test and user-facing doc/shortcut updates).
