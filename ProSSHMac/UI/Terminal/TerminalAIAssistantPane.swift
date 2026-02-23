@@ -8,7 +8,6 @@ struct TerminalAIAssistantPane: View {
     var session: Session?
     var onClose: () -> Void
     var onSend: (UUID) -> Void
-    var onRequireExecuteConfirmation: () -> Void
     var onComposerFocusChanged: (Bool) -> Void
 
     var body: some View {
@@ -49,12 +48,9 @@ struct TerminalAIAssistantPane: View {
                 .buttonStyle(.borderless)
             }
 
-            Picker("Mode", selection: $viewModel.mode) {
-                Text("Ask").tag(OpenAIAgentMode.ask)
-                Text("Follow").tag(OpenAIAgentMode.follow)
-                Text("Execute").tag(OpenAIAgentMode.execute)
-            }
-            .pickerStyle(.segmented)
+            Text("Mode: Ask")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
 
             Text(session.map { "Session: \($0.hostLabel)" } ?? "Select a connected session to start.")
                 .font(.caption)
@@ -165,11 +161,7 @@ struct TerminalAIAssistantPane: View {
         guard let session else { return }
         guard !viewModel.isSending else { return }
         guard !viewModel.draftPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        if viewModel.mode == .execute {
-            onRequireExecuteConfirmation()
-        } else {
-            onSend(session.id)
-        }
+        onSend(session.id)
     }
 }
 

@@ -21,7 +21,7 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 - Terminal has production-ready left SFTP file sidebar and right AI sidebar.
 - AI uses Responses API with model pinned to `gpt-5.1-codex`.
 - Command-block index supports reliable context retrieval for AI tools.
-- Execution safety is enforced (explicit confirmation before AI command execution).
+- Execution safety is enforced by intent-based execution in Ask mode (execute only on explicit run/open/edit/check intent).
 - Regression checks pass for existing pane splitting and Transfers behavior.
 - This file and `AGENTS.md` remain current at task completion.
 
@@ -69,7 +69,11 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 - 2026-02-23: Fixed strict function-schema validation for Responses API by ensuring every declared tool property is listed in `required` when `strict: true` (`search_terminal_history.limit`, `get_current_screen.max_lines`, `get_recent_commands.limit`), resolving 400 errors about missing required keys in schema.
 - 2026-02-23: Strengthened AI mode instructions in `OpenAIAgentService` so Ask/Follow explicitly use context tools instead of claiming no access, and Execute mode explicitly runs requested commands (including interactive commands like `nano`/`vim`/`less`) rather than refusing capabilities.
 - 2026-02-23: Fixed AI composer input UX: pressing Enter in chat input now submits (same behavior as Send button), and terminal direct-input capture now defers to active text inputs so Cmd+V in the chat field pastes into chat instead of terminal.
-- 2026-02-23: Added native local-filesystem AI tools in `OpenAIAgentService`: `search_filesystem` (filename/wildcard search) and `search_file_contents` (pattern-in-file search with matching lines), plus mode prompts updated to prefer these tools for filesystem requests. Remote sessions currently return a tool-level hint to use `execute_command` with `find`/`rg`/`grep`.
+- 2026-02-23: Added native local-filesystem AI tools in `OpenAIAgentService`: `search_filesystem` (filename/wildcard search) and `search_file_contents` (pattern-in-file search with matching lines), plus mode prompts updated to prefer these tools for filesystem requests.
+- 2026-02-23: Extended AI filesystem tools to remote SSH sessions: `search_filesystem` now executes safe read-only remote `find` queries and `search_file_contents` uses remote `rg`/`grep` fallback queries, both parsed back into structured tool output with timeout/error handling.
+- 2026-02-23: Hardened remote tool-output parsing for real terminal captures: filesystem parsing now accepts whitespace-delimited `find` rows (not only tab-delimited), and both remote filesystem/content tools now return a `raw_output_preview` + `parse_warning` fallback when structured extraction is incomplete, preventing false "not found" replies when wrapped/normalized terminal output is noisy.
+- 2026-02-23: Consolidated AI pane UX to single visible Ask mode: removed Ask/Follow/Execute mode picker and execute confirmation dialog from `TerminalView`/`TerminalAIAssistantPane`; Ask mode now auto-routes to tools and can execute commands when user intent is explicit, while Follow mode remains execution-blocked internally. Targeted tests pass (`OpenAIAgentServiceTests`, `TerminalAIAssistantViewModelTests`, with one known skipped test).
+- 2026-02-23: Completed Ask-only cleanup across backend + UI: removed `OpenAIAgentMode` and all Follow/Execute branching from `OpenAIAgentService`, removed follow auto-trigger paths from `TerminalView` and `TerminalAIAssistantViewModel`, and simplified AI tests to Ask-only contract; targeted tests pass (`OpenAIAgentServiceTests`, `TerminalAIAssistantViewModelTests`, 1 known skipped test unchanged).
 
 ## How to Use This File
 
@@ -182,7 +186,7 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 
 ### Exit criteria
 
-- AI service can answer questions using local tools and stream responses.
+- AI service can answer questions using session tools (local + remote) and stream responses.
 - Model is explicitly pinned to `gpt-5.1-codex`.
 
 ### Checklist
@@ -198,7 +202,8 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
   - `get_recent_commands`
   - `execute_command`
   - `get_session_info`
-- [x] Map `execute_command` to `SessionManager.sendShellInput` with confirmation flow support.
+- [x] Ensure filesystem tools work in both local and remote sessions with safe read-only command execution on SSH hosts.
+- [x] Map `execute_command` to `SessionManager.sendShellInput` with Ask-mode explicit-intent safety policy.
 - [x] Persist `previous_response_id` safely (best-effort continuity; handle invalid/expired IDs).
 - [x] Add robust timeout/error handling for tool loops and network failures.
 
@@ -206,16 +211,16 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 
 ### Exit criteria
 
-- AI chat sidebar is integrated in terminal UI and supports ask/follow/execute modes.
-- Execute mode includes explicit user confirmation.
+- AI chat sidebar is integrated in terminal UI with a single visible Ask mode.
+- Assistant behavior auto-routes by user intent (context lookup vs command execution) without manual mode switching.
 
 ### Checklist
 
 - [x] Add AI sidebar view and view model.
 - [x] Integrate right sidebar in `TerminalView` with independent visibility/width from left sidebar.
-- [x] Add mode selector: Ask, Follow, Execute.
-- [x] In Follow mode, trigger from command-block completion events (not per-frame grid updates).
-- [x] In Execute mode, require explicit confirmation before sending any command.
+- [x] Consolidate UI to one visible Ask mode (remove Ask/Follow/Execute selector).
+- [x] Remove Follow/Execute mode plumbing from terminal AI UI and view-model flow.
+- [x] Allow command execution in Ask mode only when the user explicitly requests run/open/edit/check actions.
 - [x] Add keyboard shortcut for AI sidebar toggle and verify no collisions.
 
 ## Phase 6 - Settings, Persistence, and Hardening
@@ -246,5 +251,5 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 - [ ] Model used for implementation and validation was `gpt-5.1-codex`.
 - [ ] No regressions in existing terminal split panes.
 - [ ] No regressions in Transfers tab.
-- [ ] Command execution from AI cannot happen silently.
+- [ ] Command execution from AI requires explicit user intent in the prompt.
 - [ ] Network/API failures fail safely with user-visible errors.

@@ -26,8 +26,7 @@ final class OpenAIAgentServiceTests: XCTestCase {
 
         let reply = try await service.generateReply(
             sessionID: sessionProvider.sessionID,
-            prompt: "How is this session?",
-            mode: .ask
+            prompt: "How is this session?"
         )
 
         XCTAssertEqual(reply.text, "Session looks healthy.")
@@ -42,7 +41,7 @@ final class OpenAIAgentServiceTests: XCTestCase {
         XCTAssertTrue(requests[1].toolOutputs[0].output.contains("\"ok\":true"))
     }
 
-    func testExecuteCommandToolRequiresExecuteMode() async throws {
+    func testExecuteCommandToolRunsWhenRequested() async throws {
         let sessionProvider = MockAgentSessionProvider()
         let responses = MockOpenAIResponsesService()
         responses.enqueueResponse(
@@ -64,75 +63,12 @@ final class OpenAIAgentServiceTests: XCTestCase {
 
         _ = try await service.generateReply(
             sessionID: sessionProvider.sessionID,
-            prompt: "run ls",
-            mode: .ask
-        )
-
-        XCTAssertEqual(sessionProvider.sentCommands, [])
-        let toolOutput = responses.capturedRequests[1].toolOutputs.first?.output ?? ""
-        XCTAssertTrue(toolOutput.contains("confirmation_required"))
-    }
-
-    func testExecuteCommandToolRunsInExecuteMode() async throws {
-        let sessionProvider = MockAgentSessionProvider()
-        let responses = MockOpenAIResponsesService()
-        responses.enqueueResponse(
-            makeFunctionCallResponse(
-                id: "resp_1",
-                callID: "call_exec",
-                toolName: "execute_command",
-                arguments: #"{"command":"ls -la"}"#
-            )
-        )
-        responses.enqueueResponse(
-            makeTextResponse(id: "resp_2", text: "Done.")
-        )
-
-        let service = OpenAIAgentService(
-            responsesService: responses,
-            sessionProvider: sessionProvider
-        )
-
-        _ = try await service.generateReply(
-            sessionID: sessionProvider.sessionID,
-            prompt: "run ls",
-            mode: .execute
+            prompt: "run ls"
         )
 
         XCTAssertEqual(sessionProvider.sentCommands, ["ls -la"])
         let toolOutput = responses.capturedRequests[1].toolOutputs.first?.output ?? ""
         XCTAssertTrue(toolOutput.contains("\"queued\""))
-    }
-
-    func testExecuteCommandToolRequiresExecuteModeInFollowMode() async throws {
-        let sessionProvider = MockAgentSessionProvider()
-        let responses = MockOpenAIResponsesService()
-        responses.enqueueResponse(
-            makeFunctionCallResponse(
-                id: "resp_1",
-                callID: "call_exec",
-                toolName: "execute_command",
-                arguments: #"{"command":"whoami"}"#
-            )
-        )
-        responses.enqueueResponse(
-            makeTextResponse(id: "resp_2", text: "Done.")
-        )
-
-        let service = OpenAIAgentService(
-            responsesService: responses,
-            sessionProvider: sessionProvider
-        )
-
-        _ = try await service.generateReply(
-            sessionID: sessionProvider.sessionID,
-            prompt: "run whoami",
-            mode: .follow
-        )
-
-        XCTAssertEqual(sessionProvider.sentCommands, [])
-        let toolOutput = responses.capturedRequests[1].toolOutputs.first?.output ?? ""
-        XCTAssertTrue(toolOutput.contains("confirmation_required"))
     }
 
     func testExecuteCommandToolMissingCommandReturnsValidationErrorOutput() async throws {
@@ -157,8 +93,7 @@ final class OpenAIAgentServiceTests: XCTestCase {
 
         let reply = try await service.generateReply(
             sessionID: sessionProvider.sessionID,
-            prompt: "execute",
-            mode: .execute
+            prompt: "execute"
         )
 
         XCTAssertEqual(reply.text, "Handled.")
@@ -198,8 +133,7 @@ final class OpenAIAgentServiceTests: XCTestCase {
         do {
             _ = try await service.generateReply(
                 sessionID: sessionProvider.sessionID,
-                prompt: "status",
-                mode: .ask
+                prompt: "status"
             )
             XCTFail("Expected tool loop exceeded")
         } catch let error as OpenAIAgentServiceError {
@@ -232,13 +166,11 @@ final class OpenAIAgentServiceTests: XCTestCase {
 
         _ = try await service.generateReply(
             sessionID: sessionProvider.sessionID,
-            prompt: "first",
-            mode: .ask
+            prompt: "first"
         )
         let recovered = try await service.generateReply(
             sessionID: sessionProvider.sessionID,
-            prompt: "second",
-            mode: .ask
+            prompt: "second"
         )
 
         XCTAssertEqual(recovered.text, "Recovered response")
@@ -246,6 +178,86 @@ final class OpenAIAgentServiceTests: XCTestCase {
         XCTAssertEqual(requests.count, 3)
         XCTAssertEqual(requests[1].previousResponseID, "resp_prev")
         XCTAssertNil(requests[2].previousResponseID)
+    }
+
+    func testSearchFilesystemToolRunsInRemoteSession() async throws {
+        let sessionProvider = MockAgentSessionProvider(isLocal: false)
+        sessionProvider.simulatedRemoteFilesystemLines = [
+            "d    /home/kevin/projects",
+            "f    ./ProSSH prd.md",
+        ]
+
+        let responses = MockOpenAIResponsesService()
+        responses.enqueueResponse(
+            makeFunctionCallResponse(
+                id: "resp_1",
+                callID: "call_fs",
+                toolName: "search_filesystem",
+                arguments: #"{"path":"/home/kevin","name_pattern":"read","max_results":20}"#
+            )
+        )
+        responses.enqueueResponse(
+            makeTextResponse(id: "resp_2", text: "Found.")
+        )
+
+        let service = OpenAIAgentService(
+            responsesService: responses,
+            sessionProvider: sessionProvider
+        )
+
+        let reply = try await service.generateReply(
+            sessionID: sessionProvider.sessionID,
+            prompt: "find files"
+        )
+
+        XCTAssertEqual(reply.text, "Found.")
+        XCTAssertEqual(reply.toolCallsExecuted, 1)
+        XCTAssertTrue(sessionProvider.sentCommands.contains { $0.contains("__PROSSH_AI_TOOL_EXIT_") })
+        let toolOutput = responses.capturedRequests[1].toolOutputs.first?.output ?? ""
+        let normalizedOutput = toolOutput.replacingOccurrences(of: #"\/"#, with: "/")
+        XCTAssertTrue(toolOutput.contains(#""ok":true"#))
+        XCTAssertTrue(toolOutput.contains(#""source":"remote_command""#))
+        XCTAssertTrue(normalizedOutput.contains("./ProSSH prd.md"))
+        XCTAssertFalse(toolOutput.contains("local sessions only"))
+    }
+
+    func testSearchFileContentsToolRunsInRemoteSession() async throws {
+        let sessionProvider = MockAgentSessionProvider(isLocal: false)
+        sessionProvider.simulatedRemoteFileContentLines = [
+            "/home/kevin/projects/README.md:12:OpenAI key setup",
+        ]
+
+        let responses = MockOpenAIResponsesService()
+        responses.enqueueResponse(
+            makeFunctionCallResponse(
+                id: "resp_1",
+                callID: "call_content",
+                toolName: "search_file_contents",
+                arguments: #"{"path":"/home/kevin/projects","text_pattern":"key","max_results":20}"#
+            )
+        )
+        responses.enqueueResponse(
+            makeTextResponse(id: "resp_2", text: "Done.")
+        )
+
+        let service = OpenAIAgentService(
+            responsesService: responses,
+            sessionProvider: sessionProvider
+        )
+
+        _ = try await service.generateReply(
+            sessionID: sessionProvider.sessionID,
+            prompt: "search in files"
+        )
+
+        XCTAssertTrue(sessionProvider.sentCommands.contains { $0.contains("__PROSSH_AI_TOOL_EXIT_") })
+        let toolOutput = responses.capturedRequests[1].toolOutputs.first?.output ?? ""
+        let normalizedOutput = toolOutput.replacingOccurrences(of: #"\/"#, with: "/")
+        XCTAssertTrue(toolOutput.contains(#""ok":true"#))
+        XCTAssertTrue(toolOutput.contains(#""source":"remote_command""#))
+        XCTAssertTrue(normalizedOutput.contains("/home/kevin/projects/README.md"))
+        XCTAssertTrue(toolOutput.contains(#""line_number":12"#))
+        XCTAssertFalse(toolOutput.contains("local sessions only"))
     }
 
     private func makeTextResponse(id: String, text: String) -> OpenAIResponsesResponse {
@@ -303,15 +315,17 @@ private final class MockAgentSessionProvider: OpenAIAgentSessionProviding {
     var sentCommands: [String] = []
     var commandBlocks: [CommandBlock]
     var commandOutputByBlockID: [UUID: String]
+    var simulatedRemoteFilesystemLines: [String] = []
+    var simulatedRemoteFileContentLines: [String] = []
 
-    init() {
+    init(isLocal: Bool = true) {
         let session = Session(
             id: sessionID,
-            kind: .local,
-            hostLabel: "Local: zsh",
+            kind: isLocal ? .local : .ssh(hostID: UUID()),
+            hostLabel: isLocal ? "Local: zsh" : "Remote: ssh",
             username: "kevin",
-            hostname: "localhost",
-            port: 0,
+            hostname: isLocal ? "localhost" : "example.remote",
+            port: isLocal ? 0 : 22,
             state: .connected
         )
         sessions = [session]
@@ -348,6 +362,54 @@ private final class MockAgentSessionProvider: OpenAIAgentSessionProviding {
 
     func sendShellInput(sessionID: UUID, input: String, suppressEcho: Bool) async {
         sentCommands.append(input)
+        guard let marker = Self.extractRemoteToolMarker(from: input) else {
+            return
+        }
+
+        let simulatedLines: [String]
+        if input.contains("__prossh_find_pattern") {
+            simulatedLines = simulatedRemoteFilesystemLines
+        } else if input.contains("rg --line-number") || input.contains("grep -RIn") {
+            simulatedLines = simulatedRemoteFileContentLines
+        } else if !simulatedRemoteFilesystemLines.isEmpty {
+            simulatedLines = simulatedRemoteFilesystemLines
+        } else if !simulatedRemoteFileContentLines.isEmpty {
+            simulatedLines = simulatedRemoteFileContentLines
+        } else {
+            simulatedLines = []
+        }
+
+        var output = simulatedLines.joined(separator: "\n")
+        if !output.isEmpty {
+            output += "\n"
+        }
+        output += "\(marker):0"
+
+        let block = CommandBlock(
+            id: UUID(),
+            sessionID: sessionID,
+            command: input,
+            output: output,
+            startedAt: .now,
+            completedAt: .now,
+            exitCode: 0,
+            boundarySource: .userInput
+        )
+        commandBlocks.append(block)
+        commandOutputByBlockID[block.id] = block.output
+    }
+
+    private static func extractRemoteToolMarker(from command: String) -> String? {
+        let pattern = #"__PROSSH_AI_TOOL_EXIT_[A-F0-9]+__"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            return nil
+        }
+        let nsCommand = command as NSString
+        let range = NSRange(location: 0, length: nsCommand.length)
+        guard let match = regex.firstMatch(in: command, options: [], range: range) else {
+            return nil
+        }
+        return nsCommand.substring(with: match.range)
     }
 }
 

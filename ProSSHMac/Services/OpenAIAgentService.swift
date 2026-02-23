@@ -6,15 +6,8 @@ protocol OpenAIAgentServicing {
     func clearConversation(sessionID: UUID)
     func generateReply(
         sessionID: UUID,
-        prompt: String,
-        mode: OpenAIAgentMode
+        prompt: String
     ) async throws -> OpenAIAgentReply
-}
-
-enum OpenAIAgentMode: Sendable, Equatable {
-    case ask
-    case follow
-    case execute
 }
 
 struct OpenAIAgentReply: Sendable, Equatable {
@@ -92,8 +85,7 @@ final class OpenAIAgentService: OpenAIAgentServicing {
 
     func generateReply(
         sessionID: UUID,
-        prompt: String,
-        mode: OpenAIAgentMode
+        prompt: String
     ) async throws -> OpenAIAgentReply {
         guard sessionProvider.sessions.contains(where: { $0.id == sessionID }) else {
             throw OpenAIAgentServiceError.sessionNotFound
@@ -106,7 +98,7 @@ final class OpenAIAgentService: OpenAIAgentServicing {
 
         var previousResponseID = previousResponseIDBySessionID[sessionID]
         var pendingMessages: [OpenAIResponsesMessage] = [
-            .init(role: .developer, text: Self.developerPrompt(for: mode)),
+            .init(role: .developer, text: Self.developerPrompt()),
             .init(role: .user, text: trimmedPrompt),
         ]
         var pendingToolOutputs: [OpenAIResponsesToolOutput] = []
@@ -140,8 +132,7 @@ final class OpenAIAgentService: OpenAIAgentServicing {
             totalToolCalls += toolCalls.count
             pendingToolOutputs = await executeToolCalls(
                 sessionID: sessionID,
-                toolCalls: toolCalls,
-                allowCommandExecution: mode == .execute
+                toolCalls: toolCalls
             )
             pendingMessages = []
         }
@@ -204,8 +195,7 @@ final class OpenAIAgentService: OpenAIAgentServicing {
 
     private func executeToolCalls(
         sessionID: UUID,
-        toolCalls: [OpenAIResponsesResponse.ToolCall],
-        allowCommandExecution: Bool
+        toolCalls: [OpenAIResponsesResponse.ToolCall]
     ) async -> [OpenAIResponsesToolOutput] {
         var outputs: [OpenAIResponsesToolOutput] = []
         outputs.reserveCapacity(toolCalls.count)
@@ -214,8 +204,7 @@ final class OpenAIAgentService: OpenAIAgentServicing {
             do {
                 let output = try await executeSingleToolCall(
                     sessionID: sessionID,
-                    toolCall: toolCall,
-                    allowCommandExecution: allowCommandExecution
+                    toolCall: toolCall
                 )
                 outputs.append(.init(callID: toolCall.id, output: output))
             } catch {
@@ -235,8 +224,7 @@ final class OpenAIAgentService: OpenAIAgentServicing {
 
     private func executeSingleToolCall(
         sessionID: UUID,
-        toolCall: OpenAIResponsesResponse.ToolCall,
-        allowCommandExecution: Bool
+        toolCall: OpenAIResponsesResponse.ToolCall
     ) async throws -> String {
         let arguments = try Self.decodeArguments(
             toolName: toolCall.name,
@@ -304,13 +292,6 @@ final class OpenAIAgentService: OpenAIAgentServicing {
             guard let session = sessionProvider.sessions.first(where: { $0.id == sessionID }) else {
                 throw OpenAIAgentServiceError.sessionNotFound
             }
-            guard session.isLocal else {
-                return Self.jsonString(from: .object([
-                    "ok": .bool(false),
-                    "error": .string("Filesystem search tool currently supports local sessions only."),
-                    "hint": .string("In remote sessions, use execute_command with find/rg/grep."),
-                ]))
-            }
 
             let searchPath = try Self.requiredString(
                 key: "path",
@@ -332,25 +313,28 @@ final class OpenAIAgentService: OpenAIAgentServicing {
                 max: 200
             )
 
-            let workingDirectory = sessionProvider.workingDirectoryBySessionID[sessionID]
-            let result = try await Self.searchFilesystemEntries(
-                path: searchPath,
-                namePattern: namePattern,
-                maxResults: maxResults,
-                workingDirectory: workingDirectory
-            )
+            let result: OpenAIJSONValue
+            if session.isLocal {
+                let workingDirectory = sessionProvider.workingDirectoryBySessionID[sessionID]
+                result = try await Self.searchFilesystemEntries(
+                    path: searchPath,
+                    namePattern: namePattern,
+                    maxResults: maxResults,
+                    workingDirectory: workingDirectory
+                )
+            } else {
+                result = await searchFilesystemEntriesRemote(
+                    sessionID: sessionID,
+                    path: searchPath,
+                    namePattern: namePattern,
+                    maxResults: maxResults
+                )
+            }
             return Self.jsonString(from: result)
 
         case "search_file_contents":
             guard let session = sessionProvider.sessions.first(where: { $0.id == sessionID }) else {
                 throw OpenAIAgentServiceError.sessionNotFound
-            }
-            guard session.isLocal else {
-                return Self.jsonString(from: .object([
-                    "ok": .bool(false),
-                    "error": .string("File-content search tool currently supports local sessions only."),
-                    "hint": .string("In remote sessions, use execute_command with rg/grep."),
-                ]))
             }
 
             let searchPath = try Self.requiredString(
@@ -373,13 +357,23 @@ final class OpenAIAgentService: OpenAIAgentServicing {
                 max: 200
             )
 
-            let workingDirectory = sessionProvider.workingDirectoryBySessionID[sessionID]
-            let result = try await Self.searchFileContents(
-                path: searchPath,
-                textPattern: textPattern,
-                maxResults: maxResults,
-                workingDirectory: workingDirectory
-            )
+            let result: OpenAIJSONValue
+            if session.isLocal {
+                let workingDirectory = sessionProvider.workingDirectoryBySessionID[sessionID]
+                result = try await Self.searchFileContents(
+                    path: searchPath,
+                    textPattern: textPattern,
+                    maxResults: maxResults,
+                    workingDirectory: workingDirectory
+                )
+            } else {
+                result = await searchFileContentsRemote(
+                    sessionID: sessionID,
+                    path: searchPath,
+                    textPattern: textPattern,
+                    maxResults: maxResults
+                )
+            }
             return Self.jsonString(from: result)
 
         case "execute_command":
@@ -388,15 +382,6 @@ final class OpenAIAgentService: OpenAIAgentServicing {
                 in: arguments,
                 toolName: toolCall.name
             )
-
-            if !allowCommandExecution {
-                return Self.jsonString(from: .object([
-                    "ok": .bool(false),
-                    "status": .string("confirmation_required"),
-                    "message": .string("Command execution is disabled in current AI mode."),
-                    "command": .string(command),
-                ]))
-            }
 
             await sessionProvider.sendShellInput(
                 sessionID: sessionID,
@@ -534,6 +519,362 @@ final class OpenAIAgentService: OpenAIAgentServicing {
 
     private static func clamp(_ value: Int, min minValue: Int, max maxValue: Int) -> Int {
         Swift.min(maxValue, Swift.max(minValue, value))
+    }
+
+    private struct RemoteToolExecutionResult: Sendable {
+        var output: String
+        var exitCode: Int?
+        var timedOut: Bool
+    }
+
+    private func searchFilesystemEntriesRemote(
+        sessionID: UUID,
+        path: String,
+        namePattern: String,
+        maxResults: Int
+    ) async -> OpenAIJSONValue {
+        let command = Self.buildRemoteFilesystemSearchCommand(
+            path: path,
+            namePattern: namePattern,
+            maxResults: maxResults
+        )
+        let execution = await executeRemoteToolCommand(
+            sessionID: sessionID,
+            commandBody: command
+        )
+
+        if execution.timedOut {
+            return .object([
+                "ok": .bool(false),
+                "error": .string("Remote filesystem search timed out."),
+            ])
+        }
+        if execution.exitCode == 127 {
+            return .object([
+                "ok": .bool(false),
+                "error": .string("Remote shell is missing required search utilities (find/head)."),
+            ])
+        }
+        return Self.parseRemoteFilesystemSearchOutput(
+            execution.output,
+            path: path,
+            namePattern: namePattern,
+            maxResults: maxResults
+        )
+    }
+
+    private func searchFileContentsRemote(
+        sessionID: UUID,
+        path: String,
+        textPattern: String,
+        maxResults: Int
+    ) async -> OpenAIJSONValue {
+        let command = Self.buildRemoteFileContentSearchCommand(
+            path: path,
+            textPattern: textPattern,
+            maxResults: maxResults
+        )
+        let execution = await executeRemoteToolCommand(
+            sessionID: sessionID,
+            commandBody: command
+        )
+
+        if execution.timedOut {
+            return .object([
+                "ok": .bool(false),
+                "error": .string("Remote file-content search timed out."),
+            ])
+        }
+        if execution.exitCode == 127 {
+            return .object([
+                "ok": .bool(false),
+                "error": .string("Remote shell is missing required search utilities (rg/grep/head)."),
+            ])
+        }
+        return Self.parseRemoteFileContentSearchOutput(
+            execution.output,
+            path: path,
+            textPattern: textPattern,
+            maxResults: maxResults
+        )
+    }
+
+    private func executeRemoteToolCommand(
+        sessionID: UUID,
+        commandBody: String,
+        timeoutSeconds: TimeInterval = 20
+    ) async -> RemoteToolExecutionResult {
+        let marker = "__PROSSH_AI_TOOL_EXIT_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))__"
+        let wrappedCommand =
+            "{ \(commandBody); __prossh_ai_tool_status=$?; printf '\\n\(marker):%s\\n' \"$__prossh_ai_tool_status\"; }"
+
+        await sessionProvider.sendShellInput(
+            sessionID: sessionID,
+            input: wrappedCommand,
+            suppressEcho: false
+        )
+
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        while Date() < deadline {
+            let blocks = await sessionProvider.searchCommandHistory(
+                sessionID: sessionID,
+                query: marker,
+                limit: 8
+            )
+            if let block = blocks.first(where: { $0.command.contains(marker) }) {
+                let parsed = Self.parseRemoteWrappedCommandOutput(
+                    block.output,
+                    marker: marker
+                )
+                return RemoteToolExecutionResult(
+                    output: parsed.output,
+                    exitCode: parsed.exitCode,
+                    timedOut: false
+                )
+            }
+            try? await Task.sleep(nanoseconds: 150_000_000)
+        }
+
+        return RemoteToolExecutionResult(
+            output: "",
+            exitCode: nil,
+            timedOut: true
+        )
+    }
+
+    private static func parseRemoteWrappedCommandOutput(
+        _ output: String,
+        marker: String
+    ) -> (output: String, exitCode: Int?) {
+        let normalized = output
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        let markerPrefix = "\(marker):"
+        guard let markerRange = normalized.range(of: markerPrefix, options: .backwards) else {
+            return (
+                normalized.trimmingCharacters(in: .whitespacesAndNewlines),
+                nil
+            )
+        }
+
+        let statusStart = markerRange.upperBound
+        let statusSlice = normalized[statusStart...]
+        let statusValue = statusSlice.prefix { $0.isNumber || $0 == "-" }
+        let exitCode = Int(statusValue)
+
+        let cleanOutput = normalized[..<markerRange.lowerBound]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (String(cleanOutput), exitCode)
+    }
+
+    private static func parseRemoteFilesystemSearchOutput(
+        _ output: String,
+        path: String,
+        namePattern: String,
+        maxResults: Int
+    ) -> OpenAIJSONValue {
+        let normalized = output
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        let lines = normalized
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .map(String.init)
+
+        if lines.contains(Self.remotePathNotFoundToken) {
+            return .object([
+                "ok": .bool(false),
+                "error": .string("Path does not exist: \(path)"),
+            ])
+        }
+
+        var results: [OpenAIJSONValue] = []
+        results.reserveCapacity(min(lines.count, maxResults))
+
+        for line in lines.prefix(maxResults) {
+            guard let parsed = Self.parseRemoteFilesystemResultLine(line) else { continue }
+            let name = (parsed.path as NSString).lastPathComponent
+            results.append(.object([
+                "path": .string(parsed.path),
+                "name": .string(name),
+                "is_directory": .bool(parsed.isDirectory),
+            ]))
+        }
+
+        var payload: [String: OpenAIJSONValue] = [
+            "ok": .bool(true),
+            "path": .string(path),
+            "name_pattern": .string(namePattern),
+            "scanned_entries": .null,
+            "truncated": .bool(results.count >= maxResults),
+            "results": .array(results),
+            "source": .string("remote_command"),
+        ]
+        if results.isEmpty, !normalized.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            payload["parse_warning"] = .string("Remote output was returned but could not be fully structured.")
+            payload["raw_output_preview"] = .string(Self.remoteOutputPreview(normalized))
+        }
+        return .object(payload)
+    }
+
+    private static func parseRemoteFileContentSearchOutput(
+        _ output: String,
+        path: String,
+        textPattern: String,
+        maxResults: Int
+    ) -> OpenAIJSONValue {
+        let normalized = output
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        let lines = normalized
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .map(String.init)
+
+        if lines.contains(Self.remotePathNotFoundToken) {
+            return .object([
+                "ok": .bool(false),
+                "error": .string("Path does not exist: \(path)"),
+            ])
+        }
+
+        var matches: [OpenAIJSONValue] = []
+        matches.reserveCapacity(min(lines.count, maxResults))
+
+        for line in lines.prefix(maxResults) {
+            guard let parsed = Self.parseRemoteContentMatchLine(line) else { continue }
+            matches.append(.object([
+                "path": .string(parsed.path),
+                "line_number": .number(Double(parsed.lineNumber)),
+                "line": .string(parsed.line),
+            ]))
+        }
+
+        var payload: [String: OpenAIJSONValue] = [
+            "ok": .bool(true),
+            "path": .string(path),
+            "text_pattern": .string(textPattern),
+            "scanned_files": .null,
+            "truncated": .bool(matches.count >= maxResults),
+            "matches": .array(matches),
+            "source": .string("remote_command"),
+        ]
+        if matches.isEmpty, !normalized.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            payload["parse_warning"] = .string("Remote output was returned but could not be fully structured.")
+            payload["raw_output_preview"] = .string(Self.remoteOutputPreview(normalized))
+        }
+        return .object(payload)
+    }
+
+    private static let remotePathNotFoundToken = "__PROSSH_PATH_NOT_FOUND__"
+    private static let remoteContentLineRegex = try! NSRegularExpression(pattern: #":([0-9]+):"#)
+
+    private static func parseRemoteFilesystemResultLine(_ line: String) -> (path: String, isDirectory: Bool)? {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let kindAndPath: (kind: String, path: String)?
+        if let tabIndex = trimmed.firstIndex(of: "\t") {
+            let kind = trimmed[..<tabIndex].trimmingCharacters(in: .whitespacesAndNewlines)
+            let path = trimmed[trimmed.index(after: tabIndex)...].trimmingCharacters(in: .whitespacesAndNewlines)
+            kindAndPath = (String(kind), String(path))
+        } else {
+            let parts = trimmed.split(maxSplits: 1, omittingEmptySubsequences: true) { $0.isWhitespace }
+            guard parts.count == 2 else { return nil }
+            kindAndPath = (String(parts[0]), String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+
+        guard let kindAndPath else { return nil }
+        guard let indicator = kindAndPath.kind.lowercased().first, indicator == "f" || indicator == "d" else {
+            return nil
+        }
+        let parsedPath = kindAndPath.path
+        guard !parsedPath.isEmpty else { return nil }
+        guard parsedPath.contains("/") || parsedPath.hasPrefix(".") || parsedPath.hasPrefix("~") else {
+            return nil
+        }
+
+        return (parsedPath, indicator == "d")
+    }
+
+    private static func remoteOutputPreview(_ normalizedOutput: String, maxCharacters: Int = 3000) -> String {
+        let trimmed = normalizedOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > maxCharacters else { return trimmed }
+        return String(trimmed.prefix(maxCharacters))
+    }
+
+    private static func parseRemoteContentMatchLine(_ line: String) -> (path: String, lineNumber: Int, line: String)? {
+        let nsLine = line as NSString
+        let fullRange = NSRange(location: 0, length: nsLine.length)
+        guard let match = remoteContentLineRegex.firstMatch(in: line, options: [], range: fullRange) else {
+            return nil
+        }
+
+        let lineNumberRange = match.range(at: 1)
+        guard lineNumberRange.location != NSNotFound else { return nil }
+        let lineNumberString = nsLine.substring(with: lineNumberRange)
+        guard let lineNumber = Int(lineNumberString) else { return nil }
+
+        let prefixRange = NSRange(location: 0, length: match.range.location)
+        let suffixStart = match.range.location + match.range.length
+        guard suffixStart <= nsLine.length else { return nil }
+        let suffixRange = NSRange(location: suffixStart, length: nsLine.length - suffixStart)
+
+        let path = nsLine.substring(with: prefixRange)
+        let content = nsLine.substring(with: suffixRange)
+        guard !path.isEmpty else { return nil }
+        return (path, lineNumber, content)
+    }
+
+    private static func buildRemoteFilesystemSearchCommand(
+        path: String,
+        namePattern: String,
+        maxResults: Int
+    ) -> String {
+        let escapedPath = shellSingleQuoted(path)
+        let escapedPattern = shellSingleQuoted(namePattern)
+        let limit = "\(maxResults)"
+
+        return """
+        __prossh_root=\(escapedPath); \
+        case "$__prossh_root" in "~") __prossh_root="$HOME" ;; "~/"*) __prossh_root="$HOME/${__prossh_root#~/}" ;; esac; \
+        if [ ! -e "$__prossh_root" ]; then printf '\(remotePathNotFoundToken)\\n'; \
+        else __prossh_pattern=\(escapedPattern); \
+        case "$__prossh_pattern" in *[\\*\\?\\[]*) __prossh_find_pattern="$__prossh_pattern" ;; *) __prossh_find_pattern="*$__prossh_pattern*" ;; esac; \
+        if find "$__prossh_root" -maxdepth 0 -printf '' >/dev/null 2>&1; then \
+        find "$__prossh_root" -iname "$__prossh_find_pattern" -printf '%y\\t%p\\n' 2>/dev/null | head -n \(limit); \
+        else \
+        find "$__prossh_root" -iname "$__prossh_find_pattern" 2>/dev/null | while IFS= read -r __prossh_path; do \
+        if [ -d "$__prossh_path" ]; then __prossh_kind=d; else __prossh_kind=f; fi; \
+        printf '%s\\t%s\\n' "$__prossh_kind" "$__prossh_path"; \
+        done | head -n \(limit); \
+        fi; fi
+        """
+    }
+
+    private static func buildRemoteFileContentSearchCommand(
+        path: String,
+        textPattern: String,
+        maxResults: Int
+    ) -> String {
+        let escapedPath = shellSingleQuoted(path)
+        let escapedPattern = shellSingleQuoted(textPattern)
+        let limit = "\(maxResults)"
+
+        return """
+        __prossh_root=\(escapedPath); \
+        case "$__prossh_root" in "~") __prossh_root="$HOME" ;; "~/"*) __prossh_root="$HOME/${__prossh_root#~/}" ;; esac; \
+        if [ ! -e "$__prossh_root" ]; then printf '\(remotePathNotFoundToken)\\n'; \
+        else __prossh_pattern=\(escapedPattern); \
+        if command -v rg >/dev/null 2>&1; then \
+        rg --line-number --with-filename --ignore-case --color never --no-messages -- "$__prossh_pattern" "$__prossh_root" | head -n \(limit); \
+        else \
+        grep -RIn --binary-files=without-match -- "$__prossh_pattern" "$__prossh_root" 2>/dev/null | head -n \(limit); \
+        fi; fi
+        """
+    }
+
+    private static func shellSingleQuoted(_ value: String) -> String {
+        let escaped = value.replacingOccurrences(of: "'", with: #"'\"'\"'"#)
+        return "'\(escaped)'"
     }
 
     private nonisolated static func searchFilesystemEntries(
@@ -790,35 +1131,16 @@ final class OpenAIAgentService: OpenAIAgentServicing {
             lowercased.contains("previous response")
     }
 
-    private static func developerPrompt(for mode: OpenAIAgentMode) -> String {
-        switch mode {
-        case .ask:
-            return """
-            You are ProSSH assistant.
-            You have tool access to this terminal session and should use tools instead of claiming you cannot access context.
-            For screen/context questions, call get_current_screen/get_recent_commands/search_terminal_history/get_session_info as needed.
-            For local filesystem questions, use search_filesystem and search_file_contents.
-            Keep responses concise.
-            Do not execute commands in Ask mode; if execution is needed, ask the user to switch to Execute mode.
-            """
-        case .follow:
-            return """
-            You are ProSSH assistant in Follow mode.
-            Focus on latest command outcomes and operational next steps.
-            Use tools for evidence before answering; do not claim lack of visibility when tools can provide context.
-            For local filesystem questions, use search_filesystem and search_file_contents.
-            Do not execute commands in Follow mode.
-            """
-        case .execute:
-            return """
-            You are ProSSH assistant in Execute mode.
-            You can run terminal commands via execute_command and should do so when the user explicitly asks to run/open/edit/check something.
-            This includes interactive programs when requested (for example: nano, vim, less, top).
-            Before or after execution, use other tools (get_current_screen, get_recent_commands, search_terminal_history, get_command_output, get_session_info, search_filesystem, search_file_contents) to validate and explain outcomes.
-            Never claim you cannot run commands in Execute mode.
-            Keep output concise and action-oriented.
-            """
-        }
+    private static func developerPrompt() -> String {
+        """
+        You are ProSSH assistant.
+        You have tool access to this terminal session and should use tools instead of claiming you cannot access context.
+        For screen/context questions, call get_current_screen/get_recent_commands/search_terminal_history/get_session_info as needed.
+        For filesystem questions, use search_filesystem and search_file_contents.
+        Execute commands only when the user explicitly asks to run, open, edit, or check something.
+        This includes interactive commands when requested (for example: nano, vim, less, top).
+        Keep responses concise.
+        """
     }
 
     private static func jsonString(from value: OpenAIJSONValue) -> String {
@@ -891,7 +1213,7 @@ final class OpenAIAgentService: OpenAIAgentServicing {
             ),
             OpenAIResponsesToolDefinition(
                 name: "search_filesystem",
-                description: "Search local filesystem entries by filename pattern. Supports wildcard patterns like '*.swift'.",
+                description: "Search filesystem entries by filename pattern in the active session. Supports wildcard patterns like '*.swift'.",
                 parameters: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -916,7 +1238,7 @@ final class OpenAIAgentService: OpenAIAgentServicing {
             ),
             OpenAIResponsesToolDefinition(
                 name: "search_file_contents",
-                description: "Search text inside local files under a directory tree and return matching lines.",
+                description: "Search text inside files under a directory tree in the active session and return matching lines.",
                 parameters: .object([
                     "type": .string("object"),
                     "properties": .object([

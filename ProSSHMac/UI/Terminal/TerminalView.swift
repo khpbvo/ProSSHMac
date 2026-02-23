@@ -69,7 +69,6 @@ struct TerminalView: View {
     @State private var fileBrowserLoadingPaths: Set<String> = []
     @State private var isFileBrowserRootLoading = false
     @State private var fileBrowserError: String?
-    @State private var showExecuteModeConfirmation = false
     @State private var isAIAssistantComposerFocused = false
     @State private var fileBrowserDragBaseWidth: Double?
     @State private var aiAssistantDragBaseWidth: Double?
@@ -98,15 +97,6 @@ struct TerminalView: View {
             }
         } message: { session in
             Text("Disconnect and close the active session for \(session.hostLabel)?")
-        }
-        .alert("Allow Command Execution?", isPresented: $showExecuteModeConfirmation) {
-            Button("Cancel", role: .cancel) {}
-            Button("Allow Once", role: .destructive) {
-                guard let session = selectedSession, session.state == .connected else { return }
-                terminalAIAssistantViewModel.submitPrompt(for: session.id)
-            }
-        } message: {
-            Text("Execute mode can run commands in your active terminal session. Confirm to allow this request once.")
         }
         .toolbar {
             if supportsMultitaskingControls {
@@ -240,16 +230,12 @@ struct TerminalView: View {
                 isAIAssistantComposerFocused = false
             }
             persistSidebarLayoutForSelection()
-            triggerFollowModeForLatestCompletedCommand()
         }
         .onChange(of: fileBrowserWidth) { _, _ in
             persistSidebarLayoutForSelection()
         }
         .onChange(of: aiAssistantWidth) { _, _ in
             persistSidebarLayoutForSelection()
-        }
-        .onChange(of: sessionManager.commandCompletionNonceBySessionID) { _, _ in
-            triggerFollowModeForLatestCompletedCommand()
         }
         .onChange(of: paneManager.focusedPaneId) { _, newPaneID in
             // When the user clicks a different pane, sync tab selection
@@ -495,19 +481,6 @@ struct TerminalView: View {
         return tabManager.tabs.first?.session
     }
 
-    private func triggerFollowModeForLatestCompletedCommand() {
-        guard showAIAssistant, terminalAIAssistantViewModel.mode == .follow else {
-            return
-        }
-        guard let session = selectedSession, session.state == .connected else {
-            return
-        }
-        guard let completedBlock = sessionManager.latestCompletedCommandBlockBySessionID[session.id] else {
-            return
-        }
-        terminalAIAssistantViewModel.submitFollowUpIfNeeded(for: session.id, completedBlock: completedBlock)
-    }
-
     private func sidebarLayoutContextKey(for session: Session) -> String {
         switch session.kind {
         case let .ssh(hostID):
@@ -613,9 +586,6 @@ struct TerminalView: View {
             },
             onSend: { sessionID in
                 terminalAIAssistantViewModel.submitPrompt(for: sessionID)
-            },
-            onRequireExecuteConfirmation: {
-                showExecuteModeConfirmation = true
             },
             onComposerFocusChanged: { isFocused in
                 isAIAssistantComposerFocused = isFocused
