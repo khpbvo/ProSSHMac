@@ -115,6 +115,67 @@ final class OpenAIResponsesServiceTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testCreateResponseEncodesFunctionToolsWithTopLevelName() async throws {
+        let provider = StaticAPIKeyProvider(key: "sk-test-123")
+        let mockSession = MockOpenAIHTTPSession()
+        let responseBody = """
+        {
+          "id": "resp_123",
+          "status": "completed",
+          "output": [
+            {
+              "type": "message",
+              "role": "assistant",
+              "content": [
+                { "type": "output_text", "text": "ok" }
+              ]
+            }
+          ]
+        }
+        """
+        await mockSession.setResponse(
+            data: Data(responseBody.utf8),
+            response: Self.makeHTTPResponse(statusCode: 200)
+        )
+
+        let service = OpenAIResponsesService(
+            apiKeyProvider: provider,
+            session: mockSession,
+            endpointURL: URL(string: "https://example.com/v1/responses")!
+        )
+
+        let tool = OpenAIResponsesToolDefinition(
+            name: "get_session_info",
+            description: "Get current session details.",
+            parameters: .object([
+                "type": .string("object"),
+                "properties": .object([:]),
+                "required": .array([]),
+                "additionalProperties": .bool(false),
+            ]),
+            strict: true
+        )
+
+        _ = try await service.createResponse(
+            OpenAIResponsesRequest(
+                messages: [.init(role: .user, text: "status")],
+                tools: [tool]
+            )
+        )
+
+        let request = await mockSession.lastRequest()
+        let capturedRequest = try XCTUnwrap(request)
+        let body = try XCTUnwrap(capturedRequest.httpBody)
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        let tools = try XCTUnwrap(json["tools"] as? [[String: Any]])
+        let firstTool = try XCTUnwrap(tools.first)
+
+        XCTAssertEqual(firstTool["type"] as? String, "function")
+        XCTAssertEqual(firstTool["name"] as? String, "get_session_info")
+        XCTAssertNil(firstTool["function"])
+    }
+
     private static func makeHTTPResponse(statusCode: Int) -> HTTPURLResponse {
         HTTPURLResponse(
             url: URL(string: "https://example.com/v1/responses")!,

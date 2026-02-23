@@ -28,6 +28,7 @@ final class TerminalAIAssistantViewModel: ObservableObject {
     private let minChunkSize: Int
     private let maxChunkSize: Int
     private var lastAutoFollowBlockIDBySessionID: [UUID: UUID] = [:]
+    private var lastModeBySessionID: [UUID: OpenAIAgentMode] = [:]
 
     init(
         agentService: any OpenAIAgentServicing,
@@ -46,13 +47,17 @@ final class TerminalAIAssistantViewModel: ObservableObject {
         lastError = nil
         if let sessionID {
             lastAutoFollowBlockIDBySessionID.removeValue(forKey: sessionID)
+            lastModeBySessionID.removeValue(forKey: sessionID)
             agentService.clearConversation(sessionID: sessionID)
         } else {
             lastAutoFollowBlockIDBySessionID.removeAll(keepingCapacity: false)
+            lastModeBySessionID.removeAll(keepingCapacity: false)
         }
     }
 
     func submitPrompt(for sessionID: UUID) {
+        resetConversationIfModeChanged(for: sessionID)
+
         let trimmed = draftPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isSending else {
             return
@@ -74,6 +79,8 @@ final class TerminalAIAssistantViewModel: ObservableObject {
     }
 
     func submitFollowUpIfNeeded(for sessionID: UUID, completedBlock: CommandBlock) {
+        resetConversationIfModeChanged(for: sessionID)
+
         guard mode == .follow, !isSending else {
             return
         }
@@ -95,6 +102,14 @@ final class TerminalAIAssistantViewModel: ObservableObject {
         )
 
         sendPrompt(followPrompt(for: completedBlock), for: sessionID, mode: .follow)
+    }
+
+    private func resetConversationIfModeChanged(for sessionID: UUID) {
+        if let lastMode = lastModeBySessionID[sessionID], lastMode != mode {
+            agentService.clearConversation(sessionID: sessionID)
+            lastAutoFollowBlockIDBySessionID.removeValue(forKey: sessionID)
+        }
+        lastModeBySessionID[sessionID] = mode
     }
 
     private func sendPrompt(_ prompt: String, for sessionID: UUID, mode: OpenAIAgentMode) {

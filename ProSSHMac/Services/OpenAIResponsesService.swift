@@ -124,15 +124,11 @@ extension OpenAIJSONValue: Codable {
 }
 
 struct OpenAIResponsesToolDefinition: Encodable, Sendable, Equatable {
-    struct Function: Encodable, Sendable, Equatable {
-        var name: String
-        var description: String
-        var parameters: OpenAIJSONValue
-        var strict: Bool?
-    }
-
     var type: String = "function"
-    var function: Function
+    var name: String
+    var description: String
+    var parameters: OpenAIJSONValue
+    var strict: Bool?
 }
 
 struct OpenAIResponsesRequest: Sendable, Equatable {

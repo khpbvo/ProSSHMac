@@ -108,11 +108,14 @@ struct TerminalAIAssistantPane: View {
 
     private var composer: some View {
         VStack(alignment: .leading, spacing: 8) {
-            TextField("Ask about logs, commands, errors, or ask for runnable examples...", text: $viewModel.draftPrompt, axis: .vertical)
+            TextField("Ask about logs, commands, errors, or ask for runnable examples...", text: $viewModel.draftPrompt)
                 .textFieldStyle(.roundedBorder)
-                .lineLimit(2...8)
+                .submitLabel(.send)
                 .autocorrectionDisabled(true)
                 .focused($isComposerFocused)
+                .onSubmit {
+                    submitComposer()
+                }
                 .disabled(session == nil || viewModel.isSending)
 
             HStack(spacing: 8) {
@@ -125,12 +128,7 @@ struct TerminalAIAssistantPane: View {
                 Spacer()
 
                 Button {
-                    guard let session else { return }
-                    if viewModel.mode == .execute {
-                        onRequireExecuteConfirmation()
-                    } else {
-                        onSend(session.id)
-                    }
+                    submitComposer()
                 } label: {
                     if viewModel.isSending {
                         ProgressView()
@@ -160,6 +158,17 @@ struct TerminalAIAssistantPane: View {
         }
         .onDisappear {
             onComposerFocusChanged(false)
+        }
+    }
+
+    private func submitComposer() {
+        guard let session else { return }
+        guard !viewModel.isSending else { return }
+        guard !viewModel.draftPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        if viewModel.mode == .execute {
+            onRequireExecuteConfirmation()
+        } else {
+            onSend(session.id)
         }
     }
 }

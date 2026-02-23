@@ -300,6 +300,88 @@ final class OpenAIAgentService: OpenAIAgentServicing {
                 "results": .array(blocks.map(Self.commandBlockSummary)),
             ]))
 
+        case "search_filesystem":
+            guard let session = sessionProvider.sessions.first(where: { $0.id == sessionID }) else {
+                throw OpenAIAgentServiceError.sessionNotFound
+            }
+            guard session.isLocal else {
+                return Self.jsonString(from: .object([
+                    "ok": .bool(false),
+                    "error": .string("Filesystem search tool currently supports local sessions only."),
+                    "hint": .string("In remote sessions, use execute_command with find/rg/grep."),
+                ]))
+            }
+
+            let searchPath = try Self.requiredString(
+                key: "path",
+                in: arguments,
+                toolName: toolCall.name
+            )
+            let namePattern = try Self.requiredString(
+                key: "name_pattern",
+                in: arguments,
+                toolName: toolCall.name
+            )
+            let maxResults = Self.clamp(
+                try Self.requiredInt(
+                    key: "max_results",
+                    in: arguments,
+                    toolName: toolCall.name
+                ),
+                min: 1,
+                max: 200
+            )
+
+            let workingDirectory = sessionProvider.workingDirectoryBySessionID[sessionID]
+            let result = try await Self.searchFilesystemEntries(
+                path: searchPath,
+                namePattern: namePattern,
+                maxResults: maxResults,
+                workingDirectory: workingDirectory
+            )
+            return Self.jsonString(from: result)
+
+        case "search_file_contents":
+            guard let session = sessionProvider.sessions.first(where: { $0.id == sessionID }) else {
+                throw OpenAIAgentServiceError.sessionNotFound
+            }
+            guard session.isLocal else {
+                return Self.jsonString(from: .object([
+                    "ok": .bool(false),
+                    "error": .string("File-content search tool currently supports local sessions only."),
+                    "hint": .string("In remote sessions, use execute_command with rg/grep."),
+                ]))
+            }
+
+            let searchPath = try Self.requiredString(
+                key: "path",
+                in: arguments,
+                toolName: toolCall.name
+            )
+            let textPattern = try Self.requiredString(
+                key: "text_pattern",
+                in: arguments,
+                toolName: toolCall.name
+            )
+            let maxResults = Self.clamp(
+                try Self.requiredInt(
+                    key: "max_results",
+                    in: arguments,
+                    toolName: toolCall.name
+                ),
+                min: 1,
+                max: 200
+            )
+
+            let workingDirectory = sessionProvider.workingDirectoryBySessionID[sessionID]
+            let result = try await Self.searchFileContents(
+                path: searchPath,
+                textPattern: textPattern,
+                maxResults: maxResults,
+                workingDirectory: workingDirectory
+            )
+            return Self.jsonString(from: result)
+
         case "execute_command":
             let command = try Self.requiredString(
                 key: "command",
@@ -405,6 +487,34 @@ final class OpenAIAgentService: OpenAIAgentServicing {
         )
     }
 
+    private static func requiredInt(
+        key: String,
+        in arguments: [String: OpenAIJSONValue],
+        toolName: String
+    ) throws -> Int {
+        guard let raw = arguments[key] else {
+            throw OpenAIAgentServiceError.invalidToolArguments(
+                toolName: toolName,
+                message: "missing '\(key)'"
+            )
+        }
+        switch raw {
+        case let .number(number):
+            return Int(number.rounded())
+        case let .string(string):
+            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let value = Int(trimmed) {
+                return value
+            }
+        default:
+            break
+        }
+        throw OpenAIAgentServiceError.invalidToolArguments(
+            toolName: toolName,
+            message: "'\(key)' must be an integer"
+        )
+    }
+
     private static func optionalInt(
         key: String,
         in arguments: [String: OpenAIJSONValue]
@@ -424,6 +534,242 @@ final class OpenAIAgentService: OpenAIAgentServicing {
 
     private static func clamp(_ value: Int, min minValue: Int, max maxValue: Int) -> Int {
         Swift.min(maxValue, Swift.max(minValue, value))
+    }
+
+    private nonisolated static func searchFilesystemEntries(
+        path: String,
+        namePattern: String,
+        maxResults: Int,
+        workingDirectory: String?
+    ) async throws -> OpenAIJSONValue {
+        try await Task.detached(priority: .userInitiated) {
+            let rootURL = try resolvedLocalSearchURL(path: path, workingDirectory: workingDirectory)
+            let fileManager = FileManager.default
+            var results: [OpenAIJSONValue] = []
+            let maxScannedEntries = max(2_000, maxResults * 300)
+            var scannedEntries = 0
+
+            var isDirectory: ObjCBool = false
+            guard fileManager.fileExists(atPath: rootURL.path, isDirectory: &isDirectory) else {
+                return OpenAIJSONValue.object([
+                    "ok": .bool(false),
+                    "error": .string("Path does not exist: \(rootURL.path)"),
+                ])
+            }
+
+            if !isDirectory.boolValue {
+                if filenameMatches(rootURL.lastPathComponent, pattern: namePattern) {
+                    results.append(.object([
+                        "path": .string(rootURL.path),
+                        "name": .string(rootURL.lastPathComponent),
+                        "is_directory": .bool(false),
+                    ]))
+                }
+                return .object([
+                    "ok": .bool(true),
+                    "path": .string(rootURL.path),
+                    "name_pattern": .string(namePattern),
+                    "scanned_entries": .number(1),
+                    "truncated": .bool(false),
+                    "results": .array(results),
+                ])
+            }
+
+            let keys: [URLResourceKey] = [.isDirectoryKey, .isRegularFileKey]
+            guard let enumerator = fileManager.enumerator(
+                at: rootURL,
+                includingPropertiesForKeys: keys,
+                options: [.skipsPackageDescendants],
+                errorHandler: { _, _ in true }
+            ) else {
+                return .object([
+                    "ok": .bool(false),
+                    "error": .string("Failed to enumerate directory: \(rootURL.path)"),
+                ])
+            }
+
+            while let item = enumerator.nextObject() as? URL {
+                scannedEntries += 1
+                if scannedEntries > maxScannedEntries { break }
+                if results.count >= maxResults { break }
+
+                let name = item.lastPathComponent
+                if filenameMatches(name, pattern: namePattern) {
+                    let values = try? item.resourceValues(forKeys: Set(keys))
+                    let directory = values?.isDirectory ?? false
+                    results.append(.object([
+                        "path": .string(item.path),
+                        "name": .string(name),
+                        "is_directory": .bool(directory),
+                    ]))
+                }
+            }
+
+            let truncated = scannedEntries > maxScannedEntries || results.count >= maxResults
+            return .object([
+                "ok": .bool(true),
+                "path": .string(rootURL.path),
+                "name_pattern": .string(namePattern),
+                "scanned_entries": .number(Double(scannedEntries)),
+                "truncated": .bool(truncated),
+                "results": .array(results),
+            ])
+        }.value
+    }
+
+    private nonisolated static func searchFileContents(
+        path: String,
+        textPattern: String,
+        maxResults: Int,
+        workingDirectory: String?
+    ) async throws -> OpenAIJSONValue {
+        try await Task.detached(priority: .userInitiated) {
+            let rootURL = try resolvedLocalSearchURL(path: path, workingDirectory: workingDirectory)
+            let fileManager = FileManager.default
+            var matches: [OpenAIJSONValue] = []
+            let maxScannedFiles = max(500, maxResults * 80)
+            let maxFileBytes = 1_500_000
+            var scannedFiles = 0
+
+            var isDirectory: ObjCBool = false
+            guard fileManager.fileExists(atPath: rootURL.path, isDirectory: &isDirectory) else {
+                return OpenAIJSONValue.object([
+                    "ok": .bool(false),
+                    "error": .string("Path does not exist: \(rootURL.path)"),
+                ])
+            }
+
+            if !isDirectory.boolValue {
+                if let fileMatches = contentMatchesForFile(
+                    fileURL: rootURL,
+                    textPattern: textPattern,
+                    maxRemaining: maxResults,
+                    maxFileBytes: maxFileBytes
+                ) {
+                    matches.append(contentsOf: fileMatches)
+                }
+                return .object([
+                    "ok": .bool(true),
+                    "path": .string(rootURL.path),
+                    "text_pattern": .string(textPattern),
+                    "scanned_files": .number(1),
+                    "truncated": .bool(matches.count >= maxResults),
+                    "matches": .array(Array(matches.prefix(maxResults))),
+                ])
+            }
+
+            let keys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey, .fileSizeKey]
+            guard let enumerator = fileManager.enumerator(
+                at: rootURL,
+                includingPropertiesForKeys: keys,
+                options: [.skipsPackageDescendants],
+                errorHandler: { _, _ in true }
+            ) else {
+                return .object([
+                    "ok": .bool(false),
+                    "error": .string("Failed to enumerate directory: \(rootURL.path)"),
+                ])
+            }
+
+            while let item = enumerator.nextObject() as? URL {
+                if matches.count >= maxResults { break }
+                if scannedFiles >= maxScannedFiles { break }
+                guard let values = try? item.resourceValues(forKeys: Set(keys)),
+                      values.isRegularFile == true else {
+                    continue
+                }
+
+                scannedFiles += 1
+                let remaining = maxResults - matches.count
+                if let fileMatches = contentMatchesForFile(
+                    fileURL: item,
+                    textPattern: textPattern,
+                    maxRemaining: remaining,
+                    maxFileBytes: maxFileBytes
+                ) {
+                    matches.append(contentsOf: fileMatches)
+                }
+            }
+
+            let truncated = matches.count >= maxResults || scannedFiles >= maxScannedFiles
+            return .object([
+                "ok": .bool(true),
+                "path": .string(rootURL.path),
+                "text_pattern": .string(textPattern),
+                "scanned_files": .number(Double(scannedFiles)),
+                "truncated": .bool(truncated),
+                "matches": .array(Array(matches.prefix(maxResults))),
+            ])
+        }.value
+    }
+
+    private nonisolated static func resolvedLocalSearchURL(path: String, workingDirectory: String?) throws -> URL {
+        let trimmedPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        let expandedPath = (trimmedPath as NSString).expandingTildeInPath
+
+        let resolvedPath: String
+        if expandedPath.hasPrefix("/") {
+            resolvedPath = expandedPath
+        } else if let workingDirectory, !workingDirectory.isEmpty {
+            resolvedPath = URL(fileURLWithPath: workingDirectory)
+                .appendingPathComponent(expandedPath)
+                .path
+        } else {
+            resolvedPath = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+                .appendingPathComponent(expandedPath)
+                .path
+        }
+
+        return URL(fileURLWithPath: resolvedPath).standardizedFileURL
+    }
+
+    private nonisolated static func filenameMatches(_ filename: String, pattern: String) -> Bool {
+        let trimmed = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.contains("*") || trimmed.contains("?") {
+            let wildcard = NSPredicate(format: "SELF LIKE[c] %@", trimmed)
+            return wildcard.evaluate(with: filename)
+        }
+        return filename.range(of: trimmed, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+    }
+
+    private nonisolated static func contentMatchesForFile(
+        fileURL: URL,
+        textPattern: String,
+        maxRemaining: Int,
+        maxFileBytes: Int
+    ) -> [OpenAIJSONValue]? {
+        guard maxRemaining > 0 else { return nil }
+        guard let data = try? Data(contentsOf: fileURL, options: [.mappedIfSafe]) else { return nil }
+        guard data.count <= maxFileBytes else { return nil }
+        if data.contains(0) { return nil }
+
+        let content: String
+        if let utf8 = String(data: data, encoding: .utf8) {
+            content = utf8
+        } else if let latin = String(data: data, encoding: .isoLatin1) {
+            content = latin
+        } else {
+            return nil
+        }
+
+        let pattern = textPattern.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !pattern.isEmpty else { return nil }
+
+        var results: [OpenAIJSONValue] = []
+        results.reserveCapacity(min(8, maxRemaining))
+
+        for (index, line) in content.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+            if results.count >= maxRemaining { break }
+            let lineString = String(line)
+            if lineString.range(of: pattern, options: [.caseInsensitive, .diacriticInsensitive]) != nil {
+                results.append(.object([
+                    "path": .string(fileURL.path),
+                    "line_number": .number(Double(index + 1)),
+                    "line": .string(lineString),
+                ]))
+            }
+        }
+        return results.isEmpty ? nil : results
     }
 
     private static func commandBlockSummary(_ block: CommandBlock) -> OpenAIJSONValue {
@@ -447,11 +793,31 @@ final class OpenAIAgentService: OpenAIAgentServicing {
     private static func developerPrompt(for mode: OpenAIAgentMode) -> String {
         switch mode {
         case .ask:
-            return "You are ProSSH assistant. Use tools when needed, keep responses concise, and do not request command execution."
+            return """
+            You are ProSSH assistant.
+            You have tool access to this terminal session and should use tools instead of claiming you cannot access context.
+            For screen/context questions, call get_current_screen/get_recent_commands/search_terminal_history/get_session_info as needed.
+            For local filesystem questions, use search_filesystem and search_file_contents.
+            Keep responses concise.
+            Do not execute commands in Ask mode; if execution is needed, ask the user to switch to Execute mode.
+            """
         case .follow:
-            return "You are ProSSH assistant in follow mode. Focus on recent command context and concise operational guidance."
+            return """
+            You are ProSSH assistant in Follow mode.
+            Focus on latest command outcomes and operational next steps.
+            Use tools for evidence before answering; do not claim lack of visibility when tools can provide context.
+            For local filesystem questions, use search_filesystem and search_file_contents.
+            Do not execute commands in Follow mode.
+            """
         case .execute:
-            return "You are ProSSH assistant in execute mode. You may call execute_command only when directly useful and after validating context."
+            return """
+            You are ProSSH assistant in Execute mode.
+            You can run terminal commands via execute_command and should do so when the user explicitly asks to run/open/edit/check something.
+            This includes interactive programs when requested (for example: nano, vim, less, top).
+            Before or after execution, use other tools (get_current_screen, get_recent_commands, search_terminal_history, get_command_output, get_session_info, search_filesystem, search_file_contents) to validate and explain outcomes.
+            Never claim you cannot run commands in Execute mode.
+            Keep output concise and action-oriented.
+            """
         }
     }
 
@@ -470,114 +836,152 @@ final class OpenAIAgentService: OpenAIAgentServicing {
 
         return [
             OpenAIResponsesToolDefinition(
-                function: .init(
-                    name: "search_terminal_history",
-                    description: "Search command history and outputs for text.",
-                    parameters: .object([
-                        "type": .string("object"),
-                        "properties": .object([
-                            "query": .object([
-                                "type": .string("string"),
-                                "description": .string("Search query for command text or output."),
-                            ]),
-                            "limit": .object([
-                                "type": .string("integer"),
-                                "minimum": .number(1),
-                                "maximum": .number(50),
-                            ]),
+                name: "search_terminal_history",
+                description: "Search command history and outputs for text.",
+                parameters: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "query": .object([
+                            "type": .string("string"),
+                            "description": .string("Search query for command text or output."),
                         ]),
-                        "required": .array([.string("query")]),
-                        "additionalProperties": commonNoExtraProperties,
+                        "limit": .object([
+                            "type": .string("integer"),
+                            "minimum": .number(1),
+                            "maximum": .number(50),
+                        ]),
                     ]),
-                    strict: true
-                )
+                    "required": .array([.string("query"), .string("limit")]),
+                    "additionalProperties": commonNoExtraProperties,
+                ]),
+                strict: true
             ),
             OpenAIResponsesToolDefinition(
-                function: .init(
-                    name: "get_command_output",
-                    description: "Get full output for a command block id.",
-                    parameters: .object([
-                        "type": .string("object"),
-                        "properties": .object([
-                            "block_id": .object([
-                                "type": .string("string"),
-                                "description": .string("UUID of the command block."),
-                            ]),
+                name: "get_command_output",
+                description: "Get full output for a command block id.",
+                parameters: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "block_id": .object([
+                            "type": .string("string"),
+                            "description": .string("UUID of the command block."),
                         ]),
-                        "required": .array([.string("block_id")]),
-                        "additionalProperties": commonNoExtraProperties,
                     ]),
-                    strict: true
-                )
+                    "required": .array([.string("block_id")]),
+                    "additionalProperties": commonNoExtraProperties,
+                ]),
+                strict: true
             ),
             OpenAIResponsesToolDefinition(
-                function: .init(
-                    name: "get_current_screen",
-                    description: "Read the current visible terminal screen lines.",
-                    parameters: .object([
-                        "type": .string("object"),
-                        "properties": .object([
-                            "max_lines": .object([
-                                "type": .string("integer"),
-                                "minimum": .number(10),
-                                "maximum": .number(400),
-                            ]),
+                name: "get_current_screen",
+                description: "Read the current visible terminal screen lines.",
+                parameters: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "max_lines": .object([
+                            "type": .string("integer"),
+                            "minimum": .number(10),
+                            "maximum": .number(400),
                         ]),
-                        "required": .array([]),
-                        "additionalProperties": commonNoExtraProperties,
                     ]),
-                    strict: true
-                )
+                    "required": .array([.string("max_lines")]),
+                    "additionalProperties": commonNoExtraProperties,
+                ]),
+                strict: true
             ),
             OpenAIResponsesToolDefinition(
-                function: .init(
-                    name: "get_recent_commands",
-                    description: "List recent command blocks in reverse chronological order.",
-                    parameters: .object([
-                        "type": .string("object"),
-                        "properties": .object([
-                            "limit": .object([
-                                "type": .string("integer"),
-                                "minimum": .number(1),
-                                "maximum": .number(50),
-                            ]),
+                name: "search_filesystem",
+                description: "Search local filesystem entries by filename pattern. Supports wildcard patterns like '*.swift'.",
+                parameters: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "path": .object([
+                            "type": .string("string"),
+                            "description": .string("Root path to search (absolute, ~, or relative to current working directory)."),
                         ]),
-                        "required": .array([]),
-                        "additionalProperties": commonNoExtraProperties,
+                        "name_pattern": .object([
+                            "type": .string("string"),
+                            "description": .string("Filename pattern to match (substring or wildcard)."),
+                        ]),
+                        "max_results": .object([
+                            "type": .string("integer"),
+                            "minimum": .number(1),
+                            "maximum": .number(200),
+                        ]),
                     ]),
-                    strict: true
-                )
+                    "required": .array([.string("path"), .string("name_pattern"), .string("max_results")]),
+                    "additionalProperties": commonNoExtraProperties,
+                ]),
+                strict: true
             ),
             OpenAIResponsesToolDefinition(
-                function: .init(
-                    name: "execute_command",
-                    description: "Execute a shell command in the current terminal session.",
-                    parameters: .object([
-                        "type": .string("object"),
-                        "properties": .object([
-                            "command": .object([
-                                "type": .string("string"),
-                                "description": .string("Shell command to execute."),
-                            ]),
+                name: "search_file_contents",
+                description: "Search text inside local files under a directory tree and return matching lines.",
+                parameters: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "path": .object([
+                            "type": .string("string"),
+                            "description": .string("Root path to search (absolute, ~, or relative to current working directory)."),
                         ]),
-                        "required": .array([.string("command")]),
-                        "additionalProperties": commonNoExtraProperties,
+                        "text_pattern": .object([
+                            "type": .string("string"),
+                            "description": .string("Text pattern to find in files."),
+                        ]),
+                        "max_results": .object([
+                            "type": .string("integer"),
+                            "minimum": .number(1),
+                            "maximum": .number(200),
+                        ]),
                     ]),
-                    strict: true
-                )
+                    "required": .array([.string("path"), .string("text_pattern"), .string("max_results")]),
+                    "additionalProperties": commonNoExtraProperties,
+                ]),
+                strict: true
             ),
             OpenAIResponsesToolDefinition(
-                function: .init(
-                    name: "get_session_info",
-                    description: "Get metadata and counters for the current session.",
-                    parameters: .object([
-                        "type": .string("object"),
-                        "properties": .object([:]),
-                        "required": .array([]),
-                        "additionalProperties": commonNoExtraProperties,
+                name: "get_recent_commands",
+                description: "List recent command blocks in reverse chronological order.",
+                parameters: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "limit": .object([
+                            "type": .string("integer"),
+                            "minimum": .number(1),
+                            "maximum": .number(50),
+                        ]),
                     ]),
-                    strict: true
-                )
+                    "required": .array([.string("limit")]),
+                    "additionalProperties": commonNoExtraProperties,
+                ]),
+                strict: true
+            ),
+            OpenAIResponsesToolDefinition(
+                name: "execute_command",
+                description: "Execute a shell command in the current terminal session.",
+                parameters: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "command": .object([
+                            "type": .string("string"),
+                            "description": .string("Shell command to execute."),
+                        ]),
+                    ]),
+                    "required": .array([.string("command")]),
+                    "additionalProperties": commonNoExtraProperties,
+                ]),
+                strict: true
+            ),
+            OpenAIResponsesToolDefinition(
+                name: "get_session_info",
+                description: "Get metadata and counters for the current session.",
+                parameters: .object([
+                    "type": .string("object"),
+                    "properties": .object([:]),
+                    "required": .array([]),
+                    "additionalProperties": commonNoExtraProperties,
+                ]),
+                strict: true
             ),
         ]
     }

@@ -29,6 +29,11 @@ This file is the project working memory for future assistants in this repository
 ## Current Status Snapshot
 
 - Latest milestone (2026-02-23): Phase 6 hardening now includes SFTP sidebar regression coverage. `SessionManagerSFTPSidebarTests` validates connected-session remote listing success, disconnected-session guard behavior, and transport error propagation, and targeted test runs are green.
+- Latest API fix (2026-02-23): OpenAI Responses tool definitions now encode with top-level `name`/`description`/`parameters` (no nested `function` object), resolving runtime 400 errors like `Missing required parameter: 'tools[0].name'`.
+- Latest API fix (2026-02-23): strict tool schemas now list all declared properties in `required` for `strict: true`, resolving runtime 400 errors like `Invalid schema ... Missing 'limit'`.
+- Latest AI behavior fix (2026-02-23): agent developer prompts were tightened so Ask/Follow use terminal context tools instead of generic capability refusals, and Execute mode explicitly runs user-requested commands (including interactive editors) via `execute_command`.
+- Latest AI capability (2026-02-23): agent now includes local filesystem search tools (`search_filesystem`, `search_file_contents`) for file-name and in-file pattern discovery; remote sessions currently fall back to command-based search guidance.
+- Latest UX fix (2026-02-23): AI composer now submits on Enter, and terminal key-capture no longer steals Cmd+V/Cmd+C when a text input (like the AI chat field) is focused.
 - Latest UX fix (2026-02-23): AI copilot composer now reliably captures keyboard input; while the chat field is focused, direct terminal key capture is paused and restored when focus returns to terminal.
 - Latest UX fix (2026-02-23): `SettingsView` AI section now shows a reliable bordered API-key input and clipboard paste button; key entry/save is no longer blocked by form-row rendering quirks.
 - Settings pane scrolling has been fixed; long settings content is now reachable.

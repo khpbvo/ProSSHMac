@@ -3121,8 +3121,10 @@ final class DirectTerminalInputNSView: NSView {
     func armForKeyboardInputIfNeeded() {
         guard isEnabled else { return }
         DispatchQueue.main.async { [weak self] in
-            guard let self, self.isEnabled else { return }
-            _ = self.window?.makeFirstResponder(self)
+            guard let self, self.isEnabled, let window = self.window else { return }
+            if self.isTextInputFocused(in: window) { return }
+            if window.firstResponder === self { return }
+            _ = window.makeFirstResponder(self)
         }
     }
 
@@ -3138,6 +3140,9 @@ final class DirectTerminalInputNSView: NSView {
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if isTextInputFocusedInWindow() {
+            return super.performKeyEquivalent(with: event)
+        }
         if handleCommandShortcut(event) {
             return true
         }
@@ -3145,6 +3150,10 @@ final class DirectTerminalInputNSView: NSView {
     }
 
     override func keyDown(with event: NSEvent) {
+        if isTextInputFocusedInWindow() {
+            super.keyDown(with: event)
+            return
+        }
         guard isEnabled,
               let sessionID,
               let sequence = encodeEvent(event) else {
@@ -3258,6 +3267,9 @@ final class DirectTerminalInputNSView: NSView {
     // MARK: - Command Shortcuts
 
     private func handleCommandShortcut(_ event: NSEvent) -> Bool {
+        if isTextInputFocusedInWindow() {
+            return false
+        }
         let flags = event.modifierFlags.intersection([.shift, .control, .option, .command])
         guard flags.contains(.command), !flags.contains(.control), !flags.contains(.option) else {
             return false
@@ -3322,6 +3334,18 @@ final class DirectTerminalInputNSView: NSView {
         }
 
         return false
+    }
+
+    private func isTextInputFocusedInWindow() -> Bool {
+        guard let window else { return false }
+        return isTextInputFocused(in: window)
+    }
+
+    private func isTextInputFocused(in window: NSWindow) -> Bool {
+        guard let responder = window.firstResponder else { return false }
+        if responder === self { return false }
+        if responder is NSTextView { return true }
+        return responder.responds(to: #selector(NSTextInputClient.insertText(_:replacementRange:)))
     }
 }
 
