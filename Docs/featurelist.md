@@ -76,6 +76,7 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 - 2026-02-23: Completed Ask-only cleanup across backend + UI: removed `OpenAIAgentMode` and all Follow/Execute branching from `OpenAIAgentService`, removed follow auto-trigger paths from `TerminalView` and `TerminalAIAssistantViewModel`, and simplified AI tests to Ask-only contract; targeted tests pass (`OpenAIAgentServiceTests`, `TerminalAIAssistantViewModelTests`, 1 known skipped test unchanged).
 - 2026-02-23: Increased AI tool-loop ceiling from 8 to 99 iterations in `OpenAIAgentService` (and explicitly via `AppDependencies`) to avoid premature `toolLoopExceeded` failures on multi-step requests; re-verified with `OpenAIAgentServiceTests`.
 - 2026-02-23: Increased AI tool-loop ceiling again to 200 iterations and tightened Ask-mode developer guidance for tool efficiency (avoid duplicate calls, batch discovery, stop once evidence is sufficient); re-verified with `OpenAIAgentServiceTests`.
+- 2026-02-23: Added bounded file-ingestion guardrails for long AI runs: new `read_file_chunk` tool (local + remote) enforces `line_count <= 200`, Ask-mode instructions now require iterative chunk reads, and `execute_command` now returns `read_window_required` when commands attempt unbounded file reads (`cat` full-file, oversized `head`/`tail`/`sed`, scripted full reads). Added regression coverage in `OpenAIAgentServiceTests`.
 
 ## How to Use This File
 
@@ -208,6 +209,7 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 - [x] Map `execute_command` to `SessionManager.sendShellInput` with Ask-mode explicit-intent safety policy.
 - [x] Persist `previous_response_id` safely (best-effort continuity; handle invalid/expired IDs).
 - [x] Add robust timeout/error handling for tool loops and network failures.
+- [x] Enforce bounded file reads for long tasks (`read_file_chunk`, max 200 lines, iterate by `start_line`) and block unbounded file ingestion via `execute_command`.
 
 ## Phase 5 - Right Sidebar AI UI + Safety
 
@@ -255,3 +257,4 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 - [ ] No regressions in Transfers tab.
 - [ ] Command execution from AI requires explicit user intent in the prompt.
 - [ ] Network/API failures fail safely with user-visible errors.
+- [x] AI file ingestion uses bounded chunk reads (max 200 lines) instead of full-file reads.

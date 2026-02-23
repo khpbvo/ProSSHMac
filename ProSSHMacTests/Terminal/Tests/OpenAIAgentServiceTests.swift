@@ -103,6 +103,38 @@ final class OpenAIAgentServiceTests: XCTestCase {
         XCTAssertTrue(toolOutput.contains("execute_command"))
     }
 
+    func testExecuteCommandToolBlocksUnboundedFileReads() async throws {
+        let sessionProvider = MockAgentSessionProvider()
+        let responses = MockOpenAIResponsesService()
+        responses.enqueueResponse(
+            makeFunctionCallResponse(
+                id: "resp_1",
+                callID: "call_exec",
+                toolName: "execute_command",
+                arguments: #"{"command":"cat Makefile"}"#
+            )
+        )
+        responses.enqueueResponse(
+            makeTextResponse(id: "resp_2", text: "Handled.")
+        )
+
+        let service = OpenAIAgentService(
+            responsesService: responses,
+            sessionProvider: sessionProvider
+        )
+
+        let reply = try await service.generateReply(
+            sessionID: sessionProvider.sessionID,
+            prompt: "show me the makefile"
+        )
+
+        XCTAssertEqual(reply.text, "Handled.")
+        XCTAssertTrue(sessionProvider.sentCommands.isEmpty)
+        let toolOutput = responses.capturedRequests[1].toolOutputs.first?.output ?? ""
+        XCTAssertTrue(toolOutput.contains("read_window_required"))
+        XCTAssertTrue(toolOutput.contains("read_file_chunk"))
+    }
+
     func testGenerateReplyThrowsToolLoopExceededWhenNoTerminalResponse() async throws {
         let sessionProvider = MockAgentSessionProvider()
         let responses = MockOpenAIResponsesService()

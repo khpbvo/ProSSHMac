@@ -376,12 +376,70 @@ final class OpenAIAgentService: OpenAIAgentServicing {
             }
             return Self.jsonString(from: result)
 
+        case "read_file_chunk":
+            guard let session = sessionProvider.sessions.first(where: { $0.id == sessionID }) else {
+                throw OpenAIAgentServiceError.sessionNotFound
+            }
+
+            let path = try Self.requiredString(
+                key: "path",
+                in: arguments,
+                toolName: toolCall.name
+            )
+            let startLine = Self.clamp(
+                try Self.requiredInt(
+                    key: "start_line",
+                    in: arguments,
+                    toolName: toolCall.name
+                ),
+                min: 1,
+                max: 2_000_000_000
+            )
+            let lineCount = Self.clamp(
+                try Self.requiredInt(
+                    key: "line_count",
+                    in: arguments,
+                    toolName: toolCall.name
+                ),
+                min: 1,
+                max: 200
+            )
+
+            let result: OpenAIJSONValue
+            if session.isLocal {
+                let workingDirectory = sessionProvider.workingDirectoryBySessionID[sessionID]
+                result = try await Self.readLocalFileChunk(
+                    path: path,
+                    startLine: startLine,
+                    lineCount: lineCount,
+                    workingDirectory: workingDirectory
+                )
+            } else {
+                result = await readRemoteFileChunk(
+                    sessionID: sessionID,
+                    path: path,
+                    startLine: startLine,
+                    lineCount: lineCount
+                )
+            }
+            return Self.jsonString(from: result)
+
         case "execute_command":
             let command = try Self.requiredString(
                 key: "command",
                 in: arguments,
                 toolName: toolCall.name
             )
+
+            if let message = Self.readBoundViolationMessage(for: command) {
+                return Self.jsonString(from: .object([
+                    "ok": .bool(false),
+                    "status": .string("read_window_required"),
+                    "message": .string(message),
+                    "hint": .string("Use read_file_chunk with line_count <= 200 and iterate by start_line."),
+                    "command": .string(command),
+                ]))
+            }
 
             await sessionProvider.sendShellInput(
                 sessionID: sessionID,
@@ -599,6 +657,44 @@ final class OpenAIAgentService: OpenAIAgentServicing {
         )
     }
 
+    private func readRemoteFileChunk(
+        sessionID: UUID,
+        path: String,
+        startLine: Int,
+        lineCount: Int
+    ) async -> OpenAIJSONValue {
+        let endLine = startLine + lineCount - 1
+        let command = Self.buildRemoteReadFileChunkCommand(
+            path: path,
+            startLine: startLine,
+            endLine: endLine
+        )
+        let execution = await executeRemoteToolCommand(
+            sessionID: sessionID,
+            commandBody: command
+        )
+
+        if execution.timedOut {
+            return .object([
+                "ok": .bool(false),
+                "error": .string("Remote file read timed out."),
+            ])
+        }
+        if execution.exitCode == 127 {
+            return .object([
+                "ok": .bool(false),
+                "error": .string("Remote shell is missing required utility: sed."),
+            ])
+        }
+        return Self.parseReadFileChunkOutput(
+            execution.output,
+            path: path,
+            startLine: startLine,
+            lineCount: lineCount,
+            source: "remote_command"
+        )
+    }
+
     private func executeRemoteToolCommand(
         sessionID: UUID,
         commandBody: String,
@@ -765,6 +861,7 @@ final class OpenAIAgentService: OpenAIAgentServicing {
     }
 
     private static let remotePathNotFoundToken = "__PROSSH_PATH_NOT_FOUND__"
+    private static let remoteNotRegularFileToken = "__PROSSH_NOT_REGULAR_FILE__"
     private static let remoteContentLineRegex = try! NSRegularExpression(pattern: #":([0-9]+):"#)
 
     private static func parseRemoteFilesystemResultLine(_ line: String) -> (path: String, isDirectory: Bool)? {
@@ -869,6 +966,21 @@ final class OpenAIAgentService: OpenAIAgentServicing {
         else \
         grep -RIn --binary-files=without-match -- "$__prossh_pattern" "$__prossh_root" 2>/dev/null | head -n \(limit); \
         fi; fi
+        """
+    }
+
+    private static func buildRemoteReadFileChunkCommand(
+        path: String,
+        startLine: Int,
+        endLine: Int
+    ) -> String {
+        let escapedPath = shellSingleQuoted(path)
+        return """
+        __prossh_file=\(escapedPath); \
+        case "$__prossh_file" in "~") __prossh_file="$HOME" ;; "~/"*) __prossh_file="$HOME/${__prossh_file#~/}" ;; esac; \
+        if [ ! -e "$__prossh_file" ]; then printf '\(remotePathNotFoundToken)\\n'; \
+        elif [ ! -f "$__prossh_file" ]; then printf '\(remoteNotRegularFileToken)\\n'; \
+        else sed -n '\(startLine),\(endLine)p' "$__prossh_file"; fi
         """
     }
 
@@ -1044,6 +1156,97 @@ final class OpenAIAgentService: OpenAIAgentServicing {
         }.value
     }
 
+    private nonisolated static func readLocalFileChunk(
+        path: String,
+        startLine: Int,
+        lineCount: Int,
+        workingDirectory: String?
+    ) async throws -> OpenAIJSONValue {
+        try await Task.detached(priority: .userInitiated) {
+            let fileURL = try resolvedLocalSearchURL(path: path, workingDirectory: workingDirectory)
+            let fileManager = FileManager.default
+
+            var isDirectory: ObjCBool = false
+            guard fileManager.fileExists(atPath: fileURL.path, isDirectory: &isDirectory) else {
+                return OpenAIJSONValue.object([
+                    "ok": .bool(false),
+                    "error": .string("Path does not exist: \(fileURL.path)"),
+                ])
+            }
+            guard !isDirectory.boolValue else {
+                return OpenAIJSONValue.object([
+                    "ok": .bool(false),
+                    "error": .string("Path is a directory, not a regular file: \(fileURL.path)"),
+                ])
+            }
+
+            let data = try Data(contentsOf: fileURL, options: [.mappedIfSafe])
+            if data.contains(0) {
+                return OpenAIJSONValue.object([
+                    "ok": .bool(false),
+                    "error": .string("File appears to be binary and cannot be read as text."),
+                ])
+            }
+
+            let content: String
+            if let utf8 = String(data: data, encoding: .utf8) {
+                content = utf8
+            } else if let latin = String(data: data, encoding: .isoLatin1) {
+                content = latin
+            } else {
+                return OpenAIJSONValue.object([
+                    "ok": .bool(false),
+                    "error": .string("Unable to decode file as UTF-8/Latin-1 text."),
+                ])
+            }
+
+            let splitLines = content
+                .replacingOccurrences(of: "\r\n", with: "\n")
+                .replacingOccurrences(of: "\r", with: "\n")
+                .split(separator: "\n", omittingEmptySubsequences: false)
+            let safeStartLine = max(1, startLine)
+            let safeLineCount = max(1, min(200, lineCount))
+            let startIndex = safeStartLine - 1
+
+            if startIndex >= splitLines.count {
+                return OpenAIJSONValue.object([
+                    "ok": .bool(true),
+                    "path": .string(fileURL.path),
+                    "start_line": .number(Double(safeStartLine)),
+                    "line_count": .number(Double(safeLineCount)),
+                    "lines": .array([]),
+                    "source": .string("local_file"),
+                    "maybe_more_lines": .bool(false),
+                    "next_start_line": .null,
+                ])
+            }
+
+            let endExclusive = min(splitLines.count, startIndex + safeLineCount)
+            let slice = splitLines[startIndex..<endExclusive]
+            let lineValues: [OpenAIJSONValue] = slice.enumerated().map { offset, line in
+                .object([
+                    "line_number": .number(Double(safeStartLine + offset)),
+                    "line": .string(String(line)),
+                ])
+            }
+            let maybeMore = endExclusive < splitLines.count
+            let nextStart: OpenAIJSONValue = maybeMore
+                ? .number(Double(endExclusive + 1))
+                : .null
+
+            return OpenAIJSONValue.object([
+                "ok": .bool(true),
+                "path": .string(fileURL.path),
+                "start_line": .number(Double(safeStartLine)),
+                "line_count": .number(Double(safeLineCount)),
+                "lines": .array(lineValues),
+                "source": .string("local_file"),
+                "maybe_more_lines": .bool(maybeMore),
+                "next_start_line": nextStart,
+            ])
+        }.value
+    }
+
     private nonisolated static func resolvedLocalSearchURL(path: String, workingDirectory: String?) throws -> URL {
         let trimmedPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
         let expandedPath = (trimmedPath as NSString).expandingTildeInPath
@@ -1131,12 +1334,128 @@ final class OpenAIAgentService: OpenAIAgentServicing {
             lowercased.contains("previous response")
     }
 
+    private static func parseReadFileChunkOutput(
+        _ output: String,
+        path: String,
+        startLine: Int,
+        lineCount: Int,
+        source: String
+    ) -> OpenAIJSONValue {
+        let normalized = output
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        let lines = normalized.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+
+        if lines.contains(remotePathNotFoundToken) {
+            return .object([
+                "ok": .bool(false),
+                "error": .string("Path does not exist: \(path)"),
+            ])
+        }
+        if lines.contains(remoteNotRegularFileToken) {
+            return .object([
+                "ok": .bool(false),
+                "error": .string("Path is not a regular file: \(path)"),
+            ])
+        }
+
+        let boundedCount = max(1, min(200, lineCount))
+        let boundedStart = max(1, startLine)
+        let lineValues: [OpenAIJSONValue] = lines.enumerated().map { offset, line in
+            .object([
+                "line_number": .number(Double(boundedStart + offset)),
+                "line": .string(line),
+            ])
+        }
+        let maybeMore = lines.count >= boundedCount
+        let nextStart: OpenAIJSONValue = maybeMore
+            ? .number(Double(boundedStart + lines.count))
+            : .null
+
+        return .object([
+            "ok": .bool(true),
+            "path": .string(path),
+            "start_line": .number(Double(boundedStart)),
+            "line_count": .number(Double(boundedCount)),
+            "lines": .array(lineValues),
+            "source": .string(source),
+            "maybe_more_lines": .bool(maybeMore),
+            "next_start_line": nextStart,
+        ])
+    }
+
+    private static func readBoundViolationMessage(for command: String) -> String? {
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lowered = trimmed.lowercased()
+
+        if lowered.hasPrefix("cat "), !lowered.contains("|"), !lowered.contains(">") {
+            return "Full-file reads via 'cat' are disabled for AI execution. Read files in chunks of at most 200 lines."
+        }
+
+        if let n = firstCapturedInt(in: lowered, pattern: #"\bhead\s+-n\s+([0-9]+)\b"#), n > 200 {
+            return "'head -n \(n)' exceeds the 200-line limit for AI file reads."
+        }
+
+        if let n = firstCapturedInt(in: lowered, pattern: #"\btail\s+-n\s+([0-9]+)\b"#), n > 200 {
+            return "'tail -n \(n)' exceeds the 200-line limit for AI file reads."
+        }
+
+        if let range = firstCapturedRange(
+            in: lowered,
+            pattern: #"\bsed\s+-n\s+['\"]?([0-9]+),([0-9]+)p['\"]?"#
+        ) {
+            let requested = (range.end - range.start) + 1
+            if requested > 200 {
+                return "'sed -n \(range.start),\(range.end)p' exceeds the 200-line limit for AI file reads."
+            }
+        }
+
+        if (lowered.contains("python") || lowered.contains("python3")) &&
+            (lowered.contains("read_text(") || lowered.contains(".read()")) {
+            return "Scripted full-file reads are disabled for AI execution. Read files in chunks of at most 200 lines."
+        }
+
+        return nil
+    }
+
+    private static func firstCapturedInt(in text: String, pattern: String) -> Int? {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let nsText = text as NSString
+        let fullRange = NSRange(location: 0, length: nsText.length)
+        guard let match = regex.firstMatch(in: text, options: [], range: fullRange),
+              match.numberOfRanges > 1 else {
+            return nil
+        }
+        let capture = match.range(at: 1)
+        guard capture.location != NSNotFound else { return nil }
+        return Int(nsText.substring(with: capture))
+    }
+
+    private static func firstCapturedRange(in text: String, pattern: String) -> (start: Int, end: Int)? {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let nsText = text as NSString
+        let fullRange = NSRange(location: 0, length: nsText.length)
+        guard let match = regex.firstMatch(in: text, options: [], range: fullRange),
+              match.numberOfRanges > 2 else {
+            return nil
+        }
+        let startRange = match.range(at: 1)
+        let endRange = match.range(at: 2)
+        guard startRange.location != NSNotFound, endRange.location != NSNotFound else { return nil }
+        guard let start = Int(nsText.substring(with: startRange)),
+              let end = Int(nsText.substring(with: endRange)) else {
+            return nil
+        }
+        return (start: start, end: end)
+    }
+
     private static func developerPrompt() -> String {
         """
         You are ProSSH assistant.
         You have tool access to this terminal session and should use tools instead of claiming you cannot access context.
         For screen/context questions, call get_current_screen/get_recent_commands/search_terminal_history/get_session_info as needed.
-        For filesystem questions, use search_filesystem and search_file_contents.
+        For filesystem questions, use search_filesystem/search_file_contents to discover targets, and use read_file_chunk to read file text.
+        Never ingest an entire file at once. Always read in windows of at most 200 lines using read_file_chunk and iterate by line numbers.
         Execute commands only when the user explicitly asks to run, open, edit, or check something.
         This includes interactive commands when requested (for example: nano, vim, less, top).
         Be tool-efficient:
@@ -1262,6 +1581,31 @@ final class OpenAIAgentService: OpenAIAgentServicing {
                         ]),
                     ]),
                     "required": .array([.string("path"), .string("text_pattern"), .string("max_results")]),
+                    "additionalProperties": commonNoExtraProperties,
+                ]),
+                strict: true
+            ),
+            OpenAIResponsesToolDefinition(
+                name: "read_file_chunk",
+                description: "Read a specific window of lines from a text file. Use this for file inspection instead of full-file reads.",
+                parameters: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "path": .object([
+                            "type": .string("string"),
+                            "description": .string("File path to read (absolute, ~, or relative to current working directory)."),
+                        ]),
+                        "start_line": .object([
+                            "type": .string("integer"),
+                            "minimum": .number(1),
+                        ]),
+                        "line_count": .object([
+                            "type": .string("integer"),
+                            "minimum": .number(1),
+                            "maximum": .number(200),
+                        ]),
+                    ]),
+                    "required": .array([.string("path"), .string("start_line"), .string("line_count")]),
                     "additionalProperties": commonNoExtraProperties,
                 ]),
                 strict: true
