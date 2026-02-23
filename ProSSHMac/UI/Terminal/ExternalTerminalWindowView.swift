@@ -1,6 +1,5 @@
 import SwiftUI
 import Metal
-import AppKit
 
 struct ExternalTerminalWindowView: View {
     let sessionID: UUID?
@@ -229,9 +228,6 @@ struct ExternalTerminalWindowView: View {
         }
         if let selectedText = selectionCoordinator.copySelection(preferredSessionID: sessionID) {
             _ = PlatformClipboard.writeString(selectedText)
-            return
-        }
-        if NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil) {
             return
         }
     }

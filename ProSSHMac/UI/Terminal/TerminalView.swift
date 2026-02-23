@@ -2820,9 +2820,6 @@ struct TerminalView: View {
             _ = PlatformClipboard.writeString(selectedText)
             return
         }
-        if NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil) {
-            return
-        }
     }
 
     @discardableResult
