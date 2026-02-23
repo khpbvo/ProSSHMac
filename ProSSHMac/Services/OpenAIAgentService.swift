@@ -70,7 +70,7 @@ final class OpenAIAgentService: OpenAIAgentServicing {
         responsesService: any OpenAIResponsesServicing,
         sessionProvider: any OpenAIAgentSessionProviding,
         requestTimeoutSeconds: Int = 60,
-        maxToolIterations: Int = 8
+        maxToolIterations: Int = 99
     ) {
         self.responsesService = responsesService
         self.sessionProvider = sessionProvider
