@@ -43,6 +43,19 @@ struct PortForwardingRule: Identifiable, Codable, Hashable {
     }
 }
 
+enum ShellIntegrationType: String, Codable, CaseIterable, Sendable {
+    case none
+    case zsh, bash, fish, posixSh
+    case ciscoIOS, juniperJunOS, aristaEOS, mikrotikRouterOS
+    case paloAltoPANOS, hpProCurve, fortinetFortiOS, nokiaSROS
+    case custom
+}
+
+struct ShellIntegrationConfig: Codable, Hashable, Sendable {
+    var type: ShellIntegrationType = .none
+    var customPromptRegex: String = ""
+}
+
 struct Host: Identifiable, Codable, Hashable {
     var id: UUID
     var label: String
@@ -63,6 +76,7 @@ struct Host: Identifiable, Codable, Hashable {
     var agentForwardingEnabled: Bool
     var portForwardingRules: [PortForwardingRule]
     var legacyModeEnabled: Bool
+    var shellIntegration: ShellIntegrationConfig
     var tags: [String]
     var notes: String?
     var lastConnected: Date?
@@ -86,6 +100,7 @@ struct Host: Identifiable, Codable, Hashable {
         agentForwardingEnabled: Bool = false,
         portForwardingRules: [PortForwardingRule] = [],
         legacyModeEnabled: Bool,
+        shellIntegration: ShellIntegrationConfig = .init(),
         tags: [String],
         notes: String?,
         lastConnected: Date?,
@@ -108,6 +123,7 @@ struct Host: Identifiable, Codable, Hashable {
         self.agentForwardingEnabled = agentForwardingEnabled
         self.portForwardingRules = portForwardingRules
         self.legacyModeEnabled = legacyModeEnabled
+        self.shellIntegration = shellIntegration
         self.tags = tags
         self.notes = notes
         self.lastConnected = lastConnected
@@ -132,6 +148,7 @@ struct Host: Identifiable, Codable, Hashable {
         case agentForwardingEnabled
         case portForwardingRules
         case legacyModeEnabled
+        case shellIntegration
         case tags
         case notes
         case lastConnected
@@ -157,6 +174,7 @@ struct Host: Identifiable, Codable, Hashable {
         agentForwardingEnabled = try container.decodeIfPresent(Bool.self, forKey: .agentForwardingEnabled) ?? false
         portForwardingRules = try container.decodeIfPresent([PortForwardingRule].self, forKey: .portForwardingRules) ?? []
         legacyModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .legacyModeEnabled) ?? false
+        shellIntegration = (try? container.decodeIfPresent(ShellIntegrationConfig.self, forKey: .shellIntegration)) ?? .init()
         tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? []
         notes = try container.decodeIfPresent(String.self, forKey: .notes)
         lastConnected = try container.decodeIfPresent(Date.self, forKey: .lastConnected)
@@ -182,6 +200,7 @@ struct Host: Identifiable, Codable, Hashable {
         try container.encode(agentForwardingEnabled, forKey: .agentForwardingEnabled)
         try container.encode(portForwardingRules, forKey: .portForwardingRules)
         try container.encode(legacyModeEnabled, forKey: .legacyModeEnabled)
+        try container.encode(shellIntegration, forKey: .shellIntegration)
         try container.encode(tags, forKey: .tags)
         try container.encodeIfPresent(notes, forKey: .notes)
         try container.encodeIfPresent(lastConnected, forKey: .lastConnected)
@@ -244,6 +263,8 @@ struct HostDraft: Equatable {
     var username: String = ""
     var authMethod: AuthMethod = .publicKey
     var legacyModeEnabled: Bool = false
+    var shellIntegrationType: ShellIntegrationType = .none
+    var customPromptRegex: String = ""
     var pinnedHostKeyAlgorithms: String = ""
     var agentForwardingEnabled: Bool = false
     var portForwardingRules: [PortForwardingRule] = []
@@ -307,6 +328,7 @@ struct HostDraft: Equatable {
             agentForwardingEnabled: agentForwardingEnabled,
             portForwardingRules: portForwardingRules,
             legacyModeEnabled: legacyModeEnabled,
+            shellIntegration: ShellIntegrationConfig(type: shellIntegrationType, customPromptRegex: customPromptRegex),
             tags: parsedTags,
             notes: notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : notes.trimmingCharacters(in: .whitespacesAndNewlines),
             lastConnected: lastConnected,
@@ -343,6 +365,8 @@ extension HostDraft {
         self.username = host.username
         self.authMethod = host.authMethod
         self.legacyModeEnabled = host.legacyModeEnabled
+        self.shellIntegrationType = host.shellIntegration.type
+        self.customPromptRegex = host.shellIntegration.customPromptRegex
         self.pinnedHostKeyAlgorithms = host.pinnedHostKeyAlgorithms.joined(separator: ", ")
         self.agentForwardingEnabled = host.agentForwardingEnabled
         self.portForwardingRules = host.portForwardingRules

@@ -134,6 +134,43 @@ struct HostFormView: View {
                         .foregroundStyle(.secondary)
                 }
 
+                Section("Shell Integration") {
+                    Picker("Device / Shell Type", selection: $draft.shellIntegrationType) {
+                        Text("None (default)").tag(ShellIntegrationType.none)
+
+                        Section("Unix Shells") {
+                            Text("Zsh").tag(ShellIntegrationType.zsh)
+                            Text("Bash").tag(ShellIntegrationType.bash)
+                            Text("Fish").tag(ShellIntegrationType.fish)
+                            Text("POSIX sh").tag(ShellIntegrationType.posixSh)
+                        }
+
+                        Section("Network Vendors") {
+                            Text("Cisco IOS / IOS-XE").tag(ShellIntegrationType.ciscoIOS)
+                            Text("Juniper JunOS").tag(ShellIntegrationType.juniperJunOS)
+                            Text("Arista EOS").tag(ShellIntegrationType.aristaEOS)
+                            Text("MikroTik RouterOS").tag(ShellIntegrationType.mikrotikRouterOS)
+                            Text("Palo Alto PAN-OS").tag(ShellIntegrationType.paloAltoPANOS)
+                            Text("HP/Aruba ProCurve").tag(ShellIntegrationType.hpProCurve)
+                            Text("Fortinet FortiOS").tag(ShellIntegrationType.fortinetFortiOS)
+                            Text("Nokia SR OS").tag(ShellIntegrationType.nokiaSROS)
+                        }
+
+                        Section("Custom") {
+                            Text("Custom regex").tag(ShellIntegrationType.custom)
+                        }
+                    }
+
+                    if draft.shellIntegrationType == .custom {
+                        TextField("Prompt regex pattern", text: $draft.customPromptRegex)
+                            .textFieldStyle(.roundedBorder)
+                    }
+
+                    Text(shellIntegrationHelpText(for: draft.shellIntegrationType))
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
                 Section("Classification") {
                     TextField("Tags (comma-separated)", text: $draft.tags)
                 }
@@ -165,6 +202,39 @@ struct HostFormView: View {
                     )
                 }
             }
+        }
+    }
+
+    private func shellIntegrationHelpText(for type: ShellIntegrationType) -> String {
+        switch type {
+        case .none:
+            return "No shell integration. The AI copilot uses generic prompt detection."
+        case .zsh:
+            return "Injects OSC 133 hooks via precmd/preexec. Provides command boundaries and exit codes."
+        case .bash:
+            return "Injects OSC 133 hooks via PROMPT_COMMAND and DEBUG trap. Provides command boundaries and exit codes."
+        case .fish:
+            return "Injects OSC 133 hooks via fish_prompt/fish_preexec events. Provides command boundaries and exit codes."
+        case .posixSh:
+            return "Limited: wraps PS1 with prompt markers only. No exit code capture (POSIX sh limitation)."
+        case .ciscoIOS:
+            return "Matches Cisco IOS/IOS-XE prompts (e.g. Router#, Router(config-if)#)."
+        case .juniperJunOS:
+            return "Matches Juniper JunOS prompts (e.g. user@host>, [edit] user@host#)."
+        case .aristaEOS:
+            return "Matches Arista EOS prompts (e.g. switch#, switch(config)#)."
+        case .mikrotikRouterOS:
+            return "Matches MikroTik RouterOS prompts (e.g. [admin@MikroTik] >)."
+        case .paloAltoPANOS:
+            return "Matches Palo Alto PAN-OS prompts (e.g. admin@PA-VM>, admin@PA-VM#)."
+        case .hpProCurve:
+            return "Matches HP/Aruba ProCurve prompts (e.g. switch#, HPswitch(config)#)."
+        case .fortinetFortiOS:
+            return "Matches Fortinet FortiOS prompts (e.g. FortiGate-60F#, FortiGate-60F (global)#)."
+        case .nokiaSROS:
+            return "Matches Nokia SR OS prompts (e.g. A:router#, A:router[/system]#)."
+        case .custom:
+            return "Enter a regular expression that matches your device's prompt line."
         }
     }
 }

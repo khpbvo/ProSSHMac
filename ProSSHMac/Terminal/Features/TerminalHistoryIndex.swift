@@ -4,6 +4,7 @@ actor TerminalHistoryIndex {
     private struct PromptHints: Sendable {
         let username: String
         let hostname: String
+        var promptRegex: NSRegularExpression?
     }
 
     private struct ActiveCommandContext: Sendable {
@@ -36,9 +37,18 @@ actor TerminalHistoryIndex {
         self.maxOutputCharacters = max(2_000, maxOutputCharacters)
     }
 
-    func registerSession(sessionID: UUID, username: String, hostname: String) {
+    func registerSession(sessionID: UUID, username: String, hostname: String,
+                         shellIntegration: ShellIntegrationConfig = .init()) {
         var state = sessionStates[sessionID] ?? SessionHistoryState()
-        state.promptHints = PromptHints(username: username, hostname: hostname)
+
+        var promptRegex: NSRegularExpression?
+        if shellIntegration.type == .custom, !shellIntegration.customPromptRegex.isEmpty {
+            promptRegex = try? NSRegularExpression(pattern: shellIntegration.customPromptRegex)
+        } else if let pattern = ShellIntegrationScripts.vendorPromptPattern(for: shellIntegration.type) {
+            promptRegex = try? NSRegularExpression(pattern: pattern)
+        }
+
+        state.promptHints = PromptHints(username: username, hostname: hostname, promptRegex: promptRegex)
         sessionStates[sessionID] = state
     }
 
@@ -388,6 +398,14 @@ actor TerminalHistoryIndex {
     private func looksLikePrompt(_ rawLine: String, hints: PromptHints?) -> Bool {
         let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !line.isEmpty, line.count <= 220 else { return false }
+
+        // Check vendor/custom regex first
+        if let regex = hints?.promptRegex {
+            let range = NSRange(line.startIndex..., in: line)
+            if regex.firstMatch(in: line, range: range) != nil {
+                return true
+            }
+        }
 
         let promptChars: Set<Character> = ["$", "#", "%", ">"]
         guard let last = line.last, promptChars.contains(last) else { return false }

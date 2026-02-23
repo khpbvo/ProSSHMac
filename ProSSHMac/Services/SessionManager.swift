@@ -311,7 +311,7 @@ final class SessionManager: ObservableObject {
         sessions.insert(session, at: 0)
         let engine = TerminalEngine(columns: PTYConfiguration.default.columns, rows: PTYConfiguration.default.rows, maxScrollbackLines: configuredScrollbackLines)
         await engine.setLineFeedMode(true)
-        await configureHistoryTracking(for: session, engine: engine)
+        await configureHistoryTracking(for: session, engine: engine, shellIntegration: host.shellIntegration)
         engines[sessionID] = engine
         desiredPTYBySessionID[sessionID] = .default
 
@@ -410,6 +410,16 @@ final class SessionManager: ObservableObject {
 
             try await openShell(for: session)
             startKeepaliveTimerIfNeeded()
+
+            // Inject shell integration script for SSH sessions (Unix shell types only).
+            // Uses compact single-line version to minimize terminal echo noise.
+            if let script = ShellIntegrationScripts.sshInjectionScript(for: host.shellIntegration.type) {
+                let sid = sessionID
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .milliseconds(500))
+                    await self?.sendRawShellInput(sessionID: sid, input: script + "\n")
+                }
+            }
 
             if let pfm = portForwardingManager {
                 let enabledRules = host.portForwardingRules.filter(\.isEnabled)
@@ -908,12 +918,14 @@ final class SessionManager: ObservableObject {
         startParserReader(for: session.id, rawOutput: channel.rawOutput)
     }
 
-    private func configureHistoryTracking(for session: Session, engine: TerminalEngine) async {
+    private func configureHistoryTracking(for session: Session, engine: TerminalEngine,
+                                          shellIntegration: ShellIntegrationConfig = .init()) async {
         let historyIndex = terminalHistoryIndex
         await historyIndex.registerSession(
             sessionID: session.id,
             username: session.username,
-            hostname: session.hostname
+            hostname: session.hostname,
+            shellIntegration: shellIntegration
         )
         await engine.setSemanticPromptEventHandler { [weak self] event in
             let completedBlock = await historyIndex.recordSemanticEvent(

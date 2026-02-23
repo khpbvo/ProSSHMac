@@ -29,7 +29,8 @@ actor LocalShellChannel: SSHShellChannel {
         rows: Int = 24,
         shellPath: String? = nil,
         environment: [String: String]? = nil,
-        workingDirectory: String? = nil
+        workingDirectory: String? = nil,
+        shellIntegration: ShellIntegrationConfig = .init()
     ) async throws -> LocalShellChannel {
         let (realHome, _, realShell) = resolveRealUserInfo()
         let resolvedShell = shellPath ?? realShell
@@ -75,7 +76,7 @@ actor LocalShellChannel: SSHShellChannel {
         }
 
         // Build environment for child
-        let childEnv = buildChildEnvironment(base: environment)
+        let childEnv = buildChildEnvironment(base: environment, shellIntegration: shellIntegration)
         // Change working directory -- use real home, not sandbox container
         let cwd = workingDirectory ?? childEnv["HOME"] ?? realHome
 
@@ -382,7 +383,7 @@ actor LocalShellChannel: SSHShellChannel {
 
     // MARK: - Environment
 
-    static func buildChildEnvironment(base: [String: String]? = nil) -> [String: String] {
+    static func buildChildEnvironment(base: [String: String]? = nil, shellIntegration: ShellIntegrationConfig = .init()) -> [String: String] {
         let parentEnv = ProcessInfo.processInfo.environment
         var env: [String: String] = [:]
 
@@ -425,11 +426,12 @@ actor LocalShellChannel: SSHShellChannel {
         env["CLICOLOR"] = "1"
         env["CLICOLOR_FORCE"] = "1"
 
-        // Inject rainbow prompt via shell-specific mechanisms.
+        // Inject rainbow prompt and shell integration via shell-specific mechanisms.
         let promptDir = Self.ensurePromptOverlay(
             shell: realShell,
             home: realHome,
-            user: realUser
+            user: realUser,
+            shellIntegration: shellIntegration
         )
         if let promptDir {
             let shellName = (realShell as NSString).lastPathComponent
@@ -446,7 +448,7 @@ actor LocalShellChannel: SSHShellChannel {
 
     // MARK: - Rainbow Prompt
 
-    private static func ensurePromptOverlay(shell: String, home: String, user: String) -> String? {
+    private static func ensurePromptOverlay(shell: String, home: String, user: String, shellIntegration: ShellIntegrationConfig = .init()) -> String? {
         let shellName = (shell as NSString).lastPathComponent
         guard shellName == "zsh" || shellName == "bash" else { return nil }
 
@@ -478,7 +480,13 @@ export REAL_ZDOTDIR="$HOME"
 setopt prompt_subst
 PROMPT='\(promptStr)'
 """
-            try? zshrc.write(toFile: rcPath, atomically: true, encoding: .utf8)
+            // Append shell integration script if configured for zsh
+            if shellIntegration.type == .zsh, let integrationScript = ShellIntegrationScripts.script(for: .zsh) {
+                let fullZshrc = zshrc + "\n" + integrationScript
+                try? fullZshrc.write(toFile: rcPath, atomically: true, encoding: .utf8)
+            } else {
+                try? zshrc.write(toFile: rcPath, atomically: true, encoding: .utf8)
+            }
 
             let envPath = (overlayDir as NSString).appendingPathComponent(".zshenv")
             let userEnv = (home as NSString).appendingPathComponent(".zshenv")
@@ -511,7 +519,13 @@ PROMPT='\(promptStr)'
 \(pathFunction)
 PS1='\(promptStr)'
 """
-            try? bashrc.write(toFile: rcPath, atomically: true, encoding: .utf8)
+            // Append shell integration script if configured for bash
+            if shellIntegration.type == .bash, let integrationScript = ShellIntegrationScripts.script(for: .bash) {
+                let fullBashrc = bashrc + "\n" + integrationScript
+                try? fullBashrc.write(toFile: rcPath, atomically: true, encoding: .utf8)
+            } else {
+                try? bashrc.write(toFile: rcPath, atomically: true, encoding: .utf8)
+            }
             return overlayDir
         }
     }
