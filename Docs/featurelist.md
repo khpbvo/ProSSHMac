@@ -28,9 +28,8 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 ### Current Focus
 
 - Active phase: Phase 6 (persistence + hardening + remaining test coverage).
-- Immediate objective: complete remaining hardening gaps for the remaining quarantined test and user-facing shortcut/help docs.
-- Test stability TODOs:
-  - investigate XCTest host crash observed in `TerminalAIAssistantViewModelTests.testClearConversationResetsMessagesAndCallsService`; this test is temporarily skipped.
+- Immediate objective: complete remaining hardening/documentation gaps (user-facing shortcut/help docs) and continue migrating legacy tests into the shared test bundle.
+- Test stability TODOs: no active crash quarantines remain for previously skipped pane/AI view-model tests.
 
 ## Loop Log
 
@@ -60,6 +59,7 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 - 2026-02-23: Completed Phase 5 AI sidebar integration: added rendered right-side copilot pane with Ask/Follow/Execute selector, streaming/copyable syntax-highlighted code blocks, explicit execute confirmation gate, and AI sidebar toggle shortcut (`⌘⌥I`), including width persistence and drag resizing.
 - 2026-02-23: Wired Follow mode to true command-completion events by emitting per-session completion signals from `SessionManager` (`latestCompletedCommandBlockBySessionID` + nonce) sourced from `TerminalHistoryIndex` completion boundaries (OSC 133 + heuristic), and auto-triggering follow prompts only when new command blocks complete.
 - 2026-02-23: Added follow-mode coverage in `TerminalAIAssistantViewModelTests`, hardened `TerminalHistoryIndexTests` timing/expectations, and quarantined unstable `testClearConversationResetsMessagesAndCallsService` with `XCTSkip` due intermittent XCTest host malloc/free crash.
+- 2026-02-23: Closed Phase 6 test blocker for `TerminalAIAssistantViewModelTests.testClearConversationResetsMessagesAndCallsService`: removed `XCTSkip`, added `nonisolated deinit` on `TerminalAIAssistantViewModel` (plus mock service lifecycle hardening), and re-verified with targeted `xcodebuild` runs for the single test and full `TerminalAIAssistantViewModelTests` suite.
 - 2026-02-23: Completed Phase 6 sidebar persistence step: `TerminalView` now persists left/right sidebar visibility and widths per context (`host:<id>` for SSH sessions, `session:<id>` for local sessions), restores layout on session switch, and adds draggable width resizing for the file browser sidebar.
 - 2026-02-23: Expanded AI hardening coverage: added execute/follow safety and tool-loop regression tests in `OpenAIAgentServiceTests` (follow-mode execute guard, execute-argument validation error output, bounded tool-loop exhaustion) plus additional `TerminalAIAssistantViewModelTests` for follow-mode suppression outside Follow mode and while a reply is already in-flight.
 - 2026-02-23: Added dedicated SFTP sidebar regression coverage in `SessionManagerSFTPSidebarTests` (connected-session directory listing success, disconnected-session guard, and transport error propagation) and verified targeted test run passes.
@@ -88,7 +88,7 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 - 2026-02-23: Improved AI token efficiency and reduced noisy context payloads in `OpenAIAgentService`: `get_current_screen` now defaults to 60 lines (max 160), command history previews are capped to 300 chars, `get_command_output` now supports bounded `max_chars` with truncation metadata, and remote internal tool wrappers run with `suppressEcho=true` to avoid terminal echo noise.
 - 2026-02-23: Fixed remaining AI pane update-loop warnings and text-density issues: `TerminalAIAssistantPane` composer callback writes now defer via `DispatchQueue.main.async` with focus-state de-duplication, streaming assistant content now renders through markdown formatting, and sentence-splitting now handles punctuation boundaries even without trailing spaces.
 - 2026-02-23: Hardened file-browser async loading against stale completions: if a stale callback arrives after request-ID rollover and no active request exists for that path, loading flags are now cleared to prevent indefinite spinner states.
-- 2026-02-23: Re-ran targeted regression tests after the above fixes: `OpenAIAgentServiceTests` and `TerminalAIAssistantViewModelTests` pass (1 known skipped test remains: `testClearConversationResetsMessagesAndCallsService`).
+- 2026-02-23: Re-ran targeted regression tests after the above fixes: `OpenAIAgentServiceTests` and `TerminalAIAssistantViewModelTests` pass, including the previously quarantined clear-conversation test.
 
 ## How to Use This File
 
@@ -261,7 +261,7 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
   - [x] AI service error handling
 - [x] Run project tests and document any failures/gaps.
 - [x] Fixed host-process crash in `PaneManagerTests` and removed quarantine (`XCTSkip` no longer needed).
-- [ ] TODO: root-cause and fix host-process crash in `TerminalAIAssistantViewModelTests.testClearConversationResetsMessagesAndCallsService` (currently quarantined with `XCTSkip`).
+- [x] Fixed host-process crash in `TerminalAIAssistantViewModelTests.testClearConversationResetsMessagesAndCallsService` and removed quarantine (`XCTSkip` no longer needed).
 - [ ] Note: `xcodebuild ... test` now succeeds via `ProSSHMacTests` smoke baseline; most existing test files are still compiled under app sources and should be migrated into the test bundle for full coverage.
 - [ ] Update user-facing docs and shortcut reference in settings/help text.
 

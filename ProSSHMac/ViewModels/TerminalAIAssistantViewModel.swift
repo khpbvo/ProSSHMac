@@ -39,6 +39,8 @@ final class TerminalAIAssistantViewModel: ObservableObject {
         self.maxChunkSize = maxChunkSize
     }
 
+    nonisolated deinit {}
+
     func clearConversation(sessionID: UUID?) {
         messages = []
         lastError = nil

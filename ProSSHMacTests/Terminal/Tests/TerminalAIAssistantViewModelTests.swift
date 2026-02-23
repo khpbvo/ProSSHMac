@@ -35,7 +35,6 @@ final class TerminalAIAssistantViewModelTests: XCTestCase {
     }
 
     func testClearConversationResetsMessagesAndCallsService() throws {
-        throw XCTSkip("Temporarily skipped: this path can crash XCTest host process (malloc/free) on current runner.")
         let sessionID = UUID()
         let service = MockOpenAIAgentService(
             nextReply: OpenAIAgentReply(text: "ok", responseID: "resp", toolCallsExecuted: 0)
@@ -110,6 +109,8 @@ private final class MockOpenAIAgentService: OpenAIAgentServicing {
         self.nextReply = nextReply
         self.replyDelayNanoseconds = replyDelayNanoseconds
     }
+
+    nonisolated deinit {}
 
     func clearConversation(sessionID: UUID) {
         clearedSessionIDs.append(sessionID)
