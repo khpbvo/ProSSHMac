@@ -36,12 +36,15 @@ final class SessionManager: ObservableObject {
     @Published private(set) var workingDirectoryBySessionID: [UUID: String] = [:]
     @Published private(set) var bytesReceivedBySessionID: [UUID: Int64] = [:]
     @Published private(set) var bytesSentBySessionID: [UUID: Int64] = [:]
+    @Published private(set) var latestCompletedCommandBlockBySessionID: [UUID: CommandBlock] = [:]
+    @Published private(set) var commandCompletionNonceBySessionID: [UUID: Int] = [:]
 
     private let transport: any SSHTransporting
     private let knownHostsStore: any KnownHostsStoreProtocol
     private let auditLogManager: AuditLogManager?
     private let portForwardingManager: PortForwardingManager?
     private let sessionRecorder: SessionRecorder
+    private let terminalHistoryIndex = TerminalHistoryIndex()
     private var shellChannels: [UUID: any SSHShellChannel] = [:]
     private var parserReaderTasks: [UUID: Task<Void, Never>] = [:]
     private var engines: [UUID: TerminalEngine] = [:]
@@ -65,6 +68,7 @@ final class SessionManager: ObservableObject {
     /// Throttles expensive visible-text extraction/publishing during heavy output.
     private var lastShellBufferPublishAtBySessionID: [UUID: Date] = [:]
     private var keepaliveTask: Task<Void, Never>?
+    private var latestPublishedCommandBlockIDBySessionID: [UUID: UUID] = [:]
     private let shellBufferPublishInterval: TimeInterval = 1.0 / 30.0
     private let throughputShellBufferPublishInterval: TimeInterval = 1.0 / 5.0
     private let snapshotPublishInterval: Duration = .milliseconds(8)
@@ -167,6 +171,7 @@ final class SessionManager: ObservableObject {
         sessions.insert(session, at: 0)
         let engine = TerminalEngine(columns: PTYConfiguration.default.columns, rows: PTYConfiguration.default.rows, maxScrollbackLines: configuredScrollbackLines)
         await engine.setLineFeedMode(true)
+        await configureHistoryTracking(for: session, engine: engine)
         engines[sessionID] = engine
         desiredPTYBySessionID[sessionID] = .default
 
@@ -306,6 +311,7 @@ final class SessionManager: ObservableObject {
         sessions.insert(session, at: 0)
         let engine = TerminalEngine(columns: PTYConfiguration.default.columns, rows: PTYConfiguration.default.rows, maxScrollbackLines: configuredScrollbackLines)
         await engine.setLineFeedMode(true)
+        await configureHistoryTracking(for: session, engine: engine)
         engines[sessionID] = engine
         desiredPTYBySessionID[sessionID] = .default
 
@@ -488,6 +494,9 @@ final class SessionManager: ObservableObject {
         if let shell = shellChannels[sessionID] {
             await shell.close()
         }
+        if let completedBlock = await terminalHistoryIndex.flushActiveCommand(sessionID: sessionID, at: .now) {
+            publishCommandCompletion(completedBlock)
+        }
         finalizeRecordingIfNeeded(sessionID: sessionID)
         removeSessionArtifacts(sessionID: sessionID)
 
@@ -559,6 +568,12 @@ final class SessionManager: ObservableObject {
             lastActivityBySessionID[sessionID] = .now
             bytesSentBySessionID[sessionID, default: 0] += Int64(payload.utf8.count)
             sessionRecorder.recordInput(sessionID: sessionID, text: payload)
+            await terminalHistoryIndex.recordCommandInput(
+                sessionID: sessionID,
+                command: trimmed,
+                at: .now,
+                source: .userInput
+            )
         } catch {
             await appendShellLine("Error: \(error.localizedDescription)", to: sessionID)
         }
@@ -579,6 +594,11 @@ final class SessionManager: ObservableObject {
             try await shell.send(input)
             bytesSentBySessionID[sessionID, default: 0] += Int64(input.utf8.count)
             sessionRecorder.recordInput(sessionID: sessionID, text: input)
+            await terminalHistoryIndex.recordRawInput(
+                sessionID: sessionID,
+                input: input,
+                at: .now
+            )
         } catch {
             await appendShellLine("Error: \(error.localizedDescription)", to: sessionID)
         }
@@ -791,6 +811,18 @@ final class SessionManager: ObservableObject {
         )
     }
 
+    func recentCommandBlocks(sessionID: UUID, limit: Int = 20) async -> [CommandBlock] {
+        await terminalHistoryIndex.recentCommands(sessionID: sessionID, limit: limit)
+    }
+
+    func searchCommandHistory(sessionID: UUID, query: String, limit: Int = 20) async -> [CommandBlock] {
+        await terminalHistoryIndex.searchCommands(sessionID: sessionID, query: query, limit: limit)
+    }
+
+    func commandOutput(sessionID: UUID, blockID: UUID) async -> String? {
+        await terminalHistoryIndex.commandOutput(sessionID: sessionID, blockID: blockID)
+    }
+
     func trustKnownHost(challenge: KnownHostVerificationChallenge) async throws {
         do {
             try await knownHostsStore.trust(challenge: challenge)
@@ -876,6 +908,24 @@ final class SessionManager: ObservableObject {
         startParserReader(for: session.id, rawOutput: channel.rawOutput)
     }
 
+    private func configureHistoryTracking(for session: Session, engine: TerminalEngine) async {
+        let historyIndex = terminalHistoryIndex
+        await historyIndex.registerSession(
+            sessionID: session.id,
+            username: session.username,
+            hostname: session.hostname
+        )
+        await engine.setSemanticPromptEventHandler { [weak self] event in
+            let completedBlock = await historyIndex.recordSemanticEvent(
+                sessionID: session.id,
+                event: event
+            )
+            if let completedBlock {
+                await self?.publishCommandCompletion(completedBlock)
+            }
+        }
+    }
+
     private func sanitizedPTY(for sessionID: UUID) -> PTYConfiguration {
         let current = desiredPTYBySessionID[sessionID] ?? .default
         return PTYConfiguration(
@@ -947,9 +997,14 @@ final class SessionManager: ObservableObject {
         }
     }
 
-    private func recordParsedChunk(sessionID: UUID, chunk: Data) {
+    private func recordParsedChunk(sessionID: UUID, chunk: Data) async {
         lastActivityBySessionID[sessionID] = .now
         bytesReceivedBySessionID[sessionID, default: 0] += Int64(chunk.count)
+        await terminalHistoryIndex.recordOutputChunk(
+            sessionID: sessionID,
+            data: chunk,
+            at: .now
+        )
 
         // Capture output directly as bytes to avoid a per-chunk UTF-8 decode.
         if sessionRecorder.isRecording(sessionID: sessionID) {
@@ -1007,6 +1062,9 @@ final class SessionManager: ObservableObject {
             session.endedAt = .now
             session.errorMessage = "Shell process exited."
             replaceSession(session)
+            if let completedBlock = await terminalHistoryIndex.flushActiveCommand(sessionID: sessionID, at: .now) {
+                publishCommandCompletion(completedBlock)
+            }
             finalizeRecordingIfNeeded(sessionID: sessionID)
             removeSessionArtifacts(sessionID: sessionID)
             return
@@ -1036,6 +1094,9 @@ final class SessionManager: ObservableObject {
             await pfm.deactivateAll(for: sessionID)
         }
 
+        if let completedBlock = await terminalHistoryIndex.flushActiveCommand(sessionID: sessionID, at: .now) {
+            publishCommandCompletion(completedBlock)
+        }
         finalizeRecordingIfNeeded(sessionID: sessionID)
         removeSessionArtifacts(sessionID: sessionID)
         await transport.disconnect(sessionID: sessionID)
@@ -1102,6 +1163,9 @@ final class SessionManager: ObservableObject {
         hasRecordingBySessionID.removeValue(forKey: sessionID)
         latestRecordingURLBySessionID.removeValue(forKey: sessionID)
         removeSessionArtifacts(sessionID: sessionID)
+        Task { [terminalHistoryIndex] in
+            await terminalHistoryIndex.removeSession(sessionID: sessionID)
+        }
     }
 
     private func finalizeRecordingIfNeeded(sessionID: UUID) {
@@ -1139,6 +1203,20 @@ final class SessionManager: ObservableObject {
         workingDirectoryBySessionID.removeValue(forKey: sessionID)
         bytesReceivedBySessionID.removeValue(forKey: sessionID)
         bytesSentBySessionID.removeValue(forKey: sessionID)
+        latestCompletedCommandBlockBySessionID.removeValue(forKey: sessionID)
+        commandCompletionNonceBySessionID.removeValue(forKey: sessionID)
+        latestPublishedCommandBlockIDBySessionID.removeValue(forKey: sessionID)
+    }
+
+    private func publishCommandCompletion(_ block: CommandBlock) {
+        let sessionID = block.sessionID
+        if latestPublishedCommandBlockIDBySessionID[sessionID] == block.id {
+            return
+        }
+
+        latestPublishedCommandBlockIDBySessionID[sessionID] = block.id
+        latestCompletedCommandBlockBySessionID[sessionID] = block
+        commandCompletionNonceBySessionID[sessionID, default: 0] += 1
     }
 
     private func shouldPublishShellBuffer(for sessionID: UUID, now: Date = .now) -> Bool {
@@ -1225,7 +1303,15 @@ final class SessionManager: ObservableObject {
 
         // Derive text lines from grid for fallback view, search, and password detection.
         if shouldPublishShellBuffer(for: sessionID) {
-            shellBuffers[sessionID] = await engine.visibleText()
+            let visibleLines = await engine.visibleText()
+            shellBuffers[sessionID] = visibleLines
+            if let completedBlock = await terminalHistoryIndex.observeVisibleLines(
+                sessionID: sessionID,
+                lines: visibleLines,
+                at: .now
+            ) {
+                publishCommandCompletion(completedBlock)
+            }
         }
 
         // F.8: Propagate bell events from engine → UI.
@@ -1442,6 +1528,7 @@ final class SessionManager: ObservableObject {
                 maxScrollbackLines: 1000
             )
             await engine.setLineFeedMode(true)
+            await configureHistoryTracking(for: session, engine: engine)
             engines[session.id] = engine
 
             desiredPTYBySessionID[session.id] = .default

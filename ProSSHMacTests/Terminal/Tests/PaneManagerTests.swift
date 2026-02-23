@@ -5,23 +5,27 @@
 
 #if canImport(XCTest)
 import XCTest
+@testable import ProSSHMac
 
-@MainActor
 final class PaneManagerTests: XCTestCase {
+    @MainActor
+    func testPaneLayoutStoreLifetimeSmoke() {
+        _ = PaneLayoutStore(persistenceEnabled: false)
+    }
 
     // MARK: - Initial State
-
+    @MainActor
     func testInitialStateIsSinglePane() {
-        let manager = PaneManager()
+        let manager = PaneManager(layoutStore: PaneLayoutStore(persistenceEnabled: false))
         XCTAssertEqual(manager.paneCount, 1)
         XCTAssertEqual(manager.rootNode.maxDepth, 0)
         XCTAssertNotNil(manager.focusedPane)
     }
 
     // MARK: - Split
-
+    @MainActor
     func testSplitCreatesCorrectTree() {
-        let manager = PaneManager()
+        let manager = makeManager(testName: #function)
         let originalPaneID = manager.focusedPaneId
 
         manager.splitPane(originalPaneID, direction: .vertical)
@@ -31,9 +35,9 @@ final class PaneManagerTests: XCTestCase {
         // Focus moves to the new pane.
         XCTAssertNotEqual(manager.focusedPaneId, originalPaneID)
     }
-
+    @MainActor
     func testSplitHorizontalCreatesVerticalLayout() {
-        let manager = PaneManager()
+        let manager = makeManager(testName: #function)
         let paneID = manager.focusedPaneId
 
         manager.splitPane(paneID, direction: .horizontal)
@@ -45,9 +49,9 @@ final class PaneManagerTests: XCTestCase {
             XCTFail("Expected split container")
         }
     }
-
+    @MainActor
     func testSplitRespectsMaxDepth() {
-        let manager = PaneManager()
+        let manager = makeManager(testName: #function)
 
         // Split repeatedly to reach max depth.
         for _ in 0..<PaneManager.maxDepth {
@@ -65,9 +69,9 @@ final class PaneManagerTests: XCTestCase {
         XCTAssertEqual(manager.rootNode.maxDepth, depthBeforeExtraAttempt)
         XCTAssertEqual(manager.paneCount, countBefore)
     }
-
+    @MainActor
     func testNestedSplitCreatesDeepTree() {
-        let manager = PaneManager()
+        let manager = makeManager(testName: #function)
         let first = manager.focusedPaneId
 
         manager.splitPane(first, direction: .vertical)
@@ -80,9 +84,9 @@ final class PaneManagerTests: XCTestCase {
     }
 
     // MARK: - Close
-
+    @MainActor
     func testClosePromotesSibling() {
-        let manager = PaneManager()
+        let manager = makeManager(testName: #function)
         let originalPaneID = manager.focusedPaneId
 
         manager.splitPane(originalPaneID, direction: .vertical)
@@ -93,9 +97,9 @@ final class PaneManagerTests: XCTestCase {
         XCTAssertEqual(manager.paneCount, 1)
         XCTAssertEqual(manager.focusedPaneId, originalPaneID)
     }
-
+    @MainActor
     func testCloseBlocksOnLastPane() {
-        let manager = PaneManager()
+        let manager = makeManager(testName: #function)
         let paneID = manager.focusedPaneId
 
         manager.closePane(paneID)
@@ -103,9 +107,9 @@ final class PaneManagerTests: XCTestCase {
         XCTAssertEqual(manager.paneCount, 1)
         XCTAssertEqual(manager.focusedPaneId, paneID)
     }
-
+    @MainActor
     func testCloseRestoresMaximizeIfClosingMaximizedPane() {
-        let manager = PaneManager()
+        let manager = makeManager(testName: #function)
         let first = manager.focusedPaneId
         manager.splitPane(first, direction: .vertical)
         let second = manager.focusedPaneId
@@ -119,9 +123,9 @@ final class PaneManagerTests: XCTestCase {
     }
 
     // MARK: - Focus Cycling
-
+    @MainActor
     func testFocusCyclingOrder() {
-        let manager = PaneManager()
+        let manager = makeManager(testName: #function)
         let first = manager.focusedPaneId
 
         manager.splitPane(first, direction: .vertical)
@@ -135,9 +139,9 @@ final class PaneManagerTests: XCTestCase {
         manager.focusNext()
         XCTAssertEqual(manager.focusedPaneId, second)
     }
-
+    @MainActor
     func testFocusPreviousCycles() {
-        let manager = PaneManager()
+        let manager = makeManager(testName: #function)
         let first = manager.focusedPaneId
 
         manager.splitPane(first, direction: .vertical)
@@ -151,9 +155,9 @@ final class PaneManagerTests: XCTestCase {
         manager.focusPrevious()
         XCTAssertEqual(manager.focusedPaneId, second)
     }
-
+    @MainActor
     func testFocusPaneUpdatesFocusedState() {
-        let manager = PaneManager()
+        let manager = makeManager(testName: #function)
         let first = manager.focusedPaneId
 
         manager.splitPane(first, direction: .vertical)
@@ -168,9 +172,9 @@ final class PaneManagerTests: XCTestCase {
     }
 
     // MARK: - Resize
-
+    @MainActor
     func testResizeClamping() {
-        let manager = PaneManager()
+        let manager = makeManager(testName: #function)
         let paneID = manager.focusedPaneId
 
         manager.splitPane(paneID, direction: .vertical)
@@ -197,9 +201,9 @@ final class PaneManagerTests: XCTestCase {
     }
 
     // MARK: - Swap
-
+    @MainActor
     func testSwapReversesPaneOrder() {
-        let manager = PaneManager()
+        let manager = makeManager(testName: #function)
         let first = manager.focusedPaneId
         manager.splitPane(first, direction: .vertical)
 
@@ -221,9 +225,9 @@ final class PaneManagerTests: XCTestCase {
     }
 
     // MARK: - Maximize / Restore
-
+    @MainActor
     func testMaximizeRestoreRoundTrip() {
-        let manager = PaneManager()
+        let manager = makeManager(testName: #function)
         let first = manager.focusedPaneId
         manager.splitPane(first, direction: .vertical)
 
@@ -243,9 +247,9 @@ final class PaneManagerTests: XCTestCase {
         XCTAssertNil(manager.maximizedPaneId)
         XCTAssertEqual(manager.rootNode, rootBefore)
     }
-
+    @MainActor
     func testToggleMaximize() {
-        let manager = PaneManager()
+        let manager = makeManager(testName: #function)
         let first = manager.focusedPaneId
         manager.splitPane(first, direction: .vertical)
 
@@ -255,9 +259,9 @@ final class PaneManagerTests: XCTestCase {
         manager.toggleMaximize(first)
         XCTAssertNil(manager.maximizedPaneId)
     }
-
+    @MainActor
     func testMaximizeSinglePaneIsNoOp() {
-        let manager = PaneManager()
+        let manager = makeManager(testName: #function)
         let paneID = manager.focusedPaneId
 
         manager.maximizePane(paneID)
@@ -265,9 +269,9 @@ final class PaneManagerTests: XCTestCase {
     }
 
     // MARK: - Session Assignment
-
+    @MainActor
     func testAssignSession() {
-        let manager = PaneManager()
+        let manager = makeManager(testName: #function)
         let paneID = manager.focusedPaneId
         let sessionID = UUID()
 
@@ -279,9 +283,9 @@ final class PaneManagerTests: XCTestCase {
     }
 
     // MARK: - Session Sync
-
+    @MainActor
     func testSyncRemovesPanesWithStaleSession() {
-        let manager = PaneManager()
+        let manager = makeManager(testName: #function)
         let first = manager.focusedPaneId
         let sessionA = UUID()
         let sessionB = UUID()
@@ -299,9 +303,9 @@ final class PaneManagerTests: XCTestCase {
         XCTAssertEqual(manager.paneCount, 1)
         XCTAssertEqual(manager.focusedSessionID, sessionA)
     }
-
+    @MainActor
     func testSyncClearsSessionOnLastPane() {
-        let manager = PaneManager()
+        let manager = makeManager(testName: #function)
         let paneID = manager.focusedPaneId
         let sessionID = UUID()
 
@@ -315,7 +319,7 @@ final class PaneManagerTests: XCTestCase {
     }
 
     // MARK: - Codable Round-Trip
-
+    @MainActor
     func testSplitNodeCodableRoundTrip() throws {
         let pane1 = TerminalPane(sessionType: .ssh(hostID: UUID(), hostLabel: "host-1"), title: "SSH")
         let pane2 = TerminalPane(sessionType: .local, title: "Local")
@@ -332,7 +336,7 @@ final class PaneManagerTests: XCTestCase {
 
         XCTAssertEqual(node, decoded)
     }
-
+    @MainActor
     func testNestedSplitNodeCodableRoundTrip() throws {
         let pane1 = TerminalPane(title: "P1")
         let pane2 = TerminalPane(title: "P2")
@@ -360,9 +364,10 @@ final class PaneManagerTests: XCTestCase {
     }
 
     // MARK: - Persistence
-
+    @MainActor
     func testLayoutPersistsAcrossManagerInstances() {
-        let defaults = UserDefaults(suiteName: "PaneManagerTests.\(UUID().uuidString)")!
+        let suite = "PaneManagerTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
         let store = PaneLayoutStore(defaults: defaults)
 
         // Create a manager, split a pane so it saves the layout.
@@ -377,11 +382,12 @@ final class PaneManagerTests: XCTestCase {
         XCTAssertEqual(manager2.paneCount, 2)
         XCTAssertEqual(manager2.rootNode.maxDepth, 1)
 
-        defaults.removePersistentDomain(forName: defaults.suiteName)
+        defaults.removePersistentDomain(forName: suite)
     }
-
+    @MainActor
     func testNamedLayoutSaveAndLoad() {
-        let defaults = UserDefaults(suiteName: "PaneManagerTests.\(UUID().uuidString)")!
+        let suite = "PaneManagerTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
         let store = PaneLayoutStore(defaults: defaults)
         let manager = PaneManager(layoutStore: store)
         let firstPane = manager.focusedPaneId
@@ -398,25 +404,33 @@ final class PaneManagerTests: XCTestCase {
         XCTAssertTrue(loaded)
         XCTAssertEqual(manager2.paneCount, 2)
 
-        defaults.removePersistentDomain(forName: defaults.suiteName)
+        defaults.removePersistentDomain(forName: suite)
     }
 
     // MARK: - Presets
-
+    @MainActor
     func testPresetsProduceCorrectPaneCounts() {
         XCTAssertEqual(PaneLayoutStore.Preset.sideBySide.node.paneCount, 2)
         XCTAssertEqual(PaneLayoutStore.Preset.threeColumn.node.paneCount, 3)
         XCTAssertEqual(PaneLayoutStore.Preset.quadGrid.node.paneCount, 4)
         XCTAssertEqual(PaneLayoutStore.Preset.mainPlusSidebar.node.paneCount, 3)
     }
-
+    @MainActor
     func testApplyPresetUpdatesManager() {
-        let manager = PaneManager()
+        let manager = makeManager(testName: #function)
         XCTAssertEqual(manager.paneCount, 1)
 
         manager.applyPreset(.quadGrid)
         XCTAssertEqual(manager.paneCount, 4)
         XCTAssertEqual(manager.rootNode.maxDepth, 2)
+    }
+
+    @MainActor
+    private func makeManager(testName: String) -> PaneManager {
+        let suite = "PaneManagerTests.\(testName).\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        return PaneManager(layoutStore: PaneLayoutStore(defaults: defaults, persistenceEnabled: false))
     }
 }
 #endif

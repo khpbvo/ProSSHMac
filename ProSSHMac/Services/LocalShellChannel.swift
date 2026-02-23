@@ -8,10 +8,6 @@
 import Foundation
 import Darwin
 
-// FIONREAD may not be exposed through the Darwin module overlay on all
-// targets.  Define it from the BSD header constant.
-private let _FIONREAD: CUnsignedLong = 0x4004_667F
-
 actor LocalShellChannel: SSHShellChannel {
 
     // MARK: - SSHShellChannel conformance
@@ -172,16 +168,31 @@ actor LocalShellChannel: SSHShellChannel {
         let data = Array(input.utf8)
         guard !data.isEmpty else { return }
 
-        data.withUnsafeBufferPointer { buffer in
-            guard let ptr = buffer.baseAddress else { return }
-            var offset = 0
-            while offset < data.count {
-                let written = Darwin.write(masterFD, ptr + offset, data.count - offset)
-                if written < 0 {
-                    break
-                }
-                offset += written
+        var offset = 0
+        while offset < data.count {
+            let written = data.withUnsafeBufferPointer { buffer -> Int in
+                guard let ptr = buffer.baseAddress else { return -1 }
+                return Darwin.write(masterFD, ptr + offset, data.count - offset)
             }
+
+            if written > 0 {
+                offset += written
+                continue
+            }
+
+            if written == 0 {
+                continue
+            }
+
+            let err = errno
+            if err == EINTR {
+                continue
+            }
+            if err == EAGAIN || err == EWOULDBLOCK {
+                try await Task.sleep(for: .milliseconds(1))
+                continue
+            }
+            throw LocalShellError.writeFailed(err)
         }
     }
 
@@ -227,54 +238,115 @@ actor LocalShellChannel: SSHShellChannel {
         let pid = childPID
 
         readerTask = Task.detached { [weak self] in
-            // 32KB buffer -- large enough for full-screen TUI redraws
-            let bufferSize = 32768
+            // 64KB buffer to reduce chunk fragmentation for full-screen TUIs.
+            let bufferSize = 65536
+            // Keep collecting for a short idle window so full-screen TUIs
+            // are rendered as coherent frames rather than tiny fragments.
+            let coalesceIdlePollMS = 2
             var buffer = [UInt8](repeating: 0, count: bufferSize)
+            var shouldExit = false
 
-            while !Task.isCancelled {
-                let bytesRead = buffer.withUnsafeMutableBufferPointer { ptr -> Int in
-                    guard let base = ptr.baseAddress else { return -1 }
-                    return Darwin.read(fd, base, ptr.count)
+            while !Task.isCancelled && !shouldExit {
+                var pollFD = pollfd(
+                    fd: fd,
+                    events: Int16(POLLIN),
+                    revents: 0
+                )
+                let pollResult = withUnsafeMutablePointer(to: &pollFD) { ptr in
+                    Darwin.poll(ptr, 1, 100)
                 }
 
-                if bytesRead > 0 {
-                    var accumulated = Data(buffer.prefix(bytesRead))
-
-                    // Coalesce: drain any additional data immediately
-                    // available in the kernel buffer.
-                    var bytesAvailable: Int32 = 0
-                    while await ioctl(fd, _FIONREAD, &bytesAvailable) == 0 && bytesAvailable > 0 {
-                        let toRead = min(Int(bytesAvailable), bufferSize)
-                        let extra = buffer.withUnsafeMutableBufferPointer { ptr -> Int in
-                            guard let base = ptr.baseAddress else { return -1 }
-                            return Darwin.read(fd, base, toRead)
-                        }
-                        if extra > 0 {
-                            accumulated.append(contentsOf: buffer.prefix(extra))
-                        } else {
-                            break
-                        }
-                    }
-
-                    await self?.yieldOutput(data: accumulated)
-                } else if bytesRead == 0 {
-                    // EOF
-                    break
-                } else {
-                    let err = errno
-                    if err == EAGAIN || err == EWOULDBLOCK {
-                        try? await Task.sleep(for: .milliseconds(10))
+                if pollResult == 0 {
+                    continue
+                }
+                if pollResult < 0 {
+                    if errno == EINTR {
                         continue
                     }
-                    if err == EIO {
-                        // Child exited
+                    break
+                }
+
+                var accumulated = Data()
+                while true {
+                    let bytesRead = buffer.withUnsafeMutableBufferPointer { ptr -> Int in
+                        guard let base = ptr.baseAddress else { return -1 }
+                        return Darwin.read(fd, base, ptr.count)
+                    }
+
+                    if bytesRead > 0 {
+                        accumulated.append(contentsOf: buffer.prefix(bytesRead))
+                        continue
+                    }
+
+                    if bytesRead == 0 {
+                        shouldExit = true
                         break
                     }
+
+                    let err = errno
                     if err == EINTR {
-                        // Interrupted by signal, retry
                         continue
                     }
-                    // Other error
+                    if err == EAGAIN || err == EWOULDBLOCK {
+                        // Briefly wait for follow-up bytes from the same redraw burst.
+                        var coalescePollFD = pollfd(
+                            fd: fd,
+                            events: Int16(POLLIN),
+                            revents: 0
+                        )
+                        let coalesceResult = withUnsafeMutablePointer(to: &coalescePollFD) { ptr in
+                            Darwin.poll(ptr, 1, Int32(coalesceIdlePollMS))
+                        }
+                        if coalesceResult > 0 {
+                            continue
+                        }
+                        if coalesceResult < 0, errno == EINTR {
+                            continue
+                        }
+                        break
+                    }
+                    if err == EIO {
+                        shouldExit = true
+                        break
+                    }
+
+                    shouldExit = true
+                    break
+                }
+
+                if !accumulated.isEmpty {
+                    await self?.yieldOutput(data: accumulated)
+                }
+
+                if shouldExit {
+                    break
+                }
+
+                let hasHangupOrError = (pollFD.revents & Int16(POLLHUP | POLLERR | POLLNVAL)) != 0
+                if hasHangupOrError {
+                    // Drain once more if needed, then exit.
+                    var tail = Data()
+                    while true {
+                        let bytesRead = buffer.withUnsafeMutableBufferPointer { ptr -> Int in
+                            guard let base = ptr.baseAddress else { return -1 }
+                            return Darwin.read(fd, base, ptr.count)
+                        }
+                        if bytesRead > 0 {
+                            tail.append(contentsOf: buffer.prefix(bytesRead))
+                            continue
+                        }
+                        if bytesRead < 0, errno == EINTR {
+                            continue
+                        }
+                        if bytesRead < 0, (errno == EAGAIN || errno == EWOULDBLOCK) {
+                            break
+                        }
+                        break
+                    }
+
+                    if !tail.isEmpty {
+                        await self?.yieldOutput(data: tail)
+                    }
                     break
                 }
             }
@@ -467,6 +539,7 @@ enum LocalShellError: LocalizedError {
     case ptyAllocationFailed
     case forkFailed
     case shellNotFound(String)
+    case writeFailed(Int32)
     case platformUnsupported
 
     var errorDescription: String? {
@@ -477,6 +550,9 @@ enum LocalShellError: LocalizedError {
             return "Failed to fork child process for local shell."
         case let .shellNotFound(path):
             return "Shell not found at path: \(path)"
+        case let .writeFailed(code):
+            let message = String(cString: Darwin.strerror(code))
+            return "Failed to send input to local PTY (\(code)): \(message)"
         case .platformUnsupported:
             return "Local terminal is not supported on this platform."
         }

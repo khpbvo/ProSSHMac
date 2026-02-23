@@ -14,10 +14,13 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <stdint.h>
+#include <pthread.h>
 
 struct ProSSHLibSSHHandle {
     ssh_session session;
     ssh_channel channel;
+    pthread_mutex_t session_mutex;
+    int session_mutex_initialized;
 };
 
 struct ProSSHForwardChannel {
@@ -42,6 +45,7 @@ static int prossh_parse_public_key_tokens(
     char **type_token,
     char **base64_token
 );
+static void prossh_libssh_channel_close_unlocked(ProSSHLibSSHHandle *handle);
 
 static void prossh_copy_string(char *dst, size_t dst_len, const char *src) {
     if (dst == NULL || dst_len == 0) {
@@ -125,6 +129,46 @@ static void prossh_set_error(
     }
 
     prossh_copy_string(error_buffer, error_buffer_len, fallback);
+}
+
+static void prossh_lock_handle(ProSSHLibSSHHandle *handle) {
+    if (handle == NULL || handle->session_mutex_initialized == 0) {
+        return;
+    }
+    pthread_mutex_lock(&handle->session_mutex);
+}
+
+static void prossh_unlock_handle(ProSSHLibSSHHandle *handle) {
+    if (handle == NULL || handle->session_mutex_initialized == 0) {
+        return;
+    }
+    pthread_mutex_unlock(&handle->session_mutex);
+}
+
+static int prossh_prepare_blocking_session_for_sftp(ProSSHLibSSHHandle *handle) {
+    if (handle == NULL || handle->session == NULL) {
+        return 1;
+    }
+
+    int was_blocking = ssh_is_blocking(handle->session);
+    if (was_blocking == 0) {
+        ssh_set_blocking(handle->session, 1);
+    }
+    return was_blocking;
+}
+
+static void prossh_restore_session_mode_after_sftp(ProSSHLibSSHHandle *handle, int previous_blocking_mode) {
+    if (handle == NULL || handle->session == NULL) {
+        return;
+    }
+
+    if (previous_blocking_mode == 0) {
+        // Restore pre-SFTP behavior for the interactive shell path.
+        ssh_set_blocking(handle->session, 0);
+        if (handle->channel != NULL) {
+            ssh_channel_set_blocking(handle->channel, 0);
+        }
+    }
 }
 
 static int prossh_apply_options(
@@ -1437,22 +1481,20 @@ static int prossh_convert_pem_to_pkcs8(
 
 ProSSHLibSSHHandle *prossh_libssh_create(void) {
     ProSSHLibSSHHandle *handle = (ProSSHLibSSHHandle *)calloc(1, sizeof(ProSSHLibSSHHandle));
-    return handle;
-}
-
-int prossh_libssh_send_keepalive(ProSSHLibSSHHandle *handle) {
-    if (handle == NULL || handle->session == NULL) {
-        return -1;
+    if (handle == NULL) {
+        return NULL;
     }
 
-    if (ssh_is_connected(handle->session) == 0) {
-        return -2;
+    if (pthread_mutex_init(&handle->session_mutex, NULL) == 0) {
+        handle->session_mutex_initialized = 1;
+        return handle;
     }
 
-    return ssh_send_ignore(handle->session, "") == SSH_OK ? 0 : -2;
+    free(handle);
+    return NULL;
 }
 
-void prossh_libssh_channel_close(ProSSHLibSSHHandle *handle) {
+static void prossh_libssh_channel_close_unlocked(ProSSHLibSSHHandle *handle) {
     if (handle == NULL || handle->channel == NULL) {
         return;
     }
@@ -1462,18 +1504,51 @@ void prossh_libssh_channel_close(ProSSHLibSSHHandle *handle) {
     handle->channel = NULL;
 }
 
+int prossh_libssh_send_keepalive(ProSSHLibSSHHandle *handle) {
+    if (handle == NULL || handle->session == NULL) {
+        return -1;
+    }
+
+    prossh_lock_handle(handle);
+    if (handle->session == NULL) {
+        prossh_unlock_handle(handle);
+        return -1;
+    }
+
+    if (ssh_is_connected(handle->session) == 0) {
+        prossh_unlock_handle(handle);
+        return -2;
+    }
+
+    int result = ssh_send_ignore(handle->session, "") == SSH_OK ? 0 : -2;
+    prossh_unlock_handle(handle);
+    return result;
+}
+
+void prossh_libssh_channel_close(ProSSHLibSSHHandle *handle) {
+    if (handle == NULL) {
+        return;
+    }
+
+    prossh_lock_handle(handle);
+    prossh_libssh_channel_close_unlocked(handle);
+    prossh_unlock_handle(handle);
+}
+
 void prossh_libssh_disconnect(ProSSHLibSSHHandle *handle) {
     if (handle == NULL) {
         return;
     }
 
-    prossh_libssh_channel_close(handle);
+    prossh_lock_handle(handle);
+    prossh_libssh_channel_close_unlocked(handle);
 
     if (handle->session != NULL) {
         ssh_disconnect(handle->session);
         ssh_free(handle->session);
         handle->session = NULL;
     }
+    prossh_unlock_handle(handle);
 }
 
 void prossh_libssh_destroy(ProSSHLibSSHHandle *handle) {
@@ -1482,6 +1557,10 @@ void prossh_libssh_destroy(ProSSHLibSSHHandle *handle) {
     }
 
     prossh_libssh_disconnect(handle);
+    if (handle->session_mutex_initialized != 0) {
+        pthread_mutex_destroy(&handle->session_mutex);
+        handle->session_mutex_initialized = 0;
+    }
     free(handle);
 }
 
@@ -1873,30 +1952,42 @@ int prossh_libssh_open_shell(
     char *error_buffer,
     size_t error_buffer_len
 ) {
+    int status = 0;
+
     if (handle == NULL || handle->session == NULL) {
         prossh_copy_string(error_buffer, error_buffer_len, "SSH session is not connected.");
         return -1;
     }
 
-    prossh_libssh_channel_close(handle);
+    prossh_lock_handle(handle);
+    if (handle->session == NULL) {
+        prossh_copy_string(error_buffer, error_buffer_len, "SSH session is not connected.");
+        status = -1;
+        goto cleanup;
+    }
+
+    prossh_libssh_channel_close_unlocked(handle);
 
     handle->channel = ssh_channel_new(handle->session);
     if (handle->channel == NULL) {
         prossh_copy_string(error_buffer, error_buffer_len, "Failed to create SSH channel.");
-        return -1;
+        status = -1;
+        goto cleanup;
     }
 
     if (ssh_channel_open_session(handle->channel) != SSH_OK) {
         prossh_set_error(handle, "Failed to open channel session.", error_buffer, error_buffer_len);
-        prossh_libssh_channel_close(handle);
-        return -2;
+        prossh_libssh_channel_close_unlocked(handle);
+        status = -2;
+        goto cleanup;
     }
 
     if (enable_agent_forwarding) {
         if (ssh_channel_request_auth_agent(handle->channel) != SSH_OK) {
             prossh_set_error(handle, "Failed to enable agent forwarding on channel.", error_buffer, error_buffer_len);
-            prossh_libssh_channel_close(handle);
-            return -5;
+            prossh_libssh_channel_close_unlocked(handle);
+            status = -5;
+            goto cleanup;
         }
     }
 
@@ -1943,19 +2034,25 @@ int prossh_libssh_open_shell(
         // Fallback for servers that reject explicit PTY mode blobs.
         if (ssh_channel_request_pty_size(handle->channel, term, columns, rows) != SSH_OK) {
             prossh_set_error(handle, "Failed to request PTY.", error_buffer, error_buffer_len);
-            prossh_libssh_channel_close(handle);
-            return -3;
+            prossh_libssh_channel_close_unlocked(handle);
+            status = -3;
+            goto cleanup;
         }
     }
 
     if (ssh_channel_request_shell(handle->channel) != SSH_OK) {
         prossh_set_error(handle, "Failed to request shell.", error_buffer, error_buffer_len);
-        prossh_libssh_channel_close(handle);
-        return -4;
+        prossh_libssh_channel_close_unlocked(handle);
+        status = -4;
+        goto cleanup;
     }
 
     ssh_channel_set_blocking(handle->channel, 0);
-    return 0;
+    status = 0;
+
+cleanup:
+    prossh_unlock_handle(handle);
+    return status;
 }
 
 int prossh_libssh_channel_resize_pty(
@@ -1965,17 +2062,31 @@ int prossh_libssh_channel_resize_pty(
     char *error_buffer,
     size_t error_buffer_len
 ) {
+    int status = 0;
+
     if (handle == NULL || handle->channel == NULL) {
         prossh_copy_string(error_buffer, error_buffer_len, "Invalid handle or channel.");
         return -1;
     }
 
-    if (ssh_channel_change_pty_size(handle->channel, columns, rows) != SSH_OK) {
-        prossh_set_error(handle, "Failed to resize PTY.", error_buffer, error_buffer_len);
-        return -2;
+    prossh_lock_handle(handle);
+    if (handle->channel == NULL) {
+        prossh_copy_string(error_buffer, error_buffer_len, "Invalid handle or channel.");
+        status = -1;
+        goto cleanup;
     }
 
-    return 0;
+    if (ssh_channel_change_pty_size(handle->channel, columns, rows) != SSH_OK) {
+        prossh_set_error(handle, "Failed to resize PTY.", error_buffer, error_buffer_len);
+        status = -2;
+        goto cleanup;
+    }
+
+    status = 0;
+
+cleanup:
+    prossh_unlock_handle(handle);
+    return status;
 }
 
 int prossh_libssh_channel_write(
@@ -1985,17 +2096,30 @@ int prossh_libssh_channel_write(
     char *error_buffer,
     size_t error_buffer_len
 ) {
+    int status = 0;
+
     if (handle == NULL || handle->channel == NULL || input == NULL || input_len == 0) {
         return -1;
+    }
+
+    prossh_lock_handle(handle);
+    if (handle->channel == NULL || handle->session == NULL) {
+        status = -1;
+        goto cleanup;
     }
 
     int written = ssh_channel_write(handle->channel, input, (uint32_t)input_len);
     if (written == SSH_ERROR) {
         prossh_set_error(handle, "Failed to write to shell channel.", error_buffer, error_buffer_len);
-        return -2;
+        status = -2;
+        goto cleanup;
     }
 
-    return 0;
+    status = 0;
+
+cleanup:
+    prossh_unlock_handle(handle);
+    return status;
 }
 
 int prossh_libssh_channel_read(
@@ -2007,6 +2131,8 @@ int prossh_libssh_channel_read(
     char *error_buffer,
     size_t error_buffer_len
 ) {
+    int status = 0;
+
     if (bytes_read != NULL) {
         *bytes_read = 0;
     }
@@ -2016,6 +2142,12 @@ int prossh_libssh_channel_read(
 
     if (handle == NULL || handle->channel == NULL || output_buffer == NULL || output_buffer_len < 2) {
         return -1;
+    }
+
+    prossh_lock_handle(handle);
+    if (handle->channel == NULL || handle->session == NULL) {
+        status = -1;
+        goto cleanup;
     }
 
     int total_read = 0;
@@ -2029,7 +2161,8 @@ int prossh_libssh_channel_read(
 
     if (stdout_read == SSH_ERROR) {
         prossh_set_error(handle, "Failed reading shell output.", error_buffer, error_buffer_len);
-        return -2;
+        status = -2;
+        goto cleanup;
     }
 
     if (stdout_read > 0) {
@@ -2047,7 +2180,8 @@ int prossh_libssh_channel_read(
 
         if (stderr_read == SSH_ERROR) {
             prossh_set_error(handle, "Failed reading shell stderr.", error_buffer, error_buffer_len);
-            return -3;
+            status = -3;
+            goto cleanup;
         }
 
         if (stderr_read > 0) {
@@ -2065,7 +2199,11 @@ int prossh_libssh_channel_read(
         *is_eof = ssh_channel_is_eof(handle->channel) != 0;
     }
 
-    return 0;
+    status = 0;
+
+cleanup:
+    prossh_unlock_handle(handle);
+    return status;
 }
 
 int prossh_libssh_generate_keypair(
@@ -3156,29 +3294,37 @@ int prossh_libssh_sftp_list_directory(
         output_buffer[0] = '\0';
     }
 
+    int status = 0;
+    int previous_blocking_mode = 1;
+    sftp_session sftp = NULL;
+    sftp_dir dir = NULL;
+
     if (handle == NULL || handle->session == NULL || remote_path == NULL ||
         output_buffer == NULL || output_buffer_len < 2) {
         prossh_copy_string(error_buffer, error_buffer_len, "Invalid SFTP list parameters.");
         return -1;
     }
 
-    sftp_session sftp = sftp_new(handle->session);
+    prossh_lock_handle(handle);
+    previous_blocking_mode = prossh_prepare_blocking_session_for_sftp(handle);
+    sftp = sftp_new(handle->session);
     if (sftp == NULL) {
         prossh_set_error(handle, "Failed to create SFTP session.", error_buffer, error_buffer_len);
-        return -2;
+        status = -2;
+        goto cleanup;
     }
 
     if (sftp_init(sftp) != SSH_OK) {
-        prossh_copy_string(error_buffer, error_buffer_len, "Failed to initialize SFTP session.");
-        sftp_free(sftp);
-        return -3;
+        prossh_set_error(handle, "Failed to initialize SFTP session.", error_buffer, error_buffer_len);
+        status = -3;
+        goto cleanup;
     }
 
-    sftp_dir dir = sftp_opendir(sftp, remote_path);
+    dir = sftp_opendir(sftp, remote_path);
     if (dir == NULL) {
-        prossh_copy_string(error_buffer, error_buffer_len, "Failed to open remote directory.");
-        sftp_free(sftp);
-        return -4;
+        prossh_set_error(handle, "Failed to open remote directory.", error_buffer, error_buffer_len);
+        status = -4;
+        goto cleanup;
     }
 
     size_t cursor = 0;
@@ -3208,10 +3354,9 @@ int prossh_libssh_sftp_list_directory(
 
             if (written < 0 || (size_t)written >= (output_buffer_len - cursor)) {
                 sftp_attributes_free(attributes);
-                sftp_closedir(dir);
-                sftp_free(sftp);
                 prossh_copy_string(error_buffer, error_buffer_len, "SFTP listing output exceeded buffer size.");
-                return -5;
+                status = -5;
+                goto cleanup;
             }
 
             cursor += (size_t)written;
@@ -3220,9 +3365,16 @@ int prossh_libssh_sftp_list_directory(
         sftp_attributes_free(attributes);
     }
 
-    sftp_closedir(dir);
-    sftp_free(sftp);
-    return 0;
+cleanup:
+    if (dir != NULL) {
+        sftp_closedir(dir);
+    }
+    if (sftp != NULL) {
+        sftp_free(sftp);
+    }
+    prossh_restore_session_mode_after_sftp(handle, previous_blocking_mode);
+    prossh_unlock_handle(handle);
+    return status;
 }
 
 int prossh_libssh_sftp_download_file(
@@ -3241,28 +3393,37 @@ int prossh_libssh_sftp_download_file(
         *total_bytes = 0;
     }
 
+    int status = 0;
+    int previous_blocking_mode = 1;
+    sftp_session sftp = NULL;
+    sftp_file remote = NULL;
+    FILE *local = NULL;
+
     if (handle == NULL || handle->session == NULL || remote_path == NULL || local_path == NULL) {
         prossh_copy_string(error_buffer, error_buffer_len, "Invalid SFTP download parameters.");
         return -1;
     }
 
-    sftp_session sftp = sftp_new(handle->session);
+    prossh_lock_handle(handle);
+    previous_blocking_mode = prossh_prepare_blocking_session_for_sftp(handle);
+    sftp = sftp_new(handle->session);
     if (sftp == NULL) {
         prossh_set_error(handle, "Failed to create SFTP session.", error_buffer, error_buffer_len);
-        return -2;
+        status = -2;
+        goto cleanup;
     }
 
     if (sftp_init(sftp) != SSH_OK) {
-        prossh_copy_string(error_buffer, error_buffer_len, "Failed to initialize SFTP session.");
-        sftp_free(sftp);
-        return -3;
+        prossh_set_error(handle, "Failed to initialize SFTP session.", error_buffer, error_buffer_len);
+        status = -3;
+        goto cleanup;
     }
 
-    sftp_file remote = sftp_open(sftp, remote_path, O_RDONLY, 0);
+    remote = sftp_open(sftp, remote_path, O_RDONLY, 0);
     if (remote == NULL) {
-        prossh_copy_string(error_buffer, error_buffer_len, "Failed to open remote file for download.");
-        sftp_free(sftp);
-        return -4;
+        prossh_set_error(handle, "Failed to open remote file for download.", error_buffer, error_buffer_len);
+        status = -4;
+        goto cleanup;
     }
 
     sftp_attributes attributes = sftp_fstat(remote);
@@ -3273,12 +3434,11 @@ int prossh_libssh_sftp_download_file(
         sftp_attributes_free(attributes);
     }
 
-    FILE *local = fopen(local_path, "wb");
+    local = fopen(local_path, "wb");
     if (local == NULL) {
         prossh_copy_string(error_buffer, error_buffer_len, "Failed to open local file for download.");
-        sftp_close(remote);
-        sftp_free(sftp);
-        return -5;
+        status = -5;
+        goto cleanup;
     }
 
     char buffer[32768];
@@ -3286,11 +3446,9 @@ int prossh_libssh_sftp_download_file(
     while (1) {
         ssize_t read_count = sftp_read(remote, buffer, sizeof(buffer));
         if (read_count < 0) {
-            prossh_copy_string(error_buffer, error_buffer_len, "Failed while reading remote file.");
-            fclose(local);
-            sftp_close(remote);
-            sftp_free(sftp);
-            return -6;
+            prossh_set_error(handle, "Failed while reading remote file.", error_buffer, error_buffer_len);
+            status = -6;
+            goto cleanup;
         }
 
         if (read_count == 0) {
@@ -3300,10 +3458,8 @@ int prossh_libssh_sftp_download_file(
         size_t written = fwrite(buffer, 1, (size_t)read_count, local);
         if (written != (size_t)read_count) {
             prossh_copy_string(error_buffer, error_buffer_len, "Failed while writing local file.");
-            fclose(local);
-            sftp_close(remote);
-            sftp_free(sftp);
-            return -7;
+            status = -7;
+            goto cleanup;
         }
 
         transferred += (int64_t)read_count;
@@ -3312,10 +3468,19 @@ int prossh_libssh_sftp_download_file(
         }
     }
 
-    fclose(local);
-    sftp_close(remote);
-    sftp_free(sftp);
-    return 0;
+cleanup:
+    if (local != NULL) {
+        fclose(local);
+    }
+    if (remote != NULL) {
+        sftp_close(remote);
+    }
+    if (sftp != NULL) {
+        sftp_free(sftp);
+    }
+    prossh_restore_session_mode_after_sftp(handle, previous_blocking_mode);
+    prossh_unlock_handle(handle);
+    return status;
 }
 
 int prossh_libssh_sftp_upload_file(
@@ -3334,6 +3499,12 @@ int prossh_libssh_sftp_upload_file(
         *total_bytes = 0;
     }
 
+    int status = 0;
+    int previous_blocking_mode = 1;
+    FILE *local = NULL;
+    sftp_session sftp = NULL;
+    sftp_file remote = NULL;
+
     if (handle == NULL || handle->session == NULL || remote_path == NULL || local_path == NULL) {
         prossh_copy_string(error_buffer, error_buffer_len, "Invalid SFTP upload parameters.");
         return -1;
@@ -3344,37 +3515,37 @@ int prossh_libssh_sftp_upload_file(
         *total_bytes = (int64_t)local_stat.st_size;
     }
 
-    FILE *local = fopen(local_path, "rb");
+    local = fopen(local_path, "rb");
     if (local == NULL) {
         prossh_copy_string(error_buffer, error_buffer_len, "Failed to open local file for upload.");
         return -2;
     }
 
-    sftp_session sftp = sftp_new(handle->session);
+    prossh_lock_handle(handle);
+    previous_blocking_mode = prossh_prepare_blocking_session_for_sftp(handle);
+    sftp = sftp_new(handle->session);
     if (sftp == NULL) {
-        fclose(local);
         prossh_set_error(handle, "Failed to create SFTP session.", error_buffer, error_buffer_len);
-        return -3;
+        status = -3;
+        goto cleanup;
     }
 
     if (sftp_init(sftp) != SSH_OK) {
-        fclose(local);
-        prossh_copy_string(error_buffer, error_buffer_len, "Failed to initialize SFTP session.");
-        sftp_free(sftp);
-        return -4;
+        prossh_set_error(handle, "Failed to initialize SFTP session.", error_buffer, error_buffer_len);
+        status = -4;
+        goto cleanup;
     }
 
-    sftp_file remote = sftp_open(
+    remote = sftp_open(
         sftp,
         remote_path,
         O_WRONLY | O_CREAT | O_TRUNC,
         S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH
     );
     if (remote == NULL) {
-        fclose(local);
-        prossh_copy_string(error_buffer, error_buffer_len, "Failed to open remote file for upload.");
-        sftp_free(sftp);
-        return -5;
+        prossh_set_error(handle, "Failed to open remote file for upload.", error_buffer, error_buffer_len);
+        status = -5;
+        goto cleanup;
     }
 
     char buffer[32768];
@@ -3383,22 +3554,18 @@ int prossh_libssh_sftp_upload_file(
         size_t read_count = fread(buffer, 1, sizeof(buffer), local);
         if (read_count == 0) {
             if (ferror(local)) {
-                fclose(local);
-                sftp_close(remote);
-                sftp_free(sftp);
                 prossh_copy_string(error_buffer, error_buffer_len, "Failed while reading local file.");
-                return -6;
+                status = -6;
+                goto cleanup;
             }
             break;
         }
 
         ssize_t written = sftp_write(remote, buffer, read_count);
         if (written < 0 || (size_t)written != read_count) {
-            fclose(local);
-            sftp_close(remote);
-            sftp_free(sftp);
-            prossh_copy_string(error_buffer, error_buffer_len, "Failed while writing remote file.");
-            return -7;
+            prossh_set_error(handle, "Failed while writing remote file.", error_buffer, error_buffer_len);
+            status = -7;
+            goto cleanup;
         }
 
         transferred += (int64_t)written;
@@ -3407,10 +3574,19 @@ int prossh_libssh_sftp_upload_file(
         }
     }
 
-    fclose(local);
-    sftp_close(remote);
-    sftp_free(sftp);
-    return 0;
+cleanup:
+    if (local != NULL) {
+        fclose(local);
+    }
+    if (remote != NULL) {
+        sftp_close(remote);
+    }
+    if (sftp != NULL) {
+        sftp_free(sftp);
+    }
+    prossh_restore_session_mode_after_sftp(handle, previous_blocking_mode);
+    prossh_unlock_handle(handle);
+    return status;
 }
 
 ProSSHForwardChannel *prossh_forward_channel_open(

@@ -1,5 +1,6 @@
 import SwiftUI
 import Metal
+import AppKit
 
 struct ExternalTerminalWindowView: View {
     let sessionID: UUID?
@@ -223,13 +224,29 @@ struct ExternalTerminalWindowView: View {
 
     private func copyActiveContentToClipboard() {
         guard let sessionID = session?.id else { return }
-        if let selectedText = selectionCoordinator.copySelection(sessionID: sessionID) {
+        if copyContentToClipboard(sessionID: sessionID) {
+            return
+        }
+        if let selectedText = selectionCoordinator.copySelection(preferredSessionID: sessionID) {
             _ = PlatformClipboard.writeString(selectedText)
             return
         }
+        if NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil) {
+            return
+        }
+    }
+
+    @discardableResult
+    private func copyContentToClipboard(sessionID: UUID) -> Bool {
+        if let selectedText = selectionCoordinator.copySelection(sessionID: sessionID), !selectedText.isEmpty {
+            _ = PlatformClipboard.writeString(selectedText)
+            return true
+        }
         if let lastLine = sessionManager.shellBuffers[sessionID]?.last, !lastLine.isEmpty {
             _ = PlatformClipboard.writeString(lastLine)
+            return true
         }
+        return false
     }
 
     private func pasteClipboardToSession(_ sessionID: UUID) {

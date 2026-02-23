@@ -12,6 +12,11 @@ final class AppDependencies: ObservableObject {
     let keyForgeViewModel: KeyForgeViewModel
     let certificatesViewModel: CertificatesViewModel
     let idleScreensaverManager: IdleScreensaverManager
+    let openAISettingsViewModel: OpenAISettingsViewModel
+    let terminalAIAssistantViewModel: TerminalAIAssistantViewModel
+    let openAIAPIKeyProvider: any OpenAIAPIKeyProviding
+    let openAIResponsesService: any OpenAIResponsesServicing
+    let openAIAgentService: any OpenAIAgentServicing
 
     static var isScreenshotMode: Bool {
         ProcessInfo.processInfo.arguments.contains("--screenshot-mode")
@@ -25,15 +30,20 @@ final class AppDependencies: ObservableObject {
         return ProcessInfo.processInfo.arguments[idx + 1]
     }
 
+    static var isRunningTests: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+    }
+
     init() {
         let screenshotMode = Self.isScreenshotMode
+        let runningTests = Self.isRunningTests
 
         self.navigationCoordinator = AppNavigationCoordinator()
 
         let auditLogManager = AuditLogManager(store: FileAuditLogStore())
         self.auditLogManager = auditLogManager
 
-        let transport = SSHTransportFactory.makePreferredTransport()
+        let transport: any SSHTransporting = runningTests ? MockSSHTransport() : SSHTransportFactory.makePreferredTransport()
         let portForwardingManager = PortForwardingManager(transport: transport, auditLogManager: auditLogManager)
         self.portForwardingManager = portForwardingManager
 
@@ -86,6 +96,19 @@ final class AppDependencies: ObservableObject {
         )
 
         self.idleScreensaverManager = IdleScreensaverManager()
+        let openAIAPIKeyStore = KeychainOpenAIAPIKeyStore()
+        self.openAISettingsViewModel = OpenAISettingsViewModel(apiKeyStore: openAIAPIKeyStore)
+        self.openAIAPIKeyProvider = DefaultOpenAIAPIKeyProvider(store: openAIAPIKeyStore)
+        let openAIResponsesService = OpenAIResponsesService(apiKeyProvider: self.openAIAPIKeyProvider)
+        self.openAIResponsesService = openAIResponsesService
+        self.openAIAgentService = OpenAIAgentService(
+            responsesService: openAIResponsesService,
+            sessionProvider: sessionManager,
+            maxToolIterations: 200
+        )
+        self.terminalAIAssistantViewModel = TerminalAIAssistantViewModel(
+            agentService: self.openAIAgentService
+        )
 
         if ThroughputBenchmarkRunner.isEnabled {
             Task { @MainActor in

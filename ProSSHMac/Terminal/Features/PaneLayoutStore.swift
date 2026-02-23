@@ -14,24 +14,41 @@ final class PaneLayoutStore {
     private static let savedLayoutsKey = "paneLayout.saved"
 
     private let defaults: UserDefaults
+    private let persistenceEnabled: Bool
+    private var inMemoryLastLayout: SplitNode?
+    private var inMemoryNamedLayouts: [String: SplitNode] = [:]
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, persistenceEnabled: Bool = true) {
         self.defaults = defaults
+        self.persistenceEnabled = persistenceEnabled
     }
+
+    nonisolated deinit {}
 
     // MARK: - Last Layout (auto-save / auto-restore)
 
     func saveLastLayout(_ node: SplitNode) {
+        guard persistenceEnabled else {
+            inMemoryLastLayout = node
+            return
+        }
         guard let data = try? JSONEncoder().encode(node) else { return }
         defaults.set(data, forKey: Self.lastLayoutKey)
     }
 
     func loadLastLayout() -> SplitNode? {
+        guard persistenceEnabled else {
+            return inMemoryLastLayout
+        }
         guard let data = defaults.data(forKey: Self.lastLayoutKey) else { return nil }
         return try? JSONDecoder().decode(SplitNode.self, from: data)
     }
 
     func clearLastLayout() {
+        guard persistenceEnabled else {
+            inMemoryLastLayout = nil
+            return
+        }
         defaults.removeObject(forKey: Self.lastLayoutKey)
     }
 
@@ -125,11 +142,18 @@ final class PaneLayoutStore {
     // MARK: - Private
 
     private func loadAllNamedLayouts() -> [String: SplitNode] {
+        guard persistenceEnabled else {
+            return inMemoryNamedLayouts
+        }
         guard let data = defaults.data(forKey: Self.savedLayoutsKey) else { return [:] }
         return (try? JSONDecoder().decode([String: SplitNode].self, from: data)) ?? [:]
     }
 
     private func persist(_ layouts: [String: SplitNode]) {
+        guard persistenceEnabled else {
+            inMemoryNamedLayouts = layouts
+            return
+        }
         guard let data = try? JSONEncoder().encode(layouts) else { return }
         defaults.set(data, forKey: Self.savedLayoutsKey)
     }

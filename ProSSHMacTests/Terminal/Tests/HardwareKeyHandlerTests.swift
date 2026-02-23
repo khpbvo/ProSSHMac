@@ -5,15 +5,18 @@
 
 #if canImport(XCTest)
 import XCTest
+@testable import ProSSHMac
 
 final class HardwareKeyHandlerTests: XCTestCase {
 
+    @MainActor
     func testPastePayloadWithoutBracketedPaste() {
         let input = "line1\nline2"
         let payload = HardwarePasteEncoder.payload(for: input, bracketedPasteEnabled: false)
         XCTAssertEqual(payload, input)
     }
 
+    @MainActor
     func testPastePayloadWithBracketedPaste() {
         let input = "line1\nline2"
         let payload = HardwarePasteEncoder.payload(for: input, bracketedPasteEnabled: true)

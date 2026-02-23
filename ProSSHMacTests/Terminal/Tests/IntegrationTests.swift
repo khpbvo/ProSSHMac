@@ -13,6 +13,7 @@
 
 #if canImport(XCTest)
 import XCTest
+@testable import ProSSHMac
 
 // MARK: - Integration Test Base
 
@@ -20,55 +21,56 @@ class IntegrationTestBase: XCTestCase {
 
     var engine: TerminalEngine!
     var grid: TerminalGrid!
-    var responses: [[UInt8]]!
 
     override func setUp() async throws {
         engine = TerminalEngine(columns: 80, rows: 24)
         grid = await engine.grid
-        responses = []
-
-        await engine.setResponseHandler { @Sendable [weak self] bytes in
-            self?.responses.append(bytes)
-        }
     }
 
     // MARK: - Helpers
 
     /// Feed a string as UTF-8 bytes into the parser.
+    @nonobjc
     func feed(_ string: String) async {
         await engine.feed(Array(string.utf8))
     }
 
     /// Feed raw bytes into the parser.
+    @nonobjc
     func feedBytes(_ bytes: [UInt8]) async {
         await engine.feed(bytes)
     }
 
     /// Read the character at a grid position.
+    @nonobjc
     func charAt(row: Int, col: Int) async -> String {
         let cell = await grid.cellAt(row: row, col: col)
         return cell?.graphemeCluster ?? ""
     }
 
     /// Read the foreground color at a grid position.
+    @nonobjc
     func fgAt(row: Int, col: Int) async -> TerminalColor {
         let cell = await grid.cellAt(row: row, col: col)
         return cell?.fgColor ?? .default
     }
 
     /// Read the background color at a grid position.
+    @nonobjc
     func bgAt(row: Int, col: Int) async -> TerminalColor {
         let cell = await grid.cellAt(row: row, col: col)
         return cell?.bgColor ?? .default
     }
 
     /// Read the attributes at a grid position.
+    @nonobjc
     func attrsAt(row: Int, col: Int) async -> CellAttributes {
         let cell = await grid.cellAt(row: row, col: col)
         return cell?.attributes ?? []
     }
 
     /// Read a string from a row spanning columns [startCol, endCol).
+    @nonobjc
     func rowText(row: Int, startCol: Int = 0, endCol: Int? = nil) async -> String {
         let cols = await grid.columns
         let end = endCol ?? cols

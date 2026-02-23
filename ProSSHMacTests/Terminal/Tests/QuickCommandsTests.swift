@@ -5,10 +5,11 @@
 
 #if canImport(XCTest)
 import XCTest
+@testable import ProSSHMac
 
-@MainActor
-final class QuickCommandsTests: XCTestCase {
+    final class QuickCommandsTests: XCTestCase {
 
+    @MainActor
     func testSaveSnippetCapturesTemplateVariablesAndDefaultValues() throws {
         let quickCommands = makeManager(suffix: "save")
 
@@ -23,12 +24,14 @@ final class QuickCommandsTests: XCTestCase {
             hostLabel: nil
         )
 
-        XCTAssertEqual(snippet.variables.map(\.name), ["count", "path"])
+        let variableNames = snippet.variables.map { $0.name }
+        XCTAssertEqual(variableNames, ["count", "path"])
 
         let resolved = quickCommands.resolvedCommand(for: snippet, values: ["count": "50"])
         XCTAssertEqual(resolved, "tail -n 50 /var/log/system.log")
     }
 
+    @MainActor
     func testSnippetsAreFilteredByHostScope() throws {
         let quickCommands = makeManager(suffix: "scope")
         let hostA = UUID()
@@ -53,10 +56,12 @@ final class QuickCommandsTests: XCTestCase {
         XCTAssertEqual(forHostA.count, 2)
 
         let forHostB = quickCommands.snippets(for: hostB)
+        let firstForHostBName = forHostB.first?.name
         XCTAssertEqual(forHostB.count, 1)
-        XCTAssertEqual(forHostB.first?.name, "Global")
+        XCTAssertEqual(firstForHostBName, "Global")
     }
 
+    @MainActor
     func testExportAndImportLibraryRoundTrip() throws {
         let source = makeManager(suffix: "export")
         _ = try source.saveSnippet(
@@ -71,14 +76,18 @@ final class QuickCommandsTests: XCTestCase {
         let exportedURL = try source.exportLibrary(destinationDirectory: directory)
 
         let target = makeManager(suffix: "import")
-        XCTAssertTrue(target.snippets.isEmpty)
+        let isTargetEmpty = target.snippets.isEmpty
+        XCTAssertTrue(isTargetEmpty)
 
         try target.importLibrary(from: exportedURL, strategy: .replace)
 
-        XCTAssertEqual(target.snippets.count, 1)
-        XCTAssertEqual(target.snippets.first?.name, "Disk")
+        let importedSnippets = target.snippets
+        let importedFirstName = importedSnippets.first?.name
+        XCTAssertEqual(importedSnippets.count, 1)
+        XCTAssertEqual(importedFirstName, "Disk")
     }
 
+    @MainActor
     func testImportMergeOverwritesByID() throws {
         let manager = makeManager(suffix: "merge")
         let sharedID = UUID()
@@ -107,11 +116,15 @@ final class QuickCommandsTests: XCTestCase {
 
         try manager.importLibrary(from: exportURL, strategy: .merge)
 
-        XCTAssertEqual(manager.snippets.count, 1)
-        XCTAssertEqual(manager.snippets.first?.name, "New")
-        XCTAssertEqual(manager.snippets.first?.command, "echo new")
+        let mergedSnippets = manager.snippets
+        let mergedFirstName = mergedSnippets.first?.name
+        let mergedFirstCommand = mergedSnippets.first?.command
+        XCTAssertEqual(mergedSnippets.count, 1)
+        XCTAssertEqual(mergedFirstName, "New")
+        XCTAssertEqual(mergedFirstCommand, "echo new")
     }
 
+    @MainActor
     private func makeManager(suffix: String) -> QuickCommands {
         QuickCommands(defaults: makeDefaults(suffix: suffix), keyPrefix: "QuickCommandsTests.\(suffix)")
     }

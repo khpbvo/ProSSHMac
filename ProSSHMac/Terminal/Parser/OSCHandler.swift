@@ -30,7 +30,8 @@ nonisolated enum OSCHandler {
     static func dispatch(
         oscString: [UInt8],
         grid: TerminalGrid,
-        responseHandler: (([UInt8]) async -> Void)?
+        responseHandler: (([UInt8]) async -> Void)?,
+        semanticPromptHandler: ((SemanticPromptEvent) async -> Void)? = nil
     ) async {
         // Parse: <number> ; <string>
         // Some OSC commands have no semicolon (e.g., OSC 112 for cursor color reset)
@@ -106,7 +107,9 @@ nonisolated enum OSCHandler {
 
         // OSC 133 — Semantic prompt (placeholder for future shell integration)
         case OSCCommand.semanticPrompt:
-            break
+            if let event = parseSemanticPromptEvent(text) {
+                await semanticPromptHandler?(event)
+            }
 
         default:
             break // Unknown OSC — ignore
@@ -377,5 +380,24 @@ nonisolated enum OSCHandler {
             value = value * 10 + Int(b - 0x30)
         }
         return value
+    }
+
+    private static func parseSemanticPromptEvent(_ text: String) -> SemanticPromptEvent? {
+        let parts = text.split(separator: ";", omittingEmptySubsequences: false)
+        guard let marker = parts.first?.first else { return nil }
+
+        switch marker {
+        case "A":
+            return .promptStart
+        case "B":
+            return .promptEnd
+        case "C":
+            return .commandStart
+        case "D":
+            let exitCode = parts.count > 1 ? Int(parts[1]) : nil
+            return .commandEnd(exitCode: exitCode)
+        default:
+            return nil
+        }
     }
 }

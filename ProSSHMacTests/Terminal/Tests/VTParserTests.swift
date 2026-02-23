@@ -10,6 +10,7 @@
 
 #if canImport(XCTest)
 import XCTest
+@testable import ProSSHMac
 
 // MARK: - VTParserTests
 
@@ -368,6 +369,44 @@ final class VTParserTests: XCTestCase {
 
         let row0 = await grid.visibleText().first ?? ""
         XCTAssertEqual(row0, "")
+    }
+
+    func testOSC133_CommandStartDispatchesSemanticEvent() async {
+        actor EventCollector {
+            var events: [SemanticPromptEvent] = []
+            func append(_ event: SemanticPromptEvent) {
+                events.append(event)
+            }
+            func snapshot() -> [SemanticPromptEvent] { events }
+        }
+
+        let collector = EventCollector()
+        await engine.setSemanticPromptEventHandler { event in
+            await collector.append(event)
+        }
+
+        await feed("\u{1B}]133;C\u{1B}\\")
+        let events = await collector.snapshot()
+        XCTAssertEqual(events, [.commandStart])
+    }
+
+    func testOSC133_CommandEndParsesExitCode() async {
+        actor EventCollector {
+            var events: [SemanticPromptEvent] = []
+            func append(_ event: SemanticPromptEvent) {
+                events.append(event)
+            }
+            func snapshot() -> [SemanticPromptEvent] { events }
+        }
+
+        let collector = EventCollector()
+        await engine.setSemanticPromptEventHandler { event in
+            await collector.append(event)
+        }
+
+        await feed("\u{1B}]133;D;17\u{1B}\\")
+        let events = await collector.snapshot()
+        XCTAssertEqual(events, [.commandEnd(exitCode: 17)])
     }
 
     func testOSC_DefaultForegroundSet() async {

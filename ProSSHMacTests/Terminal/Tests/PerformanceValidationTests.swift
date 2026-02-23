@@ -13,6 +13,7 @@
 
 #if canImport(XCTest)
 import XCTest
+@testable import ProSSHMac
 
 // MARK: - F.10: Performance Validation Test
 

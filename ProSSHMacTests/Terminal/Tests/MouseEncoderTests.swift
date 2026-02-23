@@ -5,9 +5,11 @@
 
 #if canImport(XCTest)
 import XCTest
+@testable import ProSSHMac
 
 final class MouseEncoderTests: XCTestCase {
 
+    @MainActor
     func testX10LeftPressEncoding() {
         let encoder = MouseEncoder(trackingMode: .x10, encoding: .x10)
         let event = MouseEvent(kind: .press, button: .left, row: 2, column: 3)
@@ -20,6 +22,7 @@ final class MouseEncoderTests: XCTestCase {
         }
     }
 
+    @MainActor
     func testSGRPressAndReleaseEncoding() {
         let encoder = MouseEncoder(trackingMode: .buttonEvent, encoding: .sgr)
 
@@ -30,6 +33,7 @@ final class MouseEncoderTests: XCTestCase {
         XCTAssertEqual(release, "\u{1B}[<3;44;12m")
     }
 
+    @MainActor
     func testButtonAndScrollMapping() {
         let encoder = MouseEncoder(trackingMode: .anyEvent, encoding: .sgr)
 
@@ -51,6 +55,7 @@ final class MouseEncoderTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testTrackingModeFiltering() {
         let noMouse = MouseEncoder(trackingMode: .none, encoding: .x10)
         XCTAssertNil(noMouse.encode(MouseEvent(kind: .press, button: .left, row: 1, column: 1)))
@@ -71,6 +76,7 @@ final class MouseEncoderTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testModifierBitsAreApplied() {
         let encoder = MouseEncoder(trackingMode: .anyEvent, encoding: .sgr)
         let event = MouseEvent(

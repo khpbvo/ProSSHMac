@@ -5,9 +5,11 @@
 
 #if canImport(XCTest)
 import XCTest
+@testable import ProSSHMac
 
 final class KeyboardToolbarTests: XCTestCase {
 
+    @MainActor
     func testLayoutSerializeAndParse() {
         let keys: [KeyboardToolbarKey] = [.tab, .esc, .ctrl, .alt]
         let serialized = KeyboardToolbarLayout.serialize(keys)
@@ -17,46 +19,61 @@ final class KeyboardToolbarTests: XCTestCase {
         XCTAssertEqual(parsed, keys)
     }
 
+    @MainActor
     func testLayoutParseFallsBackWhenEmpty() {
         let fallback: [KeyboardToolbarKey] = [.f1, .f2]
         let parsed = KeyboardToolbarLayout.parse(",,invalid", fallback: fallback)
         XCTAssertEqual(parsed, fallback)
     }
 
+    @MainActor
     func testLayoutParseDeduplicates() {
         let parsed = KeyboardToolbarLayout.parse("tab,esc,tab,esc,ctrl", fallback: [])
         XCTAssertEqual(parsed, [.tab, .esc, .ctrl])
     }
 
+    @MainActor
     func testCtrlOneShotAndConsume() {
         var modifiers = KeyboardToolbarModifiers()
         modifiers.toggleCtrl(now: 10.0)
-        XCTAssertEqual(modifiers.ctrl, .oneShot)
-        XCTAssertEqual(modifiers.activeKeyModifiers(), [.ctrl])
+        let afterToggleCtrl = modifiers.ctrl
+        let afterToggleActive = modifiers.activeKeyModifiers()
+        XCTAssertEqual(afterToggleCtrl, .oneShot)
+        XCTAssertEqual(afterToggleActive, [.ctrl])
 
         modifiers.consumeOneShot()
-        XCTAssertEqual(modifiers.ctrl, .off)
-        XCTAssertEqual(modifiers.activeKeyModifiers(), [])
+        let afterConsumeCtrl = modifiers.ctrl
+        let afterConsumeActive = modifiers.activeKeyModifiers()
+        XCTAssertEqual(afterConsumeCtrl, .off)
+        XCTAssertEqual(afterConsumeActive, [])
     }
 
+    @MainActor
     func testCtrlDoubleTapLocksThenTapUnlocks() {
         var modifiers = KeyboardToolbarModifiers()
         modifiers.toggleCtrl(now: 1.0)
         modifiers.toggleCtrl(now: 1.2) // double tap -> lock
-        XCTAssertEqual(modifiers.ctrl, .locked)
-        XCTAssertEqual(modifiers.activeKeyModifiers(), [.ctrl])
+        let lockedCtrl = modifiers.ctrl
+        let lockedActive = modifiers.activeKeyModifiers()
+        XCTAssertEqual(lockedCtrl, .locked)
+        XCTAssertEqual(lockedActive, [.ctrl])
 
         modifiers.toggleCtrl(now: 2.0) // single tap while locked -> off
-        XCTAssertEqual(modifiers.ctrl, .off)
-        XCTAssertEqual(modifiers.activeKeyModifiers(), [])
+        let unlockedCtrl = modifiers.ctrl
+        let unlockedActive = modifiers.activeKeyModifiers()
+        XCTAssertEqual(unlockedCtrl, .off)
+        XCTAssertEqual(unlockedActive, [])
     }
 
+    @MainActor
     func testAltDoubleTapLocks() {
         var modifiers = KeyboardToolbarModifiers()
         modifiers.toggleAlt(now: 5.0)
         modifiers.toggleAlt(now: 5.2)
-        XCTAssertEqual(modifiers.alt, .locked)
-        XCTAssertEqual(modifiers.activeKeyModifiers(), [.alt])
+        let lockedAlt = modifiers.alt
+        let lockedActive = modifiers.activeKeyModifiers()
+        XCTAssertEqual(lockedAlt, .locked)
+        XCTAssertEqual(lockedActive, [.alt])
     }
 }
 #endif

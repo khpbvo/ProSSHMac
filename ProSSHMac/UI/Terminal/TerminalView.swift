@@ -5,11 +5,16 @@ import Combine
 import AppKit
 
 struct TerminalView: View {
+    private typealias FileBrowserEntry = TerminalFileBrowserEntry
+    private typealias FileBrowserRow = TerminalFileBrowserRow
+
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.openWindow) private var openWindow
     @EnvironmentObject private var navigationCoordinator: AppNavigationCoordinator
     @EnvironmentObject private var sessionManager: SessionManager
+    @EnvironmentObject private var transferManager: TransferManager
     @EnvironmentObject private var portForwardingManager: PortForwardingManager
+    @EnvironmentObject private var terminalAIAssistantViewModel: TerminalAIAssistantViewModel
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage(BellEffectController.settingsKey) private var bellFeedbackModeRawValue = BellFeedbackMode.none.rawValue
     @AppStorage(TransparencyManager.backgroundOpacityKey) private var terminalBackgroundOpacityPercent = TransparencyManager.defaultBackgroundOpacityPercent
@@ -18,6 +23,10 @@ struct TerminalView: View {
     @AppStorage("terminal.renderer.useMetal") private var useMetalRenderer = true
     @AppStorage("terminal.renderer.migration.restoreMetal.v1") private var didRestoreMetalPreference = false
     @AppStorage("terminal.renderer.migration.defaultMetal.v2") private var didApplyMetalDefaultV2 = false
+    @AppStorage("terminal.sidebar.fileBrowser.visible") private var showFileBrowser = false
+    @AppStorage("terminal.sidebar.fileBrowser.width") private var fileBrowserWidth = 260.0
+    @AppStorage("terminal.sidebar.aiAssistant.visible") private var showAIAssistant = false
+    @AppStorage("terminal.sidebar.aiAssistant.width") private var aiAssistantWidth = 420.0
     @State private var pendingInput: [UUID: String] = [:]
     @StateObject private var bellEffect = BellEffectController()
     @StateObject private var scrollIndicator = ScrollIndicatorController()
@@ -25,7 +34,7 @@ struct TerminalView: View {
     @StateObject private var tabManager = SessionTabManager()
     @StateObject private var terminalSearch = TerminalSearch()
     @StateObject private var selectionCoordinator = TerminalSelectionCoordinator()
-    @State private var paneManager = PaneManager()
+    @StateObject private var paneManager = PaneManager()
     @State private var pendingPaneSessionCreation: Set<UUID> = []
     @StateObject private var quickCommands = QuickCommands()
     @FocusState private var focusedSessionID: UUID?
@@ -51,70 +60,25 @@ struct TerminalView: View {
     @State private var expandedMetadataSessions: Set<UUID> = []
     @State private var hoveredTabID: UUID?
     @State private var directInputActivationNonce: Int = 0
+    @State private var selectedFileBrowserPath: String?
+    @State private var fileBrowserSessionID: UUID?
+    @State private var fileBrowserCurrentPath: String = "/"
+    @State private var fileBrowserRows: [FileBrowserRow] = []
+    @State private var fileBrowserChildrenByPath: [String: [FileBrowserEntry]] = [:]
+    @State private var fileBrowserExpandedPaths: Set<String> = []
+    @State private var fileBrowserLoadingPaths: Set<String> = []
+    @State private var fileBrowserLoadRequestIDByPath: [String: UUID] = [:]
+    @State private var isFileBrowserRootLoading = false
+    @State private var fileBrowserError: String?
+    @State private var isAIAssistantComposerFocused = false
+    @State private var fileBrowserDragBaseWidth: Double?
+    @State private var aiAssistantDragBaseWidth: Double?
+    @State private var loadedSidebarLayoutContextKey: String?
+    @State private var isApplyingSidebarLayout = false
     private let linkDetector = LinkDetector()
 
     var body: some View {
-        ZStack {
-            macOSBody
-
-            terminalShortcutLayer
-                .frame(width: 0, height: 0)
-                .opacity(0.001)
-                .accessibilityHidden(true)
-                .allowsHitTesting(false)
-        }
-        .overlay {
-            if quickCommands.isDrawerPresented {
-                quickCommandScrim
-            }
-        }
-        .overlay(alignment: .trailing) {
-            quickCommandDrawerLayer
-        }
-        .animation(.easeInOut(duration: 0.2), value: quickCommands.isDrawerPresented)
-        .navigationTitle("Terminal")
-        .onAppear {
-            if !didRestoreMetalPreference {
-                if isMetalRendererAvailable {
-                    useMetalRenderer = true
-                }
-                didRestoreMetalPreference = true
-            }
-            if !didApplyMetalDefaultV2 {
-                useMetalRenderer = isMetalRendererAvailable
-                didApplyMetalDefaultV2 = true
-            }
-            tabManager.sync(with: sessionManager.sessions)
-            synchronizeSelection()
-            updateSearchLines()
-            syncPaneManagerSessions()
-        }
-        .onChange(of: sessionManager.sessions.map(\.id)) { _, _ in
-            Task { @MainActor in
-                tabManager.sync(with: sessionManager.sessions)
-                synchronizeSelection()
-                updateSearchLines()
-                syncPaneManagerSessions()
-            }
-        }
-        .onChange(of: tabManager.selectedSessionID) { _, _ in
-            scrollIndicator.reset()
-            resizeEffect.reset()
-            updateSearchLines()
-        }
-        .onChange(of: paneManager.focusedPaneId) { _, newPaneID in
-            // When the user clicks a different pane, sync tab selection
-            // so that DirectTerminalInputCaptureView enables for the
-            // correct session and keyboard input is routed properly.
-            if let sessionID = paneManager.rootNode.findPane(id: newPaneID)?.sessionID,
-               sessionID != tabManager.selectedSessionID {
-                tabManager.select(sessionID: sessionID)
-            }
-        }
-        .onChange(of: useMetalRenderer) { _, _ in
-            scrollIndicator.reset()
-            resizeEffect.reset()
-        }
+        terminalLifecycleView
         .alert(
             "Close Active Session?",
             isPresented: Binding(
@@ -163,6 +127,14 @@ struct TerminalView: View {
                 }
             }
 
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    showAIAssistant.toggle()
+                } label: {
+                    Label("AI Copilot", systemImage: showAIAssistant ? "sparkles.rectangle.stack.fill" : "sparkles.rectangle.stack")
+                }
+            }
+
             ToolbarItemGroup(placement: .keyboard) {
                 Button("Esc") { sendControl("\u{1B}") }
                 Button("Tab") { sendControl("\t") }
@@ -186,6 +158,98 @@ struct TerminalView: View {
             allowsMultipleSelection: false
         ) { result in
             handleQuickCommandImport(result: result)
+        }
+    }
+
+    private var terminalBaseView: some View {
+        ZStack {
+            terminalContentWithFileBrowser
+
+            terminalShortcutLayer
+                .frame(width: 0, height: 0)
+                .opacity(0.001)
+                .accessibilityHidden(true)
+                .allowsHitTesting(false)
+        }
+        .overlay {
+            if quickCommands.isDrawerPresented {
+                quickCommandScrim
+            }
+        }
+        .overlay(alignment: .trailing) {
+            quickCommandDrawerLayer
+        }
+        .animation(.easeInOut(duration: 0.2), value: quickCommands.isDrawerPresented)
+        .animation(.easeInOut(duration: 0.2), value: showFileBrowser)
+        .animation(.easeInOut(duration: 0.2), value: showAIAssistant)
+        .navigationTitle("Terminal")
+    }
+
+    private var terminalLifecycleView: some View {
+        terminalBaseView
+        .onAppear {
+            if !didRestoreMetalPreference {
+                if isMetalRendererAvailable {
+                    useMetalRenderer = true
+                }
+                didRestoreMetalPreference = true
+            }
+            if !didApplyMetalDefaultV2 {
+                useMetalRenderer = isMetalRendererAvailable
+                didApplyMetalDefaultV2 = true
+            }
+            tabManager.sync(with: sessionManager.sessions)
+            synchronizeSelection()
+            updateSearchLines()
+            syncPaneManagerSessions()
+            syncFileBrowserSession()
+            restoreSidebarLayoutForSelection()
+        }
+        .onChange(of: sessionManager.sessions) { _, _ in
+            Task { @MainActor in
+                tabManager.sync(with: sessionManager.sessions)
+                synchronizeSelection()
+                updateSearchLines()
+                syncPaneManagerSessions()
+                syncFileBrowserSession()
+                restoreSidebarLayoutForSelection()
+            }
+        }
+        .onChange(of: tabManager.selectedSessionID) { _, _ in
+            scrollIndicator.reset()
+            resizeEffect.reset()
+            updateSearchLines()
+            syncFileBrowserSession()
+            restoreSidebarLayoutForSelection()
+        }
+        .onChange(of: showFileBrowser) { _, _ in
+            syncFileBrowserSession()
+            persistSidebarLayoutForSelection()
+        }
+        .onChange(of: showAIAssistant) { _, _ in
+            if !showAIAssistant {
+                isAIAssistantComposerFocused = false
+            }
+            persistSidebarLayoutForSelection()
+        }
+        .onChange(of: fileBrowserWidth) { _, _ in
+            persistSidebarLayoutForSelection()
+        }
+        .onChange(of: aiAssistantWidth) { _, _ in
+            persistSidebarLayoutForSelection()
+        }
+        .onChange(of: paneManager.focusedPaneId) { _, newPaneID in
+            // When the user clicks a different pane, sync tab selection
+            // so that DirectTerminalInputCaptureView enables for the
+            // correct session and keyboard input is routed properly.
+            if let sessionID = paneManager.rootNode.findPane(id: newPaneID)?.sessionID,
+               sessionID != tabManager.selectedSessionID {
+                tabManager.select(sessionID: sessionID)
+            }
+        }
+        .onChange(of: useMetalRenderer) { _, _ in
+            scrollIndicator.reset()
+            resizeEffect.reset()
         }
     }
 
@@ -418,6 +482,310 @@ struct TerminalView: View {
         return tabManager.tabs.first?.session
     }
 
+    private func sidebarLayoutContextKey(for session: Session) -> String {
+        switch session.kind {
+        case let .ssh(hostID):
+            return "host:\(hostID.uuidString.lowercased())"
+        case .local:
+            return "session:\(session.id.uuidString.lowercased())"
+        }
+    }
+
+    private func sidebarLayoutStorageKey(_ suffix: String, context: String) -> String {
+        "terminal.sidebar.layout.\(context).\(suffix)"
+    }
+
+    private func restoreSidebarLayoutForSelection() {
+        guard let session = selectedSession else { return }
+        let contextKey = sidebarLayoutContextKey(for: session)
+
+        if loadedSidebarLayoutContextKey == contextKey {
+            return
+        }
+
+        let defaults = UserDefaults.standard
+        isApplyingSidebarLayout = true
+        defer {
+            isApplyingSidebarLayout = false
+            loadedSidebarLayoutContextKey = contextKey
+        }
+
+        let fileVisibleKey = sidebarLayoutStorageKey("fileBrowser.visible", context: contextKey)
+        let fileWidthKey = sidebarLayoutStorageKey("fileBrowser.width", context: contextKey)
+        let aiVisibleKey = sidebarLayoutStorageKey("aiAssistant.visible", context: contextKey)
+        let aiWidthKey = sidebarLayoutStorageKey("aiAssistant.width", context: contextKey)
+
+        if defaults.object(forKey: fileVisibleKey) != nil {
+            showFileBrowser = defaults.bool(forKey: fileVisibleKey)
+        }
+        if defaults.object(forKey: fileWidthKey) != nil {
+            fileBrowserWidth = defaults.double(forKey: fileWidthKey)
+        }
+        if defaults.object(forKey: aiVisibleKey) != nil {
+            showAIAssistant = defaults.bool(forKey: aiVisibleKey)
+        }
+        if defaults.object(forKey: aiWidthKey) != nil {
+            aiAssistantWidth = defaults.double(forKey: aiWidthKey)
+        }
+
+        fileBrowserWidth = clampedFileBrowserWidth
+        aiAssistantWidth = clampedAIAssistantWidth
+    }
+
+    private func persistSidebarLayoutForSelection() {
+        guard !isApplyingSidebarLayout, let session = selectedSession else { return }
+        let contextKey = sidebarLayoutContextKey(for: session)
+        loadedSidebarLayoutContextKey = contextKey
+
+        let defaults = UserDefaults.standard
+        defaults.set(showFileBrowser, forKey: sidebarLayoutStorageKey("fileBrowser.visible", context: contextKey))
+        defaults.set(clampedFileBrowserWidth, forKey: sidebarLayoutStorageKey("fileBrowser.width", context: contextKey))
+        defaults.set(showAIAssistant, forKey: sidebarLayoutStorageKey("aiAssistant.visible", context: contextKey))
+        defaults.set(clampedAIAssistantWidth, forKey: sidebarLayoutStorageKey("aiAssistant.width", context: contextKey))
+    }
+
+    private var terminalContentWithFileBrowser: some View {
+        HStack(spacing: 0) {
+            if showFileBrowser {
+                fileBrowserSidebar
+                    .frame(width: CGFloat(clampedFileBrowserWidth))
+                    .overlay(alignment: .trailing) {
+                        Rectangle()
+                            .fill(Color.clear)
+                            .frame(width: 8)
+                            .contentShape(Rectangle())
+                            .gesture(
+                                DragGesture(minimumDistance: 1)
+                                    .onChanged { value in
+                                        let base = fileBrowserDragBaseWidth ?? clampedFileBrowserWidth
+                                        fileBrowserDragBaseWidth = base
+                                        fileBrowserWidth = min(460, max(220, base + Double(value.translation.width)))
+                                    }
+                                    .onEnded { _ in
+                                        fileBrowserDragBaseWidth = nil
+                                    }
+                            )
+                    }
+                    .transition(.move(edge: .leading))
+            }
+            macOSBody
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if showAIAssistant {
+                aiAssistantPane
+                    .frame(width: CGFloat(clampedAIAssistantWidth))
+                    .transition(.move(edge: .trailing))
+            }
+        }
+    }
+
+    private var aiAssistantPane: some View {
+        TerminalAIAssistantPane(
+            viewModel: terminalAIAssistantViewModel,
+            session: selectedSession?.state == .connected ? selectedSession : nil,
+            onClose: {
+                showAIAssistant = false
+            },
+            onSend: { sessionID in
+                terminalAIAssistantViewModel.submitPrompt(for: sessionID)
+            },
+            onComposerFocusChanged: { isFocused in
+                isAIAssistantComposerFocused = isFocused
+                if !isFocused {
+                    directInputActivationNonce &+= 1
+                }
+            }
+        )
+        .frame(minWidth: CGFloat(aiAssistantMinWidth), idealWidth: CGFloat(clampedAIAssistantWidth), maxWidth: CGFloat(aiAssistantMaxWidth))
+        .overlay(alignment: .leading) {
+            HStack(spacing: 4) {
+                Rectangle()
+                    .fill(Color.primary.opacity(0.14))
+                    .frame(width: 1)
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(Color.primary.opacity(0.26))
+                    .frame(width: 4, height: 40)
+            }
+            .frame(width: 12)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 1)
+                    .onChanged { value in
+                        let base = aiAssistantDragBaseWidth ?? clampedAIAssistantWidth
+                        aiAssistantDragBaseWidth = base
+                        aiAssistantWidth = min(aiAssistantMaxWidth, max(aiAssistantMinWidth, base - Double(value.translation.width)))
+                    }
+                    .onEnded { _ in
+                        aiAssistantDragBaseWidth = nil
+                    }
+            )
+        }
+    }
+
+    private var fileBrowserSidebar: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label("Files", systemImage: "folder")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    showFileBrowser = false
+                } label: {
+                    Image(systemName: "xmark")
+                }
+                .buttonStyle(.borderless)
+            }
+
+            if let session = selectedSession {
+                Text("\(session.username)@\(session.hostname)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("No active session selected.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let session = selectedSession, session.state == .connected {
+                HStack(spacing: 8) {
+                    Button {
+                        navigateUpFileBrowserRoot(for: session)
+                        selectedFileBrowserPath = nil
+                    } label: {
+                        Image(systemName: "arrow.up.to.line")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(fileBrowserCurrentPath == "/" || fileBrowserCurrentPath.isEmpty)
+
+                    Button {
+                        refreshFileBrowserRoot(for: session)
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button {
+                        downloadSelectedFileFromSidebar()
+                    } label: {
+                        Image(systemName: "square.and.arrow.down")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(session.isLocal || selectedFileBrowserItem?.isDirectory != false)
+                }
+
+                Text(fileBrowserCurrentPath)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+
+                Divider()
+
+                if isFileBrowserRootLoading && fileBrowserRows.isEmpty {
+                    ProgressView("Loading directory...")
+                        .padding(.top, 6)
+                } else if let fileBrowserError {
+                    Text(fileBrowserError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .padding(.top, 6)
+                } else if fileBrowserRows.isEmpty {
+                    Text("Directory is empty.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 6)
+                } else {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 2) {
+                            ForEach(fileBrowserRows) { row in
+                                fileBrowserRow(row, session: session)
+                            }
+                        }
+                    }
+                }
+            } else {
+                Text("Connect to a host to browse remote files.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(10)
+        .background(.ultraThinMaterial)
+        .overlay(alignment: .trailing) {
+            Divider()
+        }
+    }
+
+    @ViewBuilder
+    private func fileBrowserRow(_ row: FileBrowserRow, session: Session) -> some View {
+        let entry = row.entry
+        let isSelected = selectedFileBrowserPath == entry.path
+        let isExpanded = entry.isDirectory && fileBrowserExpandedPaths.contains(entry.path)
+        let isLoading = entry.isDirectory && fileBrowserLoadingPaths.contains(entry.path)
+        Button {
+            if entry.isDirectory {
+                selectedFileBrowserPath = nil
+                toggleFileBrowserDirectory(entry, for: session)
+            } else {
+                selectedFileBrowserPath = entry.path
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: entry.isDirectory
+                      ? (isExpanded ? "folder.fill.badge.minus" : "folder.fill")
+                      : "doc")
+                    .foregroundStyle(entry.isDirectory ? .blue : .secondary)
+                Text(entry.name)
+                    .lineLimit(1)
+                Spacer()
+                if isLoading {
+                    ProgressView()
+                        .controlSize(.mini)
+                }
+                if !entry.isDirectory {
+                    Text(byteCount(entry.size))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.leading, CGFloat(8 + (row.depth * 14)))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(isSelected ? Color.accentColor.opacity(0.22) : Color.clear)
+            )
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            if entry.isDirectory {
+                Button(isExpanded ? "Collapse" : "Expand") {
+                    toggleFileBrowserDirectory(entry, for: session)
+                }
+            } else {
+                if !session.isLocal {
+                    Button("Download") {
+                        downloadFileBrowserFile(entry)
+                    }
+                }
+                Button("Open in nano") {
+                    openFileInTerminal(entry.path, editor: "nano")
+                }
+                Button("Open in vim") {
+                    openFileInTerminal(entry.path, editor: "vim")
+                }
+                Button("View with less") {
+                    openFileInTerminal(entry.path, editor: "less")
+                }
+                Button("Cat to terminal") {
+                    openFileInTerminal(entry.path, editor: "cat")
+                }
+            }
+            Button("Copy Path") {
+                PlatformClipboard.writeString(entry.path)
+            }
+        }
+    }
+
     private var sessionTabs: some View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
@@ -625,6 +993,7 @@ struct TerminalView: View {
     }
 
     private func focusSessionAndPane(_ sessionID: UUID, paneID: UUID? = nil) {
+        isAIAssistantComposerFocused = false
         directInputActivationNonce &+= 1
         focusedSessionID = sessionID
         if tabManager.selectedSessionID != sessionID {
@@ -1269,11 +1638,10 @@ struct TerminalView: View {
     @ViewBuilder
     private func terminalSurfaceContextMenu(for session: Session) -> some View {
         Button {
-            copyActiveContentToClipboard()
+            _ = copyContentToClipboard(sessionID: session.id)
         } label: {
             Label("Copy", systemImage: "doc.on.doc")
         }
-        .disabled(!selectionCoordinator.hasSelection(sessionID: session.id))
 
         Button {
             pasteClipboardToSession(session.id)
@@ -1613,6 +1981,7 @@ struct TerminalView: View {
     private func shouldEnableDirectTerminalInput(for session: Session) -> Bool {
         guard session.state == .connected else { return false }
         if isSearchFieldFocused { return false }
+        if isAIAssistantComposerFocused { return false }
         if isQuickCommandEditorPresented { return false }
         if quickCommandPendingSnippet != nil { return false }
         if isQuickCommandImportPresented { return false }
@@ -1796,6 +2165,278 @@ struct TerminalView: View {
         }
     }
 
+    private var selectedFileBrowserItem: FileBrowserEntry? {
+        guard let path = selectedFileBrowserPath else { return nil }
+        if let rowMatch = fileBrowserRows.first(where: { $0.entry.path == path }) {
+            return rowMatch.entry
+        }
+        for entries in fileBrowserChildrenByPath.values {
+            if let match = entries.first(where: { $0.path == path }) {
+                return match
+            }
+        }
+        return nil
+    }
+
+    private func syncFileBrowserSession() {
+        guard showFileBrowser else {
+            transferManager.setActiveSession(nil)
+            return
+        }
+        guard let session = selectedSession, session.state == .connected else {
+            transferManager.setActiveSession(nil)
+            fileBrowserSessionID = nil
+            selectedFileBrowserPath = nil
+            fileBrowserCurrentPath = "/"
+            fileBrowserRows = []
+            fileBrowserChildrenByPath = [:]
+            fileBrowserExpandedPaths = []
+            fileBrowserLoadingPaths = []
+            fileBrowserLoadRequestIDByPath = [:]
+            isFileBrowserRootLoading = false
+            fileBrowserError = nil
+            return
+        }
+
+        let didSwitchSession = fileBrowserSessionID != session.id
+        if didSwitchSession {
+            fileBrowserSessionID = session.id
+            selectedFileBrowserPath = nil
+        }
+
+        if session.isLocal {
+            transferManager.setActiveSession(nil)
+        } else if transferManager.activeSessionID != session.id {
+            transferManager.setActiveSession(session.id)
+        }
+
+        if didSwitchSession {
+            loadFileBrowserRoot(for: session, path: initialFileBrowserRootPath(for: session))
+            return
+        }
+
+        if fileBrowserChildrenByPath[fileBrowserCurrentPath] == nil && !isFileBrowserRootLoading {
+            loadFileBrowserRoot(for: session, path: fileBrowserCurrentPath)
+        }
+    }
+
+    private func initialFileBrowserRootPath(for session: Session) -> String {
+        if session.isLocal {
+            let workingDirectory = sessionManager.workingDirectoryBySessionID[session.id]?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if let workingDirectory, !workingDirectory.isEmpty {
+                return normalizeFileBrowserPath(workingDirectory, isLocal: true)
+            }
+            return FileManager.default.homeDirectoryForCurrentUser.path
+        }
+        return normalizeFileBrowserPath(transferManager.currentRemotePath, isLocal: false)
+    }
+
+    private func downloadSelectedFileFromSidebar() {
+        guard let session = selectedSession, !session.isLocal,
+              let entry = selectedFileBrowserItem, !entry.isDirectory else { return }
+        downloadFileBrowserFile(entry)
+    }
+
+    private func downloadFileBrowserFile(_ entry: FileBrowserEntry) {
+        transferManager.enqueueDownload(
+            entry: SFTPDirectoryEntry(
+                path: entry.path,
+                name: entry.name,
+                isDirectory: entry.isDirectory,
+                size: entry.size,
+                permissions: 0,
+                modifiedAt: nil
+            )
+        )
+    }
+
+    private func openFileInTerminal(_ path: String, editor: String) {
+        guard let session = selectedSession, session.state == .connected else { return }
+        let escapedPath = shellEscapeForTerminal(path)
+        Task { @MainActor in
+            await sessionManager.sendShellInput(sessionID: session.id, input: "\(editor) \(escapedPath)")
+        }
+    }
+
+    private func shellEscapeForTerminal(_ path: String) -> String {
+        "'" + path.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
+    }
+
+    private func byteCount(_ value: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: value, countStyle: .file)
+    }
+
+    private func navigateUpFileBrowserRoot(for session: Session) {
+        guard let parentPath = parentFileBrowserPath(of: fileBrowserCurrentPath, isLocal: session.isLocal) else {
+            return
+        }
+        loadFileBrowserRoot(for: session, path: parentPath)
+    }
+
+    private func refreshFileBrowserRoot(for session: Session) {
+        loadFileBrowserRoot(for: session, path: fileBrowserCurrentPath)
+    }
+
+    private func loadFileBrowserRoot(for session: Session, path: String) {
+        let normalizedPath = normalizeFileBrowserPath(path, isLocal: session.isLocal)
+        fileBrowserCurrentPath = normalizedPath
+        fileBrowserRows = []
+        fileBrowserChildrenByPath = [:]
+        fileBrowserExpandedPaths = []
+        fileBrowserLoadingPaths = []
+        fileBrowserLoadRequestIDByPath = [:]
+        fileBrowserError = nil
+        selectedFileBrowserPath = nil
+        loadFileBrowserDirectory(path: normalizedPath, for: session, isRoot: true)
+    }
+
+    private func toggleFileBrowserDirectory(_ entry: FileBrowserEntry, for session: Session) {
+        guard entry.isDirectory else { return }
+        if fileBrowserExpandedPaths.contains(entry.path) {
+            collapseFileBrowserDirectory(entry.path)
+            return
+        }
+
+        fileBrowserExpandedPaths.insert(entry.path)
+        if fileBrowserChildrenByPath[entry.path] == nil {
+            loadFileBrowserDirectory(path: entry.path, for: session, isRoot: false)
+        }
+        rebuildFileBrowserRows()
+    }
+
+    private func collapseFileBrowserDirectory(_ path: String) {
+        fileBrowserExpandedPaths = TerminalFileBrowserTree.collapseExpandedPaths(
+            fileBrowserExpandedPaths,
+            collapsing: path
+        )
+        rebuildFileBrowserRows()
+    }
+
+    private func loadFileBrowserDirectory(path: String, for session: Session, isRoot: Bool) {
+        let normalizedPath = normalizeFileBrowserPath(path, isLocal: session.isLocal)
+        if !isRoot, fileBrowserLoadRequestIDByPath[normalizedPath] != nil {
+            return
+        }
+        let requestID = UUID()
+        fileBrowserLoadRequestIDByPath[normalizedPath] = requestID
+
+        if isRoot {
+            isFileBrowserRootLoading = true
+        }
+        fileBrowserError = nil
+        fileBrowserLoadingPaths.insert(normalizedPath)
+
+        Task {
+            do {
+                let entries = try await listFileBrowserEntries(for: session, path: normalizedPath)
+                await MainActor.run {
+                    guard fileBrowserLoadRequestIDByPath[normalizedPath] == requestID else {
+                        if fileBrowserLoadRequestIDByPath[normalizedPath] == nil {
+                            fileBrowserLoadingPaths.remove(normalizedPath)
+                            if isRoot && normalizedPath == fileBrowserCurrentPath {
+                                isFileBrowserRootLoading = false
+                            }
+                        }
+                        return
+                    }
+
+                    fileBrowserLoadRequestIDByPath[normalizedPath] = nil
+                    fileBrowserLoadingPaths.remove(normalizedPath)
+                    if isRoot {
+                        isFileBrowserRootLoading = false
+                    }
+
+                    guard showFileBrowser, fileBrowserSessionID == session.id else { return }
+
+                    if isRoot {
+                        fileBrowserCurrentPath = normalizedPath
+                    }
+
+                    fileBrowserError = nil
+                    fileBrowserChildrenByPath[normalizedPath] = entries
+                    if let selectedPath = selectedFileBrowserPath, !fileBrowserContainsPath(selectedPath) {
+                        selectedFileBrowserPath = nil
+                    }
+                    rebuildFileBrowserRows()
+                }
+            } catch {
+                await MainActor.run {
+                    guard fileBrowserLoadRequestIDByPath[normalizedPath] == requestID else {
+                        if fileBrowserLoadRequestIDByPath[normalizedPath] == nil {
+                            fileBrowserLoadingPaths.remove(normalizedPath)
+                            if isRoot && normalizedPath == fileBrowserCurrentPath {
+                                isFileBrowserRootLoading = false
+                            }
+                        }
+                        return
+                    }
+
+                    fileBrowserLoadRequestIDByPath[normalizedPath] = nil
+                    fileBrowserLoadingPaths.remove(normalizedPath)
+                    if isRoot {
+                        isFileBrowserRootLoading = false
+                    }
+
+                    guard showFileBrowser, fileBrowserSessionID == session.id else { return }
+
+                    if isRoot {
+                        fileBrowserCurrentPath = normalizedPath
+                    }
+
+                    let scopeLabel = session.isLocal ? "local" : "remote"
+                    fileBrowserError = "Failed to list \(scopeLabel) directory: \(error.localizedDescription)"
+                    if isRoot {
+                        fileBrowserChildrenByPath[normalizedPath] = []
+                    }
+                    rebuildFileBrowserRows()
+                }
+            }
+        }
+    }
+
+    private func listFileBrowserEntries(for session: Session, path: String) async throws -> [FileBrowserEntry] {
+        if session.isLocal {
+            return try await Task.detached(priority: .userInitiated) {
+                try TerminalFileBrowserTree.listLocalEntries(path: path)
+            }.value
+        }
+
+        let remoteEntries = try await sessionManager.listRemoteDirectory(sessionID: session.id, path: path)
+        return remoteEntries.map {
+            FileBrowserEntry(
+                path: $0.path,
+                name: $0.name,
+                isDirectory: $0.isDirectory,
+                size: $0.size
+            )
+        }
+    }
+
+    private func rebuildFileBrowserRows() {
+        fileBrowserRows = TerminalFileBrowserTree.rebuildRows(
+            rootPath: fileBrowserCurrentPath,
+            childrenByPath: fileBrowserChildrenByPath,
+            expandedPaths: fileBrowserExpandedPaths
+        )
+    }
+
+    private func fileBrowserContainsPath(_ path: String) -> Bool {
+        TerminalFileBrowserTree.containsPath(
+            path,
+            rows: fileBrowserRows,
+            childrenByPath: fileBrowserChildrenByPath
+        )
+    }
+
+    private func normalizeFileBrowserPath(_ rawPath: String, isLocal: Bool) -> String {
+        TerminalFileBrowserTree.normalizePath(rawPath, isLocal: isLocal)
+    }
+
+    private func parentFileBrowserPath(of path: String, isLocal: Bool) -> String? {
+        TerminalFileBrowserTree.parentPath(of: path, isLocal: isLocal)
+    }
+
     private func tabBackground(for session: Session) -> Color {
         if tabManager.selectedSessionID == session.id {
             return colorScheme == .dark ? Color.accentColor.opacity(0.34) : Color.accentColor.opacity(0.2)
@@ -1867,6 +2508,17 @@ struct TerminalView: View {
                 quickCommands.toggleDrawer()
             }
             .keyboardShortcut("p", modifiers: [.command, .shift])
+
+            Button("Toggle File Browser") {
+                showFileBrowser.toggle()
+                syncFileBrowserSession()
+            }
+            .keyboardShortcut("b", modifiers: [.command])
+
+            Button("Toggle AI Copilot") {
+                showAIAssistant.toggle()
+            }
+            .keyboardShortcut("i", modifiers: [.command, .option])
 
             Button("Clear Buffer") {
                 clearSelectedBuffer()
@@ -1962,6 +2614,18 @@ struct TerminalView: View {
             .keyboardShortcut("f", modifiers: [.command, .shift])
         }
     }
+
+    private var clampedAIAssistantWidth: Double {
+        min(aiAssistantMaxWidth, max(aiAssistantMinWidth, aiAssistantWidth))
+    }
+
+    private var clampedFileBrowserWidth: Double {
+        min(460, max(220, fileBrowserWidth))
+    }
+
+    private var aiAssistantMinWidth: Double { 280 }
+
+    private var aiAssistantMaxWidth: Double { 920 }
 
     @ViewBuilder
     private func mouseInputOverlay(for session: Session, contentPadding: CGFloat = 8) -> some View {
@@ -2148,24 +2812,37 @@ struct TerminalView: View {
 
     private func copyActiveContentToClipboard() {
         let targetSessionID = paneManager.focusedSessionID ?? focusedSessionID ?? tabManager.selectedSessionID
-        guard let sessionID = targetSessionID else { return }
-
-        // Check for Metal renderer text selection first
-        if let selectedText = selectionCoordinator.copySelection(sessionID: sessionID) {
+        if let sessionID = targetSessionID,
+           copyContentToClipboard(sessionID: sessionID) {
+            return
+        }
+        if let selectedText = selectionCoordinator.copySelection(preferredSessionID: targetSessionID) {
             _ = PlatformClipboard.writeString(selectedText)
             return
         }
+        if NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil) {
+            return
+        }
+    }
 
+    @discardableResult
+    private func copyContentToClipboard(sessionID: UUID) -> Bool {
+        if let selectedText = selectionCoordinator.copySelection(sessionID: sessionID), !selectedText.isEmpty {
+            _ = PlatformClipboard.writeString(selectedText)
+            return true
+        }
         let draft = pendingInput[sessionID, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
         if !draft.isEmpty {
             _ = PlatformClipboard.writeString(draft)
-            return
+            return true
         }
 
         if let lastLine = sessionManager.shellBuffers[sessionID]?.last,
            !lastLine.isEmpty {
             _ = PlatformClipboard.writeString(lastLine)
+            return true
         }
+        return false
     }
 
     private func pasteClipboardToSession(_ sessionID: UUID) {
@@ -2406,7 +3083,15 @@ struct DirectTerminalInputCaptureView: NSViewRepresentable {
 }
 
 final class DirectTerminalInputNSView: NSView {
-    var isEnabled = false
+    var isEnabled = false {
+        didSet {
+            guard isEnabled != oldValue else { return }
+            guard let window else { return }
+            if !isEnabled, window.firstResponder === self {
+                window.makeFirstResponder(nil)
+            }
+        }
+    }
     var sessionID: UUID?
     var activationNonce: Int = 0 {
         didSet {
@@ -2430,7 +3115,9 @@ final class DirectTerminalInputNSView: NSView {
     }
 
     deinit {
-        removeActivationObservers()
+        MainActor.assumeIsolated {
+            removeActivationObservers()
+        }
     }
 
     override func viewDidMoveToWindow() {
@@ -2443,22 +3130,28 @@ final class DirectTerminalInputNSView: NSView {
             object: window,
             queue: .main
         ) { [weak self] _ in
-            self?.armForKeyboardInputIfNeeded()
+            Task { @MainActor [weak self] in
+                self?.armForKeyboardInputIfNeeded()
+            }
         }
         appDidBecomeActiveObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didBecomeActiveNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.armForKeyboardInputIfNeeded()
+            Task { @MainActor [weak self] in
+                self?.armForKeyboardInputIfNeeded()
+            }
         }
     }
 
     func armForKeyboardInputIfNeeded() {
         guard isEnabled else { return }
         DispatchQueue.main.async { [weak self] in
-            guard let self, self.isEnabled else { return }
-            _ = self.window?.makeFirstResponder(self)
+            guard let self, self.isEnabled, let window = self.window else { return }
+            if self.isTextInputFocused(in: window) { return }
+            if window.firstResponder === self { return }
+            _ = window.makeFirstResponder(self)
         }
     }
 
@@ -2474,6 +3167,9 @@ final class DirectTerminalInputNSView: NSView {
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if isTextInputFocusedInWindow() {
+            return super.performKeyEquivalent(with: event)
+        }
         if handleCommandShortcut(event) {
             return true
         }
@@ -2481,6 +3177,10 @@ final class DirectTerminalInputNSView: NSView {
     }
 
     override func keyDown(with event: NSEvent) {
+        if isTextInputFocusedInWindow() {
+            super.keyDown(with: event)
+            return
+        }
         guard isEnabled,
               let sessionID,
               let sequence = encodeEvent(event) else {
@@ -2488,6 +3188,25 @@ final class DirectTerminalInputNSView: NSView {
             return
         }
         onSendSequence?(sessionID, sequence)
+    }
+
+    @objc func copy(_ sender: Any?) {
+        guard isEnabled else { return }
+        onCommandShortcut?(.copy)
+    }
+
+    @objc func paste(_ sender: Any?) {
+        guard isEnabled else { return }
+        onCommandShortcut?(.paste)
+    }
+
+    func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        switch item.action {
+        case #selector(copy(_:)), #selector(paste(_:)):
+            return isEnabled
+        default:
+            return true
+        }
     }
 
     // MARK: - Unified Encoding
@@ -2594,6 +3313,9 @@ final class DirectTerminalInputNSView: NSView {
     // MARK: - Command Shortcuts
 
     private func handleCommandShortcut(_ event: NSEvent) -> Bool {
+        if isTextInputFocusedInWindow() {
+            return false
+        }
         let flags = event.modifierFlags.intersection([.shift, .control, .option, .command])
         guard flags.contains(.command), !flags.contains(.control), !flags.contains(.option) else {
             return false
@@ -2658,6 +3380,18 @@ final class DirectTerminalInputNSView: NSView {
         }
 
         return false
+    }
+
+    private func isTextInputFocusedInWindow() -> Bool {
+        guard let window else { return false }
+        return isTextInputFocused(in: window)
+    }
+
+    private func isTextInputFocused(in window: NSWindow) -> Bool {
+        guard let responder = window.firstResponder else { return false }
+        if responder === self { return false }
+        if responder is NSTextView { return true }
+        return responder.responds(to: #selector(NSTextInputClient.insertText(_:replacementRange:)))
     }
 }
 

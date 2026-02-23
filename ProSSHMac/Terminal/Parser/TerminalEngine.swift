@@ -717,7 +717,8 @@ actor TerminalEngine {
         await OSCHandler.dispatch(
             oscString: oscString,
             grid: grid,
-            responseHandler: responseHandler
+            responseHandler: responseHandler,
+            semanticPromptHandler: semanticPromptEventHandler
         )
     }
 
@@ -738,10 +739,15 @@ actor TerminalEngine {
 
     /// Send a response back through the SSH channel.
     private var responseHandler: (@Sendable ([UInt8]) async -> Void)?
+    private var semanticPromptEventHandler: (@Sendable (SemanticPromptEvent) async -> Void)?
 
     /// Set the handler for sending responses back to the remote host.
     func setResponseHandler(_ handler: @escaping @Sendable ([UInt8]) async -> Void) {
         self.responseHandler = handler
+    }
+
+    func setSemanticPromptEventHandler(_ handler: (@Sendable (SemanticPromptEvent) async -> Void)?) {
+        semanticPromptEventHandler = handler
     }
 
     /// Set an optional mode tracker and initialize it from current grid state.

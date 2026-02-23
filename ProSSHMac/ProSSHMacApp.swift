@@ -74,6 +74,8 @@ struct ProSSHMacApp: App {
             .environmentObject(dependencies.certificatesViewModel)
             .environmentObject(dependencies.portForwardingManager)
             .environmentObject(dependencies.idleScreensaverManager)
+            .environmentObject(dependencies.openAISettingsViewModel)
+            .environmentObject(dependencies.terminalAIAssistantViewModel)
             .preferredColorScheme(currentAppearance.preferredColorScheme)
     }
 
