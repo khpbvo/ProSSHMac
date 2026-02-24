@@ -132,7 +132,7 @@ Active branch   : master
 Current phase   : Phase 9 — NOT STARTED
 Phase status    : NOT STARTED
 Immediate action: Read RefactorTerminalView.md, begin Phase 9 (extract TerminalSidebarLayoutStore + TerminalKeyboardShortcutLayer)
-Last commit     : TBD "refactor(RefactorTV Phase 8): extract terminal surface rendering to TerminalSurfaceView"
+Last commit     : 680d4e2 "refactor(RefactorTV Phase 8): extract terminal surface rendering to TerminalSurfaceView"
 ```
 
 **Update this block after every phase.**

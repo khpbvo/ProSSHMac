@@ -22,7 +22,7 @@ Active branch   : master
 Current phase   : Phase 9 — NOT STARTED
 Phase status    : NOT STARTED
 Immediate action: Read RefactorTerminalView.md, begin Phase 9 (extract TerminalSidebarLayoutStore + TerminalKeyboardShortcutLayer)
-Last commit     : TBD "refactor(RefactorTV Phase 8): extract terminal surface rendering to TerminalSurfaceView"
+Last commit     : 680d4e2 "refactor(RefactorTV Phase 8): extract terminal surface rendering to TerminalSurfaceView"
 ```
 
 **Update this block after every phase.**
@@ -648,7 +648,7 @@ After all 9 phases are committed and the build is clean:
 
 ## Refactor Log (most recent first)
 
-- **2026-02-24 — Phase 8 COMPLETE** (commit TBD): Extracted the entire terminal surface rendering
+- **2026-02-24 — Phase 8 COMPLETE** (commit `680d4e2`): Extracted the entire terminal surface rendering
   subsystem (~540 lines) into `TerminalSurfaceView.swift`. New struct takes `session: Session`,
   `isFocused: Bool`, `paneID: UUID?`, `@ObservedObject` for `bellEffect`/`resizeEffect`/
   `selectionCoordinator`/`terminalSearch`/`paneManager`/`tabManager`, plus four action callbacks
