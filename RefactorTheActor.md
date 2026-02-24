@@ -457,6 +457,138 @@ git commit -m "refactor: Phase 1 — split SSHTransport.swift into focused files
 
 ---
 
+## Phase 1b — Swift 6 Strict Concurrency Pass on Phase 1 Files
+
+> **Goal:** Every file created or renamed in Phase 1 must pass `-strict-concurrency=complete`
+> with zero warnings. Fix explicit Sendable gaps identified during the Phase 1 audit.
+> No behavior changes — only type annotation additions.
+>
+> **Rule established:** From this point forward, every new Swift file in this project must
+> pass `-strict-concurrency=complete` before its creating commit.
+
+### Step 1b.0 — Temporarily enable strict concurrency for verification
+
+In Xcode: Target → Build Settings → Other Swift Flags → add `-strict-concurrency=complete`.
+
+```bash
+# Then build to capture baseline warnings
+xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build 2>&1 | grep 'strict-concurrency\|Sendable\|warning:' | head -40
+```
+
+- [x] Record all Sendable warnings — expected warnings are listed in steps below
+- [x] Do NOT fix anything yet; just confirm the warning list matches this plan
+
+---
+
+### Step 1b.1 — Fix Host.swift (Models)
+
+**File:** `ProSSHMac/Models/Host.swift`
+
+- [x] `AuthMethod`: add `Sendable` → `enum AuthMethod: String, Codable, CaseIterable, Identifiable, Sendable`
+- [x] `AlgorithmPreferences`: add `Sendable` → `struct AlgorithmPreferences: Codable, Hashable, Sendable`
+- [x] `PortForwardingRule`: add `Sendable` → `struct PortForwardingRule: Identifiable, Codable, Hashable, Sendable`
+- [x] `Host`: add `Sendable` → `struct Host: Identifiable, Codable, Hashable, Sendable`
+- [x] Build check:
+  ```bash
+  xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build 2>&1 | tail -3
+  ```
+- [x] `** BUILD SUCCEEDED **`
+
+---
+
+### Step 1b.2 — Fix SSHTransportTypes.swift
+
+**File:** `ProSSHMac/Services/SSH/SSHTransportTypes.swift`
+
+- [x] `SSHBackendKind`: add `Sendable` → `enum SSHBackendKind: String, Codable, Sendable`
+- [x] `SSHTransportError`: add `Sendable` → `enum SSHTransportError: LocalizedError, Sendable`
+- [x] Build check (same command as above)
+- [x] `** BUILD SUCCEEDED **`
+
+---
+
+### Step 1b.3 — Fix SSHAlgorithmPolicy.swift
+
+**File:** `ProSSHMac/Services/SSH/SSHAlgorithmPolicy.swift`
+
+- [x] `SSHAlgorithmPolicy`: add `Sendable` → `struct SSHAlgorithmPolicy: Sendable`
+- [x] Build check
+- [x] `** BUILD SUCCEEDED **`
+
+---
+
+### Step 1b.4 — Fix LibSSHTransport.swift
+
+**File:** `ProSSHMac/Services/SSH/LibSSHTransport.swift`
+
+- [x] `LibSSHConnectResult`: add `@unchecked Sendable` with safety comment:
+  ```swift
+  // safe: OpaquePointer is a C session handle owned exclusively
+  // by LibSSHTransport's actor-isolated `handles` dict; never shared across actors.
+  nonisolated private struct LibSSHConnectResult: @unchecked Sendable {
+  ```
+- [x] `LibSSHConnectFailure`: add `Sendable` → `nonisolated private enum LibSSHConnectFailure: LocalizedError, Sendable`
+- [x] `LibSSHAuthenticationMaterial`: add `Sendable` → `nonisolated private struct LibSSHAuthenticationMaterial: Sendable`
+- [x] Build check
+- [x] `** BUILD SUCCEEDED **`
+
+---
+
+### Step 1b.5 — Verify remaining Phase 1 files are clean
+
+```bash
+xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build 2>&1 | grep 'strict-concurrency\|Sendable\|warning:' | head -40
+```
+
+- [x] Zero new Sendable/strict-concurrency warnings in `SSHTransportProtocol.swift`
+- [x] Zero new Sendable/strict-concurrency warnings in `LibSSHShellChannel.swift`
+- [x] Zero new Sendable/strict-concurrency warnings in `LibSSHForwardChannel.swift`
+- [x] Zero new Sendable/strict-concurrency warnings in `MockSSHTransport.swift`
+- [x] Note: warnings may remain in other files outside `Services/SSH/` — those are Phase 7 scope
+
+---
+
+### Step 1b.6 — Remove the temporary strict concurrency flag
+
+In Xcode: Target → Build Settings → Other Swift Flags → remove `-strict-concurrency=complete`.
+
+```bash
+xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build 2>&1 | tail -3
+```
+
+- [x] `** BUILD SUCCEEDED **` with no regressions
+
+---
+
+### Step 1b.7 — Run tests and commit
+
+```bash
+xcodebuild -scheme ProSSHMac -destination 'platform=macOS' test 2>&1 \
+  | grep -E 'Executed [0-9]+ test|FAILED|SUCCEEDED' | tail -5
+```
+
+- [x] Test results: 861 tests, ≤ 23 failures (same pre-existing baseline — no regressions)
+
+```bash
+git add ProSSHMac/Models/Host.swift \
+        ProSSHMac/Services/SSH/SSHTransportTypes.swift \
+        ProSSHMac/Services/SSH/SSHAlgorithmPolicy.swift \
+        ProSSHMac/Services/SSH/LibSSHTransport.swift
+git commit -m "chore: Phase 1b — Swift 6 strict concurrency pass on Phase 1 files"
+```
+
+- [x] Commit created on `refactor/actor-isolation`
+
+---
+
+### Step 1b.8 — Update CLAUDE.md
+
+- [x] Update "Current State" block: change `Current phase` to `Phase 2 — Kill CString pyramid, inject credential resolver`, `Phase status` to `NOT PLANNED`
+- [x] Update Phase Status table: mark Phase 1b as `**COMPLETE** (2026-02-24, commit <hash>)`
+- [x] Add Refactor Log entry
+
+---
+
 ## Phase 2 — Kill the CString Pyramid & Inject Credential Resolver
 
 > **Context note for Claude Code:** This phase only touches `LibSSHTransport.swift`

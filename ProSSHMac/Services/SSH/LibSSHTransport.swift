@@ -6,12 +6,14 @@ import Foundation
 
 
 
-nonisolated private struct LibSSHConnectResult {
+// safe: OpaquePointer is a C session handle owned exclusively
+// by LibSSHTransport's actor-isolated `handles` dict; never shared across actors.
+nonisolated private struct LibSSHConnectResult: @unchecked Sendable {
     let handle: OpaquePointer
     let details: SSHConnectionDetails
 }
 
-nonisolated private enum LibSSHConnectFailure: LocalizedError {
+nonisolated private enum LibSSHConnectFailure: LocalizedError, Sendable {
     case failed(code: Int32, message: String)
 
     var errorDescription: String? {
@@ -22,7 +24,7 @@ nonisolated private enum LibSSHConnectFailure: LocalizedError {
     }
 }
 
-nonisolated private struct LibSSHAuthenticationMaterial {
+nonisolated private struct LibSSHAuthenticationMaterial: Sendable {
     var password: String? = nil
     var privateKey: String? = nil
     var certificate: String? = nil

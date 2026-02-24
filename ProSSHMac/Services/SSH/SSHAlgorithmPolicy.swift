@@ -1,7 +1,7 @@
 // Extracted from SSHTransport.swift
 import Foundation
 
-struct SSHAlgorithmPolicy {
+struct SSHAlgorithmPolicy: Sendable {
     let keyExchange: [String]
     let hostKeys: [String]
     let ciphers: [String]

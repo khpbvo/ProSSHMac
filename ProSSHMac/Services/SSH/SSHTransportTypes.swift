@@ -1,7 +1,7 @@
 // Extracted from SSHTransport.swift
 import Foundation
 
-enum SSHBackendKind: String, Codable {
+enum SSHBackendKind: String, Codable, Sendable {
     case libssh
     case mock
 }
@@ -54,7 +54,7 @@ struct JumpHostConfig: Sendable {
     let expectedFingerprint: String
 }
 
-enum SSHTransportError: LocalizedError {
+enum SSHTransportError: LocalizedError, Sendable {
     case connectionRefused
     case authenticationFailed
     case sessionNotFound
