@@ -23,9 +23,9 @@ The long-term memory for this project lives in `docs/featurelist.md`.
 ```
 Active branch : refactor/actor-isolation
 Current phase : Phase 2 — Kill CString pyramid, inject credential resolver
-Phase status  : NOT PLANNED
-Immediate action: Open RefactorTheActor.md → Phase 2 → expand sketch into detailed plan (State A)
-Key source file : ProSSHMac/Services/SSH/LibSSHTransport.swift  (~797 lines)
+Phase status  : PLANNED — execute State B (read every step, then execute in order)
+Immediate action: Open RefactorTheActor.md → Phase 2 → execute steps 2a.0 through 2b.6
+Key source file : ProSSHMac/Services/SSH/LibSSHTransport.swift  (~800 lines)
 Last commit   : 32dcd70  "chore: Phase 1b — Swift 6 strict concurrency pass on Phase 1 files"
 ```
 
