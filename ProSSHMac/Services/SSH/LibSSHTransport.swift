@@ -349,7 +349,7 @@ actor LibSSHTransport: SSHTransporting {
 
         var outputBuffer = [CChar](repeating: 0, count: 128 * 1024)
         var errorBuffer = [CChar](repeating: 0, count: 512)
-        let targetPath = Self.normalizeRemotePath(path)
+        let targetPath = RemotePath.normalize(path)
 
         let result = targetPath.withCString { pathPtr in
             prossh_libssh_sftp_list_directory(
@@ -379,7 +379,7 @@ actor LibSSHTransport: SSHTransporting {
         var bytesTransferred: Int64 = 0
         var totalBytes: Int64 = 0
         var errorBuffer = [CChar](repeating: 0, count: 512)
-        let targetPath = Self.normalizeRemotePath(remotePath)
+        let targetPath = RemotePath.normalize(remotePath)
 
         let result = localPath.withCString { localPtr in
             targetPath.withCString { remotePtr in
@@ -411,7 +411,7 @@ actor LibSSHTransport: SSHTransporting {
         var bytesTransferred: Int64 = 0
         var totalBytes: Int64 = 0
         var errorBuffer = [CChar](repeating: 0, count: 512)
-        let sourcePath = Self.normalizeRemotePath(remotePath)
+        let sourcePath = RemotePath.normalize(remotePath)
 
         let result = sourcePath.withCString { remotePtr in
             localPath.withCString { localPtr in
@@ -679,23 +679,8 @@ actor LibSSHTransport: SSHTransporting {
         }
     }
 
-    nonisolated private static func normalizeRemotePath(_ path: String) -> String {
-        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            return "/"
-        }
-
-        var parts = trimmed.split(separator: "/").map(String.init)
-        parts.removeAll(where: { $0.isEmpty || $0 == "." })
-        let normalized = "/" + parts.joined(separator: "/")
-        if normalized.count > 1 && normalized.hasSuffix("/") {
-            return String(normalized.dropLast())
-        }
-        return normalized
-    }
-
     nonisolated private static func parseSFTPListing(_ listing: String, basePath: String) -> [SFTPDirectoryEntry] {
-        let normalizedBase = normalizeRemotePath(basePath)
+        let normalizedBase = RemotePath.normalize(basePath)
         var entries: [SFTPDirectoryEntry] = []
 
         for line in listing.split(separator: "\n", omittingEmptySubsequences: true) {

@@ -98,7 +98,7 @@ actor MockSSHTransport: SSHTransporting {
             throw SSHTransportError.authenticationFailed
         }
 
-        let directoryPath = Self.normalizeRemotePath(path)
+        let directoryPath = RemotePath.normalize(path)
         guard let node = session.remoteNodes[directoryPath], node.isDirectory else {
             throw SSHTransportError.transportFailure(message: "Remote directory does not exist: \(directoryPath)")
         }
@@ -115,7 +115,7 @@ actor MockSSHTransport: SSHTransporting {
             }
 
             let name = String(firstComponent)
-            let childPath = Self.joinRemotePath(directoryPath, name)
+            let childPath = RemotePath.join(directoryPath, name)
 
             if remainder.contains("/") {
                 if entriesByPath[childPath] == nil {
@@ -159,11 +159,11 @@ actor MockSSHTransport: SSHTransporting {
 
         let localURL = URL(fileURLWithPath: localPath)
         let payload = try Data(contentsOf: localURL)
-        let baseRemotePath = Self.normalizeRemotePath(remotePath)
+        let baseRemotePath = RemotePath.normalize(remotePath)
 
         let finalRemotePath: String
         if remotePath.hasSuffix("/") || (session.remoteNodes[baseRemotePath]?.isDirectory == true) {
-            finalRemotePath = Self.joinRemotePath(baseRemotePath, localURL.lastPathComponent)
+            finalRemotePath = RemotePath.join(baseRemotePath, localURL.lastPathComponent)
         } else {
             finalRemotePath = baseRemotePath
         }
@@ -190,7 +190,7 @@ actor MockSSHTransport: SSHTransporting {
             throw SSHTransportError.authenticationFailed
         }
 
-        let normalizedRemotePath = Self.normalizeRemotePath(remotePath)
+        let normalizedRemotePath = RemotePath.normalize(remotePath)
         guard let remoteNode = session.remoteNodes[normalizedRemotePath], !remoteNode.isDirectory else {
             throw SSHTransportError.transportFailure(message: "Remote file does not exist: \(normalizedRemotePath)")
         }
@@ -289,51 +289,15 @@ actor MockSSHTransport: SSHTransporting {
         for remoteFilePath: String,
         in nodes: inout [String: MockRemoteNode]
     ) {
-        var current = Self.parentRemotePath(of: remoteFilePath)
+        var current = RemotePath.parent(of: remoteFilePath)
         while let path = current {
             if nodes[path] == nil {
                 nodes[path] = MockRemoteNode(isDirectory: true, data: Data(), modifiedAt: .now)
             }
-            current = Self.parentRemotePath(of: path)
+            current = RemotePath.parent(of: path)
         }
     }
 
-    nonisolated private static func normalizeRemotePath(_ path: String) -> String {
-        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            return "/"
-        }
-
-        var parts = trimmed.split(separator: "/").map(String.init)
-        parts.removeAll(where: { $0.isEmpty || $0 == "." })
-        let normalized = "/" + parts.joined(separator: "/")
-        if normalized.count > 1 && normalized.hasSuffix("/") {
-            return String(normalized.dropLast())
-        }
-        return normalized
-    }
-
-    nonisolated private static func parentRemotePath(of path: String) -> String? {
-        let normalized = normalizeRemotePath(path)
-        guard normalized != "/" else {
-            return nil
-        }
-        guard let slash = normalized.lastIndex(of: "/") else {
-            return "/"
-        }
-        if slash == normalized.startIndex {
-            return "/"
-        }
-        return String(normalized[..<slash])
-    }
-
-    nonisolated private static func joinRemotePath(_ base: String, _ name: String) -> String {
-        let normalizedBase = normalizeRemotePath(base)
-        if normalizedBase == "/" {
-            return "/\(name)"
-        }
-        return "\(normalizedBase)/\(name)"
-    }
 }
 
 actor MockSSHShellChannel: SSHShellChannel {
