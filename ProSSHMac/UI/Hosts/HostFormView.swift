@@ -177,7 +177,7 @@ struct HostFormView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                if draft.authMethod == .keyboardInteractive, editingHostID != nil {
+                if draft.authMethod == .keyboardInteractive {
                     Section("Two-Factor Authentication") {
                         if let config = draft.totpConfiguration {
                             TOTPLiveCodeView(config: config, secret: totpSecret)
@@ -188,10 +188,14 @@ struct HostFormView: View {
                                     Task { try? await totpStore?.deleteSecret(forHostID: hostID) }
                                 }
                             }
-                        } else {
+                        } else if editingHostID != nil {
                             Button("Set Up Two-Factor Auth") {
                                 showTOTPProvisioningSheet = true
                             }
+                        } else {
+                            Text("Save this host first, then edit it to configure two-factor authentication.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
                         }
                     }
                 }

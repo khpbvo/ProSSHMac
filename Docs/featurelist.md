@@ -314,3 +314,13 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 - Added TOTP section to `HostFormView` (appears only for `.keyboardInteractive` auth when editing an existing host): live code view (`TOTPLiveCodeView`) with 1-second timer, provisioning sheet (`TOTPProvisioningSheetView`) with URI paste and manual Base32 tabs.
 
 **Tests**: 37/37 pass (TOTPGeneratorRFCTests, TOTPAutoFillDetectorTests, SSHConfigParserTests). Build: SUCCEEDED.
+
+### 2026-02-24 — Fix: Make TOTP 2FA and SSH Config Import/Export visible in UI
+
+**Problem**: TOTP 2FA section and SSH Config Import/Export buttons were fully implemented but invisible in the running app. `HostsView` used `.toolbar {}` modifiers which don't render inside the `NavigationSplitView` → `NavigationStack` hierarchy used by `RootTabView`. Additionally, the TOTP section in `HostFormView` was gated behind `editingHostID != nil`, hiding it when creating new hosts.
+
+**Fix (HostsView.swift)**: Replaced `.toolbar` block with an inline "Actions" `Section` at the top of the `List` containing "Add Host", "Import SSH Config From Clipboard", and "Copy SSH Config Export" buttons. Removed the two dead computed properties (`importExportToolbarPlacement`, `addHostToolbarPlacement`). This matches the pattern used by KeyForgeView, CertificatesView, and other views that place action buttons inline.
+
+**Fix (HostFormView.swift)**: Relaxed the TOTP guard from `editingHostID != nil` to show the section for all keyboard-interactive hosts. For new (unsaved) hosts, displays a "Save this host first" message instead of the provisioning button, since TOTP secrets are Keychain-keyed by host UUID which doesn't exist until save.
+
+Build: SUCCEEDED.

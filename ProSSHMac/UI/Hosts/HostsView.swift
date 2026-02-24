@@ -38,6 +38,35 @@ struct HostsView: View {
 
     var body: some View {
         List {
+            Section("Actions") {
+                Button {
+                    editingHostID = nil
+                    draft = HostDraft()
+                    showForm = true
+                } label: {
+                    Label("Add Host", systemImage: "plus")
+                }
+
+                Button {
+                    let clipboard = PlatformClipboard.readString() ?? ""
+                    let preview = hostListViewModel.previewSSHConfigImport(clipboard)
+                    if preview.results.isEmpty {
+                        operationMessage = "No valid SSH host entries found in clipboard."
+                    } else {
+                        sshConfigImportPreview = preview
+                    }
+                } label: {
+                    Label("Import SSH Config From Clipboard", systemImage: "square.and.arrow.down")
+                }
+
+                Button {
+                    PlatformClipboard.writeString(hostListViewModel.exportSSHConfig())
+                    operationMessage = "SSH config copied to clipboard."
+                } label: {
+                    Label("Copy SSH Config Export", systemImage: "doc.on.doc")
+                }
+            }
+
             if hostListViewModel.isLoading {
                 ProgressView("Loading hosts...")
             }
@@ -59,38 +88,6 @@ struct HostsView: View {
         .task {
             await hostListViewModel.loadHostsIfNeeded()
             await keyForgeViewModel.loadKeysIfNeeded()
-        }
-        .toolbar {
-            ToolbarItem(placement: importExportToolbarPlacement) {
-                Menu {
-                    Button("Copy SSH Config Export", systemImage: "doc.on.doc") {
-                        PlatformClipboard.writeString(hostListViewModel.exportSSHConfig())
-                        operationMessage = "SSH config copied to clipboard."
-                    }
-
-                    Button("Import SSH Config From Clipboard", systemImage: "square.and.arrow.down") {
-                        let clipboard = PlatformClipboard.readString() ?? ""
-                        let preview = hostListViewModel.previewSSHConfigImport(clipboard)
-                        if preview.results.isEmpty {
-                            operationMessage = "No valid SSH host entries found in clipboard."
-                        } else {
-                            sshConfigImportPreview = preview
-                        }
-                    }
-                } label: {
-                    Label("Import / Export", systemImage: "arrow.up.arrow.down.circle")
-                }
-            }
-
-            ToolbarItem(placement: addHostToolbarPlacement) {
-                Button {
-                    editingHostID = nil
-                    draft = HostDraft()
-                    showForm = true
-                } label: {
-                    Label("Add Host", systemImage: "plus")
-                }
-            }
         }
         .sheet(isPresented: $showForm) {
             HostFormView(
@@ -514,14 +511,6 @@ struct HostsView: View {
             .sorted { lhs, rhs in
                 lhs.folder.localizedCaseInsensitiveCompare(rhs.folder) == .orderedAscending
             }
-    }
-
-    private var importExportToolbarPlacement: ToolbarItemPlacement {
-        return .automatic
-    }
-
-    private var addHostToolbarPlacement: ToolbarItemPlacement {
-        return .primaryAction
     }
 
     private var presentedAlertBinding: Binding<PresentedAlert?> {
