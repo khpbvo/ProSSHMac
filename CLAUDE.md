@@ -132,7 +132,7 @@ Active branch   : master
 Current phase   : Phase 7 — NOT STARTED
 Phase status    : NOT STARTED
 Immediate action: Read RefactorTerminalView.md, begin Phase 7 (extract TerminalFileBrowserSidebar)
-Last commit     : TBD "refactor(RefactorTV Phase 6): extract quick command panel to TerminalQuickCommandPanel"
+Last commit     : dda185a "refactor(RefactorTV Phase 6): extract quick command panel to TerminalQuickCommandPanel"
 ```
 
 **Update this block after every phase.**

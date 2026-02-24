@@ -22,7 +22,7 @@ Active branch   : master
 Current phase   : Phase 7 — NOT STARTED
 Phase status    : NOT STARTED
 Immediate action: Read RefactorTerminalView.md, begin Phase 7 (extract TerminalFileBrowserSidebar)
-Last commit     : TBD "refactor(RefactorTV Phase 6): extract quick command panel to TerminalQuickCommandPanel"
+Last commit     : dda185a "refactor(RefactorTV Phase 6): extract quick command panel to TerminalQuickCommandPanel"
 ```
 
 **Update this block after every phase.**
@@ -647,7 +647,7 @@ After all 9 phases are committed and the build is clean:
 
 ## Refactor Log (most recent first)
 
-- **2026-02-24 — Phase 6 COMPLETE** (commit TBD): Extracted quick command panel subsystem (~450 lines)
+- **2026-02-24 — Phase 6 COMPLETE** (commit `dda185a`): Extracted quick command panel subsystem (~450 lines)
   into `TerminalQuickCommandPanel.swift`. Moved 12 `@State` draft-editing vars, 3 sheet/fileImporter
   modifiers, 2 overlay blocks (scrim + drawer layer), and 19 computed properties/functions. Struct
   takes `@ObservedObject var quickCommands: QuickCommands`, `var selectedSession: Session?`, and
