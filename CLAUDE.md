@@ -22,11 +22,11 @@ The long-term memory for this project lives in `docs/featurelist.md`.
 
 ```
 Active branch : refactor/actor-isolation
-Current phase : Phase 5 — Decompose SessionManager.swift into 5 coordinators
+Current phase : Phase 6 — Decompose OpenAIAgentService.swift into Services/AI/
 Phase status  : NOT PLANNED
-Immediate action: Open RefactorTheActor.md → Phase 5 → expand sketch into granular plan (State A)
-Key source file : ProSSHMac/Services/SessionManager.swift (~1,640 lines)
-Last commit   : 35bfcfb  "refactor: introduce PersistentStore<T>, consolidate store boilerplate"
+Immediate action: Open RefactorTheActor.md → Phase 6 → expand sketch into granular plan (State A)
+Key source file : ProSSHMac/Services/OpenAIAgentService.swift (~1,946 lines)
+Last commit   : 0e876c2  "refactor: extract SessionRecordingCoordinator from SessionManager"
 ```
 
 **Update this block after every phase** — it is the first thing any new agent reads.
@@ -66,7 +66,7 @@ Every phase is in one of two states. Know which state you are in before doing an
 | 2 | Kill CString pyramid, inject credential resolver | **COMPLETE** (2026-02-24, commit `d7d891d`) |
 | 3 | Deduplicate remote path utilities → `RemotePath.swift` | **COMPLETE** (2026-02-24, commit `2fcdc50`) |
 | 4 | Generic `PersistentStore<T>` for store boilerplate | **COMPLETE** (2026-02-24, commit `35bfcfb`) |
-| 5 | Decompose `SessionManager.swift` into 5 coordinators | NOT PLANNED |
+| 5 | Decompose `SessionManager.swift` into 5 coordinators | **COMPLETE** (2026-02-24, commit `0e876c2`) |
 | 6 | Decompose `OpenAIAgentService.swift` into `Services/AI/` | NOT PLANNED |
 | 7 | Strict concurrency pass (`-strict-concurrency=complete`) | NOT PLANNED |
 | 8 | Test coverage backfill for all extracted types | NOT PLANNED |
@@ -203,7 +203,7 @@ All paths below are relative to the repo root. Source files live under `ProSSHMa
 | `ProSSHMac/UI/Terminal/TerminalAIAssistantPane.swift` | AI copilot sidebar, composer text view, message rendering | ~781 lines |
 | `ProSSHMac/UI/Terminal/MetalTerminalSessionSurface.swift` | SwiftUI ↔ Metal bridge, snapshot application, selection | Medium |
 | `ProSSHMac/Terminal/Renderer/MetalTerminalRenderer.swift` | Metal draw loop, cell buffer upload, cursor/selection render | ~1,438 lines |
-| `ProSSHMac/Services/SessionManager.swift` | Session lifecycle, shell I/O, SFTP, grid snapshots, history | **1,640 lines — being decomposed in Phase 5** |
+| `ProSSHMac/Services/SessionManager.swift` | Session lifecycle, shell I/O, SFTP, grid snapshots, history | **1,177 lines** — Phase 5 COMPLETE; 4 coordinators extracted |
 | `ProSSHMac/Services/SSH/LibSSHTransport.swift` | LibSSH transport actor, connect/auth/shell/SFTP/forward logic | ~797 lines — Phase 1 COMPLETE |
 | `ProSSHMac/Services/OpenAIAgentService.swift` | Agent tool loop, tool dispatch, streaming parser, context mgmt | **1,946 lines — being decomposed into `ProSSHMac/Services/AI/` in Phase 6** |
 | `ProSSHMac/Terminal/Grid/TerminalGrid.swift` | Terminal grid state, character printing, scrolling, resize/reflow | ~2,311 lines |
@@ -260,6 +260,25 @@ All paths below are relative to the repo root. Source files live under `ProSSHMa
 ## Recent Changes
 
 ### Refactor Log (strict concurrency refactor — most recent first)
+
+- **2026-02-24 — Phase 5 COMPLETE** (`0e876c2`, plan commit: `597c147`): Decomposed
+  `SessionManager.swift` (1,640→1,177 lines) into four `@MainActor final class` coordinators using
+  the weak-reference coordinator pattern. Each coordinator holds `weak var manager: SessionManager?`
+  and writes `@Published` properties via the manager reference (no delegate protocols needed).
+  Created: `SessionReconnectCoordinator` (~60L, owns NWPathMonitor + reconnect logic);
+  `SessionKeepaliveCoordinator` (~60L, owns keepalive task + UserDefaults reads);
+  `TerminalRenderingCoordinator` (~315L, owns grid snapshots, scroll offsets, PTY state, and all
+  render-publish pipeline methods); `SessionRecordingCoordinator` (~120L, owns SessionRecorder
+  instance + all recording/playback methods). Key corrections vs. plan: coordinator `init()` takes
+  no args (two-phase Swift init pattern — manager weak ref set after SessionManager stored
+  properties initialize); `nonisolated deinit {}` empty body matches codebase pattern (tasks use
+  `[weak self]` and terminate naturally); `NWPathMonitor` is `nonisolated let` so it can be
+  cancelled in coordinator's `nonisolated deinit`. SessionManager retains all `@Published`
+  properties (SwiftUI observes them via `@EnvironmentObject`) and exposes one-line forwarding
+  wrappers for the public API surface. `// swiftlint:disable file_length` retained (1,177L > 400L
+  — plan's 300L target unrealistic given remaining SFTP/AI/lifecycle code not yet extracted).
+  Build: SUCCEEDED. Tests: 22 pre-existing failures (color rendering + mouse encoding — within
+  ≤23 baseline). Phase 6 is NOT PLANNED.
 
 - **2026-02-24 — Phase 4 COMPLETE** (`35bfcfb`, plan commit: `3f6f05e`): Created
   `Services/PersistentStore.swift` — `@MainActor final class PersistentStore<T: Codable>` with
