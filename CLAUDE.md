@@ -22,11 +22,11 @@ The long-term memory for this project lives in `docs/featurelist.md`.
 
 ```
 Active branch : refactor/actor-isolation
-Current phase : Phase 3 — Deduplicate remote path utilities → RemotePath.swift
+Current phase : Phase 4 — Generic PersistentStore<T> for store boilerplate
 Phase status  : NOT PLANNED
-Immediate action: Open RefactorTheActor.md → Phase 3 → expand sketch into granular plan (State A)
-Key source file : ProSSHMac/Services/SSH/LibSSHTransport.swift  (~700 lines)
-Last commit   : d7d891d  "refactor: flatten jump host CString pyramid into LibSSHJumpCallParams"
+Immediate action: Open RefactorTheActor.md → Phase 4 → expand sketch into granular plan (State A)
+Key source file : ProSSHMac/Services/ (HostStore, KeyStore, CertificateStore, etc.)
+Last commit   : 2fcdc50  "refactor: extract RemotePath utilities, remove duplication"
 ```
 
 **Update this block after every phase** — it is the first thing any new agent reads.
@@ -64,7 +64,7 @@ Every phase is in one of two states. Know which state you are in before doing an
 | 1 | Split `SSHTransport.swift` into `Services/SSH/` | **COMPLETE** (2026-02-24, commit `f2ff073`) |
 | 1b | Swift 6 strict concurrency pass on Phase 1 files | **COMPLETE** (2026-02-24, commit `32dcd70`) |
 | 2 | Kill CString pyramid, inject credential resolver | **COMPLETE** (2026-02-24, commit `d7d891d`) |
-| 3 | Deduplicate remote path utilities → `RemotePath.swift` | NOT PLANNED |
+| 3 | Deduplicate remote path utilities → `RemotePath.swift` | **COMPLETE** (2026-02-24, commit `2fcdc50`) |
 | 4 | Generic `PersistentStore<T>` for store boilerplate | NOT PLANNED |
 | 5 | Decompose `SessionManager.swift` into 5 coordinators | NOT PLANNED |
 | 6 | Decompose `OpenAIAgentService.swift` into `Services/AI/` | NOT PLANNED |
@@ -261,6 +261,15 @@ All paths below are relative to the repo root. Source files live under `ProSSHMa
 
 ### Refactor Log (strict concurrency refactor — most recent first)
 
+- **2026-02-24 — Phase 3 COMPLETE** (`2fcdc50`, plan commit: `1cad47a`): Created
+  `Services/SSH/RemotePath.swift` with `normalize(_:)`, `parent(of:)`, and `join(_:_:)` static
+  methods. All three marked `nonisolated` (Swift 6 infers `@MainActor` on enum static methods in
+  this module — same pattern observed in Phase 2). Replaced 4 call sites in `LibSSHTransport` and
+  7 call sites in `MockSSHTransport`; deleted 14-line `normalizeRemotePath` from LibSSHTransport
+  and 33-line block of 3 methods from MockSSHTransport. `TransferManager.swift` left untouched
+  (different `normalizeRemotePath` impl with `..` resolution, different return type for parent).
+  Build: SUCCEEDED. Tests: 186 tests, 2 pre-existing failures (within ≤23 baseline). Phase 4
+  is NOT PLANNED.
 - **2026-02-24 — Phase 2 COMPLETE** (`d7d891d`, Phase 2a: `334afc4`): Extracted 6 credential-loading
   helpers from `LibSSHTransport` into `DefaultSSHCredentialResolver` (implementing new
   `SSHCredentialResolving` protocol). Injected resolver via `init(credentialResolver:)` with
