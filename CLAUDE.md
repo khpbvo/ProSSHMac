@@ -169,7 +169,7 @@ Active branch   : master
 Current phase   : Phase 5 — NOT STARTED
 Phase status    : NOT STARTED
 Immediate action: Begin Phase 5 (extract Scrolling → TerminalGrid+Scrolling.swift).
-Last commit     : <hash> "refactor(RefactorTG Phase 4): extract Cursor Movement + Cell R/W to TerminalGrid+CursorOps.swift"
+Last commit     : 5ce0ae4 "refactor(RefactorTG Phase 4): extract Cursor Movement + Cell R/W to TerminalGrid+CursorOps.swift"
 ```
 
 **Update this block after every phase.**
