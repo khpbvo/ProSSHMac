@@ -25,7 +25,7 @@ Active branch : refactor/actor-isolation
 Current phase : Phase 8 — Test coverage backfill for all extracted types
 Phase status  : NOT PLANNED
 Immediate action: Open RefactorTheActor.md → Phase 8 → expand sketch into granular plan (State A)
-Last commit   : 2c90d5b  "chore: mark Phase 7 complete in CLAUDE.md"
+Last commit   : c46e29f  "docs: add Phase 7 loop-log entry to featurelist.md"
 ```
 
 **Update this block after every phase** — it is the first thing any new agent reads.
