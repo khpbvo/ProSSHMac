@@ -123,6 +123,43 @@ Services/
 
 ---
 
+## Active Refactor: TerminalView.swift Decomposition (RefactorTerminalView.md)
+
+### ► CURRENT STATE — START HERE
+
+```
+Active branch   : master
+Current phase   : Phase 1 — NOT STARTED
+Phase status    : NOT STARTED
+Immediate action: Read RefactorTerminalView.md, begin Phase 1 (extract DirectTerminalInputNSView)
+Last commit     : (Phase 0 — see git log)
+```
+
+**Update this block after every phase.**
+
+### Phase Status
+
+| Phase | Name | Status |
+|-------|------|--------|
+| 0 | Baseline audit | COMPLETE (2026-02-24) |
+| 1 | Extract DirectTerminalInputNSView + supporting types | NOT STARTED |
+| 2 | Extract TerminalSessionHeaderView + TerminalSessionMetadataView | NOT STARTED |
+| 3 | Extract TerminalSearchBarView | NOT STARTED |
+| 4 | Extract TerminalSessionActionsBar | NOT STARTED |
+| 5 | Extract TerminalSessionTabBar | NOT STARTED |
+| 6 | Extract TerminalQuickCommandPanel | NOT STARTED |
+| 7 | Extract TerminalFileBrowserSidebar | NOT STARTED |
+| 8 | Extract TerminalSurfaceView | NOT STARTED |
+| 9 | Extract TerminalSidebarLayoutStore + TerminalKeyboardShortcutLayer + cleanup | NOT STARTED |
+
+**Run-book:** `RefactorTerminalView.md` (project root) — contains the full step-by-step
+checklist. Read it before starting any phase.
+
+**New files** all go in `ProSSHMac/UI/Terminal/`. Naming convention: `Terminal<ComponentName>.swift`.
+Each starts with `// Extracted from TerminalView.swift` as first non-blank, non-import line.
+
+---
+
 ## Project Overview
 
 **ProSSHMac** is a native macOS SSH/terminal client built with SwiftUI + Metal.
@@ -198,7 +235,7 @@ All paths below are relative to the repo root. Source files live under `ProSSHMa
 
 | File | What it does | Size / Notes |
 |------|-------------|--------------|
-| `ProSSHMac/UI/Terminal/TerminalView.swift` | Main terminal UI, sidebar layout, focus management, input capture | ~3,425 lines |
+| `ProSSHMac/UI/Terminal/TerminalView.swift` | Main terminal UI, sidebar layout, focus management, input capture | ~3,425 lines → target ~1,100 after RefactorTerminalView |
 | `ProSSHMac/UI/Terminal/TerminalAIAssistantPane.swift` | AI copilot sidebar, composer text view, message rendering | ~781 lines |
 | `ProSSHMac/UI/Terminal/MetalTerminalSessionSurface.swift` | SwiftUI ↔ Metal bridge, snapshot application, selection | Medium |
 | `ProSSHMac/Terminal/Renderer/MetalTerminalRenderer.swift` | Metal draw loop, cell buffer upload, cursor/selection render | ~1,438 lines |
