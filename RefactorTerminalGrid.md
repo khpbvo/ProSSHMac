@@ -19,10 +19,10 @@ Follow the same workflow as `RefactorTerminalView.md`:
 
 ```
 Active branch   : master
-Current phase   : Phase 10 — NOT STARTED
+Current phase   : Phase 11 — NOT STARTED
 Phase status    : NOT STARTED
-Immediate action: Begin Phase 10 (extract Print Character → TerminalGrid+Printing.swift).
-Last commit     : eb7bac3 "refactor(RefactorTG Phase 9): extract Lifecycle (Full Reset + Resize) to TerminalGrid+Lifecycle.swift"
+Immediate action: Begin Phase 11 (extract Snapshot + Text Extraction → TerminalGrid+Snapshot.swift).
+Last commit     : <pending> "refactor(RefactorTG Phase 10): extract Print Character to TerminalGrid+Printing.swift"
 ```
 
 **Update this block after every phase.**
@@ -43,7 +43,7 @@ Last commit     : eb7bac3 "refactor(RefactorTG Phase 9): extract Lifecycle (Full
 | 7 | Extract Line Operations → `TerminalGrid+LineOps.swift` | **COMPLETE** (2026-02-25) |
 | 8 | Extract Screen Buffer + Cursor Save/Restore → `TerminalGrid+ScreenBuffer.swift` | **COMPLETE** (2026-02-25) |
 | 9 | Extract Lifecycle (Full Reset + Resize) → `TerminalGrid+Lifecycle.swift` | **COMPLETE** (2026-02-25) |
-| 10 | Extract Print Character → `TerminalGrid+Printing.swift` | NOT STARTED |
+| 10 | Extract Print Character → `TerminalGrid+Printing.swift` | **COMPLETE** (2026-02-25) |
 | 11 | Extract Snapshot + Text Extraction → `TerminalGrid+Snapshot.swift` | NOT STARTED |
 | — | Full test suite run | NOT STARTED |
 
@@ -428,10 +428,10 @@ Do not rename anything. Do not restructure control flow. Move verbatim.
 
 ### Steps (7 steps)
 
-- [ ] **10.1** Read `TerminalGrid.swift` lines for `// MARK: - A.6.3 Print Character` in full (all ~357 lines, including every helper function at the end of the section).
-- [ ] **10.2** List every helper function defined inside the section. Confirm each is only called from within this MARK block. If any helper is called elsewhere (e.g., by scrolling), note it — do not move it; leave it in the main file.
-- [ ] **10.3** Create `ProSSHMac/Terminal/Grid/TerminalGrid+Printing.swift`.
-- [ ] **10.4** File header:
+- [x] **10.1** Read `TerminalGrid.swift` lines for `// MARK: - A.6.3 Print Character` in full (all ~357 lines, including every helper function at the end of the section).
+- [x] **10.2** List every helper function defined inside the section. Confirm each is only called from within this MARK block. If any helper is called elsewhere (e.g., by scrolling), note it — do not move it; leave it in the main file.
+- [x] **10.3** Create `ProSSHMac/Terminal/Grid/TerminalGrid+Printing.swift`.
+- [x] **10.4** File header:
   ```swift
   // Extracted from TerminalGrid.swift
 
@@ -440,9 +440,9 @@ Do not rename anything. Do not restructure control flow. Move verbatim.
   extension TerminalGrid {
   ```
   Close with `}`.
-- [ ] **10.5** Cut the entire `// MARK: - A.6.3 Print Character` block from `TerminalGrid.swift` (from the MARK comment through the last `}` of the last function in the section) and paste into the extension.
-- [ ] **10.6** Build: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`. Verify `** BUILD SUCCEEDED **`. Pay close attention to any "use of unresolved identifier" errors — they indicate a private helper that was missed.
-- [ ] **10.7** Commit: `refactor(RefactorTG Phase 10): extract Print Character to TerminalGrid+Printing.swift`
+- [x] **10.5** Cut the entire `// MARK: - A.6.3 Print Character` block from `TerminalGrid.swift` (from the MARK comment through the last `}` of the last function in the section) and paste into the extension.
+- [x] **10.6** Build: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`. Verify `** BUILD SUCCEEDED **`. Pay close attention to any "use of unresolved identifier" errors — they indicate a private helper that was missed.
+- [x] **10.7** Commit: `refactor(RefactorTG Phase 10): extract Print Character to TerminalGrid+Printing.swift`
 
 **Expected TerminalGrid.swift line count after phase:** ~749 lines
 
@@ -506,6 +506,17 @@ property stays in the main file (it's a class-level declaration); the extension 
 ---
 
 ## Refactor Log (most recent first)
+
+- **2026-02-25 — Phase 10 COMPLETE**: Extracted `// MARK: - A.6.3 Print Character` (5 methods:
+  `printCharacter`, `repeatLastCharacter`, `printASCIIBytesBulk`, `processGroundTextBytes`,
+  `performWrap`) from `TerminalGrid.swift` (lines 431–786, ~357 lines) into
+  `ProSSHMac/Terminal/Grid/TerminalGrid+Printing.swift`. All 5 methods annotated `nonisolated`.
+  Helper check (step 10.2): all 5 are only referenced from within the block itself or from
+  external parser/SessionManager callers — none are called from other TerminalGrid sections.
+  Cross-file calls: `insertBlanks` (LineOps), `markDirty` (TabsAndDirty), `scrollUp` (Scrolling),
+  `withActiveBuffer`/`withActiveBufferState`/`physicalRow`/`encodeGrapheme`/etc. (Helpers in main
+  file) — all resolve via extension dispatch. `TerminalGrid.swift`: ~787 lines (from ~1,143).
+  Build: SUCCEEDED, 0 new warnings.
 
 - **2026-02-25 — Phase 9 COMPLETE**: Extracted `// MARK: - Full Reset (RIS — ESC c)` (3 methods:
   `fullReset`, `softReset`, `screenAlignmentPattern`) and `// MARK: - Resize` (2 methods: `resize`,

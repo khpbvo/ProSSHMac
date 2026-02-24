@@ -166,10 +166,10 @@ Each starts with `// Extracted from TerminalView.swift` as first non-blank, non-
 
 ```
 Active branch   : master
-Current phase   : Phase 10 — NOT STARTED
+Current phase   : Phase 11 — NOT STARTED
 Phase status    : NOT STARTED
-Immediate action: Begin Phase 10 (extract Print Character → TerminalGrid+Printing.swift).
-Last commit     : eb7bac3 "refactor(RefactorTG Phase 9): extract Lifecycle (Full Reset + Resize) to TerminalGrid+Lifecycle.swift"
+Immediate action: Begin Phase 11 (extract Snapshot + Text Extraction → TerminalGrid+Snapshot.swift).
+Last commit     : <pending> "refactor(RefactorTG Phase 10): extract Print Character to TerminalGrid+Printing.swift"
 ```
 
 **Update this block after every phase.**
@@ -188,7 +188,7 @@ Last commit     : eb7bac3 "refactor(RefactorTG Phase 9): extract Lifecycle (Full
 | 7 | Extract Line Operations → `TerminalGrid+LineOps.swift` | **COMPLETE** (2026-02-25) |
 | 8 | Extract Screen Buffer + Cursor Save/Restore → `TerminalGrid+ScreenBuffer.swift` | **COMPLETE** (2026-02-25) |
 | 9 | Extract Lifecycle (Full Reset + Resize) → `TerminalGrid+Lifecycle.swift` | **COMPLETE** (2026-02-25) |
-| 10 | Extract Print Character → `TerminalGrid+Printing.swift` | NOT STARTED |
+| 10 | Extract Print Character → `TerminalGrid+Printing.swift` | **COMPLETE** (2026-02-25) |
 | 11 | Extract Snapshot + Text Extraction → `TerminalGrid+Snapshot.swift` | NOT STARTED |
 
 **Run-book:** `RefactorTerminalGrid.md` (project root) — contains the full step-by-step checklist.
