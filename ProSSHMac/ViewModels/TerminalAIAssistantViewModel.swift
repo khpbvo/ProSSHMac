@@ -1,6 +1,23 @@
 import Foundation
 @preconcurrency import Combine
 
+enum PatchApprovalState: String, Sendable, Equatable {
+    case pending, approved, denied
+}
+
+enum TerminalAIAssistantMessageKind: Sendable, Equatable {
+    case text
+    case patchApproval(
+        operation: String, path: String,
+        diffPreview: String, fingerprint: String,
+        state: PatchApprovalState
+    )
+    case patchResult(
+        operation: String, path: String,
+        linesChanged: Int, warnings: [String], success: Bool
+    )
+}
+
 enum TerminalAIAssistantRole: String, Sendable, Equatable {
     case user
     case assistant
@@ -13,6 +30,7 @@ struct TerminalAIAssistantMessage: Identifiable, Sendable, Equatable {
     var content: String
     var createdAt: Date
     var isStreaming: Bool
+    var kind: TerminalAIAssistantMessageKind = .text
 }
 
 @MainActor
@@ -27,6 +45,11 @@ final class TerminalAIAssistantViewModel: ObservableObject {
     private let minChunkSize: Int
     private let maxChunkSize: Int
 
+    private var activePatchApprovalContinuation: CheckedContinuation<(Bool, Bool), Never>?
+    private var activePatchApprovalMessageID: UUID?
+    private var activePatchApprovalOperation: PatchOperation?
+    private var activePatchApprovalFingerprint: String?
+
     init(
         agentService: any OpenAIAgentServicing,
         streamChunkDelayNanoseconds: UInt64 = 6_000_000,
@@ -37,16 +60,97 @@ final class TerminalAIAssistantViewModel: ObservableObject {
         self.streamChunkDelayNanoseconds = streamChunkDelayNanoseconds
         self.minChunkSize = minChunkSize
         self.maxChunkSize = maxChunkSize
+
+        if let svc = agentService as? OpenAIAgentService {
+            svc.patchApprovalCallback = { [weak self] operation, fingerprint in
+                await self?.requestPatchApproval(operation: operation, fingerprint: fingerprint)
+                    ?? (false, false)
+            }
+            svc.patchResultCallback = { [weak self] operation, result in
+                self?.appendPatchResultNotification(operation: operation, result: result)
+            }
+        }
     }
 
     nonisolated deinit {}
 
     func clearConversation(sessionID: UUID?) {
+        denyPatch()
         messages = []
         lastError = nil
         if let sessionID {
             agentService.clearConversation(sessionID: sessionID)
         }
+    }
+
+    func requestPatchApproval(
+        operation: PatchOperation, fingerprint: String
+    ) async -> (Bool, Bool) {
+        return await withCheckedContinuation { continuation in
+            let msgID = UUID()
+            activePatchApprovalContinuation = continuation
+            activePatchApprovalMessageID = msgID
+            activePatchApprovalOperation = operation
+            activePatchApprovalFingerprint = fingerprint
+            messages.append(TerminalAIAssistantMessage(
+                id: msgID, role: .assistant, content: "", createdAt: .now,
+                isStreaming: false,
+                kind: .patchApproval(
+                    operation: operation.type.rawValue,
+                    path: operation.path,
+                    diffPreview: String((operation.diff ?? "").prefix(500)),
+                    fingerprint: fingerprint,
+                    state: .pending
+                )
+            ))
+        }
+    }
+
+    func approvePatch(remember: Bool) {
+        guard let msgID = activePatchApprovalMessageID,
+              let idx = messages.firstIndex(where: { $0.id == msgID }),
+              let op = activePatchApprovalOperation,
+              let fp = activePatchApprovalFingerprint else { return }
+        messages[idx].kind = .patchApproval(
+            operation: op.type.rawValue, path: op.path,
+            diffPreview: String((op.diff ?? "").prefix(500)),
+            fingerprint: fp, state: .approved
+        )
+        activePatchApprovalContinuation?.resume(returning: (true, remember))
+        clearActivePatchApproval()
+    }
+
+    func denyPatch() {
+        guard let msgID = activePatchApprovalMessageID,
+              let idx = messages.firstIndex(where: { $0.id == msgID }),
+              let op = activePatchApprovalOperation,
+              let fp = activePatchApprovalFingerprint else { return }
+        messages[idx].kind = .patchApproval(
+            operation: op.type.rawValue, path: op.path,
+            diffPreview: String((op.diff ?? "").prefix(500)),
+            fingerprint: fp, state: .denied
+        )
+        activePatchApprovalContinuation?.resume(returning: (false, false))
+        clearActivePatchApproval()
+    }
+
+    private func clearActivePatchApproval() {
+        activePatchApprovalContinuation = nil
+        activePatchApprovalMessageID = nil
+        activePatchApprovalOperation = nil
+        activePatchApprovalFingerprint = nil
+    }
+
+    private func appendPatchResultNotification(operation: PatchOperation, result: PatchResult) {
+        messages.append(TerminalAIAssistantMessage(
+            id: UUID(), role: .assistant, content: "", createdAt: .now,
+            isStreaming: false,
+            kind: .patchResult(
+                operation: operation.type.rawValue, path: operation.path,
+                linesChanged: result.linesChanged, warnings: result.warnings,
+                success: result.success
+            )
+        ))
     }
 
     func submitPrompt(for sessionID: UUID) {

@@ -65,7 +65,9 @@ extension SessionManager: OpenAIAgentSessionProviding {}
 
 @MainActor
 final class OpenAIAgentService: OpenAIAgentServicing {
-    let toolDefinitions: [OpenAIResponsesToolDefinition]
+    var toolDefinitions: [OpenAIResponsesToolDefinition] {
+        AIToolDefinitions.buildToolDefinitions(patchToolEnabled: patchToolEnabled)
+    }
 
     let responsesService: any OpenAIResponsesServicing
     let sessionProvider: any OpenAIAgentSessionProviding
@@ -75,6 +77,29 @@ final class OpenAIAgentService: OpenAIAgentServicing {
     let conversationContext = AIConversationContext()
     let toolHandler = AIToolHandler()
     let agentRunner = AIAgentRunner()
+    let patchApprovalTracker = PatchApprovalTracker()
+
+    // Callbacks wired by TerminalAIAssistantViewModel after init.
+    var patchApprovalCallback: ((PatchOperation, String) async -> (approved: Bool, remember: Bool))?
+    var patchResultCallback: ((PatchOperation, PatchResult) -> Void)?
+
+    // Computed — read UserDefaults live so SettingsView toggles take effect immediately.
+    var patchToolEnabled: Bool {
+        UserDefaults.standard.object(forKey: "ai.patchTool.enabled") as? Bool ?? true
+    }
+    var patchApprovalRequired: Bool {
+        UserDefaults.standard.object(forKey: "ai.patchTool.requireApproval") as? Bool ?? true
+    }
+    var patchAllowDelete: Bool {
+        UserDefaults.standard.bool(forKey: "ai.patchTool.allowDelete")
+    }
+
+    func requestPatchApproval(
+        operation: PatchOperation, fingerprint: String
+    ) async -> (approved: Bool, remember: Bool) {
+        guard let callback = patchApprovalCallback else { return (true, true) }
+        return await callback(operation, fingerprint)
+    }
 
     init(
         responsesService: any OpenAIResponsesServicing,
@@ -88,7 +113,6 @@ final class OpenAIAgentService: OpenAIAgentServicing {
         self.requestTimeoutSeconds = max(10, requestTimeoutSeconds)
         self.maxToolIterations = max(1, maxToolIterations)
         self.persistConversationContext = persistConversationContext
-        self.toolDefinitions = AIToolDefinitions.buildToolDefinitions()
         toolHandler.service = self
         agentRunner.service = self
     }

@@ -16,6 +16,9 @@ struct SettingsView: View {
     @AppStorage("terminal.scrollback.maxLines") private var terminalScrollback = 10_000
     @AppStorage("ssh.keepalive.enabled") private var keepaliveEnabled = false
     @AppStorage("ssh.keepalive.interval") private var keepaliveInterval = 30
+    @AppStorage("ai.patchTool.enabled") private var patchToolEnabled: Bool = true
+    @AppStorage("ai.patchTool.requireApproval") private var patchRequireApproval: Bool = true
+    @AppStorage("ai.patchTool.allowDelete") private var patchAllowDelete: Bool = false
     @State private var operationMessage: String?
     @State private var showingClearAuditConfirmation = false
 
@@ -208,6 +211,24 @@ struct SettingsView: View {
                     }
 
                     Text("AI Copilot lives in Terminal. Use ⌥⌘I to toggle it. In the composer: Enter sends, Shift+Enter inserts a new line.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+
+                    Divider()
+
+                    Group {
+                        Text("FILE EDITING")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+
+                        Toggle("Allow AI to edit files", isOn: $patchToolEnabled)
+                        Toggle("Require approval before applying patches", isOn: $patchRequireApproval)
+                            .disabled(!patchToolEnabled)
+                        Toggle("Allow file deletion", isOn: $patchAllowDelete)
+                            .disabled(!patchToolEnabled)
+                    }
+
+                    Text("When approval is required, the AI shows you the exact changes before applying them. Disabling \"Allow AI to edit files\" removes the tool entirely from the AI's capabilities.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }

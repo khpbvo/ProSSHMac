@@ -421,6 +421,76 @@ import os.log
                 "working_directory": provider.workingDirectoryBySessionID[sessionID].map(OpenAIJSONValue.string) ?? .null,
             ]))
 
+        case "apply_patch":
+            let operationType = try Self.requiredString(key: "operation", in: arguments, toolName: toolCall.name)
+            let path = try Self.requiredString(key: "path", in: arguments, toolName: toolCall.name)
+            let diff = Self.optionalString(key: "diff", in: arguments)
+
+            guard let opType = PatchOperation.OperationType(rawValue: operationType) else {
+                throw OpenAIAgentServiceError.invalidToolArguments(
+                    toolName: toolCall.name,
+                    message: "operation must be 'create', 'update', or 'delete'"
+                )
+            }
+            let operation = PatchOperation(type: opType, path: path, diff: diff)
+
+            // Delete safety gate
+            if opType == .delete && !(service?.patchAllowDelete ?? false) {
+                return AIToolDefinitions.jsonString(from: .object([
+                    "ok": .bool(false),
+                    "error": .string("File deletion is disabled in AI settings."),
+                ]))
+            }
+
+            guard let session = provider.sessions.first(where: { $0.id == sessionID }) else {
+                throw OpenAIAgentServiceError.sessionNotFound
+            }
+
+            // Approval gate
+            if let svc = service, svc.patchApprovalRequired {
+                let fingerprint = svc.patchApprovalTracker.fingerprint(operation: operation)
+                if !svc.patchApprovalTracker.isApproved(fingerprint) {
+                    let (approved, remember) = await svc.requestPatchApproval(
+                        operation: operation, fingerprint: fingerprint
+                    )
+                    if !approved {
+                        Self.logger.info("patch_denied path=\(path, privacy: .public)")
+                        return AIToolDefinitions.jsonString(from: .object([
+                            "ok": .bool(false),
+                            "status": .string("denied_by_user"),
+                        ]))
+                    }
+                    if remember { svc.patchApprovalTracker.remember(fingerprint) }
+                }
+            }
+
+            // Execute
+            let result: PatchResult
+            if session.isLocal {
+                let workingDir = provider.workingDirectoryBySessionID[sessionID]
+                    ?? FileManager.default.currentDirectoryPath
+                let patcher = LocalWorkspacePatcher(workspaceRoot: URL(fileURLWithPath: workingDir))
+                result = try patcher.apply(operation)
+            } else {
+                let command = RemotePatchCommandBuilder.buildCommand(for: operation)
+                let execution = await provider.executeCommandAndWait(
+                    sessionID: sessionID, command: command, timeoutSeconds: 15
+                )
+                result = RemotePatchCommandBuilder.parseResult(execution.output, operation: operation)
+            }
+
+            Self.logger.info(
+                "patch_applied op=\(operationType, privacy: .public) path=\(path, privacy: .public) lines=\(result.linesChanged) ok=\(result.success)"
+            )
+            service?.patchResultCallback?(operation, result)
+
+            return AIToolDefinitions.jsonString(from: .object([
+                "ok": .bool(result.success),
+                "output": .string(result.output),
+                "lines_changed": .number(Double(result.linesChanged)),
+                "warnings": .array(result.warnings.map { .string($0) }),
+            ]))
+
         default:
             return AIToolDefinitions.jsonString(from: .object([
                 "ok": .bool(false),
@@ -506,6 +576,19 @@ import os.log
             toolName: toolName,
             message: "'\(key)' must be an integer"
         )
+    }
+
+    private static func optionalString(
+        key: String,
+        in arguments: [String: OpenAIJSONValue]
+    ) -> String? {
+        guard let value = arguments[key] else { return nil }
+        switch value {
+        case let .string(s):
+            let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        default: return nil
+        }
     }
 
     private static func optionalInt(

@@ -49,12 +49,34 @@ enum AIToolDefinitions {
         - Add a brief heading when it improves scanning.
         - Show relevant command output in fenced code blocks.
         - Be concise but thorough.
+
+        ## File Editing with apply_patch
+
+        When you need to create, modify, or delete files, use the `apply_patch` tool
+        instead of `execute_command` with echo/cat/sed. It is safer and more reliable.
+
+        Workflow for modifying an existing file:
+        1. Use `read_file_chunk` to read the current file contents
+        2. Generate a unified diff based on what you read
+        3. Call `apply_patch` with operation="update" and the diff
+
+        Diff format requirements for updates:
+        - Must include @@ hunk headers with correct line numbers
+        - Must include context lines (unchanged lines prefixed with space)
+        - Removal lines prefixed with -
+        - Addition lines prefixed with +
+
+        For creating new files: use operation="create" with file content or a diff of only + lines.
+        For deleting files: operation="delete", no diff needed.
+
+        IMPORTANT: Always read a file before trying to update it. Never guess at
+        the current contents — use read_file_chunk to get accurate context lines.
         """
     }
 
     // MARK: - Tool Definitions
 
-    static func buildToolDefinitions() -> [OpenAIResponsesToolDefinition] {
+    static func buildToolDefinitions(patchToolEnabled: Bool = true) -> [OpenAIResponsesToolDefinition] {
         let commonNoExtraProperties = OpenAIJSONValue.bool(false)
 
         return [
@@ -284,7 +306,7 @@ enum AIToolDefinitions {
                 ]),
                 strict: true
             ),
-        ]
+        ] + (patchToolEnabled ? [ApplyPatchToolDefinition.definition()] : [])
     }
 
     // MARK: - Direct Action Tool Filtering
@@ -295,6 +317,7 @@ enum AIToolDefinitions {
         let allowedNames: Set<String> = [
             "execute_command", "execute_and_wait", "get_current_screen",
             "get_session_info", "get_recent_commands", "get_command_output",
+            "apply_patch",
         ]
         let filtered = tools.filter { allowedNames.contains($0.name) }
         return filtered.isEmpty ? tools : filtered

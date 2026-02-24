@@ -67,8 +67,25 @@ struct TerminalAIAssistantPane: View {
                         emptyState
                     } else {
                         ForEach(viewModel.messages) { message in
-                            AIAssistantMessageCard(message: message)
+                            switch message.kind {
+                            case .text:
+                                AIAssistantMessageCard(message: message)
+                                    .id(message.id)
+                            case let .patchApproval(op, path, diffPreview, _, state):
+                                PatchApprovalCardView(
+                                    operation: op, path: path, diffPreview: diffPreview, state: state,
+                                    onApprove: { remember in viewModel.approvePatch(remember: remember) },
+                                    onDeny: { viewModel.denyPatch() }
+                                )
+                                .padding(.horizontal, 4)
                                 .id(message.id)
+                            case let .patchResult(op, path, linesChanged, warnings, success):
+                                PatchResultNotificationView(
+                                    operation: op, path: path, linesChanged: linesChanged,
+                                    warnings: warnings, success: success
+                                )
+                                .id(message.id)
+                            }
                         }
                     }
                 }
@@ -777,5 +794,50 @@ private enum AIAssistantRenderer {
             return ["const", "let", "var", "function", "if", "else", "return", "class", "import", "export", "async", "await", "try", "catch", "new"]
         }
         return ["if", "else", "for", "while", "return", "import", "class", "function", "const", "let", "var", "def"]
+    }
+}
+
+private struct PatchResultNotificationView: View {
+    let operation: String
+    let path: String
+    let linesChanged: Int
+    let warnings: [String]
+    let success: Bool
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: success ? icon : "exclamationmark.triangle.fill")
+                .foregroundStyle(success ? .green : .red)
+                .font(.subheadline)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(summaryText)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(success ? Color.primary : Color.red)
+                ForEach(warnings, id: \.self) { w in
+                    Text(w)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+            }
+        }
+        .padding(8)
+    }
+
+    private var icon: String {
+        switch operation {
+        case "create": return "doc.badge.plus"
+        case "update": return "checkmark.circle.fill"
+        case "delete": return "trash.fill"
+        default:       return "checkmark.circle.fill"
+        }
+    }
+    private var summaryText: String {
+        if !success { return "Patch failed" }
+        switch operation {
+        case "create": return "Created \(URL(fileURLWithPath: path).lastPathComponent) (\(linesChanged) lines)"
+        case "update": return "Updated \(URL(fileURLWithPath: path).lastPathComponent) (\(linesChanged) lines changed)"
+        case "delete": return "Deleted \(URL(fileURLWithPath: path).lastPathComponent)"
+        default:       return "Patch applied"
+        }
     }
 }
