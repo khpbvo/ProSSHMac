@@ -166,10 +166,10 @@ Each starts with `// Extracted from TerminalView.swift` as first non-blank, non-
 
 ```
 Active branch   : master
-Current phase   : Phase 2 — NOT STARTED
+Current phase   : Phase 3 — NOT STARTED
 Phase status    : NOT STARTED
-Immediate action: Begin Phase 2 (extract OSC Handlers → TerminalGrid+OSCHandlers.swift).
-Last commit     : b68d5dd "refactor(RefactorTG Phase 1): extract Mode Setters to TerminalGrid+ModeSetters.swift"
+Immediate action: Begin Phase 3 (extract Tab Stops + Dirty Tracking → TerminalGrid+TabsAndDirty.swift).
+Last commit     : <hash> "refactor(RefactorTG Phase 2): extract OSC Handlers to TerminalGrid+OSCHandlers.swift"
 ```
 
 **Update this block after every phase.**
@@ -180,7 +180,7 @@ Last commit     : b68d5dd "refactor(RefactorTG Phase 1): extract Mode Setters to
 |-------|------|--------|
 | 0 | Baseline — swiftlint:disable + internal access | **COMPLETE** (2026-02-24) |
 | 1 | Extract Mode Setters → `TerminalGrid+ModeSetters.swift` | **COMPLETE** (2026-02-24) |
-| 2 | Extract OSC Handlers → `TerminalGrid+OSCHandlers.swift` | NOT STARTED |
+| 2 | Extract OSC Handlers → `TerminalGrid+OSCHandlers.swift` | **COMPLETE** (2026-02-24) |
 | 3 | Extract Tab Stops + Dirty Tracking → `TerminalGrid+TabsAndDirty.swift` | NOT STARTED |
 | 4 | Extract Cursor Movement + Cell R/W → `TerminalGrid+CursorOps.swift` | NOT STARTED |
 | 5 | Extract Scrolling → `TerminalGrid+Scrolling.swift` | NOT STARTED |

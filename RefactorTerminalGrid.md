@@ -19,10 +19,10 @@ Follow the same workflow as `RefactorTerminalView.md`:
 
 ```
 Active branch   : master
-Current phase   : Phase 2 — NOT STARTED
+Current phase   : Phase 3 — NOT STARTED
 Phase status    : NOT STARTED
-Immediate action: Begin Phase 2 (extract OSC Handlers → TerminalGrid+OSCHandlers.swift).
-Last commit     : b68d5dd "refactor(RefactorTG Phase 1): extract Mode Setters to TerminalGrid+ModeSetters.swift"
+Immediate action: Begin Phase 3 (extract Tab Stops + Dirty Tracking → TerminalGrid+TabsAndDirty.swift).
+Last commit     : <hash> "refactor(RefactorTG Phase 2): extract OSC Handlers to TerminalGrid+OSCHandlers.swift"
 ```
 
 **Update this block after every phase.**
@@ -35,7 +35,7 @@ Last commit     : b68d5dd "refactor(RefactorTG Phase 1): extract Mode Setters to
 |-------|------|--------|
 | 0 | Baseline — swiftlint:disable + remove all `private` from stored properties | **COMPLETE** (2026-02-24) |
 | 1 | Extract Mode Setters → `TerminalGrid+ModeSetters.swift` | **COMPLETE** (2026-02-24) |
-| 2 | Extract OSC Handlers → `TerminalGrid+OSCHandlers.swift` | NOT STARTED |
+| 2 | Extract OSC Handlers → `TerminalGrid+OSCHandlers.swift` | **COMPLETE** (2026-02-24) |
 | 3 | Extract Tab Stops + Dirty Tracking → `TerminalGrid+TabsAndDirty.swift` | NOT STARTED |
 | 4 | Extract Cursor Movement + Cell R/W → `TerminalGrid+CursorOps.swift` | NOT STARTED |
 | 5 | Extract Scrolling → `TerminalGrid+Scrolling.swift` | NOT STARTED |
@@ -208,12 +208,12 @@ main file. It is now `internal` after Phase 0 so the extension can call it.
 
 ### Steps (6 steps)
 
-- [ ] **2.1** Read the two OSC MARK blocks in `TerminalGrid.swift` in full (find current line numbers after Phase 1 shift).
-- [ ] **2.2** Create `ProSSHMac/Terminal/Grid/TerminalGrid+OSCHandlers.swift`.
-- [ ] **2.3** File header: `// Extracted from TerminalGrid.swift`, `import Foundation`, `extension TerminalGrid {`, close `}`.
-- [ ] **2.4** Cut `// MARK: - Window Title (OSC 0/1/2)` and `// MARK: - Color Palette (OSC 4/10/11/12)` from `TerminalGrid.swift` and paste into the extension.
-- [ ] **2.5** Build: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`. Verify `** BUILD SUCCEEDED **`.
-- [ ] **2.6** Commit: `refactor(RefactorTG Phase 2): extract OSC Handlers to TerminalGrid+OSCHandlers.swift`
+- [x] **2.1** Read the two OSC MARK blocks in `TerminalGrid.swift` in full (find current line numbers after Phase 1 shift).
+- [x] **2.2** Create `ProSSHMac/Terminal/Grid/TerminalGrid+OSCHandlers.swift`.
+- [x] **2.3** File header: `// Extracted from TerminalGrid.swift`, `import Foundation`, `extension TerminalGrid {`, close `}`.
+- [x] **2.4** Cut `// MARK: - Window Title (OSC 0/1/2)` and `// MARK: - Color Palette (OSC 4/10/11/12)` from `TerminalGrid.swift` and paste into the extension. Added `nonisolated` to all 13 methods (same requirement as Phase 1 — `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` defaults extension methods to `@MainActor`).
+- [x] **2.5** Build: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`. Verify `** BUILD SUCCEEDED **`.
+- [x] **2.6** Commit: `refactor(RefactorTG Phase 2): extract OSC Handlers to TerminalGrid+OSCHandlers.swift`
 
 **Expected TerminalGrid.swift line count after phase:** ~1,995 lines
 
@@ -506,6 +506,15 @@ property stays in the main file (it's a class-level declaration); the extension 
 ---
 
 ## Refactor Log (most recent first)
+
+- **2026-02-24 — Phase 2 COMPLETE**: Extracted `// MARK: - Window Title (OSC 0/1/2)` (4 methods) and
+  `// MARK: - Color Palette (OSC 4/10/11/12)` (9 methods) from `TerminalGrid.swift` (lines 1982–2059,
+  78 lines, 13 methods total) into `ProSSHMac/Terminal/Grid/TerminalGrid+OSCHandlers.swift`. All 13
+  methods annotated `nonisolated` (same pattern as Phase 1 — `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`
+  causes extension methods to inherit `@MainActor` unless explicitly overridden). Cross-file calls to
+  `markAllDirty()`, `customPalette`, `cursorColor`, `defaultForegroundColor`, `defaultBackgroundColor`,
+  `windowTitle`, `iconName`, `workingDirectory`, `currentHyperlink` all resolve fine — all widened to
+  `internal` in Phase 0. `TerminalGrid.swift`: ~2,003 lines (from ~2,081). Build: SUCCEEDED, 0 new warnings.
 
 - **2026-02-24 — Phase 1 COMPLETE**: Extracted `// MARK: - Mode Setters (for cross-actor access from VTParser)`
   block (lines 1982–2213, 232 lines, 29 methods) from `TerminalGrid.swift` into new file
