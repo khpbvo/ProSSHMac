@@ -43,7 +43,11 @@ final class AppDependencies: ObservableObject {
         let auditLogManager = AuditLogManager(store: FileAuditLogStore())
         self.auditLogManager = auditLogManager
 
+        #if DEBUG
         let transport: any SSHTransporting = runningTests ? MockSSHTransport() : SSHTransportFactory.makePreferredTransport()
+        #else
+        let transport: any SSHTransporting = SSHTransportFactory.makePreferredTransport()
+        #endif
         let portForwardingManager = PortForwardingManager(transport: transport, auditLogManager: auditLogManager)
         self.portForwardingManager = portForwardingManager
 

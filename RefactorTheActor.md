@@ -119,12 +119,14 @@ git commit -m "chore: Phase 0 — add swiftlint:disable file_length to god files
 ## Phase 1 — Split `SSHTransport.swift` (1,653 lines → 6 focused files)
 
 > **Before touching any code:** The actual file is at `ProSSHMac/Services/SSHTransport.swift`.
-> Every new file lives under `ProSSHMac/Services/SSH/` and must be added to the Xcode target
-> in `ProSSHMac.xcodeproj` — files created only on disk will not compile.
-> Every extracted file must have `// Extracted from SSHTransport.swift` as its first non-blank,
-> non-import line. Build must pass after every sub-phase before proceeding to the next.
+> Every new file lives under `ProSSHMac/Services/SSH/`.
+> **No Xcode project edits are needed** — this project uses `PBXFileSystemSynchronizedRootGroup`
+> (Xcode 15.4+ file-system sync). Any Swift file created on disk under `ProSSHMac/` is
+> compiled automatically.
+> Every extracted file must have `// Extracted from SSHTransport.swift` as its first
+> non-blank, non-import line. Build must pass after every sub-phase before proceeding.
 
-### Type map — what goes where (verify against the source file before moving anything)
+### Type map — what goes where (verified against source lines)
 
 | Declaration | Source lines | Destination file |
 |-------------|-------------|-----------------|
@@ -136,27 +138,29 @@ git commit -m "chore: Phase 0 — add swiftlint:disable file_length to god files
 | `SFTPTransferResult` struct | 47–50 | `SSHTransportTypes.swift` |
 | `JumpHostConfig` struct | 52–55 | `SSHTransportTypes.swift` |
 | `SSHTransportError` enum | 57–88 | `SSHTransportTypes.swift` |
-| `UncheckedOpaquePointer` struct | 173–175 | `SSHTransportTypes.swift` ⚠️ used by LibSSH actors too — do NOT put in Mock file |
-| `SSHTransportFactory` enum | 151–158 | `SSHTransportTypes.swift` |
 | `SSHShellChannel` protocol | 90–95 | `SSHTransportProtocol.swift` |
 | `SSHForwardChannel` protocol | 97–102 | `SSHTransportProtocol.swift` |
 | `SSHTransporting` protocol | 104–114 | `SSHTransportProtocol.swift` |
 | `extension SSHTransporting` (default overloads) | 116–128 | `SSHTransportProtocol.swift` |
 | `SSHAlgorithmPolicy` struct | 130–149 | `SSHAlgorithmPolicy.swift` |
-| `ActiveMockSession` struct | 160–165 | `MockSSHTransport.swift` |
-| `MockRemoteNode` struct | 167–171 | `MockSSHTransport.swift` |
-| `MockServerProfile` enum | 177–188 | `MockSSHTransport.swift` |
+| `SSHTransportFactory` enum | 151–158 | `SSHTransportTypes.swift` ⚠️ update mock branch to `#if DEBUG` |
+| `ActiveMockSession` struct | 160–165 | `MockSSHTransport.swift` — drop `private` |
+| `MockRemoteNode` struct | 167–171 | `MockSSHTransport.swift` — drop `private` |
+| `UncheckedOpaquePointer` struct | 173–175 | `SSHTransportTypes.swift` ⚠️ used by LibSSH actors — NOT in Mock file |
+| `MockServerProfile` enum | 177–188 | `MockSSHTransport.swift` — drop `private` |
 | `MockSSHTransport` actor | 190–494 | `MockSSHTransport.swift` |
 | `MockSSHShellChannel` actor | 496–595 | `MockSSHTransport.swift` |
 | `MockSSHForwardChannel` actor | 597–621 | `MockSSHTransport.swift` |
-| `LibSSHConnectResult` struct | 623–626 | stays → `LibSSHTransport.swift` (private to LibSSHTransport) |
+| `LibSSHConnectResult` struct | 623–626 | stays → `LibSSHTransport.swift` |
 | `LibSSHConnectFailure` enum | 628–637 | stays → `LibSSHTransport.swift` |
 | `LibSSHAuthenticationMaterial` struct | 639–644 | stays → `LibSSHTransport.swift` |
-| `LibSSHTransport` actor | 646–1388 | stays → `LibSSHTransport.swift` (file renamed in Step 1.13) |
+| `LibSSHTransport` actor | 646–1388 | stays → `LibSSHTransport.swift` (renamed in Step 1.13) |
 | `LibSSHShellChannel` actor | 1390–1552 | `LibSSHShellChannel.swift` |
 | `LibSSHForwardChannel` actor | 1554–1632 | `LibSSHForwardChannel.swift` |
-| `private extension AuthMethod` | 1634–1647 | stays → `LibSSHTransport.swift`, remove `private` keyword |
-| `private extension Array where Element == CChar` | 1649–1653 | stays → `LibSSHTransport.swift`, remove `private` keyword |
+| `private extension AuthMethod` | 1634–1647 | stays → `LibSSHTransport.swift`, remove `private` |
+| `private extension Array where Element == CChar` | 1649–1653 | stays → `LibSSHTransport.swift`, remove `private` |
+
+---
 
 ### Step 1.0 — Create the SSH/ directory on disk
 
@@ -164,60 +168,44 @@ git commit -m "chore: Phase 0 — add swiftlint:disable file_length to god files
 mkdir -p ProSSHMac/Services/SSH
 ```
 
-- [ ] Directory `ProSSHMac/Services/SSH/` exists
+- [ ] Directory `ProSSHMac/Services/SSH/` exists on disk
+- [ ] No `.xcodeproj` edits are needed at any point in this phase (file-system sync)
 
 ---
 
 ### Step 1.1 — Create SSHTransportTypes.swift
 
-- [ ] Create `ProSSHMac/Services/SSH/SSHTransportTypes.swift` with:
-  - First line: `// Extracted from SSHTransport.swift`
-  - `import Foundation`
-  - Copy (then delete from source) in this order:
-    - `SSHBackendKind` (lines 4–7)
-    - `SSHAlgorithmClass` (lines 9–14)
-    - `PTYConfiguration` (lines 16–22)
-    - `SSHConnectionDetails` (lines 24–32)
-    - `SFTPDirectoryEntry` (lines 34–45)
-    - `SFTPTransferResult` (lines 47–50)
-    - `JumpHostConfig` (lines 52–55)
-    - `SSHTransportError` (lines 57–88)
-    - `UncheckedOpaquePointer` (lines 173–175)
-    - `SSHTransportFactory` (lines 151–158) — update the mock branch to compile only in DEBUG:
-      ```swift
-      static func makePreferredTransport() -> any SSHTransporting {
-          #if DEBUG
-          if ProcessInfo.processInfo.environment["PROSSH_FORCE_MOCK"] == "1" {
-              return MockSSHTransport()
-          }
-          #endif
-          return LibSSHTransport()
-      }
-      ```
-- [ ] All listed declarations deleted from `SSHTransport.swift`
+- [ ] Create `ProSSHMac/Services/SSH/SSHTransportTypes.swift` with this exact header:
+  ```swift
+  // Extracted from SSHTransport.swift
+  import Foundation
+  ```
+- [ ] Copy then delete from source in this order:
+  - [ ] `SSHBackendKind` (lines 4–7)
+  - [ ] `SSHAlgorithmClass` (lines 9–14)
+  - [ ] `PTYConfiguration` (lines 16–22)
+  - [ ] `SSHConnectionDetails` (lines 24–32)
+  - [ ] `SFTPDirectoryEntry` (lines 34–45)
+  - [ ] `SFTPTransferResult` (lines 47–50)
+  - [ ] `JumpHostConfig` (lines 52–55)
+  - [ ] `SSHTransportError` (lines 57–88)
+  - [ ] `UncheckedOpaquePointer` (lines 173–175)
+  - [ ] `SSHTransportFactory` (lines 151–158) — rewrite the mock branch with `#if DEBUG`:
+    ```swift
+    enum SSHTransportFactory {
+        static func makePreferredTransport() -> any SSHTransporting {
+            #if DEBUG
+            if ProcessInfo.processInfo.environment["PROSSH_FORCE_MOCK"] == "1" {
+                return MockSSHTransport()
+            }
+            #endif
+            return LibSSHTransport()
+        }
+    }
+    ```
+- [ ] All 10 declarations confirmed deleted from `SSHTransport.swift`
 
-### Step 1.2 — Add SSHTransportTypes.swift to the Xcode target
-
-```bash
-# If xcodeproj gem is available (gem list xcodeproj):
-ruby -e "
-require 'xcodeproj'
-proj = Xcodeproj::Project.open('ProSSHMac.xcodeproj')
-target = proj.targets.find { |t| t.name == 'ProSSHMac' }
-group = proj.main_group.find_subpath('ProSSHMac/Services/SSH', true)
-group.set_source_tree('<group>')
-group.set_path('ProSSHMac/Services/SSH')
-ref = group.new_reference('SSHTransportTypes.swift')
-target.source_build_phase.add_file_reference(ref)
-proj.save
-"
-# Otherwise: Xcode → right-click Services group → Add Files to ProSSHMac → select the file
-```
-
-- [ ] File appears in Xcode navigator under Services/SSH/
-- [ ] File appears in target's Compile Sources build phase
-
-### Step 1.3 — Build check after SSHTransportTypes
+### Step 1.2 — Build check after SSHTransportTypes
 
 ```bash
 xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build 2>&1 | tail -3
@@ -227,39 +215,21 @@ xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build 2>&1 | tail -3
 
 ---
 
-### Step 1.4 — Create SSHTransportProtocol.swift
+### Step 1.3 — Create SSHTransportProtocol.swift
 
-- [ ] Create `ProSSHMac/Services/SSH/SSHTransportProtocol.swift` with:
-  - First line: `// Extracted from SSHTransport.swift`
-  - `import Foundation`
-  - Copy (then delete from source) in this order:
-    - `SSHShellChannel` protocol (lines 90–95)
-    - `SSHForwardChannel` protocol (lines 97–102)
-    - `SSHTransporting` protocol (lines 104–114)
-    - `extension SSHTransporting` default overloads (lines 116–128)
-- [ ] All listed declarations deleted from `SSHTransport.swift`
-- [ ] Add `SSHTransportProtocol.swift` to the Xcode target (same ruby command, change filename)
+- [ ] Create `ProSSHMac/Services/SSH/SSHTransportProtocol.swift` with this exact header:
+  ```swift
+  // Extracted from SSHTransport.swift
+  import Foundation
+  ```
+- [ ] Copy then delete from source in this order:
+  - [ ] `SSHShellChannel` protocol (lines 90–95)
+  - [ ] `SSHForwardChannel` protocol (lines 97–102)
+  - [ ] `SSHTransporting` protocol (lines 104–114)
+  - [ ] `extension SSHTransporting` default overloads (lines 116–128)
+- [ ] All 4 declarations confirmed deleted from `SSHTransport.swift`
 
-### Step 1.5 — Build check after SSHTransportProtocol
-
-```bash
-xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build 2>&1 | tail -3
-```
-
-- [ ] `** BUILD SUCCEEDED **`
-
----
-
-### Step 1.6 — Create SSHAlgorithmPolicy.swift
-
-- [ ] Create `ProSSHMac/Services/SSH/SSHAlgorithmPolicy.swift` with:
-  - First line: `// Extracted from SSHTransport.swift`
-  - `import Foundation`
-  - Copy (then delete from source): `SSHAlgorithmPolicy` struct (lines 130–149)
-- [ ] `SSHAlgorithmPolicy` deleted from `SSHTransport.swift`
-- [ ] Add `SSHAlgorithmPolicy.swift` to the Xcode target
-
-### Step 1.7 — Build check after SSHAlgorithmPolicy
+### Step 1.4 — Build check after SSHTransportProtocol
 
 ```bash
 xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build 2>&1 | tail -3
@@ -269,24 +239,17 @@ xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build 2>&1 | tail -3
 
 ---
 
-### Step 1.8 — Create MockSSHTransport.swift
+### Step 1.5 — Create SSHAlgorithmPolicy.swift
 
-- [ ] Create `ProSSHMac/Services/SSH/MockSSHTransport.swift` with:
-  - First line: `// Extracted from SSHTransport.swift`
-  - `import Foundation`
-  - Entire file body wrapped in `#if DEBUG` / `#endif`
-  - Copy (then delete from source) in this order:
-    - `ActiveMockSession` struct — remove the `private` keyword (it was file-private; now it's module-internal inside `#if DEBUG`)
-    - `MockRemoteNode` struct — remove `private`
-    - `MockServerProfile` enum — remove `private`
-    - `MockSSHTransport` actor (full body including all private methods)
-    - `MockSSHShellChannel` actor (full body)
-    - `MockSSHForwardChannel` actor (full body)
-  - ⚠️ Do NOT copy `UncheckedOpaquePointer` — it already lives in `SSHTransportTypes.swift`
-- [ ] All listed declarations deleted from `SSHTransport.swift`
-- [ ] Add `MockSSHTransport.swift` to the Xcode target
+- [ ] Create `ProSSHMac/Services/SSH/SSHAlgorithmPolicy.swift` with this exact header:
+  ```swift
+  // Extracted from SSHTransport.swift
+  import Foundation
+  ```
+- [ ] Copy then delete from source: `SSHAlgorithmPolicy` struct (lines 130–149)
+- [ ] `SSHAlgorithmPolicy` confirmed deleted from `SSHTransport.swift`
 
-### Step 1.9 — Build check after MockSSHTransport
+### Step 1.6 — Build check after SSHAlgorithmPolicy
 
 ```bash
 xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build 2>&1 | tail -3
@@ -296,17 +259,47 @@ xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build 2>&1 | tail -3
 
 ---
 
-### Step 1.10 — Create LibSSHShellChannel.swift
+### Step 1.7 — Create MockSSHTransport.swift + fix AppDependencies.swift
 
-- [ ] Create `ProSSHMac/Services/SSH/LibSSHShellChannel.swift` with:
-  - First line: `// Extracted from SSHTransport.swift`
-  - `import Foundation`
-  - Copy (then delete from source): `LibSSHShellChannel` actor (lines 1390–1552 in original; locate by `nonisolated actor LibSSHShellChannel`)
-  - Note: this actor uses `UncheckedOpaquePointer` (now in `SSHTransportTypes.swift`) and the `asString` extension (will remain in `LibSSHTransport.swift` as `internal`) — both are visible within the module with no import
-- [ ] `LibSSHShellChannel` deleted from `SSHTransport.swift`
-- [ ] Add `LibSSHShellChannel.swift` to the Xcode target
+**Part A — Create the file:**
+- [ ] Create `ProSSHMac/Services/SSH/MockSSHTransport.swift` with this exact structure:
+  ```swift
+  // Extracted from SSHTransport.swift
+  import Foundation
 
-### Step 1.11 — Build check after LibSSHShellChannel
+  #if DEBUG
+  // ... all mock types go here ...
+  #endif
+  ```
+- [ ] Inside `#if DEBUG`, copy then delete from source in this order:
+  - [ ] `ActiveMockSession` struct (lines 160–165) — **remove the `private` keyword**
+  - [ ] `MockRemoteNode` struct (lines 167–171) — **remove the `private` keyword**
+  - [ ] `MockServerProfile` enum (lines 177–188) — **remove the `private` keyword**
+  - [ ] `MockSSHTransport` actor (lines 190–494)
+  - [ ] `MockSSHShellChannel` actor (lines 496–595)
+  - [ ] `MockSSHForwardChannel` actor (lines 597–621)
+- [ ] ⚠️ Do NOT copy `UncheckedOpaquePointer` — it already lives in `SSHTransportTypes.swift`
+- [ ] All 6 declarations confirmed deleted from `SSHTransport.swift`
+
+**Part B — Fix `AppDependencies.swift` line 46:**
+`AppDependencies.swift` directly references `MockSSHTransport()` without a `#if DEBUG` guard.
+Now that MockSSHTransport only exists in DEBUG builds, Release builds will fail without this fix.
+
+- [ ] Open `ProSSHMac/App/AppDependencies.swift`
+- [ ] Find line 46:
+  ```swift
+  let transport: any SSHTransporting = runningTests ? MockSSHTransport() : SSHTransportFactory.makePreferredTransport()
+  ```
+- [ ] Replace with:
+  ```swift
+  #if DEBUG
+  let transport: any SSHTransporting = runningTests ? MockSSHTransport() : SSHTransportFactory.makePreferredTransport()
+  #else
+  let transport: any SSHTransporting = SSHTransportFactory.makePreferredTransport()
+  #endif
+  ```
+
+### Step 1.8 — Build check after MockSSHTransport
 
 ```bash
 xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build 2>&1 | tail -3
@@ -316,18 +309,21 @@ xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build 2>&1 | tail -3
 
 ---
 
-### Step 1.12 — Create LibSSHForwardChannel.swift
+### Step 1.9 — Create LibSSHShellChannel.swift
 
-- [ ] Create `ProSSHMac/Services/SSH/LibSSHForwardChannel.swift` with:
-  - First line: `// Extracted from SSHTransport.swift`
-  - `import Foundation`
-  - Copy (then delete from source): `LibSSHForwardChannel` actor (lines 1554–1632 in original; locate by `nonisolated actor LibSSHForwardChannel`)
-  - Note: uses `UncheckedOpaquePointer` and `asString` — both visible within module
-  - ⚠️ Do NOT move `LibSSHConnectResult`, `LibSSHConnectFailure`, or `LibSSHAuthenticationMaterial` here — they are private implementation details of `LibSSHTransport`, not of this actor
-- [ ] `LibSSHForwardChannel` deleted from `SSHTransport.swift`
-- [ ] Add `LibSSHForwardChannel.swift` to the Xcode target
+- [ ] Create `ProSSHMac/Services/SSH/LibSSHShellChannel.swift` with this exact header:
+  ```swift
+  // Extracted from SSHTransport.swift
+  import Foundation
+  ```
+- [ ] Copy then delete from source: `LibSSHShellChannel` actor (lines 1390–1552)
+  - Locate by: `nonisolated actor LibSSHShellChannel`
+  - This actor uses `UncheckedOpaquePointer` (now in `SSHTransportTypes.swift`) and
+    the `asString` extension (will stay in `LibSSHTransport.swift` as `internal`) —
+    both visible within the module, no import needed
+- [ ] `LibSSHShellChannel` confirmed deleted from `SSHTransport.swift`
 
-### Step 1.13 — Build check after LibSSHForwardChannel
+### Step 1.10 — Build check after LibSSHShellChannel
 
 ```bash
 xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build 2>&1 | tail -3
@@ -337,83 +333,127 @@ xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build 2>&1 | tail -3
 
 ---
 
-### Step 1.14 — Clean up SSHTransport.swift and rename to LibSSHTransport.swift
+### Step 1.11 — Create LibSSHForwardChannel.swift
+
+- [ ] Create `ProSSHMac/Services/SSH/LibSSHForwardChannel.swift` with this exact header:
+  ```swift
+  // Extracted from SSHTransport.swift
+  import Foundation
+  ```
+- [ ] Copy then delete from source: `LibSSHForwardChannel` actor (lines 1554–1632)
+  - Locate by: `nonisolated actor LibSSHForwardChannel`
+  - Uses `UncheckedOpaquePointer` and `asString` — both visible within module
+- [ ] ⚠️ Do NOT move `LibSSHConnectResult`, `LibSSHConnectFailure`, or
+  `LibSSHAuthenticationMaterial` — they are private implementation details of `LibSSHTransport`
+- [ ] `LibSSHForwardChannel` confirmed deleted from `SSHTransport.swift`
+
+### Step 1.12 — Build check after LibSSHForwardChannel
+
+```bash
+xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build 2>&1 | tail -3
+```
+
+- [ ] `** BUILD SUCCEEDED **`
+
+---
+
+### Step 1.13 — Clean up SSHTransport.swift and rename to LibSSHTransport.swift
 
 At this point `SSHTransport.swift` should contain only:
 - `// swiftlint:disable file_length` (line 1)
 - `import Foundation`
-- `LibSSHConnectResult` struct
-- `LibSSHConnectFailure` enum
-- `LibSSHAuthenticationMaterial` struct
-- `LibSSHTransport` actor (full body)
+- `LibSSHConnectResult` struct (lines 623–626)
+- `LibSSHConnectFailure` enum (lines 628–637)
+- `LibSSHAuthenticationMaterial` struct (lines 639–644)
+- `LibSSHTransport` actor (lines 646–1388)
 - `private extension AuthMethod { var libsshAuthMethod }`
 - `private extension Array where Element == CChar { var asString }`
 
 Perform these edits:
 
-- [ ] Remove the `// swiftlint:disable file_length` from line 1 (file is now well under 400 lines)
-- [ ] Change `private extension AuthMethod` → `extension AuthMethod` (drop `private` so `LibSSHShellChannel` and `LibSSHForwardChannel` can see `asString`)
+- [ ] **Keep** `// swiftlint:disable file_length` on line 1 — the `LibSSHTransport` actor alone
+  spans ~743 lines; the resulting file will be ~780 lines total (well above the 400-line
+  removal threshold). Remove this comment only if a future phase shrinks the file below 400.
+- [ ] Change `private extension AuthMethod` → `extension AuthMethod` (drop `private`
+  keyword) so `LibSSHShellChannel` and `LibSSHForwardChannel` can call `.libsshAuthMethod`
 - [ ] Change `private extension Array where Element == CChar` → `extension Array where Element == CChar`
-- [ ] Rename the file on disk:
+  (drop `private` keyword) so `LibSSHShellChannel` and `LibSSHForwardChannel` can call `.asString`
+- [ ] Rename file on disk:
   ```bash
   mv ProSSHMac/Services/SSHTransport.swift ProSSHMac/Services/SSH/LibSSHTransport.swift
   ```
-- [ ] Update Xcode project — remove old `SSHTransport.swift` reference, add new `SSH/LibSSHTransport.swift`:
-  ```bash
-  ruby -e "
-  require 'xcodeproj'
-  proj = Xcodeproj::Project.open('ProSSHMac.xcodeproj')
-  target = proj.targets.find { |t| t.name == 'ProSSHMac' }
-  # Remove old reference
-  proj.files.select { |f| f.path&.include?('SSHTransport.swift') }.each { |f|
-      target.source_build_phase.files_references.delete(f)
-      f.remove_from_project
-  }
-  # Add new reference
-  group = proj.main_group.find_subpath('ProSSHMac/Services/SSH', true)
-  ref = group.new_reference('LibSSHTransport.swift')
-  target.source_build_phase.add_file_reference(ref)
-  proj.save
-  "
-  ```
+- [ ] No `.xcodeproj` edits needed — file-system sync picks up the rename automatically
 
-### Step 1.15 — Build check after rename
+### Step 1.14 — Build check after rename
 
 ```bash
 xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build 2>&1 | tail -3
 ```
 
 - [ ] `** BUILD SUCCEEDED **`
-- [ ] Confirm `SSHTransport.swift` no longer exists in `ProSSHMac/Services/`:
+- [ ] Confirm old file is gone:
   ```bash
-  ls ProSSHMac/Services/SSHTransport.swift 2>&1   # should say: No such file or directory
+  ls ProSSHMac/Services/SSHTransport.swift 2>&1   # must print: No such file or directory
   ```
-
-### Step 1.16 — Verify all new files are under 400 lines
-
-```bash
-wc -l ProSSHMac/Services/SSH/*.swift
-```
-
-- [ ] Every file is under 400 lines
 
 ---
 
-### Step 1.17 — Run tests and commit
+### Step 1.15 — Verify sizes of the five small extracted files
 
 ```bash
-xcodebuild -scheme ProSSHMac -destination 'platform=macOS' test 2>&1 | grep -E 'Executed [0-9]+ test|FAILED|SUCCEEDED' | tail -5
+wc -l ProSSHMac/Services/SSH/SSHTransportTypes.swift \
+       ProSSHMac/Services/SSH/SSHTransportProtocol.swift \
+       ProSSHMac/Services/SSH/SSHAlgorithmPolicy.swift \
+       ProSSHMac/Services/SSH/LibSSHShellChannel.swift \
+       ProSSHMac/Services/SSH/LibSSHForwardChannel.swift
 ```
 
-- [ ] Test results: 861 tests, ≤ 23 failures (same as baseline — no regressions)
+- [ ] Each of the five files above is under 400 lines
+- [ ] Note: `LibSSHTransport.swift` (~780L) and `MockSSHTransport.swift` (~458L) exceed 400
+  lines — that is expected and correct; their `// swiftlint:disable file_length` comments
+  must remain until a future phase shrinks them
+
+---
+
+### Step 1.16 — Run tests and commit
 
 ```bash
-git add ProSSHMac/Services/SSH/ ProSSHMac.xcodeproj/project.pbxproj
+xcodebuild -scheme ProSSHMac -destination 'platform=macOS' test 2>&1 \
+  | grep -E 'Executed [0-9]+ test|FAILED|SUCCEEDED' | tail -5
+```
+
+- [ ] Test results: 861 tests, ≤ 23 failures (same pre-existing baseline — no regressions)
+
+```bash
+git add ProSSHMac/Services/SSH/ \
+        ProSSHMac/App/AppDependencies.swift \
+        ProSSHMac.xcodeproj/project.pbxproj
+git status   # confirm SSHTransport.swift shows as deleted/renamed, not as a new untracked file
 git commit -m "refactor: Phase 1 — split SSHTransport.swift into focused files in Services/SSH/"
 ```
 
 - [ ] Commit created on `refactor/actor-isolation`
-- [ ] Phase 1 complete — proceed to expand Phase 2 in this file before writing any code
+- [ ] `git log --oneline -1` shows the commit on the right branch
+
+---
+
+### Step 1.17 — Update CLAUDE.md
+
+- [ ] Update the "Current State" block in `CLAUDE.md`:
+  - Change `Current phase` to `Phase 2 — Kill CString pyramid, inject credential resolver`
+  - Change `Phase status` to `NOT PLANNED`
+  - Change `Key source file` to `ProSSHMac/Services/SSH/LibSSHTransport.swift`
+  - Change `Last commit` to the hash just made
+- [ ] Update Phase Status table row for Phase 1 to `**COMPLETE** (2026-02-24, commit <hash>)`
+- [ ] Add a Refactor Log entry in `CLAUDE.md` under "Recent Changes / Refactor Log":
+  ```
+  - **2026-02-24 — Phase 1 COMPLETE** (`<hash>`): Split SSHTransport.swift (1,653L) into 6 files
+    under Services/SSH/. Key corrections vs. original plan: removed xcodeproj registration steps
+    (project uses file-system sync); added #if DEBUG guard to AppDependencies.swift line 46;
+    kept swiftlint:disable in LibSSHTransport.swift (~780L) and MockSSHTransport.swift (~458L).
+  ```
+- [ ] Phase 1 complete — proceed to State A for Phase 2 (expand sketch into detailed plan
+  in RefactorTheActor.md before writing any code)
 
 ---
 
