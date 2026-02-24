@@ -129,10 +129,10 @@ Services/
 
 ```
 Active branch   : master
-Current phase   : Phase 4 — NOT STARTED
+Current phase   : Phase 5 — NOT STARTED
 Phase status    : NOT STARTED
-Immediate action: Read RefactorTerminalView.md, begin Phase 4 (extract TerminalSessionActionsBar)
-Last commit     : 7bc5e1e "refactor(RefactorTV Phase 3): extract search bar to TerminalSearchBarView"
+Immediate action: Read RefactorTerminalView.md, begin Phase 5 (extract TerminalSessionTabBar)
+Last commit     : TBD "refactor(RefactorTV Phase 4): extract session actions toolbar to TerminalSessionActionsBar"
 ```
 
 **Update this block after every phase.**
@@ -145,7 +145,7 @@ Last commit     : 7bc5e1e "refactor(RefactorTV Phase 3): extract search bar to T
 | 1 | Extract DirectTerminalInputNSView + supporting types | COMPLETE (2026-02-24) |
 | 2 | Extract TerminalSessionHeaderView + TerminalSessionMetadataView | COMPLETE (2026-02-24) |
 | 3 | Extract TerminalSearchBarView | COMPLETE (2026-02-24) |
-| 4 | Extract TerminalSessionActionsBar | NOT STARTED |
+| 4 | Extract TerminalSessionActionsBar | COMPLETE (2026-02-24) |
 | 5 | Extract TerminalSessionTabBar | NOT STARTED |
 | 6 | Extract TerminalQuickCommandPanel | NOT STARTED |
 | 7 | Extract TerminalFileBrowserSidebar | NOT STARTED |

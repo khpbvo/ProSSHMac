@@ -19,10 +19,10 @@ Follow the same workflow as `RefactorTheActor.md`:
 
 ```
 Active branch   : master
-Current phase   : Phase 4 — NOT STARTED
+Current phase   : Phase 5 — NOT STARTED
 Phase status    : NOT STARTED
-Immediate action: Read RefactorTerminalView.md, begin Phase 4 (extract TerminalSessionActionsBar)
-Last commit     : 7bc5e1e "refactor(RefactorTV Phase 3): extract search bar to TerminalSearchBarView"
+Immediate action: Read RefactorTerminalView.md, begin Phase 5 (extract TerminalSessionTabBar)
+Last commit     : TBD "refactor(RefactorTV Phase 4): extract session actions toolbar to TerminalSessionActionsBar"
 ```
 
 **Update this block after every phase.**
@@ -37,7 +37,7 @@ Last commit     : 7bc5e1e "refactor(RefactorTV Phase 3): extract search bar to T
 | 1 | Extract `DirectTerminalInputNSView` + supporting types | COMPLETE (2026-02-24) |
 | 2 | Extract `TerminalSessionHeaderView` + `TerminalSessionMetadataView` | COMPLETE (2026-02-24) |
 | 3 | Extract `TerminalSearchBarView` | COMPLETE (2026-02-24) |
-| 4 | Extract `TerminalSessionActionsBar` | NOT STARTED |
+| 4 | Extract `TerminalSessionActionsBar` | COMPLETE (2026-02-24) |
 | 5 | Extract `TerminalSessionTabBar` | NOT STARTED |
 | 6 | Extract `TerminalQuickCommandPanel` | NOT STARTED |
 | 7 | Extract `TerminalFileBrowserSidebar` | NOT STARTED |
@@ -265,22 +265,22 @@ via `@EnvironmentObject`).
 
 ### Steps (7 steps)
 
-- [ ] **4.1** Read `TerminalView.swift` lines 2049–2157 in full before starting. Note all `sessionManager` call sites and any references to `TerminalView` state.
-- [ ] **4.2** Create `ProSSHMac/UI/Terminal/TerminalSessionActionsBar.swift`. Header: `// Extracted from TerminalView.swift`. Imports: `import SwiftUI`, `import Metal`.
-- [ ] **4.3** Write `struct TerminalSessionActionsBar: View` with:
+- [x] **4.1** Read `TerminalView.swift` lines 2049–2157 in full before starting. Note all `sessionManager` call sites and any references to `TerminalView` state.
+- [x] **4.2** Create `ProSSHMac/UI/Terminal/TerminalSessionActionsBar.swift`. Header: `// Extracted from TerminalView.swift`. Imports: `import SwiftUI`, `import Metal`.
+- [x] **4.3** Write `struct TerminalSessionActionsBar: View` with:
   - `let session: Session`
   - `@EnvironmentObject private var sessionManager: SessionManager`
   - `@AppStorage("terminal.renderer.useMetal") private var useMetalRenderer = true`
   - `@Environment(\.openWindow) private var openWindow`
   - `var onRestartLocal: (Session) -> Void`
   - Private `isMetalRendererAvailable: Bool` and `isMetalRendererToggleEnabled: Bool` computed vars (copy verbatim).
-- [ ] **4.4** Copy the content of `terminalActions(for:)` as the `body`. Replace `restartLocalSession(session)` call with `onRestartLocal(session)`.
-- [ ] **4.5** In `TerminalView.swift` `sessionPanel`: replace `terminalActions(for: session)` with:
+- [x] **4.4** Copy the content of `terminalActions(for:)` as the `body`. Replace `restartLocalSession(session)` call with `onRestartLocal(session)`.
+- [x] **4.5** In `TerminalView.swift` `sessionPanel`: replace `terminalActions(for: session)` with:
   ```swift
   TerminalSessionActionsBar(session: session, onRestartLocal: { s in restartLocalSession(s) })
   ```
-- [ ] **4.6** Delete `terminalActions(for:)` from `TerminalView.swift`. Do NOT delete `isMetalRendererAvailable`, `isMetalRendererToggleEnabled`, or the `useMetalRenderer` `@AppStorage` from `TerminalView` — they are still used in `terminalSurface` and `terminalLifecycleView`.
-- [ ] **4.7** Run build: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`. Verify `** BUILD SUCCEEDED **`. Commit: `refactor(RefactorTV Phase 4): extract session actions toolbar to TerminalSessionActionsBar`
+- [x] **4.6** Delete `terminalActions(for:)` from `TerminalView.swift`. Do NOT delete `isMetalRendererAvailable`, `isMetalRendererToggleEnabled`, or the `useMetalRenderer` `@AppStorage` from `TerminalView` — they are still used in `terminalSurface` and `terminalLifecycleView`.
+- [x] **4.7** Run build: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`. Verify `** BUILD SUCCEEDED **`. Commit: `refactor(RefactorTV Phase 4): extract session actions toolbar to TerminalSessionActionsBar`
 
 **Expected TerminalView.swift line count after phase:** ~2,725
 
@@ -655,6 +655,15 @@ After all 9 phases are committed and the build is clean:
 ---
 
 ## Refactor Log (most recent first)
+
+- **2026-02-24 — Phase 4 COMPLETE** (commit TBD): Extracted `terminalActions(for:)` (~108 lines)
+  into `TerminalSessionActionsBar.swift`. `onRestartLocal: (Session) -> Void` callback replaces
+  the direct `restartLocalSession(session)` call (which required `tabManager` `@StateObject`).
+  `useMetalRenderer` `@AppStorage` re-declared in child (same key, rule 7). `isMetalRendererAvailable`
+  and `isMetalRendererToggleEnabled` copied as private computed vars in child.
+  `isMetalRendererToggleEnabled` deleted from `TerminalView` (sole caller was `terminalActions`).
+  `isMetalRendererAvailable` retained in `TerminalView` (used in `supportsMetalTerminalSurface` + `.onAppear`).
+  `TerminalView.swift`: 2,787 → 2,673 lines (−114). Build: `** BUILD SUCCEEDED **`, 0 new warnings.
 
 - **2026-02-24 — Phase 3 COMPLETE** (commit `7bc5e1e`): Extracted `searchBar` computed property and its
   three companion binding helpers (`searchQueryBinding`, `searchRegexBinding`,
