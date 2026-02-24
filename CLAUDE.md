@@ -40,7 +40,7 @@ before starting Phase 0. All refactor commits go on this branch.
 | Phase | Name | Status |
 |-------|------|--------|
 | 0 | Baseline audit & branch setup | **COMPLETE** (2026-02-24) |
-| 1 | Split `SSHTransport.swift` into `Services/SSH/` | NOT STARTED |
+| 1 | Split `SSHTransport.swift` into `Services/SSH/` | PLANNED — ready to execute |
 | 2 | Kill CString pyramid, inject credential resolver | NOT STARTED |
 | 3 | Deduplicate remote path utilities → `RemotePath.swift` | NOT STARTED |
 | 4 | Generic `PersistentStore<T>` for store boilerplate | NOT STARTED |
