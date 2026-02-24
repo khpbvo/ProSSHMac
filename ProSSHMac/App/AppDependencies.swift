@@ -66,7 +66,7 @@ final class AppDependencies: ObservableObject {
             )
         } else {
             self.hostListViewModel = HostListViewModel(
-                hostStore: FileHostStore(),
+                hostStore: PersistentStore<Host>(filename: "hosts.json"),
                 sessionManager: sessionManager,
                 auditLogManager: auditLogManager,
                 searchIndexer: HostSpotlightIndexer(),
@@ -86,15 +86,15 @@ final class AppDependencies: ObservableObject {
             )
         } else {
             self.keyForgeViewModel = KeyForgeViewModel(
-                keyStore: FileKeyStore(),
+                keyStore: PersistentStore<StoredSSHKey>(filename: "keys.json"),
                 keyForgeService: KeyForgeService()
             )
         }
 
         self.certificatesViewModel = CertificatesViewModel(
             service: CertificateAuthorityService(
-                authorityStore: FileCertificateAuthorityStore(),
-                certificateStore: FileCertificateStore(),
+                authorityStore: PersistentStore<CertificateAuthorityModel>(filename: "certificate_authorities.json"),
+                certificateStore: PersistentStore<SSHCertificate>(filename: "certificates.json"),
                 secureEnclaveKeyManager: SecureEnclaveKeyManager()
             )
         )
