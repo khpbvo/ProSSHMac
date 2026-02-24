@@ -166,10 +166,10 @@ Each starts with `// Extracted from TerminalView.swift` as first non-blank, non-
 
 ```
 Active branch   : master
-Current phase   : Phase 4 — NOT STARTED
+Current phase   : Phase 5 — NOT STARTED
 Phase status    : NOT STARTED
-Immediate action: Begin Phase 4 (extract Cursor Movement + Cell R/W → TerminalGrid+CursorOps.swift).
-Last commit     : 5e446f2 "refactor(RefactorTG Phase 3): extract Tab Stops + Dirty Tracking to TerminalGrid+TabsAndDirty.swift"
+Immediate action: Begin Phase 5 (extract Scrolling → TerminalGrid+Scrolling.swift).
+Last commit     : <hash> "refactor(RefactorTG Phase 4): extract Cursor Movement + Cell R/W to TerminalGrid+CursorOps.swift"
 ```
 
 **Update this block after every phase.**
@@ -182,7 +182,7 @@ Last commit     : 5e446f2 "refactor(RefactorTG Phase 3): extract Tab Stops + Dir
 | 1 | Extract Mode Setters → `TerminalGrid+ModeSetters.swift` | **COMPLETE** (2026-02-24) |
 | 2 | Extract OSC Handlers → `TerminalGrid+OSCHandlers.swift` | **COMPLETE** (2026-02-24) |
 | 3 | Extract Tab Stops + Dirty Tracking → `TerminalGrid+TabsAndDirty.swift` | **COMPLETE** (2026-02-25) |
-| 4 | Extract Cursor Movement + Cell R/W → `TerminalGrid+CursorOps.swift` | NOT STARTED |
+| 4 | Extract Cursor Movement + Cell R/W → `TerminalGrid+CursorOps.swift` | **COMPLETE** (2026-02-25) |
 | 5 | Extract Scrolling → `TerminalGrid+Scrolling.swift` | NOT STARTED |
 | 6 | Extract Erasing → `TerminalGrid+Erasing.swift` | NOT STARTED |
 | 7 | Extract Line Operations → `TerminalGrid+LineOps.swift` | NOT STARTED |

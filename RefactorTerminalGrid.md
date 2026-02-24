@@ -19,10 +19,10 @@ Follow the same workflow as `RefactorTerminalView.md`:
 
 ```
 Active branch   : master
-Current phase   : Phase 4 — NOT STARTED
+Current phase   : Phase 5 — NOT STARTED
 Phase status    : NOT STARTED
-Immediate action: Begin Phase 4 (extract Cursor Movement + Cell R/W → TerminalGrid+CursorOps.swift).
-Last commit     : 5e446f2 "refactor(RefactorTG Phase 3): extract Tab Stops + Dirty Tracking to TerminalGrid+TabsAndDirty.swift"
+Immediate action: Begin Phase 5 (extract Scrolling → TerminalGrid+Scrolling.swift).
+Last commit     : <hash> "refactor(RefactorTG Phase 4): extract Cursor Movement + Cell R/W to TerminalGrid+CursorOps.swift"
 ```
 
 **Update this block after every phase.**
@@ -37,7 +37,7 @@ Last commit     : 5e446f2 "refactor(RefactorTG Phase 3): extract Tab Stops + Dir
 | 1 | Extract Mode Setters → `TerminalGrid+ModeSetters.swift` | **COMPLETE** (2026-02-24) |
 | 2 | Extract OSC Handlers → `TerminalGrid+OSCHandlers.swift` | **COMPLETE** (2026-02-24) |
 | 3 | Extract Tab Stops + Dirty Tracking → `TerminalGrid+TabsAndDirty.swift` | **COMPLETE** (2026-02-25) |
-| 4 | Extract Cursor Movement + Cell R/W → `TerminalGrid+CursorOps.swift` | NOT STARTED |
+| 4 | Extract Cursor Movement + Cell R/W → `TerminalGrid+CursorOps.swift` | **COMPLETE** (2026-02-25) |
 | 5 | Extract Scrolling → `TerminalGrid+Scrolling.swift` | NOT STARTED |
 | 6 | Extract Erasing → `TerminalGrid+Erasing.swift` | NOT STARTED |
 | 7 | Extract Line Operations → `TerminalGrid+LineOps.swift` | NOT STARTED |
@@ -261,12 +261,12 @@ All 9 cursor movement methods delegate to `cursor.*` methods (CursorState). `cel
 
 ### Steps (6 steps)
 
-- [ ] **4.1** Read the two MARK blocks in `TerminalGrid.swift` in full (find current line numbers after prior phase shifts).
-- [ ] **4.2** Create `ProSSHMac/Terminal/Grid/TerminalGrid+CursorOps.swift`.
-- [ ] **4.3** File header: `// Extracted from TerminalGrid.swift`, `import Foundation`, `extension TerminalGrid {`, close `}`.
-- [ ] **4.4** Cut `// MARK: - A.6.1 Cell Read/Write` and `// MARK: - A.6.2 Cursor Movement` from `TerminalGrid.swift` and paste into the extension.
-- [ ] **4.5** Build: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`. Verify `** BUILD SUCCEEDED **`.
-- [ ] **4.6** Commit: `refactor(RefactorTG Phase 4): extract Cursor Movement + Cell R/W to TerminalGrid+CursorOps.swift`
+- [x] **4.1** Read the two MARK blocks in `TerminalGrid.swift` in full (found at lines 431–511 after prior phase shifts).
+- [x] **4.2** Create `ProSSHMac/Terminal/Grid/TerminalGrid+CursorOps.swift`.
+- [x] **4.3** File header: `// Extracted from TerminalGrid.swift`, `import Foundation`, `extension TerminalGrid {`, close `}`.
+- [x] **4.4** Cut `// MARK: - A.6.1 Cell Read/Write` (2 methods) and `// MARK: - A.6.2 Cursor Movement` (9 methods) from `TerminalGrid.swift` and paste into the extension. Added `nonisolated` to all 11 methods.
+- [x] **4.5** Build: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`. Verify `** BUILD SUCCEEDED **`.
+- [x] **4.6** Commit: `refactor(RefactorTG Phase 4): extract Cursor Movement + Cell R/W to TerminalGrid+CursorOps.swift`
 
 **Expected TerminalGrid.swift line count after phase:** ~1,847 lines
 
@@ -506,6 +506,14 @@ property stays in the main file (it's a class-level declaration); the extension 
 ---
 
 ## Refactor Log (most recent first)
+
+- **2026-02-25 — Phase 4 COMPLETE**: Extracted `// MARK: - A.6.1 Cell Read/Write` (2 methods:
+  `cellAt`, `setCellAt`) and `// MARK: - A.6.2 Cursor Movement` (9 methods: `moveCursorTo`,
+  `moveCursorUp`, `moveCursorDown`, `moveCursorForward`, `moveCursorBackward`, `moveCursorNextLine`,
+  `moveCursorPreviousLine`, `setCursorColumn`, `setCursorRow`) from `TerminalGrid.swift`
+  (lines 431–511, 82 lines) into `ProSSHMac/Terminal/Grid/TerminalGrid+CursorOps.swift`. All 11
+  methods annotated `nonisolated`. `setCellAt` calls `markDirty` (now in +TabsAndDirty) — resolves
+  fine via extension dispatch. `TerminalGrid.swift`: ~1,855 lines (from ~1,937). Build: SUCCEEDED, 0 new warnings.
 
 - **2026-02-25 — Phase 3 COMPLETE**: Extracted `// MARK: - A.6.12 Tab Stop Management` (5 methods:
   `tabForward`, `tabBackward`, `setTabStop`, `clearTabStop`, `resetTabStops`) and
