@@ -40,7 +40,6 @@ final class SessionManager: ObservableObject {
     private let knownHostsStore: any KnownHostsStoreProtocol
     private let auditLogManager: AuditLogManager?
     private let portForwardingManager: PortForwardingManager?
-    private let sessionRecorder: SessionRecorder
     let terminalHistoryIndex = TerminalHistoryIndex()
     var shellChannels: [UUID: any SSHShellChannel] = [:]
     private var parserReaderTasks: [UUID: Task<Void, Never>] = [:]
@@ -52,6 +51,7 @@ final class SessionManager: ObservableObject {
     let reconnectCoordinator: SessionReconnectCoordinator
     let keepaliveCoordinator: SessionKeepaliveCoordinator
     let renderingCoordinator: TerminalRenderingCoordinator
+    let recordingCoordinator: SessionRecordingCoordinator
     private var latestPublishedCommandBlockIDBySessionID: [UUID: UUID] = [:]
 
     /// Runtime throughput policy. When enabled, expensive non-render work is throttled:
@@ -73,19 +73,19 @@ final class SessionManager: ObservableObject {
         transport: any SSHTransporting,
         knownHostsStore: any KnownHostsStoreProtocol,
         auditLogManager: AuditLogManager? = nil,
-        portForwardingManager: PortForwardingManager? = nil,
-        sessionRecorder: SessionRecorder = SessionRecorder()
+        portForwardingManager: PortForwardingManager? = nil
     ) {
         self.transport = transport
         self.knownHostsStore = knownHostsStore
         self.auditLogManager = auditLogManager
         self.portForwardingManager = portForwardingManager
-        self.sessionRecorder = sessionRecorder
         let coord = SessionReconnectCoordinator()
         self.reconnectCoordinator = coord
         self.keepaliveCoordinator = SessionKeepaliveCoordinator()
         let renderCoord = TerminalRenderingCoordinator()
         self.renderingCoordinator = renderCoord
+        let recordCoord = SessionRecordingCoordinator()
+        self.recordingCoordinator = recordCoord
 
         Task { @MainActor [weak self] in
             await self?.refreshKnownHosts()
@@ -95,6 +95,7 @@ final class SessionManager: ObservableObject {
         coord.start()
         keepaliveCoordinator.manager = self
         renderCoord.manager = self
+        recordCoord.manager = self
     }
 
     nonisolated deinit {}
@@ -472,7 +473,7 @@ final class SessionManager: ObservableObject {
         if let completedBlock = await terminalHistoryIndex.flushActiveCommand(sessionID: sessionID, at: .now) {
             publishCommandCompletion(completedBlock)
         }
-        finalizeRecordingIfNeeded(sessionID: sessionID)
+        recordingCoordinator.finalizeIfNeeded(sessionID: sessionID)
         removeSessionArtifacts(sessionID: sessionID)
 
         if !session.isLocal {
@@ -542,7 +543,7 @@ final class SessionManager: ObservableObject {
             try await shell.send(payload)
             lastActivityBySessionID[sessionID] = .now
             bytesSentBySessionID[sessionID, default: 0] += Int64(payload.utf8.count)
-            sessionRecorder.recordInput(sessionID: sessionID, text: payload)
+            recordingCoordinator.recordInput(sessionID: sessionID, text: payload)
             await terminalHistoryIndex.recordCommandInput(
                 sessionID: sessionID,
                 command: trimmed,
@@ -568,7 +569,7 @@ final class SessionManager: ObservableObject {
         do {
             try await shell.send(input)
             bytesSentBySessionID[sessionID, default: 0] += Int64(input.utf8.count)
-            sessionRecorder.recordInput(sessionID: sessionID, text: input)
+            recordingCoordinator.recordInput(sessionID: sessionID, text: input)
             await terminalHistoryIndex.recordRawInput(
                 sessionID: sessionID,
                 input: input,
@@ -607,70 +608,26 @@ final class SessionManager: ObservableObject {
         renderingCoordinator.gridSnapshot(for: sessionID)
     }
 
+    // MARK: - Recording (delegates to recordingCoordinator)
+
     func toggleRecording(sessionID: UUID) async {
-        if isRecordingBySessionID[sessionID, default: false] {
-            await stopRecording(sessionID: sessionID)
-        } else {
-            await startRecording(sessionID: sessionID)
-        }
+        await recordingCoordinator.toggleRecording(sessionID: sessionID)
     }
 
     func startRecording(sessionID: UUID) async {
-        guard let session = sessions.first(where: { $0.id == sessionID }) else {
-            return
-        }
-        do {
-            try sessionRecorder.startRecording(for: session)
-            isRecordingBySessionID[sessionID] = true
-            await renderingCoordinator.appendShellLine("[Recorder] Started session capture.", to: sessionID)
-        } catch {
-            await renderingCoordinator.appendShellLine("[Recorder] \(error.localizedDescription)", to: sessionID)
-        }
+        await recordingCoordinator.startRecording(sessionID: sessionID)
     }
 
     func stopRecording(sessionID: UUID) async {
-        do {
-            let recordingURL = try sessionRecorder.stopRecording(sessionID: sessionID)
-            isRecordingBySessionID[sessionID] = false
-            hasRecordingBySessionID[sessionID] = true
-            latestRecordingURLBySessionID[sessionID] = recordingURL
-            await renderingCoordinator.appendShellLine("[Recorder] Saved encrypted recording: \(recordingURL.lastPathComponent)", to: sessionID)
-        } catch {
-            await renderingCoordinator.appendShellLine("[Recorder] \(error.localizedDescription)", to: sessionID)
-        }
+        await recordingCoordinator.stopRecording(sessionID: sessionID)
     }
 
     func playLastRecording(sessionID: UUID, speed: Double) async {
-        guard !isPlaybackRunningBySessionID[sessionID, default: false] else {
-            return
-        }
-
-        isPlaybackRunningBySessionID[sessionID] = true
-        defer { isPlaybackRunningBySessionID[sessionID] = false }
-
-        do {
-            clearShellBuffer(sessionID: sessionID)
-            await renderingCoordinator.appendShellLine("[Recorder] Playback started (\(String(format: "%.1fx", speed))).", to: sessionID)
-            try await sessionRecorder.playLatestRecording(sessionID: sessionID, speed: speed) { [weak self] step in
-                await self?.renderingCoordinator.applyPlaybackStep(step, to: sessionID)
-            }
-            await renderingCoordinator.appendShellLine("[Recorder] Playback finished.", to: sessionID)
-        } catch {
-            await renderingCoordinator.appendShellLine("[Recorder] Playback failed: \(error.localizedDescription)", to: sessionID)
-        }
+        await recordingCoordinator.playLastRecording(sessionID: sessionID, speed: speed)
     }
 
     func exportLastRecordingAsCast(sessionID: UUID, columns: Int = 80, rows: Int = 24) async {
-        do {
-            let castURL = try sessionRecorder.exportLatestRecordingAsCast(
-                sessionID: sessionID,
-                columns: columns,
-                rows: rows
-            )
-            await renderingCoordinator.appendShellLine("[Recorder] Exported .cast: \(castURL.path(percentEncoded: false))", to: sessionID)
-        } catch {
-            await renderingCoordinator.appendShellLine("[Recorder] Export failed: \(error.localizedDescription)", to: sessionID)
-        }
+        await recordingCoordinator.exportLastRecordingAsCast(sessionID: sessionID, columns: columns, rows: rows)
     }
 
     func listRemoteDirectory(sessionID: UUID, path: String) async throws -> [SFTPDirectoryEntry] {
@@ -748,7 +705,7 @@ final class SessionManager: ObservableObject {
             try await shell.send(payload)
             lastActivityBySessionID[sessionID] = .now
             bytesSentBySessionID[sessionID, default: 0] += Int64(payload.utf8.count)
-            sessionRecorder.recordInput(sessionID: sessionID, text: payload)
+            recordingCoordinator.recordInput(sessionID: sessionID, text: payload)
             await terminalHistoryIndex.recordCommandInput(
                 sessionID: sessionID,
                 command: wrappedCommand,
@@ -975,13 +932,7 @@ final class SessionManager: ObservableObject {
         )
 
         // Capture output directly as bytes to avoid a per-chunk UTF-8 decode.
-        if sessionRecorder.isRecording(sessionID: sessionID) {
-            // Sync coalescing state with throughput mode policy.
-            if sessionRecorder.coalescingEnabled != throughputModeEnabled {
-                sessionRecorder.coalescingEnabled = throughputModeEnabled
-            }
-            sessionRecorder.recordOutputData(sessionID: sessionID, data: chunk)
-        }
+        recordingCoordinator.recordIfActive(sessionID: sessionID, chunk: chunk, throughputModeEnabled: throughputModeEnabled)
     }
 
     func handleShellStreamEndedInternal(sessionID: UUID) async {
@@ -1006,7 +957,7 @@ final class SessionManager: ObservableObject {
             if let completedBlock = await terminalHistoryIndex.flushActiveCommand(sessionID: sessionID, at: .now) {
                 publishCommandCompletion(completedBlock)
             }
-            finalizeRecordingIfNeeded(sessionID: sessionID)
+            recordingCoordinator.finalizeIfNeeded(sessionID: sessionID)
             removeSessionArtifacts(sessionID: sessionID)
             return
         }
@@ -1036,7 +987,7 @@ final class SessionManager: ObservableObject {
         if let completedBlock = await terminalHistoryIndex.flushActiveCommand(sessionID: sessionID, at: .now) {
             publishCommandCompletion(completedBlock)
         }
-        finalizeRecordingIfNeeded(sessionID: sessionID)
+        recordingCoordinator.finalizeIfNeeded(sessionID: sessionID)
         removeSessionArtifacts(sessionID: sessionID)
         await transport.disconnect(sessionID: sessionID)
         reconnectCoordinator.scheduleReconnect(for: sessionID, host: host, jumpHost: jumpHost)
@@ -1061,28 +1012,12 @@ final class SessionManager: ObservableObject {
         hostBySessionID.removeValue(forKey: sessionID)
         jumpHostBySessionID.removeValue(forKey: sessionID)
         sessions.removeAll(where: { $0.id == sessionID })
-        finalizeRecordingIfNeeded(sessionID: sessionID)
+        recordingCoordinator.finalizeIfNeeded(sessionID: sessionID)
         hasRecordingBySessionID.removeValue(forKey: sessionID)
         latestRecordingURLBySessionID.removeValue(forKey: sessionID)
         removeSessionArtifacts(sessionID: sessionID)
         Task { [terminalHistoryIndex] in
             await terminalHistoryIndex.removeSession(sessionID: sessionID)
-        }
-    }
-
-    private func finalizeRecordingIfNeeded(sessionID: UUID) {
-        guard sessionRecorder.isRecording(sessionID: sessionID) else {
-            return
-        }
-
-        Task { @MainActor in
-            do {
-                let recordingURL = try sessionRecorder.stopRecording(sessionID: sessionID)
-                hasRecordingBySessionID[sessionID] = true
-                latestRecordingURLBySessionID[sessionID] = recordingURL
-            } catch {
-                // Best-effort finalization when sessions disconnect unexpectedly.
-            }
         }
     }
 
