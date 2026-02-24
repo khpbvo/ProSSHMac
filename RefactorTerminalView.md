@@ -19,10 +19,10 @@ Follow the same workflow as `RefactorTheActor.md`:
 
 ```
 Active branch   : master
-Current phase   : Phase 8 — NOT STARTED
+Current phase   : Phase 9 — NOT STARTED
 Phase status    : NOT STARTED
-Immediate action: Read RefactorTerminalView.md, begin Phase 8 (extract TerminalSurfaceView)
-Last commit     : d414853 "refactor(RefactorTV Phase 7): extract file browser sidebar to TerminalFileBrowserSidebar"
+Immediate action: Read RefactorTerminalView.md, begin Phase 9 (extract TerminalSidebarLayoutStore + TerminalKeyboardShortcutLayer)
+Last commit     : TBD "refactor(RefactorTV Phase 8): extract terminal surface rendering to TerminalSurfaceView"
 ```
 
 **Update this block after every phase.**
@@ -41,7 +41,7 @@ Last commit     : d414853 "refactor(RefactorTV Phase 7): extract file browser si
 | 5 | Extract `TerminalSessionTabBar` | COMPLETE (2026-02-24) |
 | 6 | Extract `TerminalQuickCommandPanel` | COMPLETE (2026-02-24) |
 | 7 | Extract `TerminalFileBrowserSidebar` | COMPLETE (2026-02-24) |
-| 8 | Extract `TerminalSurfaceView` | NOT STARTED |
+| 8 | Extract `TerminalSurfaceView` | COMPLETE (2026-02-24) |
 | 9 | Extract `TerminalSidebarLayoutStore` + `TerminalKeyboardShortcutLayer`, final cleanup | NOT STARTED |
 | — | Full test suite run | NOT STARTED |
 
@@ -490,9 +490,9 @@ level as a separate overlay, not inside the surface).
 
 ### Steps (11 steps)
 
-- [ ] **8.1** Read `TerminalView.swift` lines 1502–1900 (all surface functions) and 2637–2701 (mouse overlay + attributedLine helpers) in full before starting.
-- [ ] **8.2** Create `ProSSHMac/UI/Terminal/TerminalSurfaceView.swift`. Header: `// Extracted from TerminalView.swift`. Imports: `import SwiftUI`, `import Metal`.
-- [ ] **8.3** Write `struct TerminalSurfaceView: View` with:
+- [x] **8.1** Read `TerminalView.swift` lines 1502–1900 (all surface functions) and 2637–2701 (mouse overlay + attributedLine helpers) in full before starting.
+- [x] **8.2** Create `ProSSHMac/UI/Terminal/TerminalSurfaceView.swift`. Header: `// Extracted from TerminalView.swift`. Imports: `import SwiftUI`, `import Metal`.
+- [x] **8.3** Write `struct TerminalSurfaceView: View` with:
   - `let session: Session`
   - `let isFocused: Bool`
   - `let paneID: UUID?`
@@ -509,11 +509,11 @@ level as a separate overlay, not inside the surface).
   - `var onCopy: (UUID) -> Bool`
   - `var onSplitWithExisting: (UUID, UUID, SplitDirection) -> Void`
   - `private let linkDetector = LinkDetector()`
-- [ ] **8.4** `body` = the content of `terminalSurface(for:isFocused:paneID:)`, dispatching among the three render paths.
-- [ ] **8.5** Copy all rendering functions verbatim: `safeTerminalBuffer(for:)`, `safeTerminalDisplayLines(for:)`, `metalTerminalBuffer(for:isFocused:paneID:)`, `terminalSurfaceContextMenu(for:)`, `terminalBuffer(for:)`, `terminalLineView(_:lineIndex:)`, `mouseInputOverlay(for:contentPadding:)`, `attributedTerminalLine(_:lineIndex:)`, `terminalCellCoordinates(from:contentPadding:)`, `isMouseTrackingEnabled(for:)`. Copy `inputModeSnapshot(for:)` as a private func.
-- [ ] **8.6** Copy `terminalSurfaceColor`, `terminalSurfaceBorderColor`, `supportsMetalTerminalSurface`, `isMacOSTerminalSafetyModeEnabled` as private computed vars.
-- [ ] **8.7** Fix call sites in the copied code: `copyContentToClipboard(sessionID:)` → `onCopy(sessionID)`, `pasteClipboardToSession(_:)` → `onPaste(sessionID)`, tap-to-focus → `onFocusTap()`, `splitWithExistingSession(...)` → `onSplitWithExisting(...)`.
-- [ ] **8.8** In `TerminalView.swift sessionPanel`: replace `terminalSurface(for: session, isFocused: isFocused, paneID: paneID)` with:
+- [x] **8.4** `body` = the content of `terminalSurface(for:isFocused:paneID:)`, dispatching among the three render paths.
+- [x] **8.5** Copy all rendering functions verbatim: `safeTerminalBuffer(for:)`, `safeTerminalDisplayLines(for:)`, `metalTerminalBuffer(for:isFocused:paneID:)`, `terminalSurfaceContextMenu(for:)`, `terminalBuffer(for:)`, `terminalLineView(_:lineIndex:)`, `mouseInputOverlay(for:contentPadding:)`, `attributedTerminalLine(_:lineIndex:)`, `terminalCellCoordinates(from:contentPadding:)`, `isMouseTrackingEnabled(for:)`. Copy `inputModeSnapshot(for:)` as a private func.
+- [x] **8.6** Copy `terminalSurfaceColor`, `terminalSurfaceBorderColor`, `supportsMetalTerminalSurface`, `isMacOSTerminalSafetyModeEnabled` as private computed vars.
+- [x] **8.7** Fix call sites in the copied code: `copyContentToClipboard(sessionID:)` → `onCopy(sessionID)`, `pasteClipboardToSession(_:)` → `onPaste(sessionID)`, tap-to-focus → `onFocusTap()`, `splitWithExistingSession(...)` → `onSplitWithExisting(...)`.
+- [x] **8.8** In `TerminalView.swift sessionPanel`: replace `terminalSurface(for: session, isFocused: isFocused, paneID: paneID)` with:
   ```swift
   TerminalSurfaceView(
       session: session,
@@ -529,11 +529,12 @@ level as a separate overlay, not inside the surface).
       onSplitWithExisting: { sid, pid, dir in splitWithExistingSession(sid, beside: pid, direction: dir) }
   )
   ```
-- [ ] **8.9** Delete from `TerminalView.swift`: `terminalSurface(for:isFocused:paneID:)`, `safeTerminalBuffer(for:)`, `safeTerminalDisplayLines(for:)`, `metalTerminalBuffer(for:isFocused:paneID:)`, `terminalSurfaceContextMenu(for:)`, `terminalBuffer(for:)`, `terminalLineView(_:lineIndex:)`, `mouseInputOverlay(for:contentPadding:)`, `attributedTerminalLine(_:lineIndex:)`, `terminalCellCoordinates(from:contentPadding:)`, `isMouseTrackingEnabled(for:)`, `terminalSurfaceColor`, `terminalSurfaceBorderColor`, `supportsMetalTerminalSurface`, `isMacOSTerminalSafetyModeEnabled`. Keep `inputModeSnapshot(for:)` in `TerminalView.swift`.
-- [ ] **8.10** Run build: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`. Verify `** BUILD SUCCEEDED **`.
-- [ ] **8.11** Commit: `refactor(RefactorTV Phase 8): extract terminal surface rendering to TerminalSurfaceView`
+- [x] **8.9** Delete from `TerminalView.swift`: `terminalSurface(for:isFocused:paneID:)`, `safeTerminalBuffer(for:)`, `safeTerminalDisplayLines(for:)`, `metalTerminalBuffer(for:isFocused:paneID:)`, `terminalSurfaceContextMenu(for:)`, `terminalBuffer(for:)`, `terminalLineView(_:lineIndex:)`, `mouseInputOverlay(for:contentPadding:)`, `attributedTerminalLine(_:lineIndex:)`, `terminalCellCoordinates(from:contentPadding:)`, `isMouseTrackingEnabled(for:)`, `terminalSurfaceColor`, `terminalSurfaceBorderColor`, `supportsMetalTerminalSurface`, `isMacOSTerminalSafetyModeEnabled`. Keep `inputModeSnapshot(for:)` in `TerminalView.swift`.
+- [x] **8.10** Run build: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`. Verify `** BUILD SUCCEEDED **`.
+- [x] **8.11** Commit: `refactor(RefactorTV Phase 8): extract terminal surface rendering to TerminalSurfaceView`
 
 **Expected TerminalView.swift line count after phase:** ~1,235
+**Actual TerminalView.swift line count after phase:** 1,182
 
 ---
 
@@ -646,6 +647,23 @@ After all 9 phases are committed and the build is clean:
 ---
 
 ## Refactor Log (most recent first)
+
+- **2026-02-24 — Phase 8 COMPLETE** (commit TBD): Extracted the entire terminal surface rendering
+  subsystem (~540 lines) into `TerminalSurfaceView.swift`. New struct takes `session: Session`,
+  `isFocused: Bool`, `paneID: UUID?`, `@ObservedObject` for `bellEffect`/`resizeEffect`/
+  `selectionCoordinator`/`terminalSearch`/`paneManager`/`tabManager`, plus four action callbacks
+  (`onFocusTap`, `onPaste`, `onCopy`, `onSplitWithExisting`). Body dispatches among safe/Metal/classic
+  rendering paths. Moved `@StateObject private var scrollIndicator`, three `@State` scroll vars, and
+  `private let linkDetector` into `TerminalSurfaceView`. Removed 15 functions/computed properties from
+  `TerminalView`: `terminalSurface`, `safeTerminalBuffer`, `safeTerminalDisplayLines`, `metalTerminalBuffer`,
+  `terminalSurfaceContextMenu`, `terminalBuffer`, `terminalLineView`, `mouseInputOverlay`,
+  `attributedTerminalLine`, `terminalCellCoordinates`, `isMouseTrackingEnabled`, `terminalSurfaceColor`,
+  `terminalSurfaceBorderColor`, `supportsMetalTerminalSurface`, `isMacOSTerminalSafetyModeEnabled`
+  (last two kept in TerminalView — still referenced by `onAppear` metal migration logic and
+  `handleDirectTerminalInput`). Updated 4 call sites in TerminalView (2 in `sessionPanel`,
+  2 in `terminalOnlyMode` pane/single paths). Added `import UniformTypeIdentifiers` to new file
+  (required by `onDrop(of: [.fileURL])`). `TerminalView.swift`: 1,623 → 1,182 lines (−441).
+  Build: `** BUILD SUCCEEDED **`, 0 warnings.
 
 - **2026-02-24 — Phase 7 COMPLETE** (commit `d414853`): Extracted the entire file browser sidebar subsystem
   (~450 lines) into `TerminalFileBrowserSidebar.swift`. Removed 10 `@State` file-browser properties,

@@ -27,7 +27,6 @@ struct TerminalView: View {
     @AppStorage("terminal.sidebar.aiAssistant.width") private var aiAssistantWidth = 420.0
     @State private var pendingInput: [UUID: String] = [:]
     @StateObject private var bellEffect = BellEffectController()
-    @StateObject private var scrollIndicator = ScrollIndicatorController()
     @StateObject private var resizeEffect = ResizeEffectController()
     @StateObject private var tabManager = SessionTabManager()
     @StateObject private var terminalSearch = TerminalSearch()
@@ -38,9 +37,6 @@ struct TerminalView: View {
     @FocusState private var focusedSessionID: UUID?
     @State private var closeConfirmationSession: Session?
     @State private var secureInputOverride: Bool?
-    @State private var terminalContentHeight: CGFloat = 0
-    @State private var terminalContentOffset: CGFloat = 0
-    @State private var terminalViewportSize: CGSize = .zero
     @State private var directInputBufferBySessionID: [UUID: String] = [:]
     @State private var directInputActivationNonce: Int = 0
     @State private var searchFocusNonce: Int = 0
@@ -50,8 +46,6 @@ struct TerminalView: View {
     @State private var aiAssistantDragBaseWidth: Double?
     @State private var loadedSidebarLayoutContextKey: String?
     @State private var isApplyingSidebarLayout = false
-    private let linkDetector = LinkDetector()
-
     var body: some View {
         terminalLifecycleView
         .alert(
@@ -176,7 +170,6 @@ struct TerminalView: View {
             }
         }
         .onChange(of: tabManager.selectedSessionID) { _, _ in
-            scrollIndicator.reset()
             resizeEffect.reset()
             updateSearchLines()
             restoreSidebarLayoutForSelection()
@@ -206,7 +199,6 @@ struct TerminalView: View {
             }
         }
         .onChange(of: useMetalRenderer) { _, _ in
-            scrollIndicator.reset()
             resizeEffect.reset()
         }
     }
@@ -261,11 +253,26 @@ struct TerminalView: View {
                     if let session = sessionForPane(pane) {
                         let paneFocused = pane.id == paneManager.focusedPaneId
                         if terminalOnlyMode {
-                            terminalSurface(for: session, isFocused: paneFocused, paneID: pane.id)
-                                .overlay {
-                                    directTerminalInputOverlay(for: session)
-                                }
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            TerminalSurfaceView(
+                                session: session,
+                                isFocused: paneFocused,
+                                paneID: pane.id,
+                                bellEffect: bellEffect,
+                                resizeEffect: resizeEffect,
+                                selectionCoordinator: selectionCoordinator,
+                                terminalSearch: terminalSearch,
+                                paneManager: paneManager,
+                                tabManager: tabManager,
+                                onFocusTap: { focusSessionAndPane(session.id, paneID: pane.id) },
+                                onPaste: { sid in pasteClipboardToSession(sid) },
+                                onCopy: { sid in copyContentToClipboard(sessionID: sid) },
+                                onSplitWithExisting: { sid, pid, dir in splitWithExistingSession(sid, beside: pid, direction: dir) }
+                            )
+                            .id(session.id)
+                            .overlay {
+                                directTerminalInputOverlay(for: session)
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
                         } else {
                             sessionPanel(for: session, paneID: pane.id, includeSearch: paneFocused, isFocused: paneFocused)
                                 .padding(.horizontal)
@@ -289,11 +296,26 @@ struct TerminalView: View {
 
                 if let session = selectedSession {
                     if terminalOnlyMode {
-                        terminalSurface(for: session)
-                            .overlay {
-                                directTerminalInputOverlay(for: session)
-                            }
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        TerminalSurfaceView(
+                            session: session,
+                            isFocused: true,
+                            paneID: nil,
+                            bellEffect: bellEffect,
+                            resizeEffect: resizeEffect,
+                            selectionCoordinator: selectionCoordinator,
+                            terminalSearch: terminalSearch,
+                            paneManager: paneManager,
+                            tabManager: tabManager,
+                            onFocusTap: { focusSessionAndPane(session.id, paneID: nil) },
+                            onPaste: { sid in pasteClipboardToSession(sid) },
+                            onCopy: { sid in copyContentToClipboard(sessionID: sid) },
+                            onSplitWithExisting: { sid, pid, dir in splitWithExistingSession(sid, beside: pid, direction: dir) }
+                        )
+                        .id(session.id)
+                        .overlay {
+                            directTerminalInputOverlay(for: session)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else {
                         sessionPanel(for: session, includeSearch: true)
                             .padding(.horizontal)
@@ -326,10 +348,25 @@ struct TerminalView: View {
             }
 
             if session.state == .connected {
-                terminalSurface(for: session, isFocused: isFocused, paneID: paneID)
-                    .overlay {
-                        directTerminalInputOverlay(for: session)
-                    }
+                TerminalSurfaceView(
+                    session: session,
+                    isFocused: isFocused,
+                    paneID: paneID,
+                    bellEffect: bellEffect,
+                    resizeEffect: resizeEffect,
+                    selectionCoordinator: selectionCoordinator,
+                    terminalSearch: terminalSearch,
+                    paneManager: paneManager,
+                    tabManager: tabManager,
+                    onFocusTap: { focusSessionAndPane(session.id, paneID: paneID) },
+                    onPaste: { sid in pasteClipboardToSession(sid) },
+                    onCopy: { sid in copyContentToClipboard(sessionID: sid) },
+                    onSplitWithExisting: { sid, pid, dir in splitWithExistingSession(sid, beside: pid, direction: dir) }
+                )
+                .id(session.id)
+                .overlay {
+                    directTerminalInputOverlay(for: session)
+                }
             }
 
             TerminalSessionActionsBar(session: session, onRestartLocal: { s in restartLocalSession(s) })
@@ -572,407 +609,6 @@ struct TerminalView: View {
         .padding(8)
     }
 
-    private func terminalSurface(for session: Session, isFocused: Bool = true, paneID: UUID? = nil) -> some View {
-        Group {
-            if isMacOSTerminalSafetyModeEnabled {
-                safeTerminalBuffer(for: session)
-            } else if supportsMetalTerminalSurface {
-                metalTerminalBuffer(for: session, isFocused: isFocused, paneID: paneID)
-            } else {
-                terminalBuffer(for: session)
-            }
-        }
-        .contentShape(Rectangle())
-        .simultaneousGesture(
-            TapGesture().onEnded {
-                focusSessionAndPane(session.id, paneID: paneID)
-            }
-        )
-    }
-
-    @ViewBuilder
-    private func safeTerminalBuffer(for session: Session) -> some View {
-        let renderedLines = safeTerminalDisplayLines(for: session)
-        let scrollSpaceName = "terminal-scroll-safe-\(session.id.uuidString)"
-
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 2) {
-                    ForEach(renderedLines) { line in
-                        Text(verbatim: line.text)
-                            .font(.custom(terminalUIFontFamily, size: terminalUIFontSize))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .id(line.id)
-                    }
-                }
-                .padding(8)
-            }
-            .coordinateSpace(name: scrollSpaceName)
-            .onAppear {
-                guard let last = renderedLines.indices.last else { return }
-                proxy.scrollTo(last, anchor: .bottom)
-            }
-            .onChange(of: renderedLines.count) { _, _ in
-                guard let last = renderedLines.indices.last else { return }
-                proxy.scrollTo(last, anchor: .bottom)
-            }
-        }
-        .frame(minHeight: 220, maxHeight: .infinity)
-        .background(terminalSurfaceColor, in: RoundedRectangle(cornerRadius: 10))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(terminalSurfaceBorderColor, lineWidth: 1)
-        )
-    }
-
-    private func safeTerminalDisplayLines(for session: Session) -> [SafeTerminalRenderedLine] {
-        var lines = sessionManager.shellBuffers[session.id] ?? []
-        let directInput = directInputBufferBySessionID[session.id, default: ""]
-        let shouldUseSafetyOverlay = isMacOSTerminalSafetyModeEnabled
-        let shouldEchoInput = !shouldUseSecureInput(for: session)
-        let shouldShowCursor = shouldEnableDirectTerminalInput(for: session)
-
-        if shouldUseSafetyOverlay && (shouldShowCursor || (shouldEchoInput && !directInput.isEmpty)) {
-            let suffix = (shouldEchoInput ? directInput : "") + (shouldShowCursor ? "█" : "")
-            if lines.isEmpty {
-                lines = [suffix]
-            } else {
-                lines[lines.count - 1] += suffix
-            }
-        }
-
-        return lines.enumerated().map { index, line in
-            let stableID = "\(index)-\(line.hashValue)"
-            return SafeTerminalRenderedLine(id: stableID, lineNumber: index, text: line)
-        }
-    }
-
-    @ViewBuilder
-    private func metalTerminalBuffer(for session: Session, isFocused: Bool = true, paneID: UUID? = nil) -> some View {
-        let snapshotNonce = sessionManager.gridSnapshotNonceBySessionID[session.id, default: 0]
-
-        MetalTerminalSessionSurface(
-            sessionID: session.id,
-            snapshotProvider: { sessionManager.gridSnapshot(for: session.id) },
-            snapshotNonce: snapshotNonce,
-            fontSize: terminalUIFontSize,
-            fontFamily: terminalUIFontFamily,
-            backgroundOpacityPercent: terminalBackgroundOpacityPercent,
-            onTap: { _ in
-                focusSessionAndPane(session.id, paneID: paneID)
-            },
-            onTerminalResize: { columns, rows in
-                Task {
-                    await sessionManager.resizeTerminal(
-                        sessionID: session.id,
-                        columns: columns,
-                        rows: rows
-                    )
-                }
-            },
-            onScroll: { delta in
-                sessionManager.scrollTerminal(sessionID: session.id, delta: delta)
-            },
-            isFocused: isFocused,
-            isLocalSession: session.isLocal,
-            selectionCoordinator: selectionCoordinator
-        )
-        .id(session.id)
-        .frame(minHeight: 220, maxHeight: .infinity)
-        .scaleEffect(resizeEffect.contentScale)
-        .opacity(resizeEffect.contentOpacity)
-        .background(terminalSurfaceColor, in: RoundedRectangle(cornerRadius: 10))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(terminalSurfaceBorderColor, lineWidth: 1)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 10)
-                .fill(Color.white.opacity(bellEffect.flashOpacity))
-                .allowsHitTesting(false)
-        }
-        .overlay {
-            mouseInputOverlay(for: session, contentPadding: 0)
-        }
-        .contextMenu {
-            terminalSurfaceContextMenu(for: session)
-        }
-        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
-            for provider in providers {
-                _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                    guard let url else { return }
-                    let escaped = url.path.replacingOccurrences(of: "'", with: "'\\''")
-                    let escapedPath = "'\(escaped)'"
-                    Task { @MainActor in
-                        await sessionManager.sendShellInput(sessionID: session.id, input: escapedPath)
-                    }
-                }
-            }
-            return true
-        }
-        .onChange(of: sessionManager.bellEventNonceBySessionID[session.id, default: 0]) { _, _ in
-            bellEffect.trigger(mode: bellFeedbackMode)
-        }
-    }
-
-    @ViewBuilder
-    private func terminalSurfaceContextMenu(for session: Session) -> some View {
-        Button {
-            _ = copyContentToClipboard(sessionID: session.id)
-        } label: {
-            Label("Copy", systemImage: "doc.on.doc")
-        }
-
-        Button {
-            pasteClipboardToSession(session.id)
-        } label: {
-            Label("Paste", systemImage: "doc.on.clipboard")
-        }
-
-        Button {
-            openWindow(id: ProSSHMacApp.externalTerminalWindowID, value: session.id)
-        } label: {
-            Label("Pop Out to Window", systemImage: "rectangle.portrait.and.arrow.right")
-        }
-
-        Divider()
-
-        Button {
-            selectionCoordinator.selectAll(sessionID: session.id)
-        } label: {
-            Label("Select All", systemImage: "selection.pin.in.out")
-        }
-
-        if selectionCoordinator.hasSelection(sessionID: session.id) {
-            Button {
-                selectionCoordinator.clearSelection(sessionID: session.id)
-            } label: {
-                Label("Clear Selection", systemImage: "xmark.rectangle")
-            }
-        }
-
-        let currentPaneID = paneManager.allPanes.first(where: { $0.sessionID == session.id })?.id
-            ?? paneManager.focusedPaneId
-        let otherSessions = tabManager.tabs
-            .map(\.session)
-            .filter { $0.id != session.id }
-
-        if paneManager.canSplit(currentPaneID) && !otherSessions.isEmpty {
-            Divider()
-
-            Menu {
-                ForEach(otherSessions, id: \.id) { other in
-                    Button(other.hostLabel) {
-                        splitWithExistingSession(other.id, beside: currentPaneID, direction: .vertical)
-                    }
-                }
-            } label: {
-                Label("Split Right With...", systemImage: "rectangle.split.2x1")
-            }
-
-            Menu {
-                ForEach(otherSessions, id: \.id) { other in
-                    Button(other.hostLabel) {
-                        splitWithExistingSession(other.id, beside: currentPaneID, direction: .horizontal)
-                    }
-                }
-            } label: {
-                Label("Split Down With...", systemImage: "rectangle.split.1x2")
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func terminalBuffer(for session: Session) -> some View {
-        let lines = sessionManager.shellBuffers[session.id] ?? []
-        let scrollSpaceName = "terminal-scroll-\(session.id.uuidString)"
-
-        ScrollViewReader { proxy in
-            GeometryReader { viewportProxy in
-                ScrollView {
-                    GeometryReader { offsetProxy in
-                        Color.clear.preference(
-                            key: TerminalScrollOffsetPreferenceKey.self,
-                            value: -offsetProxy.frame(in: .named(scrollSpaceName)).minY
-                        )
-                    }
-                    .frame(height: 0)
-
-                    LazyVStack(alignment: .leading, spacing: 2) {
-                        ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
-                            terminalLineView(line, lineIndex: index)
-                                .id("\(index)-\(line.hashValue)")
-                        }
-                    }
-                    .padding(8)
-                    .background(
-                        GeometryReader { contentProxy in
-                            Color.clear.preference(
-                                key: TerminalScrollContentHeightPreferenceKey.self,
-                                value: contentProxy.size.height
-                            )
-                        }
-                    )
-                }
-                .coordinateSpace(name: scrollSpaceName)
-                .onAppear {
-                    terminalViewportSize = viewportProxy.size
-                    terminalSearch.updateLines(lines)
-                    scrollIndicator.update(
-                        contentOffset: terminalContentOffset,
-                        contentHeight: terminalContentHeight,
-                        viewportHeight: terminalViewportSize.height
-                    )
-                    guard lines.count > 0 else { return }
-                    proxy.scrollTo(lines.count - 1, anchor: .bottom)
-                }
-                .onChange(of: viewportProxy.size) { oldSize, newSize in
-                    terminalViewportSize = newSize
-                    resizeEffect.handleViewportChange(from: oldSize, to: newSize)
-                    scrollIndicator.update(
-                        contentOffset: terminalContentOffset,
-                        contentHeight: terminalContentHeight,
-                        viewportHeight: terminalViewportSize.height
-                    )
-                }
-                .onPreferenceChange(TerminalScrollOffsetPreferenceKey.self) { offset in
-                    terminalContentOffset = max(0, offset)
-                    scrollIndicator.update(
-                        contentOffset: terminalContentOffset,
-                        contentHeight: terminalContentHeight,
-                        viewportHeight: terminalViewportSize.height
-                    )
-                }
-                .onPreferenceChange(TerminalScrollContentHeightPreferenceKey.self) { contentHeight in
-                    terminalContentHeight = contentHeight
-                    scrollIndicator.update(
-                        contentOffset: terminalContentOffset,
-                        contentHeight: terminalContentHeight,
-                        viewportHeight: terminalViewportSize.height
-                    )
-                }
-                .onChange(of: lines) { _, newLines in
-                    terminalSearch.updateLines(newLines)
-                    guard !newLines.isEmpty else { return }
-                    guard scrollIndicator.isNearBottom else { return }
-                    withAnimation(.easeOut(duration: 0.12)) {
-                        proxy.scrollTo(newLines.count - 1, anchor: .bottom)
-                    }
-                }
-                .onChange(of: terminalSearch.selectedMatch) { _, selectedMatch in
-                    guard let selectedMatch, selectedMatch.lineIndex < lines.count else { return }
-                    withAnimation(.easeOut(duration: 0.12)) {
-                        proxy.scrollTo(selectedMatch.lineIndex, anchor: .center)
-                    }
-                }
-                .overlay(alignment: .trailing) {
-                    if scrollIndicator.shouldShowThumb {
-                        GeometryReader { indicatorProxy in
-                            let trackHeight = indicatorProxy.size.height
-                            let thumbHeight = max(18, trackHeight * scrollIndicator.thumbFraction)
-                            let travel = max(0, trackHeight - thumbHeight)
-                            Capsule(style: .continuous)
-                                .fill(Color.white.opacity(colorScheme == .dark ? 0.58 : 0.42))
-                                .frame(width: 3, height: thumbHeight)
-                                .offset(y: travel * scrollIndicator.thumbOffsetFraction)
-                                .padding(.trailing, 4)
-                                .opacity(scrollIndicator.thumbOpacity)
-                                .animation(.easeOut(duration: 0.16), value: scrollIndicator.thumbOpacity)
-                        }
-                        .allowsHitTesting(false)
-                    }
-                }
-                .overlay(alignment: .bottom) {
-                    if scrollIndicator.showJumpToBottom, !lines.isEmpty {
-                        VStack(spacing: 6) {
-                            if !scrollIndicator.isNearBottom {
-                                Text("\u{2193} New output below")
-                                    .font(.caption2.weight(.medium))
-                                    .foregroundStyle(.white)
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 4)
-                                    .background(.ultraThinMaterial, in: Capsule())
-                            }
-
-                            Button {
-                                withAnimation(.easeOut(duration: 0.16)) {
-                                    proxy.scrollTo(lines.count - 1, anchor: .bottom)
-                                }
-                            } label: {
-                                Label("Jump to Bottom", systemImage: "arrow.down.to.line")
-                                    .labelStyle(.titleAndIcon)
-                                    .font(.caption2.weight(.semibold))
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.small)
-                        }
-                        .padding(.bottom, 8)
-                    }
-                }
-            }
-            .frame(minHeight: 220, maxHeight: .infinity)
-            .scaleEffect(resizeEffect.contentScale)
-            .opacity(resizeEffect.contentOpacity)
-            .background(terminalSurfaceColor, in: RoundedRectangle(cornerRadius: 10))
-            .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(terminalSurfaceBorderColor, lineWidth: 1)
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(Color.white.opacity(bellEffect.flashOpacity))
-                    .allowsHitTesting(false)
-            }
-            .overlay {
-                mouseInputOverlay(for: session)
-            }
-            .onChange(of: sessionManager.bellEventNonceBySessionID[session.id, default: 0]) { _, _ in
-                bellEffect.trigger(mode: bellFeedbackMode)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func terminalLineView(_ line: String, lineIndex: Int) -> some View {
-        let detectedLinks = linkDetector.detectLinks(in: line)
-        let attributed = attributedTerminalLine(line, lineIndex: lineIndex)
-
-        let base = Text(attributed)
-            .font(.system(size: terminalUIFontSize, weight: .regular, design: .monospaced))
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .textSelection(.enabled)
-            .environment(
-                \.openURL,
-                OpenURLAction { url in
-                    PlatformURL.openInBrowser(url)
-                    return .handled
-                }
-            )
-
-        if detectedLinks.isEmpty {
-            base
-        } else {
-            base
-                .help(detectedLinks.map(\.previewLabel).joined(separator: "\n"))
-                .contextMenu {
-                    Text(detectedLinks.first?.previewLabel ?? "Detected Link")
-                    Divider()
-                    ForEach(detectedLinks) { link in
-                        Button("Open \(link.text) in Browser") {
-                            PlatformURL.openInBrowser(link.destinationURL)
-                        }
-                    }
-                    Divider()
-                    ForEach(detectedLinks) { link in
-                        Button("Copy \(link.text)") {
-                            PlatformClipboard.writeString(link.text)
-                        }
-                    }
-                }
-        }
-    }
-
-
     @ViewBuilder
     private func directTerminalInputOverlay(for session: Session) -> some View {
         DirectTerminalInputCaptureView(
@@ -1055,16 +691,6 @@ struct TerminalView: View {
         )
     }
 
-    private var terminalSurfaceColor: Color {
-        let opacityMultiplier = TransparencyManager.normalizedOpacity(fromPercent: terminalBackgroundOpacityPercent)
-        let baseOpacity = colorScheme == .dark ? 0.34 : 0.08
-        return Color.black.opacity(baseOpacity * opacityMultiplier)
-    }
-
-    private var terminalSurfaceBorderColor: Color {
-        colorScheme == .dark ? Color.white.opacity(0.14) : Color.black.opacity(0.12)
-    }
-
     private var supportsMultitaskingControls: Bool {
         horizontalSizeClass == .regular
     }
@@ -1073,17 +699,11 @@ struct TerminalView: View {
         true
     }
 
-    private var supportsMetalTerminalSurface: Bool {
-        useMetalRenderer && isMetalRendererAvailable
-    }
-
-    private var isMacOSTerminalSafetyModeEnabled: Bool {
-        false
-    }
-
     private var isMetalRendererAvailable: Bool {
         MTLCreateSystemDefaultDevice() != nil
     }
+
+    private var isMacOSTerminalSafetyModeEnabled: Bool { false }
 
     private var newWindowToolbarPlacement: ToolbarItemPlacement {
         return .automatic
@@ -1232,51 +852,6 @@ struct TerminalView: View {
     private var aiAssistantMinWidth: Double { 280 }
 
     private var aiAssistantMaxWidth: Double { 920 }
-
-    @ViewBuilder
-    private func mouseInputOverlay(for session: Session, contentPadding: CGFloat = 8) -> some View {
-        let isEnabled = session.state == .connected && isMouseTrackingEnabled(for: session.id)
-
-        MouseInputHandler(
-            isEnabled: isEnabled,
-            modeSnapshot: {
-                inputModeSnapshot(for: session.id)
-            },
-            locationToCell: { location in
-                terminalCellCoordinates(from: location, contentPadding: contentPadding)
-            },
-            onSendSequence: { sequence in
-                sendControl(sequence, sessionID: session.id)
-            }
-        )
-        .opacity(0.001)
-        .accessibilityHidden(true)
-        .allowsHitTesting(isEnabled)
-    }
-
-    private func attributedTerminalLine(_ line: String, lineIndex: Int) -> AttributedString {
-        var attributed = linkDetector.attributedLine(line)
-        guard terminalSearch.isPresented else { return attributed }
-
-        let lineMatches = terminalSearch.matches(forLineIndex: lineIndex)
-        guard !lineMatches.isEmpty else { return attributed }
-
-        for match in lineMatches {
-            guard let lineRange = match.stringRange(in: line),
-                  let attributedRange = Range(lineRange, in: attributed) else {
-                continue
-            }
-
-            if terminalSearch.isSelected(match) {
-                attributed[attributedRange].backgroundColor = .orange.opacity(0.6)
-                attributed[attributedRange].foregroundColor = colorScheme == .dark ? .black : .primary
-            } else {
-                attributed[attributedRange].backgroundColor = .yellow.opacity(0.35)
-            }
-        }
-
-        return attributed
-    }
 
     private func sendSelectedCommandShortcut() {
         guard let sessionID = selectedSession?.id else { return }
@@ -1443,22 +1018,6 @@ struct TerminalView: View {
 
     private func inputModeSnapshot(for sessionID: UUID) -> InputModeSnapshot {
         sessionManager.inputModeSnapshotsBySessionID[sessionID] ?? .default
-    }
-
-    private func isMouseTrackingEnabled(for sessionID: UUID) -> Bool {
-        inputModeSnapshot(for: sessionID).mouseTracking != .none
-    }
-
-    private func terminalCellCoordinates(from location: CGPoint, contentPadding: CGFloat = 8) -> (row: Int, col: Int)? {
-        let fontSize = CGFloat(terminalUIFontSize)
-        let estimatedCellWidth = max(1, fontSize * 0.62)
-        let estimatedLineHeight = max(1, fontSize * 1.35 + 2)
-
-        let x = max(0, location.x - contentPadding)
-        let y = max(0, location.y - contentPadding)
-        let row = Int(y / estimatedLineHeight) + 1
-        let col = Int(x / estimatedCellWidth) + 1
-        return (row: max(1, row), col: max(1, col))
     }
 
     private func hardwareKeyEncoderOptions() -> KeyEncoderOptions {

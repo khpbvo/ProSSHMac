@@ -129,10 +129,10 @@ Services/
 
 ```
 Active branch   : master
-Current phase   : Phase 8 — NOT STARTED
+Current phase   : Phase 9 — NOT STARTED
 Phase status    : NOT STARTED
-Immediate action: Read RefactorTerminalView.md, begin Phase 8 (extract TerminalSurfaceView)
-Last commit     : d414853 "refactor(RefactorTV Phase 7): extract file browser sidebar to TerminalFileBrowserSidebar"
+Immediate action: Read RefactorTerminalView.md, begin Phase 9 (extract TerminalSidebarLayoutStore + TerminalKeyboardShortcutLayer)
+Last commit     : TBD "refactor(RefactorTV Phase 8): extract terminal surface rendering to TerminalSurfaceView"
 ```
 
 **Update this block after every phase.**
@@ -149,7 +149,7 @@ Last commit     : d414853 "refactor(RefactorTV Phase 7): extract file browser si
 | 5 | Extract TerminalSessionTabBar | COMPLETE (2026-02-24, commit `662c5a2`) |
 | 6 | Extract TerminalQuickCommandPanel | COMPLETE (2026-02-24) |
 | 7 | Extract TerminalFileBrowserSidebar | COMPLETE (2026-02-24) |
-| 8 | Extract TerminalSurfaceView | NOT STARTED |
+| 8 | Extract TerminalSurfaceView | COMPLETE (2026-02-24) |
 | 9 | Extract TerminalSidebarLayoutStore + TerminalKeyboardShortcutLayer + cleanup | NOT STARTED |
 
 **Run-book:** `RefactorTerminalView.md` (project root) — contains the full step-by-step
