@@ -22,11 +22,11 @@ The long-term memory for this project lives in `docs/featurelist.md`.
 
 ```
 Active branch : refactor/actor-isolation
-Current phase : Phase 4 — Generic PersistentStore<T> for store boilerplate
+Current phase : Phase 5 — Decompose SessionManager.swift into 5 coordinators
 Phase status  : NOT PLANNED
-Immediate action: Open RefactorTheActor.md → Phase 4 → expand sketch into granular plan (State A)
-Key source file : ProSSHMac/Services/ (HostStore, KeyStore, CertificateStore, etc.)
-Last commit   : 2fcdc50  "refactor: extract RemotePath utilities, remove duplication"
+Immediate action: Open RefactorTheActor.md → Phase 5 → expand sketch into granular plan (State A)
+Key source file : ProSSHMac/Services/SessionManager.swift (~1,640 lines)
+Last commit   : 35bfcfb  "refactor: introduce PersistentStore<T>, consolidate store boilerplate"
 ```
 
 **Update this block after every phase** — it is the first thing any new agent reads.
@@ -65,7 +65,7 @@ Every phase is in one of two states. Know which state you are in before doing an
 | 1b | Swift 6 strict concurrency pass on Phase 1 files | **COMPLETE** (2026-02-24, commit `32dcd70`) |
 | 2 | Kill CString pyramid, inject credential resolver | **COMPLETE** (2026-02-24, commit `d7d891d`) |
 | 3 | Deduplicate remote path utilities → `RemotePath.swift` | **COMPLETE** (2026-02-24, commit `2fcdc50`) |
-| 4 | Generic `PersistentStore<T>` for store boilerplate | NOT PLANNED |
+| 4 | Generic `PersistentStore<T>` for store boilerplate | **COMPLETE** (2026-02-24, commit `35bfcfb`) |
 | 5 | Decompose `SessionManager.swift` into 5 coordinators | NOT PLANNED |
 | 6 | Decompose `OpenAIAgentService.swift` into `Services/AI/` | NOT PLANNED |
 | 7 | Strict concurrency pass (`-strict-concurrency=complete`) | NOT PLANNED |
@@ -91,7 +91,7 @@ Services/
 │   ├── AIConversationContext.swift        # conversation history management (Phase 6)
 │   ├── AIResponseStreamParser.swift       # SSE / streaming response parsing (Phase 6)
 │   └── AIAgentRunner.swift                # agent loop (Phase 6)
-├── PersistentStore.swift                  # generic actor<T: Codable & Identifiable> (Phase 4)
+├── PersistentStore.swift                  # @MainActor final class PersistentStore<T: Codable> (Phase 4)
 ├── SessionReconnectCoordinator.swift      # extracted from SessionManager (Phase 5a)
 ├── SessionKeepaliveCoordinator.swift      # extracted from SessionManager (Phase 5b)
 ├── TerminalRenderingCoordinator.swift     # extracted from SessionManager (Phase 5c)
@@ -260,6 +260,20 @@ All paths below are relative to the repo root. Source files live under `ProSSHMa
 ## Recent Changes
 
 ### Refactor Log (strict concurrency refactor — most recent first)
+
+- **2026-02-24 — Phase 4 COMPLETE** (`35bfcfb`, plan commit: `3f6f05e`): Created
+  `Services/PersistentStore.swift` — `@MainActor final class PersistentStore<T: Codable>` with
+  `load()` / `save()` and four conditional conformance extensions for `HostStoreProtocol`,
+  `KeyStoreProtocol`, `CertificateStoreProtocol`, and `CertificateAuthorityStoreProtocol`. Deleted
+  `FileHostStore` (HostStore.swift −49L), `FileKeyStore` (KeyStore.swift −46L),
+  `FileCertificateStore` (CertificateStore.swift −48L), `FileCertificateAuthorityStore`
+  (CertificateAuthorityStore.swift −48L). Updated 4 instantiation sites in `AppDependencies.swift`.
+  Sketch corrections: used `@MainActor final class` (not `actor`) to directly satisfy all four
+  `@MainActor` protocols without bridging; dropped `upsert`/`delete` (no call site uses per-item
+  operations); dropped `Identifiable` constraint (bulk array serialization only); left
+  `AuditLogStore`, `KnownHostsStore`, and Keychain-backed stores untouched (incompatible designs).
+  Build: SUCCEEDED. Tests: 186 tests, 2 pre-existing failures (within ≤23 baseline). Phase 5
+  is NOT PLANNED.
 
 - **2026-02-24 — Phase 3 COMPLETE** (`2fcdc50`, plan commit: `1cad47a`): Created
   `Services/SSH/RemotePath.swift` with `normalize(_:)`, `parent(of:)`, and `join(_:_:)` static
