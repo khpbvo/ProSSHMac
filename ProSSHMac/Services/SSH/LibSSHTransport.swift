@@ -31,6 +31,128 @@ nonisolated private struct LibSSHAuthenticationMaterial: Sendable {
     var keyPassphrase: String? = nil
 }
 
+private struct LibSSHTargetParams: Sendable {
+    let hostname: String
+    let port: UInt16
+    let username: String
+    let kex: String
+    let ciphers: String
+    let hostKeys: String
+    let macs: String
+
+    nonisolated init(host: Host, policy: SSHAlgorithmPolicy) {
+        hostname = host.hostname
+        port = host.port
+        username = host.username
+        let selectedHostKeys = host.pinnedHostKeyAlgorithms.isEmpty
+            ? policy.hostKeys : host.pinnedHostKeyAlgorithms
+        kex = policy.keyExchange.joined(separator: ",")
+        ciphers = policy.ciphers.joined(separator: ",")
+        hostKeys = selectedHostKeys.joined(separator: ",")
+        macs = policy.macs.joined(separator: ",")
+    }
+}
+
+private struct LibSSHJumpCallParams: Sendable {
+    let jumpHostname: String
+    let jumpPort: UInt16
+    let jumpUsername: String
+    let jumpKex: String
+    let jumpCiphers: String
+    let jumpHostKeys: String
+    let jumpMacs: String
+    let expectedFingerprint: String
+    let jumpAuthMethod: ProSSHAuthMethod
+    let jumpPassword: String?
+    let jumpPrivateKey: String?
+    let jumpCertificate: String?
+    let jumpKeyPassphrase: String?
+
+    nonisolated init(jumpHost: Host, policy: SSHAlgorithmPolicy,
+                     material: LibSSHAuthenticationMaterial, expectedFingerprint: String) {
+        jumpHostname = jumpHost.hostname
+        jumpPort = jumpHost.port
+        jumpUsername = jumpHost.username
+        jumpKex = policy.keyExchange.joined(separator: ",")
+        jumpCiphers = policy.ciphers.joined(separator: ",")
+        jumpHostKeys = policy.hostKeys.joined(separator: ",")
+        jumpMacs = policy.macs.joined(separator: ",")
+        self.expectedFingerprint = expectedFingerprint
+        jumpAuthMethod = jumpHost.authMethod.libsshAuthMethod
+        jumpPassword = material.password
+        jumpPrivateKey = material.privateKey
+        jumpCertificate = material.certificate
+        jumpKeyPassphrase = material.keyPassphrase
+    }
+
+    nonisolated func invoke(handle: OpaquePointer, target: LibSSHTargetParams,
+                            config: inout ProSSHJumpHostConfig,
+                            errorBuffer: inout [CChar]) -> Int32 {
+        return jumpHostname.withCString { jumpHostnamePtr in
+            jumpUsername.withCString { jumpUsernamePtr in
+                jumpKex.withCString { jumpKexPtr in
+                    jumpCiphers.withCString { jumpCiphersPtr in
+                        jumpHostKeys.withCString { jumpHostKeysPtr in
+                            jumpMacs.withCString { jumpMacsPtr in
+                                expectedFingerprint.withCString { fpPtr in
+                                    LibSSHTransport.withOptionalCString(jumpPassword) { pwPtr in
+                                        LibSSHTransport.withOptionalCString(jumpPrivateKey) { pkPtr in
+                                            LibSSHTransport.withOptionalCString(jumpCertificate) { certPtr in
+                                                LibSSHTransport.withOptionalCString(jumpKeyPassphrase) { ppPtr in
+                                                    target.hostname.withCString { hostnamePtr in
+                                                        target.username.withCString { usernamePtr in
+                                                            target.kex.withCString { kexPtr in
+                                                                target.ciphers.withCString { ciphersPtr in
+                                                                    target.hostKeys.withCString { hostKeysPtr in
+                                                                        target.macs.withCString { macsPtr in
+                                                                            config.jump_hostname = jumpHostnamePtr
+                                                                            config.jump_username = jumpUsernamePtr
+                                                                            config.jump_port = jumpPort
+                                                                            config.kex = jumpKexPtr
+                                                                            config.ciphers = jumpCiphersPtr
+                                                                            config.hostkeys = jumpHostKeysPtr
+                                                                            config.macs = jumpMacsPtr
+                                                                            config.timeout_seconds = 10
+                                                                            config.expected_fingerprint = fpPtr
+                                                                            config.auth_method = jumpAuthMethod
+                                                                            config.password = pwPtr
+                                                                            config.private_key = pkPtr
+                                                                            config.certificate = certPtr
+                                                                            config.key_passphrase = ppPtr
+                                                                            return prossh_libssh_connect_with_jump(
+                                                                                handle,
+                                                                                hostnamePtr,
+                                                                                target.port,
+                                                                                usernamePtr,
+                                                                                kexPtr,
+                                                                                ciphersPtr,
+                                                                                hostKeysPtr,
+                                                                                macsPtr,
+                                                                                10,
+                                                                                &config,
+                                                                                &errorBuffer,
+                                                                                errorBuffer.count
+                                                                            )
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 actor LibSSHTransport: SSHTransporting {
     private var handles: [UUID: OpaquePointer] = [:]
     private let credentialResolver: any SSHCredentialResolving
@@ -110,96 +232,29 @@ actor LibSSHTransport: SSHTransporting {
         let jumpPolicy: SSHAlgorithmPolicy = jumpHost.legacyModeEnabled ? .legacy : .modern
         let targetPolicy: SSHAlgorithmPolicy = host.legacyModeEnabled ? .legacy : .modern
 
-        let jumpKex = jumpPolicy.keyExchange.joined(separator: ",")
-        let jumpCiphers = jumpPolicy.ciphers.joined(separator: ",")
-        let jumpHostKeys = jumpPolicy.hostKeys.joined(separator: ",")
-        let jumpMacs = jumpPolicy.macs.joined(separator: ",")
-
-        let targetKex = targetPolicy.keyExchange.joined(separator: ",")
-        let targetCiphers = targetPolicy.ciphers.joined(separator: ",")
-        let targetSelectedHostKeys = host.pinnedHostKeyAlgorithms.isEmpty ? targetPolicy.hostKeys : host.pinnedHostKeyAlgorithms
-        let targetHostKeys = targetSelectedHostKeys.joined(separator: ",")
-        let targetMacs = targetPolicy.macs.joined(separator: ",")
+        let jumpParams = LibSSHJumpCallParams(
+            jumpHost: jumpHost,
+            policy: jumpPolicy,
+            material: jumpMaterial,
+            expectedFingerprint: jumpConfig.expectedFingerprint
+        )
+        let targetParams = LibSSHTargetParams(host: host, policy: targetPolicy)
 
         var errorBuffer = [CChar](repeating: 0, count: 512)
-
         var jumpCConfig = ProSSHJumpHostConfig()
-        let connectResult: Int32 = jumpHost.hostname.withCString { jumpHostnamePtr in
-            jumpHost.username.withCString { jumpUsernamePtr in
-                jumpKex.withCString { jumpKexPtr in
-                    jumpCiphers.withCString { jumpCiphersPtr in
-                        jumpHostKeys.withCString { jumpHostKeysPtr in
-                            jumpMacs.withCString { jumpMacsPtr in
-                                jumpConfig.expectedFingerprint.withCString { expectedFPPtr in
-                                    Self.withOptionalCString(jumpMaterial.password) { jumpPasswordPtr in
-                                        Self.withOptionalCString(jumpMaterial.privateKey) { jumpPrivKeyPtr in
-                                            Self.withOptionalCString(jumpMaterial.certificate) { jumpCertPtr in
-                                                Self.withOptionalCString(jumpMaterial.keyPassphrase) { jumpPassphrasePtr in
-                                                    host.hostname.withCString { hostnamePtr in
-                                                        host.username.withCString { usernamePtr in
-                                                            targetKex.withCString { kexPtr in
-                                                                targetCiphers.withCString { ciphersPtr in
-                                                                    targetHostKeys.withCString { hostKeysPtr in
-                                                                        targetMacs.withCString { macsPtr in
-                                                                            jumpCConfig.jump_hostname = jumpHostnamePtr
-                                                                            jumpCConfig.jump_username = jumpUsernamePtr
-                                                                            jumpCConfig.jump_port = jumpHost.port
-                                                                            jumpCConfig.kex = jumpKexPtr
-                                                                            jumpCConfig.ciphers = jumpCiphersPtr
-                                                                            jumpCConfig.hostkeys = jumpHostKeysPtr
-                                                                            jumpCConfig.macs = jumpMacsPtr
-                                                                            jumpCConfig.timeout_seconds = 10
-                                                                            jumpCConfig.expected_fingerprint = expectedFPPtr
-                                                                            jumpCConfig.auth_method = jumpHost.authMethod.libsshAuthMethod
-                                                                            jumpCConfig.password = jumpPasswordPtr
-                                                                            jumpCConfig.private_key = jumpPrivKeyPtr
-                                                                            jumpCConfig.certificate = jumpCertPtr
-                                                                            jumpCConfig.key_passphrase = jumpPassphrasePtr
-
-                                                                            return prossh_libssh_connect_with_jump(
-                                                                                handle,
-                                                                                hostnamePtr,
-                                                                                host.port,
-                                                                                usernamePtr,
-                                                                                kexPtr,
-                                                                                ciphersPtr,
-                                                                                hostKeysPtr,
-                                                                                macsPtr,
-                                                                                10,
-                                                                                &jumpCConfig,
-                                                                                &errorBuffer,
-                                                                                errorBuffer.count
-                                                                            )
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        let connectResult = jumpParams.invoke(
+            handle: handle,
+            target: targetParams,
+            config: &jumpCConfig,
+            errorBuffer: &errorBuffer
+        )
 
         if connectResult != 0 {
             let errorMessage = errorBuffer.asString
             let actualFP = Self.extractCTupleString(&jumpCConfig.actual_fingerprint, capacity: 256)
             prossh_libssh_destroy(handle)
-
             switch connectResult {
-            case -10:
-                throw SSHTransportError.jumpHostVerificationFailed(
-                    jumpHostname: jumpHost.hostname,
-                    actualFingerprint: actualFP
-                )
-            case -11:
+            case -10, -11:
                 throw SSHTransportError.jumpHostVerificationFailed(
                     jumpHostname: jumpHost.hostname,
                     actualFingerprint: actualFP
@@ -220,7 +275,6 @@ actor LibSSHTransport: SSHTransporting {
         var cipherBuffer = [CChar](repeating: 0, count: 128)
         var hostKeyBuffer = [CChar](repeating: 0, count: 128)
         var fingerprintBuffer = [CChar](repeating: 0, count: 256)
-
         _ = prossh_libssh_get_negotiated(
             handle,
             &kexBuffer, kexBuffer.count,
