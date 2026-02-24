@@ -54,23 +54,49 @@ enum AIToolDefinitions {
 
         When you need to create, modify, or delete files, use the `apply_patch` tool
         instead of `execute_command` with echo/cat/sed. It is safer and more reliable.
+        NEVER write patch content to a file using shell commands — this embeds the raw
+        markers literally into the file and corrupts it.
 
-        Workflow for modifying an existing file:
-        1. Use `read_file_chunk` to read the current file contents
-        2. Generate a unified diff based on what you read
-        3. Call `apply_patch` with operation="update" and the diff
+        RULE 1 — Always read before updating:
+        Before calling apply_patch with operation="update", you MUST first call
+        read_file_chunk (or execute_and_wait with cat) to read the current file.
+        Never guess at line numbers or existing content — a wrong line number causes
+        the diff to fail or apply to the wrong location.
 
-        Diff format requirements for updates:
-        - Must include @@ hunk headers with correct line numbers
-        - Must include context lines (unchanged lines prefixed with space)
-        - Removal lines prefixed with -
-        - Addition lines prefixed with +
+        RULE 2 — Create the file before patching it:
+        If the file does not yet exist, use operation="create" with the full content in
+        the diff field. Never shell-create a file and then immediately patch it.
 
-        For creating new files: use operation="create" with file content or a diff of only + lines.
-        For deleting files: operation="delete", no diff needed.
+        Diff format — wrap every patch in *** Begin Patch / *** End Patch markers:
 
-        IMPORTANT: Always read a file before trying to update it. Never guess at
-        the current contents — use read_file_chunk to get accurate context lines.
+        Updating an existing file (read it first, then build the diff):
+          *** Begin Patch
+          *** Update File: /absolute/path/to/file.py
+          @@ -5,4 +5,4 @@
+           # context line above change
+          -from pathlib of Path
+          +from pathlib import Path
+           # context line below change
+          *** End Patch
+
+        Creating a new file (use + lines for every line of content):
+          *** Begin Patch
+          *** Add File: /absolute/path/to/newfile.txt
+          +First line of the new file
+          +Second line of the new file
+          +Third line
+          *** End Patch
+
+        Diff format rules:
+        - Wrap the diff in *** Begin Patch / *** End Patch
+        - Start with *** Update File: <path> or *** Add File: <path>
+        - For updates: include @@ -OLD_START,OLD_COUNT +NEW_START,OLD_COUNT @@
+        - Include 2-3 context lines (space-prefixed) around each change
+        - Removal lines prefixed with exactly one -
+        - Addition lines prefixed with exactly one +
+        - Line numbers in @@ must match what you read — always verify
+
+        For deleting files: operation="delete", path only, no diff needed.
         """
     }
 
