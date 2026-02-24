@@ -19,10 +19,10 @@ Follow the same workflow as `RefactorTerminalView.md`:
 
 ```
 Active branch   : master
-Current phase   : Phase 7 — NOT STARTED
+Current phase   : Phase 8 — NOT STARTED
 Phase status    : NOT STARTED
-Immediate action: Begin Phase 7 (extract Line Operations → TerminalGrid+LineOps.swift).
-Last commit     : aa9a10f "refactor(RefactorTG Phase 6): extract Erasing to TerminalGrid+Erasing.swift"
+Immediate action: Begin Phase 8 (extract Screen Buffer + Cursor Save/Restore → TerminalGrid+ScreenBuffer.swift).
+Last commit     : <hash> "refactor(RefactorTG Phase 7): extract Line Operations to TerminalGrid+LineOps.swift"
 ```
 
 **Update this block after every phase.**
@@ -40,7 +40,7 @@ Last commit     : aa9a10f "refactor(RefactorTG Phase 6): extract Erasing to Term
 | 4 | Extract Cursor Movement + Cell R/W → `TerminalGrid+CursorOps.swift` | **COMPLETE** (2026-02-25) |
 | 5 | Extract Scrolling → `TerminalGrid+Scrolling.swift` | **COMPLETE** (2026-02-25) |
 | 6 | Extract Erasing → `TerminalGrid+Erasing.swift` | **COMPLETE** (2026-02-25) |
-| 7 | Extract Line Operations → `TerminalGrid+LineOps.swift` | NOT STARTED |
+| 7 | Extract Line Operations → `TerminalGrid+LineOps.swift` | **COMPLETE** (2026-02-25) |
 | 8 | Extract Screen Buffer + Cursor Save/Restore → `TerminalGrid+ScreenBuffer.swift` | NOT STARTED |
 | 9 | Extract Lifecycle (Full Reset + Resize) → `TerminalGrid+Lifecycle.swift` | NOT STARTED |
 | 10 | Extract Print Character → `TerminalGrid+Printing.swift` | NOT STARTED |
@@ -338,12 +338,12 @@ These use `withActiveBuffer`, `makeBlankRow`, `markAllDirty`. All internal.
 
 ### Steps (6 steps)
 
-- [ ] **7.1** Read both MARK blocks in `TerminalGrid.swift` in full.
-- [ ] **7.2** Create `ProSSHMac/Terminal/Grid/TerminalGrid+LineOps.swift`.
-- [ ] **7.3** File header: `// Extracted from TerminalGrid.swift`, `import Foundation`, `extension TerminalGrid {`, close `}`.
-- [ ] **7.4** Cut `// MARK: - A.6.7 Insert/Delete Characters` and `// MARK: - A.6.8 Insert/Delete Lines` from `TerminalGrid.swift` and paste into the extension.
-- [ ] **7.5** Build: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`. Verify `** BUILD SUCCEEDED **`.
-- [ ] **7.6** Commit: `refactor(RefactorTG Phase 7): extract Line Operations to TerminalGrid+LineOps.swift`
+- [x] **7.1** Read both MARK blocks in `TerminalGrid.swift` in full (A.6.7 at lines 788–845, A.6.8 at lines 847–898 after prior shifts).
+- [x] **7.2** Create `ProSSHMac/Terminal/Grid/TerminalGrid+LineOps.swift`.
+- [x] **7.3** File header: `// Extracted from TerminalGrid.swift`, `import Foundation`, `extension TerminalGrid {`, close `}`.
+- [x] **7.4** Cut `// MARK: - A.6.7 Insert/Delete Characters` (3 methods: `insertCharacters`, `deleteCharacters`, `insertBlanks`) and `// MARK: - A.6.8 Insert/Delete Lines` (2 methods: `insertLines`, `deleteLines`) from `TerminalGrid.swift` and paste into the extension. Added `nonisolated` to all 5 methods.
+- [x] **7.5** Build: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`. Verify `** BUILD SUCCEEDED **`.
+- [x] **7.6** Commit: `refactor(RefactorTG Phase 7): extract Line Operations to TerminalGrid+LineOps.swift`
 
 **Expected TerminalGrid.swift line count after phase:** ~1,447 lines
 
@@ -506,6 +506,15 @@ property stays in the main file (it's a class-level declaration); the extension 
 ---
 
 ## Refactor Log (most recent first)
+
+- **2026-02-25 — Phase 7 COMPLETE**: Extracted `// MARK: - A.6.7 Insert/Delete Characters`
+  (3 methods: `insertCharacters`, `deleteCharacters`, `insertBlanks`) and
+  `// MARK: - A.6.8 Insert/Delete Lines` (2 methods: `insertLines`, `deleteLines`) from
+  `TerminalGrid.swift` (lines 788–898, 112 lines) into
+  `ProSSHMac/Terminal/Grid/TerminalGrid+LineOps.swift`. All 5 methods annotated `nonisolated`.
+  `insertBlanks` is a helper called by `insertCharacters` (now in the same extension file) and
+  also by `printCharacter` (still in main file) — cross-file call via `self.` dispatch works fine.
+  `TerminalGrid.swift`: ~1,484 lines (from ~1,596). Build: SUCCEEDED, 0 new warnings.
 
 - **2026-02-25 — Phase 6 COMPLETE**: Extracted `// MARK: - A.6.5 Erase in Line` (1 method:
   `eraseInLine`) and `// MARK: - A.6.6 Erase in Display` (2 methods: `eraseInDisplay`,
