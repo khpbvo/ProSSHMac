@@ -26,7 +26,7 @@ Current phase : Phase 2 — Kill CString pyramid, inject credential resolver
 Phase status  : NOT PLANNED
 Immediate action: Open RefactorTheActor.md → Phase 2 → expand sketch into detailed plan (State A)
 Key source file : ProSSHMac/Services/SSH/LibSSHTransport.swift  (~797 lines)
-Last commit   : f2ff073  "refactor: Phase 1 — split SSHTransport.swift into focused files in Services/SSH/"
+Last commit   : 32dcd70  "chore: Phase 1b — Swift 6 strict concurrency pass on Phase 1 files"
 ```
 
 **Update this block after every phase** — it is the first thing any new agent reads.
@@ -62,6 +62,7 @@ Every phase is in one of two states. Know which state you are in before doing an
 |-------|------|--------|
 | 0 | Baseline audit & branch setup | **COMPLETE** (2026-02-24, commit `9913cdc`) |
 | 1 | Split `SSHTransport.swift` into `Services/SSH/` | **COMPLETE** (2026-02-24, commit `f2ff073`) |
+| 1b | Swift 6 strict concurrency pass on Phase 1 files | **COMPLETE** (2026-02-24, commit `32dcd70`) |
 | 2 | Kill CString pyramid, inject credential resolver | NOT PLANNED |
 | 3 | Deduplicate remote path utilities → `RemotePath.swift` | NOT PLANNED |
 | 4 | Generic `PersistentStore<T>` for store boilerplate | NOT PLANNED |
@@ -115,6 +116,11 @@ Services/
 6. **Update `RefactorTheActor.md` before each phase** — write the detailed step-by-step plan for
    the upcoming phase into `RefactorTheActor.md` first, then execute it. Never start coding a phase
    without a fully written plan in the file.
+7. **Every new Swift file must pass `-strict-concurrency=complete` before its creating commit** —
+   add explicit `Sendable` conformances on all value types; use `@unchecked Sendable` only for
+   C-interop types (e.g. `OpaquePointer`) and add a `// safe: <reason>` comment. After making
+   the changes, temporarily add `-strict-concurrency=complete` to Other Swift Flags in Xcode,
+   build, fix any warnings, then remove the flag before committing.
 
 ---
 
@@ -255,6 +261,14 @@ All paths below are relative to the repo root. Source files live under `ProSSHMa
 
 ### Refactor Log (strict concurrency refactor — most recent first)
 
+- **2026-02-24 — Phase 1b COMPLETE** (`32dcd70`): Added explicit Sendable conformances to
+  Host, AuthMethod, AlgorithmPreferences, PortForwardingRule (Models/Host.swift);
+  SSHBackendKind, SSHTransportError (SSHTransportTypes.swift); SSHAlgorithmPolicy
+  (SSHAlgorithmPolicy.swift); LibSSHConnectFailure, LibSSHAuthenticationMaterial
+  (LibSSHTransport.swift). LibSSHConnectResult annotated @unchecked Sendable with safety comment
+  (holds OpaquePointer owned exclusively by actor-isolated handles dict). All Phase 1 files now
+  pass -strict-concurrency=complete with zero warnings. Build: SUCCEEDED. Tests: 186 tests,
+  2 pre-existing failures (emoji rendering — within ≤23 baseline). Phase 2 is NOT PLANNED.
 - **2026-02-24 — Phase 1 COMPLETE** (`f2ff073`): Split SSHTransport.swift (1,653L) into 6 files
   under Services/SSH/. Key corrections vs. original plan: removed xcodeproj registration steps
   (project uses PBXFileSystemSynchronizedRootGroup file-system sync); added #if DEBUG guard to
