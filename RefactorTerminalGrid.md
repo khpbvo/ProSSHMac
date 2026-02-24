@@ -22,7 +22,7 @@ Active branch   : master
 Current phase   : Phase 11 — COMPLETE
 Phase status    : COMPLETE
 Immediate action: All 11 phases done. Run post-refactor test suite (see Post-Refactor Checklist).
-Last commit     : <pending> "refactor(RefactorTG Phase 11): extract Snapshot + Text Extraction to TerminalGrid+Snapshot.swift"
+Last commit     : 35e125f "refactor(RefactorTG Phase 11): extract Snapshot + Text Extraction to TerminalGrid+Snapshot.swift"
 ```
 
 **Update this block after every phase.**
