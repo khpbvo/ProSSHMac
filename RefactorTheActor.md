@@ -23,8 +23,8 @@
 git checkout -b refactor/actor-isolation
 ```
 
-- [ ] Verify: `git branch --show-current` prints `refactor/actor-isolation`
-- [ ] All subsequent work in this refactor goes on this branch
+- [x] Verify: `git branch --show-current` prints `refactor/actor-isolation`
+- [x] All subsequent work in this refactor goes on this branch
 
 ### Step 0.2 — Run full build and capture warning count
 
@@ -33,8 +33,8 @@ xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build 2>&1 | tee /tmp
 grep -c ': warning:' /tmp/prossh_build.txt
 ```
 
-- [ ] Build must succeed (exit 0) before continuing — if it fails, fix it first and do not proceed
-- [ ] Note the warning count from `grep` output; you will need it in Step 0.4
+- [x] Build must succeed (exit 0) before continuing — if it fails, fix it first and do not proceed
+- [x] Note the warning count from `grep` output; you will need it in Step 0.4
 
 ### Step 0.3 — Run full test suite and capture results
 
@@ -43,8 +43,8 @@ xcodebuild -scheme ProSSHMac -destination 'platform=macOS' test 2>&1 | tee /tmp/
 grep -E 'Test Suite.*passed|Test Suite.*failed' /tmp/prossh_test.txt | tail -5
 ```
 
-- [ ] Note the number of tests passed and failed from the summary lines; you will need it in Step 0.4
-- [ ] A failing test here is a pre-existing issue — note it but do not block Phase 0 on it
+- [x] Note the number of tests passed and failed from the summary lines; you will need it in Step 0.4
+- [x] A failing test here is a pre-existing issue — note it but do not block Phase 0 on it
 
 ### Step 0.4 — Create WARNINGS_BASELINE.txt (scratch file, do NOT commit)
 
@@ -54,13 +54,13 @@ from Steps 0.2 and 0.3:
 ```
 Date: 2026-02-24
 Branch: refactor/actor-isolation (before any source changes)
-Build warning count: <N>
-Test results: <M> passed, <K> failed
+Build warning count: 0
+Test results: 861 total, 23 pre-existing failures (color rendering, mouse encoding)
 Note: delete this file when Phase 8 is complete. Never commit it.
 ```
 
-- [ ] File created at repo root
-- [ ] Add `WARNINGS_BASELINE.txt` to `.gitignore` so it cannot be accidentally committed:
+- [x] File created at repo root
+- [x] Add `WARNINGS_BASELINE.txt` to `.gitignore` so it cannot be accidentally committed:
   ```bash
   echo 'WARNINGS_BASELINE.txt' >> .gitignore
   git add .gitignore
@@ -68,24 +68,24 @@ Note: delete this file when Phase 8 is complete. Never commit it.
 
 ### Step 0.5 — Add `// swiftlint:disable file_length` to SSHTransport.swift
 
-- [ ] Open `Services/SSHTransport.swift`
-- [ ] Insert `// swiftlint:disable file_length` as **line 1** — before any imports or declarations
-- [ ] Save the file
-- [ ] Verify line 1 of the file is exactly `// swiftlint:disable file_length`
+- [x] Open `ProSSHMac/Services/SSHTransport.swift`
+- [x] Insert `// swiftlint:disable file_length` as **line 1** — before any imports or declarations
+- [x] Save the file
+- [x] Verify line 1 of the file is exactly `// swiftlint:disable file_length`
 
 ### Step 0.6 — Add `// swiftlint:disable file_length` to SessionManager.swift
 
-- [ ] Open `Services/SessionManager.swift`
-- [ ] Insert `// swiftlint:disable file_length` as **line 1** — before any imports or declarations
-- [ ] Save the file
-- [ ] Verify line 1 of the file is exactly `// swiftlint:disable file_length`
+- [x] Open `ProSSHMac/Services/SessionManager.swift`
+- [x] Insert `// swiftlint:disable file_length` as **line 1** — before any imports or declarations
+- [x] Save the file
+- [x] Verify line 1 of the file is exactly `// swiftlint:disable file_length`
 
 ### Step 0.7 — Add `// swiftlint:disable file_length` to OpenAIAgentService.swift
 
-- [ ] Open `Services/OpenAIAgentService.swift`
-- [ ] Insert `// swiftlint:disable file_length` as **line 1** — before any imports or declarations
-- [ ] Save the file
-- [ ] Verify line 1 of the file is exactly `// swiftlint:disable file_length`
+- [x] Open `ProSSHMac/Services/OpenAIAgentService.swift`
+- [x] Insert `// swiftlint:disable file_length` as **line 1** — before any imports or declarations
+- [x] Save the file
+- [x] Verify line 1 of the file is exactly `// swiftlint:disable file_length`
 
 ### Step 0.8 — Verify build still passes after the three edits
 
@@ -93,8 +93,8 @@ Note: delete this file when Phase 8 is complete. Never commit it.
 xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build
 ```
 
-- [ ] Build exits 0 — if it fails, fix the issue before committing
-- [ ] This also confirms that `CLAUDE.md`'s build command is accurate (Step 0.9 is satisfied)
+- [x] Build exits 0 — BUILD SUCCEEDED
+- [x] This also confirms that `CLAUDE.md`'s build command is accurate (Step 0.9 is satisfied)
 
 ### Step 0.9 — Commit Phase 0
 
@@ -102,14 +102,17 @@ Stage only the three modified Swift files and the `.gitignore` update — do NOT
 `WARNINGS_BASELINE.txt`:
 
 ```bash
-git add Services/SSHTransport.swift Services/SessionManager.swift Services/OpenAIAgentService.swift .gitignore
+git add ProSSHMac/Services/SSHTransport.swift ProSSHMac/Services/SessionManager.swift ProSSHMac/Services/OpenAIAgentService.swift .gitignore
 git status   # confirm WARNINGS_BASELINE.txt is NOT listed as staged
 git commit -m "chore: Phase 0 — add swiftlint:disable file_length to god files"
 ```
 
-- [ ] Commit created on `refactor/actor-isolation`
-- [ ] `WARNINGS_BASELINE.txt` is untracked (not staged, not committed)
-- [ ] Phase 0 complete — proceed to expand Phase 1 in this file before writing any code
+- [x] Commit `9913cdc` created on `refactor/actor-isolation`
+- [x] `WARNINGS_BASELINE.txt` is untracked (not staged, not committed)
+- [x] Phase 0 complete — proceed to expand Phase 1 in this file before writing any code
+
+> **COMPLETED 2026-02-24** — build 0 warnings, 861 tests (23 pre-existing failures).
+> God files are at: SSHTransport.swift = 1,653L, SessionManager.swift = 1,640L, OpenAIAgentService.swift = 1,946L (each +1 for the swiftlint comment).
 
 ---
 

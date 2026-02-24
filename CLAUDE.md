@@ -39,7 +39,7 @@ before starting Phase 0. All refactor commits go on this branch.
 
 | Phase | Name | Status |
 |-------|------|--------|
-| 0 | Baseline audit & branch setup | NOT STARTED |
+| 0 | Baseline audit & branch setup | **COMPLETE** (2026-02-24) |
 | 1 | Split `SSHTransport.swift` into `Services/SSH/` | NOT STARTED |
 | 2 | Kill CString pyramid, inject credential resolver | NOT STARTED |
 | 3 | Deduplicate remote path utilities → `RemotePath.swift` | NOT STARTED |
@@ -230,6 +230,12 @@ ProSSHMac/
 
 ## Recent Changes (Session Log)
 
+- **2026-02-24**: Completed Phase 0. Branch `refactor/actor-isolation` created. Build baseline:
+  0 warnings, BUILD SUCCEEDED. Test baseline: 861 tests, 23 pre-existing failures (color rendering
+  + mouse encoding, unrelated to refactor). `// swiftlint:disable file_length` added to all three
+  god files as line 1. `WARNINGS_BASELINE.txt` created and gitignored. Commit: `9913cdc`.
+  Note: actual file paths are `ProSSHMac/Services/` not `Services/` — update all Phase 1+ steps
+  accordingly.
 - **2026-02-24**: Established the Strict Concurrency Refactor plan. `RefactorTheActor.md` added to
   repo root as the 8-phase spec. `CLAUDE.md` updated to reflect refactor phase status, rules, and
   the plan→refactor→plan workflow. `RefactorTheActor.md` WILL be edited: each phase gets a full
