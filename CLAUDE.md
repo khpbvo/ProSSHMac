@@ -132,7 +132,7 @@ Active branch   : master
 Current phase   : Phase 5 — NOT STARTED
 Phase status    : NOT STARTED
 Immediate action: Read RefactorTerminalView.md, begin Phase 5 (extract TerminalSessionTabBar)
-Last commit     : TBD "refactor(RefactorTV Phase 4): extract session actions toolbar to TerminalSessionActionsBar"
+Last commit     : 661dc50 "refactor(RefactorTV Phase 4): extract session actions toolbar to TerminalSessionActionsBar"
 ```
 
 **Update this block after every phase.**

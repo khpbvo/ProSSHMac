@@ -22,7 +22,7 @@ Active branch   : master
 Current phase   : Phase 5 — NOT STARTED
 Phase status    : NOT STARTED
 Immediate action: Read RefactorTerminalView.md, begin Phase 5 (extract TerminalSessionTabBar)
-Last commit     : TBD "refactor(RefactorTV Phase 4): extract session actions toolbar to TerminalSessionActionsBar"
+Last commit     : 661dc50 "refactor(RefactorTV Phase 4): extract session actions toolbar to TerminalSessionActionsBar"
 ```
 
 **Update this block after every phase.**
@@ -656,7 +656,7 @@ After all 9 phases are committed and the build is clean:
 
 ## Refactor Log (most recent first)
 
-- **2026-02-24 — Phase 4 COMPLETE** (commit TBD): Extracted `terminalActions(for:)` (~108 lines)
+- **2026-02-24 — Phase 4 COMPLETE** (commit `661dc50`): Extracted `terminalActions(for:)` (~108 lines)
   into `TerminalSessionActionsBar.swift`. `onRestartLocal: (Session) -> Void` callback replaces
   the direct `restartLocalSession(session)` call (which required `tabManager` `@StateObject`).
   `useMetalRenderer` `@AppStorage` re-declared in child (same key, rule 7). `isMetalRendererAvailable`
