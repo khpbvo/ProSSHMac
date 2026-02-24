@@ -22,7 +22,7 @@ Active branch   : master
 Current phase   : Phase 1 — NOT STARTED
 Phase status    : NOT STARTED
 Immediate action: Read RefactorTerminalView.md, begin Phase 1 (extract DirectTerminalInputNSView)
-Last commit     : (see git log — Phase 0 commit)
+Last commit     : 60b4f08 "chore(RefactorTV Phase 0): baseline — add swiftlint:disable to TerminalView.swift"
 ```
 
 **Update this block after every phase.**
@@ -656,4 +656,6 @@ After all 9 phases are committed and the build is clean:
 
 ## Refactor Log (most recent first)
 
-_(Entries added here as phases complete)_
+- **2026-02-24 — Phase 0 COMPLETE** (commit `60b4f08`): Added `// swiftlint:disable file_length`
+  as line 1 of `TerminalView.swift` (3,425 → 3,426 lines after insert). Build verified:
+  `** BUILD SUCCEEDED **`, 0 warnings. Baseline established.

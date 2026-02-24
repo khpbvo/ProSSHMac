@@ -132,7 +132,7 @@ Active branch   : master
 Current phase   : Phase 1 — NOT STARTED
 Phase status    : NOT STARTED
 Immediate action: Read RefactorTerminalView.md, begin Phase 1 (extract DirectTerminalInputNSView)
-Last commit     : (Phase 0 — see git log)
+Last commit     : 60b4f08 "chore(RefactorTV Phase 0): baseline — add swiftlint:disable to TerminalView.swift"
 ```
 
 **Update this block after every phase.**
