@@ -1140,20 +1140,117 @@ git commit -m "refactor: flatten jump host CString pyramid into LibSSHJumpCallPa
 
 > **Context note for Claude Code:** `normalizeRemotePath`, `parentRemotePath`, `joinRemotePath`
 > are copy-pasted between `MockSSHTransport` and `LibSSHTransport`. Extract once, use everywhere.
+>
+> **Out of scope:** `TransferManager.swift` has its own copies with different logic (`..` resolution,
+> different return type for parent). Leave it untouched.
 
-- [ ] Create `Services/SSH/RemotePath.swift`
-  ```swift
-  enum RemotePath {
-      static func normalize(_ path: String) -> String { ... }
-      static func parent(of path: String) -> String? { ... }
-      static func join(_ base: String, _ name: String) -> String { ... }
-  }
-  ```
-- [ ] Replace all `Self.normalizeRemotePath(_:)` calls in `LibSSHTransport` with `RemotePath.normalize(_:)`
-- [ ] Replace all `Self.normalizeRemotePath(_:)`, `Self.parentRemotePath(of:)`,
-      `Self.joinRemotePath(_:_:)` calls in `MockSSHTransport` with `RemotePath.*`
-- [ ] Delete the now-duplicate private static methods from both transport actors
-- [ ] Run tests; commit: `refactor: extract RemotePath utilities, remove duplication`
+### Step 3.0 — Write detailed plan into RefactorTheActor.md (no code changes)
+- [x] Expand sketch into numbered steps; commit `docs: expand Phase 3 plan in RefactorTheActor.md`
+
+### Step 3.1 — Create `RemotePath.swift`
+
+- [ ] Create `ProSSHMac/Services/SSH/RemotePath.swift` with exact content:
+
+```swift
+// Extracted from LibSSHTransport.swift
+import Foundation
+
+enum RemotePath {
+    nonisolated static func normalize(_ path: String) -> String {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return "/"
+        }
+        var parts = trimmed.split(separator: "/").map(String.init)
+        parts.removeAll(where: { $0.isEmpty || $0 == "." })
+        let normalized = "/" + parts.joined(separator: "/")
+        if normalized.count > 1 && normalized.hasSuffix("/") {
+            return String(normalized.dropLast())
+        }
+        return normalized
+    }
+
+    nonisolated static func parent(of path: String) -> String? {
+        let normalized = normalize(path)
+        guard normalized != "/" else {
+            return nil
+        }
+        guard let slash = normalized.lastIndex(of: "/") else {
+            return "/"
+        }
+        if slash == normalized.startIndex {
+            return "/"
+        }
+        return String(normalized[..<slash])
+    }
+
+    nonisolated static func join(_ base: String, _ name: String) -> String {
+        let normalizedBase = normalize(base)
+        if normalizedBase == "/" {
+            return "/\(name)"
+        }
+        return "\(normalizedBase)/\(name)"
+    }
+}
+```
+
+Notes:
+- All three methods marked `nonisolated` (Swift 6 can infer `@MainActor` on enum static methods)
+- Header comment `// Extracted from LibSSHTransport.swift` (normalizeRemotePath originated there)
+- Internal calls use unqualified `normalize(...)` (same enum, resolves correctly)
+
+### Step 3.2 — Build check (pre-deletion)
+
+- [ ] Run: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build 2>&1 | tail -3`
+- [ ] Must show: `** BUILD SUCCEEDED **`
+
+### Step 3.3 — Update call sites in `LibSSHTransport.swift` (4 sites)
+
+- [ ] `listDirectory`: `Self.normalizeRemotePath(path)` → `RemotePath.normalize(path)`
+- [ ] `uploadFile`: `Self.normalizeRemotePath(remotePath)` → `RemotePath.normalize(remotePath)`
+- [ ] `downloadFile`: `Self.normalizeRemotePath(remotePath)` → `RemotePath.normalize(remotePath)`
+- [ ] `parseSFTPListing`: `normalizeRemotePath(basePath)` → `RemotePath.normalize(basePath)`
+
+### Step 3.4 — Delete `normalizeRemotePath` from `LibSSHTransport.swift`
+
+- [ ] Delete the `nonisolated private static func normalizeRemotePath` method (~14 lines)
+- [ ] Verify zero remaining references to `normalizeRemotePath` in `LibSSHTransport.swift`
+
+### Step 3.5 — Update call sites in `MockSSHTransport.swift` (7 sites)
+
+- [ ] `listDirectory` ~line 101: `Self.normalizeRemotePath(path)` → `RemotePath.normalize(path)`
+- [ ] `listDirectory` ~line 118: `Self.joinRemotePath(...)` → `RemotePath.join(...)`
+- [ ] `uploadFile` ~line 162: `Self.normalizeRemotePath(...)` → `RemotePath.normalize(...)`
+- [ ] `uploadFile` ~line 166: `Self.joinRemotePath(...)` → `RemotePath.join(...)`
+- [ ] `downloadFile` ~line 193: `Self.normalizeRemotePath(...)` → `RemotePath.normalize(...)`
+- [ ] `ensureParentDirectoriesExist` ~line 292: `Self.parentRemotePath(of: ...)` → `RemotePath.parent(of: ...)`
+- [ ] `ensureParentDirectoriesExist` ~line 297: `Self.parentRemotePath(of: ...)` → `RemotePath.parent(of: ...)`
+
+### Step 3.6 — Delete 3 duplicate methods from `MockSSHTransport.swift`
+
+- [ ] Delete `nonisolated private static func normalizeRemotePath` (~14 lines)
+- [ ] Delete `nonisolated private static func parentRemotePath` (~12 lines)
+- [ ] Delete `nonisolated private static func joinRemotePath` (~7 lines)
+- [ ] Verify zero remaining references to all three method names in `MockSSHTransport.swift`
+
+### Step 3.7 — Build check after deletions
+
+- [ ] Run: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build 2>&1 | tail -3`
+- [ ] Must show: `** BUILD SUCCEEDED **`
+
+### Step 3.8 — Run tests and commit
+
+- [ ] Run: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' test 2>&1 | grep -E 'Executed [0-9]+ test|FAILED|SUCCEEDED' | tail -5`
+- [ ] Failures must be ≤ 23 (pre-existing baseline)
+- [ ] `git add ProSSHMac/Services/SSH/RemotePath.swift ProSSHMac/Services/SSH/LibSSHTransport.swift ProSSHMac/Services/SSH/MockSSHTransport.swift`
+- [ ] `git commit -m "refactor: extract RemotePath utilities, remove duplication"`
+
+### Step 3.9 — Update CLAUDE.md
+
+- [ ] "Current State" block: phase → Phase 4, status → NOT PLANNED, last commit → new hash
+- [ ] Phase Status table: Phase 3 → COMPLETE (2026-02-24, commit <hash>)
+- [ ] Refactor Log entry: mention `nonisolated` requirement, TransferManager left untouched
+- [ ] `git commit -m "docs: mark Phase 3 complete in CLAUDE.md"`
 
 ---
 
