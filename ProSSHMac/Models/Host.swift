@@ -1,6 +1,6 @@
 import Foundation
 
-enum AuthMethod: String, Codable, CaseIterable, Identifiable {
+enum AuthMethod: String, Codable, CaseIterable, Identifiable, Sendable {
     case password
     case publicKey
     case certificate
@@ -18,14 +18,14 @@ enum AuthMethod: String, Codable, CaseIterable, Identifiable {
     }
 }
 
-struct AlgorithmPreferences: Codable, Hashable {
+struct AlgorithmPreferences: Codable, Hashable, Sendable {
     var keyExchange: [String] = []
     var hostKeys: [String] = []
     var ciphers: [String] = []
     var macs: [String] = []
 }
 
-struct PortForwardingRule: Identifiable, Codable, Hashable {
+struct PortForwardingRule: Identifiable, Codable, Hashable, Sendable {
     var id: UUID
     var localPort: UInt16
     var remoteHost: String
@@ -56,7 +56,7 @@ struct ShellIntegrationConfig: Codable, Hashable, Sendable {
     var customPromptRegex: String = ""
 }
 
-struct Host: Identifiable, Codable, Hashable {
+struct Host: Identifiable, Codable, Hashable, Sendable {
     var id: UUID
     var label: String
     var folder: String?

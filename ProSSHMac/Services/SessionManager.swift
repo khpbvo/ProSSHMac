@@ -1,9 +1,7 @@
+// swiftlint:disable file_length
 import Foundation
 import Combine
 import Network
-#if DEBUG
-import os.signpost
-#endif
 
 enum SessionConnectionError: LocalizedError {
     case hostVerificationRequired(KnownHostVerificationChallenge)
@@ -22,60 +20,39 @@ enum SessionConnectionError: LocalizedError {
 @MainActor
 final class SessionManager: ObservableObject {
     @Published private(set) var sessions: [Session] = []
-    @Published private(set) var shellBuffers: [UUID: [String]] = [:]
-    @Published private(set) var bellEventNonceBySessionID: [UUID: Int] = [:]
-    @Published private(set) var inputModeSnapshotsBySessionID: [UUID: InputModeSnapshot] = [:]
-    private var gridSnapshotsBySessionID: [UUID: GridSnapshot] = [:]
-    @Published private(set) var gridSnapshotNonceBySessionID: [UUID: Int] = [:]
-    @Published private(set) var windowTitleBySessionID: [UUID: String] = [:]
+    @Published var shellBuffers: [UUID: [String]] = [:]
+    @Published var bellEventNonceBySessionID: [UUID: Int] = [:]
+    @Published var inputModeSnapshotsBySessionID: [UUID: InputModeSnapshot] = [:]
+    @Published var gridSnapshotNonceBySessionID: [UUID: Int] = [:]
+    @Published var windowTitleBySessionID: [UUID: String] = [:]
     @Published private(set) var knownHosts: [KnownHostEntry] = []
-    @Published private(set) var isRecordingBySessionID: [UUID: Bool] = [:]
-    @Published private(set) var hasRecordingBySessionID: [UUID: Bool] = [:]
-    @Published private(set) var isPlaybackRunningBySessionID: [UUID: Bool] = [:]
-    @Published private(set) var latestRecordingURLBySessionID: [UUID: URL] = [:]
-    @Published private(set) var workingDirectoryBySessionID: [UUID: String] = [:]
+    @Published var isRecordingBySessionID: [UUID: Bool] = [:]
+    @Published var hasRecordingBySessionID: [UUID: Bool] = [:]
+    @Published var isPlaybackRunningBySessionID: [UUID: Bool] = [:]
+    @Published var latestRecordingURLBySessionID: [UUID: URL] = [:]
+    @Published var workingDirectoryBySessionID: [UUID: String] = [:]
     @Published private(set) var bytesReceivedBySessionID: [UUID: Int64] = [:]
     @Published private(set) var bytesSentBySessionID: [UUID: Int64] = [:]
     @Published private(set) var latestCompletedCommandBlockBySessionID: [UUID: CommandBlock] = [:]
     @Published private(set) var commandCompletionNonceBySessionID: [UUID: Int] = [:]
 
-    private let transport: any SSHTransporting
+    let transport: any SSHTransporting
     private let knownHostsStore: any KnownHostsStoreProtocol
     private let auditLogManager: AuditLogManager?
     private let portForwardingManager: PortForwardingManager?
-    private let sessionRecorder: SessionRecorder
-    private let terminalHistoryIndex = TerminalHistoryIndex()
-    private var shellChannels: [UUID: any SSHShellChannel] = [:]
+    let terminalHistoryIndex = TerminalHistoryIndex()
+    var shellChannels: [UUID: any SSHShellChannel] = [:]
     private var parserReaderTasks: [UUID: Task<Void, Never>] = [:]
-    private var engines: [UUID: TerminalEngine] = [:]
-    private var desiredPTYBySessionID: [UUID: PTYConfiguration] = [:]
-    private var hostBySessionID: [UUID: Host] = [:]
-    private(set) var lastActivityBySessionID: [UUID: Date] = [:]
-    private var jumpHostBySessionID: [UUID: Host] = [:]
-    private var pendingReconnectHosts: [UUID: (host: Host, jumpHost: Host?)] = [:]
-    private var reconnectTask: Task<Void, Never>?
-    private var manuallyDisconnectingSessions: Set<UUID> = []
-    private let networkMonitor = NWPathMonitor()
-    private let networkMonitorQueue = DispatchQueue(label: "prosshv2.network.monitor")
-    private var isNetworkReachable = true
-    private var pendingResizeTasks: [UUID: Task<Void, Never>] = [:]
-    /// Tracks last bell event time per session for throughput mode rate-limiting.
-    private var lastBellTimeBySessionID: [UUID: Date] = [:]
-    /// Per-session coalesced snapshot publish task (max one publish per frame interval).
-    private var pendingSnapshotPublishTasksBySessionID: [UUID: Task<Void, Never>] = [:]
-    /// Per-session scroll offset (0 = live view, >0 = scrolled back N lines).
-    private var scrollOffsetBySessionID: [UUID: Int] = [:]
-    /// Throttles expensive visible-text extraction/publishing during heavy output.
-    private var lastShellBufferPublishAtBySessionID: [UUID: Date] = [:]
-    private var keepaliveTask: Task<Void, Never>?
+    var engines: [UUID: TerminalEngine] = [:]
+    var hostBySessionID: [UUID: Host] = [:]
+    var lastActivityBySessionID: [UUID: Date] = [:]
+    var jumpHostBySessionID: [UUID: Host] = [:]
+    var manuallyDisconnectingSessions: Set<UUID> = []
+    let reconnectCoordinator: SessionReconnectCoordinator
+    let keepaliveCoordinator: SessionKeepaliveCoordinator
+    let renderingCoordinator: TerminalRenderingCoordinator
+    let recordingCoordinator: SessionRecordingCoordinator
     private var latestPublishedCommandBlockIDBySessionID: [UUID: UUID] = [:]
-    private let shellBufferPublishInterval: TimeInterval = 1.0 / 30.0
-    private let throughputShellBufferPublishInterval: TimeInterval = 1.0 / 5.0
-    private let snapshotPublishInterval: Duration = .milliseconds(8)
-    private let throughputSnapshotPublishInterval: Duration = .milliseconds(16)
-    #if DEBUG
-    private let perfSignpostLog = OSLog(subsystem: "com.prossh", category: "TerminalPerf")
-    #endif
 
     /// Runtime throughput policy. When enabled, expensive non-render work is throttled:
     /// - Snapshot publish interval relaxed from 8ms to 16ms (~60fps → ~30fps)
@@ -83,20 +60,11 @@ final class SessionManager: ObservableObject {
     /// - Bell events rate-limited to 1 per second per session
     /// - Session recorder uses chunk coalescing (64KB / 100ms flush)
     /// Toggle via: `defaults write com.prossh terminal.throughput.mode.enabled -bool true`
-    private var throughputModeEnabled: Bool {
+    var throughputModeEnabled: Bool {
         UserDefaults.standard.bool(forKey: "terminal.throughput.mode.enabled")
     }
 
-    private var keepaliveEnabled: Bool {
-        UserDefaults.standard.bool(forKey: "ssh.keepalive.enabled")
-    }
-
-    private var keepaliveInterval: TimeInterval {
-        let stored = UserDefaults.standard.integer(forKey: "ssh.keepalive.interval")
-        return stored > 0 ? TimeInterval(stored) : 30
-    }
-
-    private var configuredScrollbackLines: Int {
+    var configuredScrollbackLines: Int {
         let stored = UserDefaults.standard.integer(forKey: "terminal.scrollback.maxLines")
         return stored > 0 ? stored : TerminalDefaults.maxScrollbackLines
     }
@@ -105,35 +73,39 @@ final class SessionManager: ObservableObject {
         transport: any SSHTransporting,
         knownHostsStore: any KnownHostsStoreProtocol,
         auditLogManager: AuditLogManager? = nil,
-        portForwardingManager: PortForwardingManager? = nil,
-        sessionRecorder: SessionRecorder = SessionRecorder()
+        portForwardingManager: PortForwardingManager? = nil
     ) {
         self.transport = transport
         self.knownHostsStore = knownHostsStore
         self.auditLogManager = auditLogManager
         self.portForwardingManager = portForwardingManager
-        self.sessionRecorder = sessionRecorder
+        let coord = SessionReconnectCoordinator()
+        self.reconnectCoordinator = coord
+        self.keepaliveCoordinator = SessionKeepaliveCoordinator()
+        let renderCoord = TerminalRenderingCoordinator()
+        self.renderingCoordinator = renderCoord
+        let recordCoord = SessionRecordingCoordinator()
+        self.recordingCoordinator = recordCoord
 
         Task { @MainActor [weak self] in
             await self?.refreshKnownHosts()
         }
 
-        networkMonitor.pathUpdateHandler = { [weak self] path in
-            Task { @MainActor [weak self] in
-                self?.handleNetworkStatusChange(isReachable: path.status == .satisfied)
-            }
-        }
-        networkMonitor.start(queue: networkMonitorQueue)
+        coord.manager = self
+        coord.start()
+        keepaliveCoordinator.manager = self
+        renderCoord.manager = self
+        recordCoord.manager = self
     }
 
-    deinit {
-        networkMonitor.cancel()
-        reconnectTask?.cancel()
-        keepaliveTask?.cancel()
-    }
+    nonisolated deinit {}
 
     func connect(to host: Host, jumpHost: Host? = nil, passwordOverride: String? = nil, keyPassphraseOverride: String? = nil) async throws -> Session {
         try await connect(to: host, jumpHost: jumpHost, automaticReconnect: false, passwordOverride: passwordOverride, keyPassphraseOverride: keyPassphraseOverride)
+    }
+
+    func reconnectConnect(host: Host, jumpHost: Host?) async throws -> Session {
+        try await connect(to: host, jumpHost: jumpHost, automaticReconnect: true, passwordOverride: nil)
     }
 
     func closeSession(sessionID: UUID) async {
@@ -173,9 +145,9 @@ final class SessionManager: ObservableObject {
         await engine.setLineFeedMode(true)
         await configureHistoryTracking(for: session, engine: engine)
         engines[sessionID] = engine
-        desiredPTYBySessionID[sessionID] = .default
+        renderingCoordinator.initializePTY(for: sessionID)
 
-        gridSnapshotsBySessionID[sessionID] = await engine.snapshot()
+        renderingCoordinator.gridSnapshotsBySessionID[sessionID] = await engine.snapshot()
         gridSnapshotNonceBySessionID[sessionID] = 0
         shellBuffers[sessionID] = []
         bellEventNonceBySessionID[sessionID] = 0
@@ -187,7 +159,7 @@ final class SessionManager: ObservableObject {
         bytesSentBySessionID[sessionID] = 0
 
         do {
-            let desiredPTY = sanitizedPTY(for: sessionID)
+            let desiredPTY = renderingCoordinator.sanitizedPTY(for: sessionID)
             let channel = try await LocalShellChannel.spawn(
                 columns: desiredPTY.columns,
                 rows: desiredPTY.rows,
@@ -249,15 +221,11 @@ final class SessionManager: ObservableObject {
     }
 
     func applicationDidEnterBackground() {
-        for session in sessions where session.state == .connected {
-            if let host = hostBySessionID[session.id] {
-                pendingReconnectHosts[session.id] = (host: host, jumpHost: jumpHostBySessionID[session.id])
-            }
-        }
+        reconnectCoordinator.applicationDidEnterBackground()
     }
 
     func applicationDidBecomeActive() {
-        scheduleReconnectAttempt(after: .milliseconds(0))
+        reconnectCoordinator.applicationDidBecomeActive()
     }
 
     private func connect(
@@ -313,9 +281,9 @@ final class SessionManager: ObservableObject {
         await engine.setLineFeedMode(true)
         await configureHistoryTracking(for: session, engine: engine, shellIntegration: host.shellIntegration)
         engines[sessionID] = engine
-        desiredPTYBySessionID[sessionID] = .default
+        renderingCoordinator.initializePTY(for: sessionID)
 
-        gridSnapshotsBySessionID[sessionID] = await engine.snapshot()
+        renderingCoordinator.gridSnapshotsBySessionID[sessionID] = await engine.snapshot()
         gridSnapshotNonceBySessionID[sessionID] = 0
         shellBuffers[sessionID] = []
         bellEventNonceBySessionID[sessionID] = 0
@@ -367,9 +335,7 @@ final class SessionManager: ObservableObject {
             if let jumpHost {
                 jumpHostBySessionID[sessionID] = jumpHost
             }
-            for (key, entry) in pendingReconnectHosts where entry.host.id == host.id {
-                pendingReconnectHosts.removeValue(forKey: key)
-            }
+            reconnectCoordinator.removePendingForHost(host.id)
 
             let securityNote: String
             if details.usedLegacyAlgorithms {
@@ -409,7 +375,7 @@ final class SessionManager: ObservableObject {
             }
 
             try await openShell(for: session)
-            startKeepaliveTimerIfNeeded()
+            keepaliveCoordinator.startIfNeeded()
 
             // Inject shell integration script for SSH sessions (Unix shell types only).
             // Uses compact single-line version to minimize terminal echo noise.
@@ -493,7 +459,7 @@ final class SessionManager: ObservableObject {
         manuallyDisconnectingSessions.insert(sessionID)
         defer { manuallyDisconnectingSessions.remove(sessionID) }
 
-        pendingReconnectHosts.removeValue(forKey: sessionID)
+        reconnectCoordinator.cancelPending(sessionID: sessionID)
         hostBySessionID.removeValue(forKey: sessionID)
         jumpHostBySessionID.removeValue(forKey: sessionID)
 
@@ -507,7 +473,7 @@ final class SessionManager: ObservableObject {
         if let completedBlock = await terminalHistoryIndex.flushActiveCommand(sessionID: sessionID, at: .now) {
             publishCommandCompletion(completedBlock)
         }
-        finalizeRecordingIfNeeded(sessionID: sessionID)
+        recordingCoordinator.finalizeIfNeeded(sessionID: sessionID)
         removeSessionArtifacts(sessionID: sessionID)
 
         if !session.isLocal {
@@ -517,7 +483,7 @@ final class SessionManager: ObservableObject {
         session.state = .disconnected
         session.endedAt = .now
         replaceSession(session)
-        stopKeepaliveTimerIfIdle()
+        keepaliveCoordinator.stopIfIdle()
 
         await auditLogManager?.record(
             category: .session,
@@ -558,7 +524,7 @@ final class SessionManager: ObservableObject {
 
     func sendShellInput(sessionID: UUID, input: String, suppressEcho: Bool = false) async {
         guard sessions.contains(where: { $0.id == sessionID && $0.state == .connected }) else {
-            await appendShellLine("Session is not connected.", to: sessionID)
+            await renderingCoordinator.appendShellLine("Session is not connected.", to: sessionID)
             return
         }
 
@@ -568,7 +534,7 @@ final class SessionManager: ObservableObject {
         }
 
         guard let shell = shellChannels[sessionID] else {
-            await appendShellLine("Shell channel is not available.", to: sessionID)
+            await renderingCoordinator.appendShellLine("Shell channel is not available.", to: sessionID)
             return
         }
 
@@ -577,7 +543,7 @@ final class SessionManager: ObservableObject {
             try await shell.send(payload)
             lastActivityBySessionID[sessionID] = .now
             bytesSentBySessionID[sessionID, default: 0] += Int64(payload.utf8.count)
-            sessionRecorder.recordInput(sessionID: sessionID, text: payload)
+            recordingCoordinator.recordInput(sessionID: sessionID, text: payload)
             await terminalHistoryIndex.recordCommandInput(
                 sessionID: sessionID,
                 command: trimmed,
@@ -585,195 +551,83 @@ final class SessionManager: ObservableObject {
                 source: .userInput
             )
         } catch {
-            await appendShellLine("Error: \(error.localizedDescription)", to: sessionID)
+            await renderingCoordinator.appendShellLine("Error: \(error.localizedDescription)", to: sessionID)
         }
     }
 
     func sendRawShellInput(sessionID: UUID, input: String) async {
         guard sessions.contains(where: { $0.id == sessionID && $0.state == .connected }) else {
-            await appendShellLine("Session is not connected.", to: sessionID)
+            await renderingCoordinator.appendShellLine("Session is not connected.", to: sessionID)
             return
         }
 
         guard let shell = shellChannels[sessionID] else {
-            await appendShellLine("Shell channel is not available.", to: sessionID)
+            await renderingCoordinator.appendShellLine("Shell channel is not available.", to: sessionID)
             return
         }
 
         do {
             try await shell.send(input)
             bytesSentBySessionID[sessionID, default: 0] += Int64(input.utf8.count)
-            sessionRecorder.recordInput(sessionID: sessionID, text: input)
+            recordingCoordinator.recordInput(sessionID: sessionID, text: input)
             await terminalHistoryIndex.recordRawInput(
                 sessionID: sessionID,
                 input: input,
                 at: .now
             )
         } catch {
-            await appendShellLine("Error: \(error.localizedDescription)", to: sessionID)
+            await renderingCoordinator.appendShellLine("Error: \(error.localizedDescription)", to: sessionID)
         }
     }
 
-    // MARK: - F.6 PTY Resize
+    // MARK: - F.6 PTY Resize (delegates to renderingCoordinator)
 
-    /// Resizes the remote PTY and terminal grid for a session.
-    /// Called when the terminal view dimensions change.
-    ///
-    /// - Parameters:
-    ///   - sessionID: The session to resize.
-    ///   - columns: New column count.
-    ///   - rows: New row count.
     func resizeTerminal(sessionID: UUID, columns: Int, rows: Int) async {
-        // Ignore transient layout sizes from early view lifecycle passes.
-        // These can briefly report tiny dimensions (e.g. 1xN) and break
-        // remote shell wrapping for the session.
-        guard columns >= 10, rows >= 4 else { return }
-
-        desiredPTYBySessionID[sessionID] = PTYConfiguration(
-            columns: columns,
-            rows: rows,
-            terminalType: PTYConfiguration.default.terminalType
-        )
-
-        // Resize the local terminal grid immediately (no debounce needed).
-        if let engine = engines[sessionID] {
-            await engine.resize(newColumns: columns, newRows: rows)
-            let snapshot = await engine.snapshot()
-            gridSnapshotsBySessionID[sessionID] = snapshot
-            gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
-        }
-
-        // Debounce PTY resize to avoid flooding the shell with TIOCSWINSZ
-        // calls during split pane divider dragging.
-        pendingResizeTasks[sessionID]?.cancel()
-        pendingResizeTasks[sessionID] = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(150))
-            guard !Task.isCancelled else { return }
-            guard let self, let shell = self.shellChannels[sessionID] else { return }
-            do {
-                try await shell.resizePTY(columns: columns, rows: rows)
-            } catch {
-                // Non-fatal: log but don't surface to user.
-            }
-            self.pendingResizeTasks.removeValue(forKey: sessionID)
-        }
+        await renderingCoordinator.resizeTerminal(sessionID: sessionID, columns: columns, rows: rows)
     }
 
     func clearShellBuffer(sessionID: UUID) {
-        guard let engine = engines[sessionID] else { return }
-        Task { @MainActor in
-            await engine.eraseInDisplay(mode: 3)
-            await engine.moveCursorTo(row: 0, col: 0)
-            let snapshot = await engine.snapshot()
-            gridSnapshotsBySessionID[sessionID] = snapshot
-            gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
-            shellBuffers[sessionID] = await engine.visibleText()
-        }
+        renderingCoordinator.clearShellBuffer(sessionID: sessionID)
     }
 
-    // MARK: - Scrollback Navigation
+    // MARK: - Scrollback Navigation (delegates to renderingCoordinator)
 
-    /// Scroll the terminal viewport for a session by the given number of lines.
-    /// Positive delta scrolls up (into scrollback), negative scrolls down (toward live).
     func scrollTerminal(sessionID: UUID, delta: Int) {
-        guard let engine = engines[sessionID] else { return }
-        let current = scrollOffsetBySessionID[sessionID, default: 0]
-        Task { @MainActor in
-            let maxOffset = await engine.scrollbackCount
-            let newOffset = max(0, min(current + delta, maxOffset))
-            scrollOffsetBySessionID[sessionID] = newOffset
-            let snapshot = await engine.snapshot(scrollOffset: newOffset)
-            gridSnapshotsBySessionID[sessionID] = snapshot
-            gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
-        }
+        renderingCoordinator.scrollTerminal(sessionID: sessionID, delta: delta)
     }
 
-    /// Reset scroll position to the live terminal view (bottom).
     func scrollToBottom(sessionID: UUID) {
-        guard let engine = engines[sessionID] else { return }
-        scrollOffsetBySessionID[sessionID] = 0
-        Task { @MainActor in
-            let snapshot = await engine.snapshot()
-            gridSnapshotsBySessionID[sessionID] = snapshot
-            gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
-        }
+        renderingCoordinator.scrollToBottom(sessionID: sessionID)
     }
 
-    /// Whether the session is currently scrolled back from the live view.
     func isScrolledBack(sessionID: UUID) -> Bool {
-        (scrollOffsetBySessionID[sessionID] ?? 0) > 0
+        renderingCoordinator.isScrolledBack(sessionID: sessionID)
     }
 
-    /// Returns the latest grid snapshot for a session.
-    /// Snapshot publishing is nonce-driven to avoid large @Published payloads.
     func gridSnapshot(for sessionID: UUID) -> GridSnapshot? {
-        gridSnapshotsBySessionID[sessionID]
+        renderingCoordinator.gridSnapshot(for: sessionID)
     }
+
+    // MARK: - Recording (delegates to recordingCoordinator)
 
     func toggleRecording(sessionID: UUID) async {
-        if isRecordingBySessionID[sessionID, default: false] {
-            await stopRecording(sessionID: sessionID)
-        } else {
-            await startRecording(sessionID: sessionID)
-        }
+        await recordingCoordinator.toggleRecording(sessionID: sessionID)
     }
 
     func startRecording(sessionID: UUID) async {
-        guard let session = sessions.first(where: { $0.id == sessionID }) else {
-            return
-        }
-        do {
-            try sessionRecorder.startRecording(for: session)
-            isRecordingBySessionID[sessionID] = true
-            await appendShellLine("[Recorder] Started session capture.", to: sessionID)
-        } catch {
-            await appendShellLine("[Recorder] \(error.localizedDescription)", to: sessionID)
-        }
+        await recordingCoordinator.startRecording(sessionID: sessionID)
     }
 
     func stopRecording(sessionID: UUID) async {
-        do {
-            let recordingURL = try sessionRecorder.stopRecording(sessionID: sessionID)
-            isRecordingBySessionID[sessionID] = false
-            hasRecordingBySessionID[sessionID] = true
-            latestRecordingURLBySessionID[sessionID] = recordingURL
-            await appendShellLine("[Recorder] Saved encrypted recording: \(recordingURL.lastPathComponent)", to: sessionID)
-        } catch {
-            await appendShellLine("[Recorder] \(error.localizedDescription)", to: sessionID)
-        }
+        await recordingCoordinator.stopRecording(sessionID: sessionID)
     }
 
     func playLastRecording(sessionID: UUID, speed: Double) async {
-        guard !isPlaybackRunningBySessionID[sessionID, default: false] else {
-            return
-        }
-
-        isPlaybackRunningBySessionID[sessionID] = true
-        defer { isPlaybackRunningBySessionID[sessionID] = false }
-
-        do {
-            clearShellBuffer(sessionID: sessionID)
-            await appendShellLine("[Recorder] Playback started (\(String(format: "%.1fx", speed))).", to: sessionID)
-            try await sessionRecorder.playLatestRecording(sessionID: sessionID, speed: speed) { [weak self] step in
-                await self?.applyPlaybackStep(step, to: sessionID)
-            }
-            await appendShellLine("[Recorder] Playback finished.", to: sessionID)
-        } catch {
-            await appendShellLine("[Recorder] Playback failed: \(error.localizedDescription)", to: sessionID)
-        }
+        await recordingCoordinator.playLastRecording(sessionID: sessionID, speed: speed)
     }
 
     func exportLastRecordingAsCast(sessionID: UUID, columns: Int = 80, rows: Int = 24) async {
-        do {
-            let castURL = try sessionRecorder.exportLatestRecordingAsCast(
-                sessionID: sessionID,
-                columns: columns,
-                rows: rows
-            )
-            await appendShellLine("[Recorder] Exported .cast: \(castURL.path(percentEncoded: false))", to: sessionID)
-        } catch {
-            await appendShellLine("[Recorder] Export failed: \(error.localizedDescription)", to: sessionID)
-        }
+        await recordingCoordinator.exportLastRecordingAsCast(sessionID: sessionID, columns: columns, rows: rows)
     }
 
     func listRemoteDirectory(sessionID: UUID, path: String) async throws -> [SFTPDirectoryEntry] {
@@ -851,7 +705,7 @@ final class SessionManager: ObservableObject {
             try await shell.send(payload)
             lastActivityBySessionID[sessionID] = .now
             bytesSentBySessionID[sessionID, default: 0] += Int64(payload.utf8.count)
-            sessionRecorder.recordInput(sessionID: sessionID, text: payload)
+            recordingCoordinator.recordInput(sessionID: sessionID, text: payload)
             await terminalHistoryIndex.recordCommandInput(
                 sessionID: sessionID,
                 command: wrappedCommand,
@@ -956,7 +810,7 @@ final class SessionManager: ObservableObject {
     }
 
     private func openShell(for session: Session) async throws {
-        let desiredPTY = sanitizedPTY(for: session.id)
+        let desiredPTY = renderingCoordinator.sanitizedPTY(for: session.id)
         let channel = try await transport.openShell(
             sessionID: session.id,
             pty: desiredPTY,
@@ -1006,15 +860,6 @@ final class SessionManager: ObservableObject {
         }
     }
 
-    private func sanitizedPTY(for sessionID: UUID) -> PTYConfiguration {
-        let current = desiredPTYBySessionID[sessionID] ?? .default
-        return PTYConfiguration(
-            columns: max(10, current.columns),
-            rows: max(4, current.rows),
-            terminalType: current.terminalType
-        )
-    }
-
     private func startParserReader(for sessionID: UUID, rawOutput: AsyncStream<Data>) {
         parserReaderTasks[sessionID]?.cancel()
         guard let engine = engines[sessionID] else {
@@ -1040,7 +885,7 @@ final class SessionManager: ObservableObject {
                 // captured when sync re-enables — otherwise that frame is lost
                 // and stale content ("ghost characters") persists on screen.
                 if let syncExitSnap = await engine.consumeSyncExitSnapshot() {
-                    await self?.publishSyncExitSnapshot(
+                    await self?.renderingCoordinator.publishSyncExitSnapshot(
                         sessionID: sessionID,
                         engine: engine,
                         snapshotOverride: syncExitSnap
@@ -1051,13 +896,13 @@ final class SessionManager: ObservableObject {
                 if inSyncMode { continue }
 
                 // Auto-reset scroll offset when new output arrives.
-                await self?.scheduleParsedChunkPublish(
+                await self?.renderingCoordinator.scheduleParsedChunkPublish(
                     sessionID: sessionID,
                     engine: engine
                 )
             }
 
-            await self?.flushPendingSnapshotPublishIfNeeded(
+            await self?.renderingCoordinator.flushPendingSnapshotPublishIfNeeded(
                 for: sessionID,
                 engine: engine
             )
@@ -1067,12 +912,12 @@ final class SessionManager: ObservableObject {
             // alternate screen content from leaking into the primary buffer.
             if await engine.usingAlternateBuffer {
                 await engine.disableAlternateBuffer()
-                await self?.publishGridState(for: sessionID, engine: engine)
+                await self?.renderingCoordinator.publishGridState(for: sessionID, engine: engine)
             }
 
             // Detect disconnection.
             if !Task.isCancelled {
-                await self?.handleShellStreamEnded(sessionID: sessionID)
+                await self?.handleShellStreamEndedInternal(sessionID: sessionID)
             }
         }
     }
@@ -1087,43 +932,10 @@ final class SessionManager: ObservableObject {
         )
 
         // Capture output directly as bytes to avoid a per-chunk UTF-8 decode.
-        if sessionRecorder.isRecording(sessionID: sessionID) {
-            // Sync coalescing state with throughput mode policy.
-            if sessionRecorder.coalescingEnabled != throughputModeEnabled {
-                sessionRecorder.coalescingEnabled = throughputModeEnabled
-            }
-            sessionRecorder.recordOutputData(sessionID: sessionID, data: chunk)
-        }
+        recordingCoordinator.recordIfActive(sessionID: sessionID, chunk: chunk, throughputModeEnabled: throughputModeEnabled)
     }
 
-    private func publishSyncExitSnapshot(
-        sessionID: UUID,
-        engine: TerminalEngine,
-        snapshotOverride: GridSnapshot
-    ) async {
-        scrollOffsetBySessionID[sessionID] = 0
-        cancelPendingSnapshotPublish(for: sessionID)
-        await publishGridState(
-            for: sessionID,
-            engine: engine,
-            snapshotOverride: snapshotOverride
-        )
-    }
-
-    private func scheduleParsedChunkPublish(
-        sessionID: UUID,
-        engine: TerminalEngine
-    ) {
-        scrollOffsetBySessionID[sessionID] = 0
-        // Frame-coalesced publish: parse every chunk immediately,
-        // but publish at most once per display interval.
-        scheduleCoalescedGridPublish(
-            for: sessionID,
-            engine: engine
-        )
-    }
-
-    private func handleShellStreamEnded(sessionID: UUID) async {
+    func handleShellStreamEndedInternal(sessionID: UUID) async {
         guard !manuallyDisconnectingSessions.contains(sessionID) else {
             return
         }
@@ -1145,7 +957,7 @@ final class SessionManager: ObservableObject {
             if let completedBlock = await terminalHistoryIndex.flushActiveCommand(sessionID: sessionID, at: .now) {
                 publishCommandCompletion(completedBlock)
             }
-            finalizeRecordingIfNeeded(sessionID: sessionID)
+            recordingCoordinator.finalizeIfNeeded(sessionID: sessionID)
             removeSessionArtifacts(sessionID: sessionID)
             return
         }
@@ -1154,12 +966,10 @@ final class SessionManager: ObservableObject {
         session.endedAt = .now
         session.errorMessage = "Connection lost. Reconnecting when network is available."
         replaceSession(session)
-        stopKeepaliveTimerIfIdle()
+        keepaliveCoordinator.stopIfIdle()
 
         let host = hostBySessionID[sessionID]
-        if let host {
-            pendingReconnectHosts[sessionID] = (host: host, jumpHost: jumpHostBySessionID[sessionID])
-        }
+        let jumpHost = jumpHostBySessionID[sessionID]
 
         await auditLogManager?.record(
             category: .session,
@@ -1177,47 +987,10 @@ final class SessionManager: ObservableObject {
         if let completedBlock = await terminalHistoryIndex.flushActiveCommand(sessionID: sessionID, at: .now) {
             publishCommandCompletion(completedBlock)
         }
-        finalizeRecordingIfNeeded(sessionID: sessionID)
+        recordingCoordinator.finalizeIfNeeded(sessionID: sessionID)
         removeSessionArtifacts(sessionID: sessionID)
         await transport.disconnect(sessionID: sessionID)
-        scheduleReconnectAttempt(after: .seconds(1))
-    }
-
-    private func appendShellLine(_ line: String, to sessionID: UUID) async {
-        guard let engine = engines[sessionID] else { return }
-        // Prepend CAN (0x18) to abort any in-progress escape sequence before
-        // injecting the system message. Without this, if the previous SSH chunk
-        // ended mid-escape (e.g. the last byte was ESC), the system message
-        // bytes would be misinterpreted as part of that escape sequence.
-        var bytes: [UInt8] = [0x18] // CAN — returns parser to ground state
-        bytes.append(contentsOf: Array(("\r\n" + line + "\r\n").utf8))
-        let data = Data(bytes)
-        // Feed directly instead of spawning a detached Task to avoid racing
-        // with the reader loop for snapshot updates. If another feed() is
-        // in progress (reader loop), the data is queued by the engine's
-        // reentrancy guard and the active feeder will process it — we skip
-        // the snapshot because the reader loop will take one after draining
-        // the queue.
-        let didProcess = await engine.feed(data)
-        if didProcess {
-            let snapshot = await engine.snapshot()
-            gridSnapshotsBySessionID[sessionID] = snapshot
-            gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
-            shellBuffers[sessionID] = await engine.visibleText()
-        }
-    }
-
-    private func applyPlaybackStep(_ step: SessionPlaybackStep, to sessionID: UUID) async {
-        guard step.stream == .output else { return }
-        guard let engine = engines[sessionID] else { return }
-        let data = Data(step.text.utf8)
-        let didProcess = await engine.feed(data)
-        if didProcess {
-            let snapshot = await engine.snapshot()
-            gridSnapshotsBySessionID[sessionID] = snapshot
-            gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
-            shellBuffers[sessionID] = await engine.visibleText()
-        }
+        reconnectCoordinator.scheduleReconnect(for: sessionID, host: host, jumpHost: jumpHost)
     }
 
     private func replaceSession(_ updatedSession: Session) {
@@ -1235,11 +1008,11 @@ final class SessionManager: ObservableObject {
                 await pfm.deactivateAll(for: sessionID)
             }
         }
-        pendingReconnectHosts.removeValue(forKey: sessionID)
+        reconnectCoordinator.cancelPending(sessionID: sessionID)
         hostBySessionID.removeValue(forKey: sessionID)
         jumpHostBySessionID.removeValue(forKey: sessionID)
         sessions.removeAll(where: { $0.id == sessionID })
-        finalizeRecordingIfNeeded(sessionID: sessionID)
+        recordingCoordinator.finalizeIfNeeded(sessionID: sessionID)
         hasRecordingBySessionID.removeValue(forKey: sessionID)
         latestRecordingURLBySessionID.removeValue(forKey: sessionID)
         removeSessionArtifacts(sessionID: sessionID)
@@ -1248,35 +1021,15 @@ final class SessionManager: ObservableObject {
         }
     }
 
-    private func finalizeRecordingIfNeeded(sessionID: UUID) {
-        guard sessionRecorder.isRecording(sessionID: sessionID) else {
-            return
-        }
-
-        Task { @MainActor in
-            do {
-                let recordingURL = try sessionRecorder.stopRecording(sessionID: sessionID)
-                hasRecordingBySessionID[sessionID] = true
-                latestRecordingURLBySessionID[sessionID] = recordingURL
-            } catch {
-                // Best-effort finalization when sessions disconnect unexpectedly.
-            }
-        }
-    }
-
     private func removeSessionArtifacts(sessionID: UUID) {
         parserReaderTasks[sessionID]?.cancel()
         parserReaderTasks.removeValue(forKey: sessionID)
-        cancelPendingSnapshotPublish(for: sessionID)
+        renderingCoordinator.cleanupSession(sessionID)
         shellChannels.removeValue(forKey: sessionID)
         engines.removeValue(forKey: sessionID)
-        desiredPTYBySessionID.removeValue(forKey: sessionID)
         shellBuffers.removeValue(forKey: sessionID)
-        lastShellBufferPublishAtBySessionID.removeValue(forKey: sessionID)
         bellEventNonceBySessionID.removeValue(forKey: sessionID)
-        lastBellTimeBySessionID.removeValue(forKey: sessionID)
         inputModeSnapshotsBySessionID.removeValue(forKey: sessionID)
-        gridSnapshotsBySessionID.removeValue(forKey: sessionID)
         gridSnapshotNonceBySessionID.removeValue(forKey: sessionID)
         isRecordingBySessionID[sessionID] = false
         isPlaybackRunningBySessionID[sessionID] = false
@@ -1288,7 +1041,7 @@ final class SessionManager: ObservableObject {
         latestPublishedCommandBlockIDBySessionID.removeValue(forKey: sessionID)
     }
 
-    private func publishCommandCompletion(_ block: CommandBlock) {
+    func publishCommandCompletion(_ block: CommandBlock) {
         let sessionID = block.sessionID
         if latestPublishedCommandBlockIDBySessionID[sessionID] == block.id {
             return
@@ -1297,169 +1050,6 @@ final class SessionManager: ObservableObject {
         latestPublishedCommandBlockIDBySessionID[sessionID] = block.id
         latestCompletedCommandBlockBySessionID[sessionID] = block
         commandCompletionNonceBySessionID[sessionID, default: 0] += 1
-    }
-
-    private func shouldPublishShellBuffer(for sessionID: UUID, now: Date = .now) -> Bool {
-        let publishInterval = throughputModeEnabled
-            ? throughputShellBufferPublishInterval
-            : shellBufferPublishInterval
-        if let lastPublished = lastShellBufferPublishAtBySessionID[sessionID],
-           now.timeIntervalSince(lastPublished) < publishInterval {
-            return false
-        }
-        lastShellBufferPublishAtBySessionID[sessionID] = now
-        return true
-    }
-
-    private func scheduleCoalescedGridPublish(
-        for sessionID: UUID,
-        engine: TerminalEngine
-    ) {
-        guard pendingSnapshotPublishTasksBySessionID[sessionID] == nil else {
-            return
-        }
-
-        pendingSnapshotPublishTasksBySessionID[sessionID] = Task { @MainActor [weak self] in
-            guard let self else { return }
-            let interval = self.throughputModeEnabled
-                ? self.throughputSnapshotPublishInterval
-                : self.snapshotPublishInterval
-            try? await Task.sleep(for: interval)
-            guard !Task.isCancelled else { return }
-            self.pendingSnapshotPublishTasksBySessionID.removeValue(forKey: sessionID)
-            await self.publishGridState(for: sessionID, engine: engine)
-        }
-    }
-
-    private func flushPendingSnapshotPublishIfNeeded(
-        for sessionID: UUID,
-        engine: TerminalEngine
-    ) async {
-        guard pendingSnapshotPublishTasksBySessionID[sessionID] != nil else {
-            return
-        }
-        cancelPendingSnapshotPublish(for: sessionID)
-        await publishGridState(for: sessionID, engine: engine)
-    }
-
-    private func cancelPendingSnapshotPublish(for sessionID: UUID) {
-        pendingSnapshotPublishTasksBySessionID[sessionID]?.cancel()
-        pendingSnapshotPublishTasksBySessionID.removeValue(forKey: sessionID)
-    }
-
-    private func publishGridState(
-        for sessionID: UUID,
-        engine: TerminalEngine,
-        snapshotOverride: GridSnapshot? = nil
-    ) async {
-        // Session may have been torn down while a scheduled publish was pending.
-        guard engines[sessionID] != nil else { return }
-        #if DEBUG
-        let signpostID = OSSignpostID(log: perfSignpostLog)
-        os_signpost(
-            .begin,
-            log: perfSignpostLog,
-            name: "PublishGridState",
-            signpostID: signpostID
-        )
-        defer {
-            os_signpost(
-                .end,
-                log: perfSignpostLog,
-                name: "PublishGridState",
-                signpostID: signpostID
-            )
-        }
-        #endif
-
-        let snapshot: GridSnapshot
-        if let snapshotOverride {
-            snapshot = snapshotOverride
-        } else {
-            snapshot = await engine.snapshot()
-        }
-        gridSnapshotsBySessionID[sessionID] = snapshot
-        gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
-
-        // Derive text lines from grid for fallback view, search, and password detection.
-        if shouldPublishShellBuffer(for: sessionID) {
-            let visibleLines = await engine.visibleText()
-            shellBuffers[sessionID] = visibleLines
-            if let completedBlock = await terminalHistoryIndex.observeVisibleLines(
-                sessionID: sessionID,
-                lines: visibleLines,
-                at: .now
-            ) {
-                publishCommandCompletion(completedBlock)
-            }
-        }
-
-        // F.8: Propagate bell events from engine → UI.
-        // In throughput mode, rate-limit bells to 1 per second per session to prevent
-        // audio/visual bell flooding during high-throughput output.
-        let bellCount = await engine.consumeBellCount()
-        if bellCount > 0 {
-            if throughputModeEnabled {
-                let now = Date()
-                let lastBell = lastBellTimeBySessionID[sessionID] ?? .distantPast
-                if now.timeIntervalSince(lastBell) >= 1.0 {
-                    bellEventNonceBySessionID[sessionID, default: 0] += 1
-                    lastBellTimeBySessionID[sessionID] = now
-                }
-            } else {
-                bellEventNonceBySessionID[sessionID, default: 0] += bellCount
-            }
-        }
-
-        inputModeSnapshotsBySessionID[sessionID] = await engine.inputModeSnapshot()
-
-        // F.7: Propagate window title changes to published state.
-        let title = await engine.windowTitle
-        if !title.isEmpty {
-            windowTitleBySessionID[sessionID] = title
-        }
-
-        // Propagate working directory from OSC 7.
-        let cwd = await engine.workingDirectory
-        if !cwd.isEmpty {
-            workingDirectoryBySessionID[sessionID] = cwd
-        }
-    }
-
-    // MARK: - SSH Keepalive
-
-    private func startKeepaliveTimerIfNeeded() {
-        guard keepaliveEnabled, keepaliveTask == nil else { return }
-        keepaliveTask = Task { @MainActor [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(self?.keepaliveInterval ?? 30))
-                guard !Task.isCancelled else { break }
-                await self?.sendKeepalives()
-            }
-        }
-    }
-
-    private func stopKeepaliveTimerIfIdle() {
-        let hasConnectedSSHSession = sessions.contains { $0.state == .connected && !$0.isLocal }
-        if !hasConnectedSSHSession {
-            keepaliveTask?.cancel()
-            keepaliveTask = nil
-        }
-    }
-
-    private func sendKeepalives() async {
-        let connectedSSHSessions = sessions.filter { $0.state == .connected && !$0.isLocal }
-        for session in connectedSSHSessions {
-            let lastActivity = lastActivityBySessionID[session.id] ?? .distantPast
-            if Date.now.timeIntervalSince(lastActivity) < keepaliveInterval * 0.8 {
-                continue
-            }
-
-            let alive = await transport.sendKeepalive(sessionID: session.id)
-            if !alive {
-                await handleShellStreamEnded(sessionID: session.id)
-            }
-        }
     }
 
     private func evaluateKnownHost(
@@ -1544,58 +1134,6 @@ final class SessionManager: ObservableObject {
         }
     }
 
-    private func handleNetworkStatusChange(isReachable: Bool) {
-        let wasReachable = isNetworkReachable
-        isNetworkReachable = isReachable
-
-        if isReachable && !wasReachable {
-            scheduleReconnectAttempt(after: .milliseconds(250))
-        }
-    }
-
-    private func scheduleReconnectAttempt(after delay: Duration) {
-        guard reconnectTask == nil else {
-            return
-        }
-
-        reconnectTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            if delay > .zero {
-                try? await Task.sleep(for: delay)
-            }
-
-            await self.attemptPendingReconnects()
-            self.reconnectTask = nil
-
-            if self.isNetworkReachable && !self.pendingReconnectHosts.isEmpty {
-                self.scheduleReconnectAttempt(after: .seconds(5))
-            }
-        }
-    }
-
-    private func attemptPendingReconnects() async {
-        guard isNetworkReachable else {
-            return
-        }
-
-        let snapshot = pendingReconnectHosts
-        for (oldSessionID, entry) in snapshot {
-            if activeSession(for: entry.host.id) != nil {
-                pendingReconnectHosts.removeValue(forKey: oldSessionID)
-                continue
-            }
-
-            do {
-                _ = try await connect(to: entry.host, jumpHost: entry.jumpHost, automaticReconnect: true, passwordOverride: nil)
-                pendingReconnectHosts.removeValue(forKey: oldSessionID)
-            } catch SessionConnectionError.hostVerificationRequired {
-                pendingReconnectHosts.removeValue(forKey: oldSessionID)
-            } catch {
-                // Keep entry in pending queue for a later retry.
-            }
-        }
-    }
-
     // MARK: - Screenshot Mode Support
 
     func injectScreenshotSessions() async {
@@ -1611,7 +1149,7 @@ final class SessionManager: ObservableObject {
             await configureHistoryTracking(for: session, engine: engine)
             engines[session.id] = engine
 
-            desiredPTYBySessionID[session.id] = .default
+            renderingCoordinator.initializePTY(for: session.id)
             shellBuffers[session.id] = []
             bellEventNonceBySessionID[session.id] = 0
             isRecordingBySessionID[session.id] = false
@@ -1630,7 +1168,7 @@ final class SessionManager: ObservableObject {
             }
 
             let snapshot = await engine.snapshot()
-            gridSnapshotsBySessionID[session.id] = snapshot
+            renderingCoordinator.gridSnapshotsBySessionID[session.id] = snapshot
             gridSnapshotNonceBySessionID[session.id] = 1
             inputModeSnapshotsBySessionID[session.id] = await engine.inputModeSnapshot()
             shellBuffers[session.id] = await engine.visibleText()
