@@ -19,10 +19,10 @@ Follow the same workflow as `RefactorTheActor.md`:
 
 ```
 Active branch   : master
-Current phase   : Phase 7 — NOT STARTED
+Current phase   : Phase 8 — NOT STARTED
 Phase status    : NOT STARTED
-Immediate action: Read RefactorTerminalView.md, begin Phase 7 (extract TerminalFileBrowserSidebar)
-Last commit     : dda185a "refactor(RefactorTV Phase 6): extract quick command panel to TerminalQuickCommandPanel"
+Immediate action: Read RefactorTerminalView.md, begin Phase 8 (extract TerminalSurfaceView)
+Last commit     : TBD "refactor(RefactorTV Phase 7): extract file browser sidebar to TerminalFileBrowserSidebar"
 ```
 
 **Update this block after every phase.**
@@ -40,7 +40,7 @@ Last commit     : dda185a "refactor(RefactorTV Phase 6): extract quick command p
 | 4 | Extract `TerminalSessionActionsBar` | COMPLETE (2026-02-24) |
 | 5 | Extract `TerminalSessionTabBar` | COMPLETE (2026-02-24) |
 | 6 | Extract `TerminalQuickCommandPanel` | COMPLETE (2026-02-24) |
-| 7 | Extract `TerminalFileBrowserSidebar` | NOT STARTED |
+| 7 | Extract `TerminalFileBrowserSidebar` | COMPLETE (2026-02-24) |
 | 8 | Extract `TerminalSurfaceView` | NOT STARTED |
 | 9 | Extract `TerminalSidebarLayoutStore` + `TerminalKeyboardShortcutLayer`, final cleanup | NOT STARTED |
 | — | Full test suite run | NOT STARTED |
@@ -423,20 +423,20 @@ refactor.
 
 ### Steps (10 steps)
 
-- [ ] **7.1** Read `TerminalView.swift` lines 624–787 (sidebar UI + row renderer) and 2188–2445 (state management) in full. Read `Terminal/Features/TerminalFileBrowserTree.swift` to understand the helper API.
-- [ ] **7.2** Create `ProSSHMac/UI/Terminal/TerminalFileBrowserSidebar.swift`. Header: `// Extracted from TerminalView.swift`. Imports: `import SwiftUI`.
-- [ ] **7.3** Write `struct TerminalFileBrowserSidebar: View` with:
+- [x] **7.1** Read `TerminalView.swift` lines 624–787 (sidebar UI + row renderer) and 2188–2445 (state management) in full. Read `Terminal/Features/TerminalFileBrowserTree.swift` to understand the helper API.
+- [x] **7.2** Create `ProSSHMac/UI/Terminal/TerminalFileBrowserSidebar.swift`. Header: `// Extracted from TerminalView.swift`. Imports: `import SwiftUI`.
+- [x] **7.3** Write `struct TerminalFileBrowserSidebar: View` with:
   - `var session: Session?`
   - `@EnvironmentObject private var sessionManager: SessionManager`
   - `@EnvironmentObject private var transferManager: TransferManager`
   - `var onClose: () -> Void`
   - `var onSendShellInput: (UUID, String) -> Void`
   - All 10 `@State` file-browser properties from lines 63–72 of `TerminalView`
-- [ ] **7.4** `body`: the content of `fileBrowserSidebar` (lines 624–716), using `session` in place of `selectedSession`.
-- [ ] **7.5** Copy `fileBrowserRow(_:session:)` as a private function. Copy all loading/navigation helpers: `initialFileBrowserRootPath(for:)`, `downloadFileBrowserFile(_:)`, `openFileInTerminal(_:editor:)`, `shellEscapeForTerminal(_:)`, `byteCount(_:)`, `navigateUpFileBrowserRoot(for:)`, `refreshFileBrowserRoot(for:)`, `loadFileBrowserRoot(for:path:)`, `toggleFileBrowserDirectory(_:for:)`, `collapseFileBrowserDirectory(_:)`, `loadFileBrowserDirectory(path:for:isRoot:)`, `listFileBrowserEntries(for:path:)`, `rebuildFileBrowserRows()`, `fileBrowserContainsPath(_:)`, `normalizeFileBrowserPath(_:isLocal:)`, `parentFileBrowserPath(of:isLocal:)`.
-- [ ] **7.6** Replace `openFileInTerminal` terminal-send calls with `onSendShellInput(session.id, command)`.
-- [ ] **7.7** Add `.onChange(of: session?.id) { _, _ in resetAndReload() }` to the body. Write `private func resetAndReload()` that clears all 10 state vars to defaults and calls `loadFileBrowserRoot` if session is connected.
-- [ ] **7.8** In `TerminalView.swift terminalContentWithFileBrowser`: replace `fileBrowserSidebar` with:
+- [x] **7.4** `body`: the content of `fileBrowserSidebar` (lines 624–716), using `session` in place of `selectedSession`.
+- [x] **7.5** Copy `fileBrowserRow(_:session:)` as a private function. Copy all loading/navigation helpers: `initialFileBrowserRootPath(for:)`, `downloadFileBrowserFile(_:)`, `openFileInTerminal(_:editor:)`, `shellEscapeForTerminal(_:)`, `byteCount(_:)`, `navigateUpFileBrowserRoot(for:)`, `refreshFileBrowserRoot(for:)`, `loadFileBrowserRoot(for:path:)`, `toggleFileBrowserDirectory(_:for:)`, `collapseFileBrowserDirectory(_:)`, `loadFileBrowserDirectory(path:for:isRoot:)`, `listFileBrowserEntries(for:path:)`, `rebuildFileBrowserRows()`, `fileBrowserContainsPath(_:)`, `normalizeFileBrowserPath(_:isLocal:)`, `parentFileBrowserPath(of:isLocal:)`.
+- [x] **7.6** Replace `openFileInTerminal` terminal-send calls with `onSendShellInput(session.id, command)`.
+- [x] **7.7** Add `.onChange(of: session?.id) { _, _ in resetAndReload() }` to the body. Write `private func resetAndReload()` that clears all 10 state vars to defaults and calls `loadFileBrowserRoot` if session is connected.
+- [x] **7.8** In `TerminalView.swift terminalContentWithFileBrowser`: replace `fileBrowserSidebar` with:
   ```swift
   TerminalFileBrowserSidebar(
       session: selectedSession,
@@ -446,8 +446,8 @@ refactor.
       }
   )
   ```
-- [ ] **7.9** In `TerminalView.swift`: delete all 10 `@State fileBrowser*` properties. Delete `fileBrowserSidebar`, `fileBrowserRow(_:session:)`, `syncFileBrowserSession()`, `initialFileBrowserRootPath(for:)`, and all file-browser helper functions listed in step 7.5. Simplify any `onChange(showFileBrowser)` that called `syncFileBrowserSession()` to just `transferManager.setActiveSession(showFileBrowser ? selectedSession : nil)` if applicable (or remove if the sidebar handles it).
-- [ ] **7.10** Run build: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`. Verify `** BUILD SUCCEEDED **`. Commit: `refactor(RefactorTV Phase 7): extract file browser sidebar to TerminalFileBrowserSidebar`
+- [x] **7.9** In `TerminalView.swift`: delete all 10 `@State fileBrowser*` properties. Delete `fileBrowserSidebar`, `fileBrowserRow(_:session:)`, `syncFileBrowserSession()`, `initialFileBrowserRootPath(for:)`, and all file-browser helper functions listed in step 7.5. Simplify any `onChange(showFileBrowser)` that called `syncFileBrowserSession()` to just `transferManager.setActiveSession(showFileBrowser ? selectedSession : nil)` if applicable (or remove if the sidebar handles it).
+- [x] **7.10** Run build: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`. Verify `** BUILD SUCCEEDED **`. Commit: `refactor(RefactorTV Phase 7): extract file browser sidebar to TerminalFileBrowserSidebar`
 
 **Expected TerminalView.swift line count after phase:** ~1,665
 
@@ -646,6 +646,20 @@ After all 9 phases are committed and the build is clean:
 ---
 
 ## Refactor Log (most recent first)
+
+- **2026-02-24 — Phase 7 COMPLETE** (commit TBD): Extracted the entire file browser sidebar subsystem
+  (~450 lines) into `TerminalFileBrowserSidebar.swift`. Removed 10 `@State` file-browser properties,
+  2 private type aliases (`FileBrowserEntry`, `FileBrowserRow`), `fileBrowserSidebar` computed view,
+  `fileBrowserRow(_:session:)`, `syncFileBrowserSession()`, and 16 helper functions from `TerminalView`.
+  Removed all 5 `syncFileBrowserSession()` call sites (onAppear, sessions-changed Task,
+  `onChange(selectedSessionID)`, `onChange(showFileBrowser)`, keyboard shortcut). New struct takes
+  `session: Session?`, `onClose: () -> Void`, `onSendShellInput: (UUID, String) -> Void` plus
+  `@EnvironmentObject` for `SessionManager` and `TransferManager`. Lifecycle handled via
+  `.onAppear { syncSession() }`, `.onDisappear { transferManager.setActiveSession(nil) }`, and
+  `.onChange(of: session?.id)`. `openFileInTerminal` call replaced with `onSendShellInput(session.id, ...)`.
+  Both `guard showFileBrowser, fileBrowserSessionID == session.id` guards in `loadFileBrowserDirectory`
+  simplified to `guard fileBrowserSessionID == session.id` (view is only instantiated when `showFileBrowser`
+  is true). `TerminalView.swift`: 2,072 → 1,623 lines (−449). Build: `** BUILD SUCCEEDED **`, 0 new warnings.
 
 - **2026-02-24 — Phase 6 COMPLETE** (commit `dda185a`): Extracted quick command panel subsystem (~450 lines)
   into `TerminalQuickCommandPanel.swift`. Moved 12 `@State` draft-editing vars, 3 sheet/fileImporter
