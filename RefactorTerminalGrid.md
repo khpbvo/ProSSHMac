@@ -22,7 +22,7 @@ Active branch   : master
 Current phase   : Phase 3 — NOT STARTED
 Phase status    : NOT STARTED
 Immediate action: Begin Phase 3 (extract Tab Stops + Dirty Tracking → TerminalGrid+TabsAndDirty.swift).
-Last commit     : <hash> "refactor(RefactorTG Phase 2): extract OSC Handlers to TerminalGrid+OSCHandlers.swift"
+Last commit     : eff03e6 "refactor(RefactorTG Phase 2): extract OSC Handlers to TerminalGrid+OSCHandlers.swift"
 ```
 
 **Update this block after every phase.**
