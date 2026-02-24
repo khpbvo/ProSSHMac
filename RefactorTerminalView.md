@@ -19,10 +19,10 @@ Follow the same workflow as `RefactorTheActor.md`:
 
 ```
 Active branch   : master
-Current phase   : Phase 3 — NOT STARTED
+Current phase   : Phase 4 — NOT STARTED
 Phase status    : NOT STARTED
-Immediate action: Read RefactorTerminalView.md, begin Phase 3 (extract TerminalSearchBarView)
-Last commit     : 524fc9b "refactor(RefactorTV Phase 2): extract session header + metadata views"
+Immediate action: Read RefactorTerminalView.md, begin Phase 4 (extract TerminalSessionActionsBar)
+Last commit     : TBD "refactor(RefactorTV Phase 3): extract search bar to TerminalSearchBarView"
 ```
 
 **Update this block after every phase.**
@@ -36,7 +36,7 @@ Last commit     : 524fc9b "refactor(RefactorTV Phase 2): extract session header 
 | 0 | Baseline audit — add swiftlint:disable, verify build | COMPLETE (2026-02-24) |
 | 1 | Extract `DirectTerminalInputNSView` + supporting types | COMPLETE (2026-02-24) |
 | 2 | Extract `TerminalSessionHeaderView` + `TerminalSessionMetadataView` | COMPLETE (2026-02-24) |
-| 3 | Extract `TerminalSearchBarView` | NOT STARTED |
+| 3 | Extract `TerminalSearchBarView` | COMPLETE (2026-02-24) |
 | 4 | Extract `TerminalSessionActionsBar` | NOT STARTED |
 | 5 | Extract `TerminalSessionTabBar` | NOT STARTED |
 | 6 | Extract `TerminalQuickCommandPanel` | NOT STARTED |
@@ -212,19 +212,19 @@ isSearchBarFocused = v }`. Update `shouldEnableDirectTerminalInput` to check `is
 
 ### Steps (12 steps)
 
-- [ ] **3.1** Read `TerminalView.swift` lines 1902–1970 and 2658–2677 in full before starting.
-- [ ] **3.2** Create `ProSSHMac/UI/Terminal/TerminalSearchBarView.swift`. Header: `// Extracted from TerminalView.swift`. Imports: `import SwiftUI`.
-- [ ] **3.3** Write `struct TerminalSearchBarView: View` with:
+- [x] **3.1** Read `TerminalView.swift` lines 1902–1970 and 2658–2677 in full before starting.
+- [x] **3.2** Create `ProSSHMac/UI/Terminal/TerminalSearchBarView.swift`. Header: `// Extracted from TerminalView.swift`. Imports: `import SwiftUI`.
+- [x] **3.3** Write `struct TerminalSearchBarView: View` with:
   - `@ObservedObject var terminalSearch: TerminalSearch`
   - `let focusFieldNonce: Int`
   - `var onHide: () -> Void`
   - `var onFocusChanged: (Bool) -> Void`
   - `@FocusState private var isFieldFocused: Bool`
-- [ ] **3.4** In body: add `.onChange(of: focusFieldNonce) { _, _ in isFieldFocused = true }`. Add `.onChange(of: isFieldFocused) { _, v in onFocusChanged(v) }`.
-- [ ] **3.5** Copy the content of `searchBar` as the `body`. Replace `isSearchFieldFocused` with `isFieldFocused`, `$isSearchFieldFocused` with `$isFieldFocused`, and `hideSearchBar()` calls with `onHide()`. Move the three binding helper vars (`searchQueryBinding`, etc.) as `private var` computed properties inside the struct.
-- [ ] **3.6** In `TerminalView.swift`: remove `@FocusState private var isSearchFieldFocused: Bool`.
-- [ ] **3.7** In `TerminalView.swift`: add `@State private var searchFocusNonce: Int = 0` and `@State private var isSearchBarFocused: Bool = false`.
-- [ ] **3.8** In `TerminalView.swift` `sessionPanel`: replace the `if includeSearch, terminalSearch.isPresented { searchBar }` block with:
+- [x] **3.4** In body: add `.onChange(of: focusFieldNonce) { _, _ in isFieldFocused = true }`. Add `.onChange(of: isFieldFocused) { _, v in onFocusChanged(v) }`.
+- [x] **3.5** Copy the content of `searchBar` as the `body`. Replace `isSearchFieldFocused` with `isFieldFocused`, `$isSearchFieldFocused` with `$isFieldFocused`, and `hideSearchBar()` calls with `onHide()`. Move the three binding helper vars (`searchQueryBinding`, etc.) as `private var` computed properties inside the struct.
+- [x] **3.6** In `TerminalView.swift`: remove `@FocusState private var isSearchFieldFocused: Bool`.
+- [x] **3.7** In `TerminalView.swift`: add `@State private var searchFocusNonce: Int = 0` and `@State private var isSearchBarFocused: Bool = false`.
+- [x] **3.8** In `TerminalView.swift` `sessionPanel`: replace the `if includeSearch, terminalSearch.isPresented { searchBar }` block with:
   ```swift
   if includeSearch, terminalSearch.isPresented {
       TerminalSearchBarView(
@@ -235,12 +235,12 @@ isSearchBarFocused = v }`. Update `shouldEnableDirectTerminalInput` to check `is
       )
   }
   ```
-- [ ] **3.9** Rewrite `showSearchBar()` in `TerminalView.swift`: replace `isSearchFieldFocused = true` with `searchFocusNonce &+= 1`.
-- [ ] **3.10** Rewrite `hideSearchBar()` in `TerminalView.swift`: remove `isSearchFieldFocused = false` (the child manages its own focus).
-- [ ] **3.11** In `shouldEnableDirectTerminalInput(for:)`: replace `isSearchFieldFocused` check with `isSearchBarFocused`. Delete `searchBar`, `searchQueryBinding`, `searchRegexBinding`, `searchCaseSensitiveBinding` from `TerminalView.swift`.
-- [ ] **3.12** Run build: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`. Verify `** BUILD SUCCEEDED **`. Commit: `refactor(RefactorTV Phase 3): extract search bar to TerminalSearchBarView`
+- [x] **3.9** Rewrite `showSearchBar()` in `TerminalView.swift`: replace `isSearchFieldFocused = true` with `searchFocusNonce &+= 1`.
+- [x] **3.10** Rewrite `hideSearchBar()` in `TerminalView.swift`: remove `isSearchFieldFocused = false` (the child manages its own focus).
+- [x] **3.11** In `shouldEnableDirectTerminalInput(for:)`: replace `isSearchFieldFocused` check with `isSearchBarFocused`. Delete `searchBar`, `searchQueryBinding`, `searchRegexBinding`, `searchCaseSensitiveBinding` from `TerminalView.swift`.
+- [x] **3.12** Run build: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`. Verify `** BUILD SUCCEEDED **`. ✓ Commit: `refactor(RefactorTV Phase 3): extract search bar to TerminalSearchBarView`
 
-**Expected TerminalView.swift line count after phase:** ~2,835
+**Actual TerminalView.swift line count after phase:** 2,787 lines (expected ~2,835 ✓)
 
 ---
 
@@ -655,6 +655,17 @@ After all 9 phases are committed and the build is clean:
 ---
 
 ## Refactor Log (most recent first)
+
+- **2026-02-24 — Phase 3 COMPLETE** (commit TBD): Extracted `searchBar` computed property and its
+  three companion binding helpers (`searchQueryBinding`, `searchRegexBinding`,
+  `searchCaseSensitiveBinding`) into `TerminalSearchBarView.swift` (~115 lines). Bridged the
+  `@FocusState` boundary with the `searchFocusNonce: Int` pattern (same as `directInputActivationNonce`).
+  Added `onFocusChanged: (Bool) -> Void` callback so `shouldEnableDirectTerminalInput(for:)` can
+  still gate on search-field focus via `isSearchBarFocused: Bool` in `TerminalView`. Color helpers
+  (`terminalSurfaceColor`, `terminalSurfaceBorderColor`) re-declared in child per rule 7 — both
+  share the same `@AppStorage` key and stay in sync automatically. Deleted: `@FocusState` var +
+  `var searchBar` + 3 binding helpers + `DispatchQueue.main.async` focus call in `showSearchBar()`.
+  `TerminalView.swift`: 2,874 → 2,787 lines (−87). Build: `** BUILD SUCCEEDED **`, 0 new warnings.
 
 - **2026-02-24 — Phase 2 COMPLETE** (commit `524fc9b`): Extracted two display-only view functions from
   `TerminalView`. Created `TerminalSessionHeaderView.swift` (~67 lines) containing `header(for:)`

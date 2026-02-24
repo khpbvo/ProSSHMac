@@ -39,7 +39,6 @@ struct TerminalView: View {
     @State private var pendingPaneSessionCreation: Set<UUID> = []
     @StateObject private var quickCommands = QuickCommands()
     @FocusState private var focusedSessionID: UUID?
-    @FocusState private var isSearchFieldFocused: Bool
     @State private var closeConfirmationSession: Session?
     @State private var secureInputOverride: Bool?
     @State private var isQuickCommandEditorPresented = false
@@ -60,6 +59,8 @@ struct TerminalView: View {
     @State private var directInputBufferBySessionID: [UUID: String] = [:]
     @State private var hoveredTabID: UUID?
     @State private var directInputActivationNonce: Int = 0
+    @State private var searchFocusNonce: Int = 0
+    @State private var isSearchBarFocused: Bool = false
     @State private var selectedFileBrowserPath: String?
     @State private var fileBrowserSessionID: UUID?
     @State private var fileBrowserCurrentPath: String = "/"
@@ -347,7 +348,12 @@ struct TerminalView: View {
             TerminalSessionMetadataView(session: session)
 
             if includeSearch, terminalSearch.isPresented {
-                searchBar
+                TerminalSearchBarView(
+                    terminalSearch: terminalSearch,
+                    focusFieldNonce: searchFocusNonce,
+                    onHide: { hideSearchBar() },
+                    onFocusChanged: { v in isSearchBarFocused = v }
+                )
             }
 
             if session.state == .connected {
@@ -1734,75 +1740,6 @@ struct TerminalView: View {
         }
     }
 
-    private var searchBar: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Label("Find", systemImage: "magnifyingglass")
-                    .font(.caption.weight(.semibold))
-
-                TextField("Find in terminal output", text: searchQueryBinding)
-                    .textFieldStyle(.roundedBorder)
-                    .focused($isSearchFieldFocused)
-                    .onSubmit {
-                        terminalSearch.selectNextMatch()
-                    }
-
-                Button {
-                    hideSearchBar()
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-            }
-
-            HStack(spacing: 8) {
-                Toggle("Regex", isOn: searchRegexBinding)
-                    .toggleStyle(.button)
-                    .controlSize(.small)
-
-                Toggle("Case", isOn: searchCaseSensitiveBinding)
-                    .toggleStyle(.button)
-                    .controlSize(.small)
-
-                Spacer()
-
-                Text(terminalSearch.resultSummary)
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-
-                Button {
-                    terminalSearch.selectPreviousMatch()
-                } label: {
-                    Image(systemName: "chevron.up")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(terminalSearch.matches.isEmpty)
-
-                Button {
-                    terminalSearch.selectNextMatch()
-                } label: {
-                    Image(systemName: "chevron.down")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(terminalSearch.matches.isEmpty)
-            }
-
-            if let validationError = terminalSearch.validationError {
-                Text("Regex error: \(validationError)")
-                    .font(.caption)
-                    .foregroundStyle(.red)
-            }
-        }
-        .padding(8)
-        .background(terminalSurfaceColor, in: RoundedRectangle(cornerRadius: 8))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(terminalSurfaceBorderColor, lineWidth: 1)
-        )
-    }
 
     @ViewBuilder
     private func directTerminalInputOverlay(for session: Session) -> some View {
@@ -1822,7 +1759,7 @@ struct TerminalView: View {
 
     private func shouldEnableDirectTerminalInput(for session: Session) -> Bool {
         guard session.state == .connected else { return false }
-        if isSearchFieldFocused { return false }
+        if isSearchBarFocused { return false }
         if isAIAssistantComposerFocused { return false }
         if isQuickCommandEditorPresented { return false }
         if quickCommandPendingSnippet != nil { return false }
@@ -2481,27 +2418,6 @@ struct TerminalView: View {
         .allowsHitTesting(isEnabled)
     }
 
-    private var searchQueryBinding: Binding<String> {
-        Binding(
-            get: { terminalSearch.query },
-            set: { terminalSearch.query = $0 }
-        )
-    }
-
-    private var searchRegexBinding: Binding<Bool> {
-        Binding(
-            get: { terminalSearch.isRegexEnabled },
-            set: { terminalSearch.isRegexEnabled = $0 }
-        )
-    }
-
-    private var searchCaseSensitiveBinding: Binding<Bool> {
-        Binding(
-            get: { terminalSearch.isCaseSensitive },
-            set: { terminalSearch.isCaseSensitive = $0 }
-        )
-    }
-
     private func attributedTerminalLine(_ line: String, lineIndex: Int) -> AttributedString {
         var attributed = linkDetector.attributedLine(line)
         guard terminalSearch.isPresented else { return attributed }
@@ -2803,14 +2719,11 @@ struct TerminalView: View {
     private func showSearchBar() {
         terminalSearch.present()
         updateSearchLines()
-        DispatchQueue.main.async {
-            isSearchFieldFocused = true
-        }
+        searchFocusNonce &+= 1
     }
 
     private func hideSearchBar() {
         terminalSearch.dismiss()
-        isSearchFieldFocused = false
     }
 
     private func updateSearchLines() {
