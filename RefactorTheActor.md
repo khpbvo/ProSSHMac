@@ -1364,71 +1364,399 @@ git commit -m "refactor: introduce PersistentStore<T>, consolidate store boilerp
 > PTY resize debouncing, keepalive, auto-reconnect w/ network monitoring, session recording,
 > scrollback navigation, command history, and screenshot injection.
 > These need separate homes.
+>
+> **Architecture:** Each coordinator is `@MainActor final class`, owned (strong) by SessionManager,
+> and holds `weak var manager: SessionManager?`. `@Published` properties stay on SessionManager
+> (SwiftUI observes via `@EnvironmentObject`); coordinators write via `manager?.prop = value`.
+> Private state used ONLY by a coordinator moves into that coordinator.
+> State also used by SessionManager stays on SessionManager but with visibility widened
+> from `private` to `internal` so coordinators can read it via `manager.prop`.
 
-### 5a. Extract `SessionReconnectCoordinator`
+---
 
-- [ ] Create `Services/SessionReconnectCoordinator.swift`
-  - Owns: `pendingReconnectHosts`, `reconnectTask`, `isNetworkReachable`, `networkMonitor`,
-    `networkMonitorQueue`
-  - Methods: `scheduleReconnectAttempt(after:)`, `attemptPendingReconnects()`,
-    `handleNetworkStatusChange(isReachable:)`, `applicationDidEnterBackground()`,
-    `applicationDidBecomeActive()`
-  - Protocol: `SessionReconnecting` — so `SessionManager` holds a reference without tight coupling
-- [ ] Update `SessionManager` to hold `private let reconnectCoordinator: SessionReconnectCoordinator`
-- [ ] Delegate all reconnect calls from `SessionManager` through the coordinator
-- [ ] Verify `networkMonitor.cancel()` still fires on coordinator `deinit`, not on `SessionManager`
-- [ ] Run tests; commit: `refactor: extract SessionReconnectCoordinator from SessionManager`
+### Sub-Phase 5a — Extract `SessionReconnectCoordinator` (~55 lines extracted)
 
-### 5b. Extract `SessionKeepaliveCoordinator`
+**New file:** `ProSSHMac/Services/SessionReconnectCoordinator.swift`
+**Header (first non-blank, non-import line):** `// Extracted from SessionManager.swift`
 
-- [ ] Create `Services/SessionKeepaliveCoordinator.swift`
-  - Owns: `keepaliveTask`, `keepaliveEnabled`, `keepaliveInterval` (UserDefaults reads)
-  - Methods: `startIfNeeded(activeSessions:)`, `stopIfIdle(activeSessions:)`,
-    `sendKeepalives(activeSessions:transport:lastActivity:)`
-- [ ] Update `SessionManager` to hold `private let keepaliveCoordinator: SessionKeepaliveCoordinator`
-- [ ] Remove `keepaliveTask`, `startKeepaliveTimerIfNeeded()`, `stopKeepaliveTimerIfIdle()`,
-      `sendKeepalives()` from `SessionManager`
-- [ ] Run tests; commit: `refactor: extract SessionKeepaliveCoordinator from SessionManager`
+#### Step 5a.1 — Read SessionManager.swift reconnect section (lines 56–61, 122–134, 252–262, 487–530, 1127–1185, 1239–1242, 1548–1598)
+- [ ] Confirm: properties `pendingReconnectHosts` (line 56), `reconnectTask` (line 57),
+      `networkMonitor` (line 59), `networkMonitorQueue` (line 60), `isNetworkReachable` (line 61)
+- [ ] Confirm: methods `handleNetworkStatusChange` (line 1548), `scheduleReconnectAttempt` (line 1557),
+      `attemptPendingReconnects` (line 1577)
+- [ ] Confirm: coordinator also needs to see `manager.hostBySessionID`, `manager.jumpHostBySessionID`,
+      `manager.manuallyDisconnectingSessions` (read in `handleShellStreamEnded` and `disconnect`)
 
-### 5c. Extract `TerminalRenderingCoordinator`
+#### Step 5a.2 — Create `SessionReconnectCoordinator.swift`
+- [ ] Create file at `ProSSHMac/Services/SessionReconnectCoordinator.swift`
+- [ ] First non-blank, non-import line: `// Extracted from SessionManager.swift`
+- [ ] Declare `@MainActor final class SessionReconnectCoordinator`
+- [ ] Properties:
+  - `weak var manager: SessionManager?`
+  - `var pendingReconnectHosts: [UUID: (host: Host, jumpHost: Host?)] = [:]`
+  - `var reconnectTask: Task<Void, Never>?`
+  - `nonisolated let networkMonitor: NWPathMonitor`  ← `nonisolated let` so deinit can cancel it
+  - `nonisolated let networkMonitorQueue: DispatchQueue`
+  - `var isNetworkReachable: Bool = true`
+- [ ] `init(manager: SessionManager)` — sets all properties; does NOT start monitor yet
+- [ ] `nonisolated deinit { networkMonitor.cancel() }`
+      (reconnectTask terminates naturally via [weak self]; NWPathMonitor needs explicit cancel)
+- [ ] `func start()` — sets `networkMonitor.pathUpdateHandler` then calls `networkMonitor.start(queue:)`
+- [ ] `func stop()` — calls `reconnectTask?.cancel(); reconnectTask = nil`
+- [ ] `func applicationDidEnterBackground()` — iterates `manager.sessions` to populate
+      `pendingReconnectHosts` with connected SSH sessions
+- [ ] `func applicationDidBecomeActive()` — calls `scheduleReconnectAttempt(after: .milliseconds(0))`
+- [ ] `func cancelPending(sessionID: UUID)` — `pendingReconnectHosts.removeValue(forKey: sessionID)`
+- [ ] `func removePendingForHost(_ hostID: UUID)` — removes all entries where `entry.host.id == hostID`
+- [ ] `func scheduleReconnect(for sessionID: UUID, host: Host?, jumpHost: Host?)` — stores in
+      `pendingReconnectHosts` if host non-nil, then calls `scheduleReconnectAttempt(after: .seconds(1))`
+- [ ] `private func handleNetworkStatusChange(isReachable: Bool)` — moved verbatim
+- [ ] `private func scheduleReconnectAttempt(after delay: Duration)` — moved verbatim,
+      but calls `manager?.reconnectConnect(host:jumpHost:)` indirectly via `attemptPendingReconnects`
+- [ ] `private func attemptPendingReconnects()` — moved verbatim, uses
+      `manager?.activeSession(for:)` and `manager?.reconnectConnect(host:jumpHost:)`
+- [ ] File must pass `-strict-concurrency=complete` — verify `nonisolated let` annotations
+      on networkMonitor and networkMonitorQueue allow deinit access
 
-- [ ] Create `Services/TerminalRenderingCoordinator.swift`
-  - Owns: per-session `TerminalEngine` instances, grid snapshots, shell buffers,
-    bell events, input mode snapshots, window titles, working directories,
-    scroll offsets, pending snapshot publish tasks, timing policies
-  - Methods: `publishGridState(for:engine:snapshotOverride:)`,
-    `scheduleCoalescedGridPublish(for:engine:)`, `scrollTerminal(sessionID:delta:)`,
-    `scrollToBottom(sessionID:)`, `clearShellBuffer(sessionID:)`,
-    `appendShellLine(_:to:)`, `resizeTerminal(sessionID:columns:rows:)`
-  - Exposes `@Published` state via a `TerminalRenderingState` observable wrapper
-    (or stays `@MainActor` and is composed into `SessionManager`'s published surface)
-- [ ] Move all `gridSnapshotsBySessionID`, `shellBuffers`, `bellEventNonceBySessionID`,
-      `inputModeSnapshotsBySessionID`, `windowTitleBySessionID`, `workingDirectoryBySessionID`,
-      `scrollOffsetBySessionID`, `throughputModeEnabled` policy into this coordinator
-- [ ] Update `SessionManager` to hold `private let renderingCoordinator: TerminalRenderingCoordinator`
-- [ ] Run tests; commit: `refactor: extract TerminalRenderingCoordinator from SessionManager`
+#### Step 5a.3 — Widen visibility in SessionManager.swift
+- [ ] `private var hostBySessionID` → `var hostBySessionID` (remove `private`)
+- [ ] `private var jumpHostBySessionID` → `var jumpHostBySessionID`
+- [ ] `private var manuallyDisconnectingSessions` → `var manuallyDisconnectingSessions`
 
-### 5d. Extract `SessionRecordingCoordinator`
+#### Step 5a.4 — Add coordinator + helper to SessionManager.swift
+- [ ] Add `let reconnectCoordinator: SessionReconnectCoordinator` (after existing `let` declarations)
+- [ ] In `init()`: remove the `networkMonitor.pathUpdateHandler = ...` block (lines 122–127);
+      add at end of init:
+      ```swift
+      reconnectCoordinator = SessionReconnectCoordinator(manager: self)
+      reconnectCoordinator.start()
+      ```
+- [ ] In `deinit`: remove `networkMonitor.cancel()` and `reconnectTask?.cancel()` lines
+- [ ] Add `nonisolated deinit {}` (empty body prevents actor-isolated deallocation crash in XCTest)
+      — NOTE: if SessionManager already has a `deinit`, rename to `nonisolated deinit` and keep
+      `keepaliveTask?.cancel()` inside until Phase 5b removes it
+- [ ] Add internal helper method:
+      ```swift
+      func reconnectConnect(host: Host, jumpHost: Host?) async throws -> Session {
+          try await connect(to: host, jumpHost: jumpHost, automaticReconnect: true, passwordOverride: nil)
+      }
+      ```
 
-- [ ] Create `Services/SessionRecordingCoordinator.swift`
-  - Wraps `SessionRecorder`; owns `isRecordingBySessionID`, `hasRecordingBySessionID`,
-    `isPlaybackRunningBySessionID`, `latestRecordingURLBySessionID`
-  - Methods: `toggleRecording(sessionID:)`, `startRecording(sessionID:)`,
-    `stopRecording(sessionID:)`, `playLastRecording(sessionID:speed:)`,
-    `exportLastRecordingAsCast(sessionID:columns:rows:)`, `finalizeRecordingIfNeeded(sessionID:)`
-- [ ] Update `SessionManager` to hold `private let recordingCoordinator: SessionRecordingCoordinator`
-- [ ] Remove recording methods from `SessionManager`
-- [ ] Run tests; commit: `refactor: extract SessionRecordingCoordinator from SessionManager`
+#### Step 5a.5 — Update SessionManager call sites
+- [ ] `applicationDidEnterBackground()` (line ~252): replace body with
+      `reconnectCoordinator.applicationDidEnterBackground()`
+- [ ] `applicationDidBecomeActive()` (line ~260): replace body with
+      `reconnectCoordinator.applicationDidBecomeActive()`
+- [ ] `connect()` private method (line ~371): replace
+      `for (key, entry) in pendingReconnectHosts where entry.host.id == host.id { ... }` with
+      `reconnectCoordinator.removePendingForHost(host.id)`
+- [ ] `disconnect()` (line ~497): replace `pendingReconnectHosts.removeValue(forKey: sessionID)` with
+      `reconnectCoordinator.cancelPending(sessionID: sessionID)`
+- [ ] `removeSession()` (line ~1239): replace `pendingReconnectHosts.removeValue(forKey: sessionID)` with
+      `reconnectCoordinator.cancelPending(sessionID: sessionID)`
+- [ ] `handleShellStreamEnded()` (line ~1162): capture host BEFORE cleanup:
+      `let jumpHost = jumpHostBySessionID[sessionID]`; remove the
+      `if let host { pendingReconnectHosts[sessionID] = ... }` block;
+      replace `scheduleReconnectAttempt(after: .seconds(1))` at end with
+      `reconnectCoordinator.scheduleReconnect(for: sessionID, host: host, jumpHost: jumpHost)`
+- [ ] Delete private properties from SessionManager: `pendingReconnectHosts`, `reconnectTask`,
+      `networkMonitor`, `networkMonitorQueue`, `isNetworkReachable` (they now live on coordinator)
+- [ ] Delete private methods from SessionManager: `handleNetworkStatusChange(isReachable:)`,
+      `scheduleReconnectAttempt(after:)`, `attemptPendingReconnects()`
 
-### 5e. Clean up `SessionManager` itself
+#### Step 5a.6 — Build check
+```bash
+xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build
+# Must print: ** BUILD SUCCEEDED **
+```
+- [ ] BUILD SUCCEEDED
 
-- [ ] Verify `SessionManager` now only owns: session list `@Published`, shell channels map,
-      parser reader tasks, connection lifecycle methods, host verification, and known hosts
-- [ ] Remove `// swiftlint:disable file_length` added in Phase 0 if file is now under ~400 lines
-- [ ] Ensure all `@Published` properties on `SessionManager` that were moved are now
-      either forwarded from coordinators or removed where the UI accesses the coordinator directly
-- [ ] Update `ProSSHMacApp.swift` / `HostListViewModel` injection points for new coordinator types
-- [ ] Run tests; commit: `refactor: SessionManager slim-down, inject coordinators`
+#### Step 5a.7 — Commit
+- [ ] Commit: `refactor: extract SessionReconnectCoordinator from SessionManager`
+
+---
+
+### Sub-Phase 5b — Extract `SessionKeepaliveCoordinator` (~45 lines extracted)
+
+**New file:** `ProSSHMac/Services/SessionKeepaliveCoordinator.swift`
+**Header:** `// Extracted from SessionManager.swift`
+
+#### Step 5b.1 — Read SessionManager.swift keepalive section (lines 71, 87–98, 1430–1464)
+- [ ] Confirm: `keepaliveTask` (line 71), `keepaliveEnabled` computed (line 91),
+      `keepaliveInterval` computed (line 95)
+- [ ] Confirm: methods `startKeepaliveTimerIfNeeded` (line 1432),
+      `stopKeepaliveTimerIfIdle` (line 1443), `sendKeepalives` (line 1451)
+- [ ] Note: `sendKeepalives` reads `manager.sessions`, `manager.lastActivityBySessionID`,
+      `manager.transport` — these stay on SessionManager, coordinator accesses via manager ref
+
+#### Step 5b.2 — Create `SessionKeepaliveCoordinator.swift`
+- [ ] Create file at `ProSSHMac/Services/SessionKeepaliveCoordinator.swift`
+- [ ] First non-blank, non-import line: `// Extracted from SessionManager.swift`
+- [ ] Declare `@MainActor final class SessionKeepaliveCoordinator`
+- [ ] Properties:
+  - `weak var manager: SessionManager?`
+  - `var keepaliveTask: Task<Void, Never>?`
+- [ ] Computed properties (read UserDefaults via manager pattern or directly):
+  - `private var keepaliveEnabled: Bool { UserDefaults.standard.bool(forKey: "ssh.keepalive.enabled") }`
+  - `private var keepaliveInterval: TimeInterval { let s = UserDefaults.standard.integer(forKey: "ssh.keepalive.interval"); return s > 0 ? TimeInterval(s) : 30 }`
+- [ ] `init(manager: SessionManager)`
+- [ ] `nonisolated deinit {}` (keepaliveTask uses [weak self], terminates naturally)
+- [ ] `func startIfNeeded()` — moved from `startKeepaliveTimerIfNeeded`; references `manager` for
+      the keepalive task body
+- [ ] `func stopIfIdle()` — moved from `stopKeepaliveTimerIfIdle`; reads `manager?.sessions`
+- [ ] `private func sendKeepalives() async` — moved from `sendKeepalives`; accesses
+      `manager?.sessions`, `manager?.lastActivityBySessionID`, `manager?.transport`
+- [ ] `func handleShellStreamEnded(sessionID: UUID)` — calls `stopIfIdle()`
+      (convenience wrapper called from SessionManager)
+- [ ] File must pass `-strict-concurrency=complete`
+
+#### Step 5b.3 — Widen visibility in SessionManager.swift
+- [ ] `private let transport` → `let transport` (remove `private`; coordinator reads it)
+- [ ] `private var shellChannels` → `var shellChannels` (coordinator may read for connected check)
+- [ ] `private(set) var lastActivityBySessionID` → `var lastActivityBySessionID`
+      (coordinator reads it; TerminalView may also read — keep internal with full read/write)
+
+#### Step 5b.4 — Add coordinator to SessionManager.swift + remove keepalive state
+- [ ] Add `let keepaliveCoordinator: SessionKeepaliveCoordinator`
+- [ ] In `init()`: at end, after reconnectCoordinator setup, add:
+      `keepaliveCoordinator = SessionKeepaliveCoordinator(manager: self)`
+- [ ] In `nonisolated deinit`: remove `keepaliveTask?.cancel()` (if still present from 5a)
+- [ ] Delete private property `keepaliveTask` from SessionManager
+- [ ] Delete computed properties `keepaliveEnabled` and `keepaliveInterval` from SessionManager
+- [ ] Delete methods `startKeepaliveTimerIfNeeded()`, `stopKeepaliveTimerIfIdle()`,
+      `sendKeepalives()` from SessionManager
+
+#### Step 5b.5 — Update SessionManager call sites
+- [ ] After `try await openShell(for: session)` in `connect()` (line ~413):
+      replace `startKeepaliveTimerIfNeeded()` with `keepaliveCoordinator.startIfNeeded()`
+- [ ] In `disconnect()` (line ~521): replace `stopKeepaliveTimerIfIdle()` with
+      `keepaliveCoordinator.stopIfIdle()`
+- [ ] In `handleShellStreamEnded()` (line ~1158): replace `stopKeepaliveTimerIfIdle()` with
+      `keepaliveCoordinator.stopIfIdle()`
+
+#### Step 5b.6 — Build check
+```bash
+xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build
+# Must print: ** BUILD SUCCEEDED **
+```
+- [ ] BUILD SUCCEEDED
+
+#### Step 5b.7 — Commit
+- [ ] Commit: `refactor: extract SessionKeepaliveCoordinator from SessionManager`
+
+---
+
+### Sub-Phase 5c — Extract `TerminalRenderingCoordinator` (~420 lines extracted — largest)
+
+**New file:** `ProSSHMac/Services/TerminalRenderingCoordinator.swift`
+**Header:** `// Extracted from SessionManager.swift`
+
+#### Step 5c.1 — Read SessionManager.swift rendering section
+- [ ] Confirm private properties moving to coordinator:
+  - `gridSnapshotsBySessionID` (line 29) — private cache, NOT @Published
+  - `pendingSnapshotPublishTasksBySessionID` (line 66)
+  - `scrollOffsetBySessionID` (line 68)
+  - `lastShellBufferPublishAtBySessionID` (line 70)
+  - `lastBellTimeBySessionID` (line 64)
+  - `pendingResizeTasks` (line 62)
+  - `desiredPTYBySessionID` (line 52)
+  - `shellBufferPublishInterval` (line 73)
+  - `throughputShellBufferPublishInterval` (line 74)
+  - `snapshotPublishInterval` (line 75)
+  - `throughputSnapshotPublishInterval` (line 76)
+  - `perfSignpostLog` (lines 77–79, DEBUG only)
+  - `throughputModeEnabled` computed (line 87)
+  - `configuredScrollbackLines` computed (line 100)
+- [ ] Confirm `@Published` properties that STAY on SessionManager (coordinator writes via manager ref):
+  `gridSnapshotNonceBySessionID`, `shellBuffers`, `bellEventNonceBySessionID`,
+  `inputModeSnapshotsBySessionID`, `windowTitleBySessionID`, `workingDirectoryBySessionID`
+  — drop `private(set)` from all so coordinator can write
+- [ ] Confirm methods moving to coordinator:
+  lines 627–712 (resizeTerminal, clearShellBuffer, scrollTerminal, scrollToBottom,
+  isScrolledBack, gridSnapshot), lines 1100–1125 (publishSyncExitSnapshot,
+  scheduleParsedChunkPublish), lines 1187–1222 (appendShellLine, applyPlaybackStep),
+  lines 1303–1428 (shouldPublishShellBuffer, scheduleCoalescedGridPublish,
+  flushPendingSnapshotPublishIfNeeded, cancelPendingSnapshotPublish, publishGridState)
+
+#### Step 5c.2 — Create `TerminalRenderingCoordinator.swift`
+- [ ] Create file at `ProSSHMac/Services/TerminalRenderingCoordinator.swift`
+- [ ] First non-blank, non-import line: `// Extracted from SessionManager.swift`
+- [ ] Declare `@MainActor final class TerminalRenderingCoordinator`
+- [ ] Move all properties listed in 5c.1 into coordinator
+- [ ] `init(manager: SessionManager)`
+- [ ] `nonisolated deinit {}` (tasks use [weak self])
+- [ ] `func initializePTY(for sessionID: UUID)` — sets `desiredPTYBySessionID[sessionID] = .default`
+- [ ] `func cleanupSession(_ sessionID: UUID)` — cancels pending tasks and removes all dicts for session
+- [ ] Move all rendering methods listed in 5c.1 into coordinator; replace direct SessionManager
+      property accesses with `manager?.prop` for `@Published` state, and local `self.prop` for
+      coordinator-owned private state
+- [ ] Update `publishGridState` to write `manager?.gridSnapshotNonceBySessionID`,
+      `manager?.shellBuffers`, `manager?.bellEventNonceBySessionID`, etc.
+- [ ] `appendShellLine` and `applyPlaybackStep` both access `engines` (stays on coordinator)
+      and write `manager?.gridSnapshotNonceBySessionID` etc.
+- [ ] File must pass `-strict-concurrency=complete`
+
+#### Step 5c.3 — Widen visibility in SessionManager.swift
+- [ ] `private var engines` → `var engines` (coordinator needs it; also used in startParserReader)
+- [ ] `private let terminalHistoryIndex` → `let terminalHistoryIndex`
+- [ ] Drop `private(set)` from: `shellBuffers`, `gridSnapshotNonceBySessionID`,
+      `bellEventNonceBySessionID`, `inputModeSnapshotsBySessionID`, `windowTitleBySessionID`,
+      `workingDirectoryBySessionID` — they stay `@Published` but coordinator can write them
+
+#### Step 5c.4 — Add coordinator to SessionManager.swift + remove rendering state
+- [ ] Add `let renderingCoordinator: TerminalRenderingCoordinator`
+- [ ] In `init()`: at end, add `renderingCoordinator = TerminalRenderingCoordinator(manager: self)`
+- [ ] In `openLocalSession()` (line ~177): replace `desiredPTYBySessionID[sessionID] = .default` and
+      direct snapshot/grid/shellBuffer assignments with `renderingCoordinator.initializePTY(for: sessionID)`
+      (keep the @Published initializations like `gridSnapshotNonceBySessionID[sessionID] = 0` etc.
+      where they are for now — the coordinator's `initializePTY` only sets desiredPTYBySessionID)
+- [ ] In `connect()` private method: same — replace `desiredPTYBySessionID[sessionID] = .default` with
+      `renderingCoordinator.initializePTY(for: sessionID)`
+- [ ] In `removeSessionArtifacts()`: add `renderingCoordinator.cleanupSession(sessionID)` and
+      remove the lines that clear coordinator-owned dicts
+- [ ] In `injectScreenshotSessions()` (line ~1615): replace
+      `desiredPTYBySessionID[session.id] = .default` with `renderingCoordinator.initializePTY(for: session.id)`
+- [ ] In `startParserReader()`: replace calls:
+      `scheduleParsedChunkPublish(...)` → `renderingCoordinator.scheduleParsedChunkPublish(...)`
+      `publishSyncExitSnapshot(...)` → `renderingCoordinator.publishSyncExitSnapshot(...)`
+      `flushPendingSnapshotPublishIfNeeded(...)` → `renderingCoordinator.flushPendingSnapshotPublishIfNeeded(...)`
+      `publishGridState(...)` → `renderingCoordinator.publishGridState(...)`
+- [ ] Add public forwarding wrappers to SessionManager (keep public API unchanged for TerminalView):
+      `func resizeTerminal(sessionID:columns:rows:)` → `await renderingCoordinator.resizeTerminal(...)`
+      `func scrollTerminal(sessionID:delta:)` → `renderingCoordinator.scrollTerminal(...)`
+      `func scrollToBottom(sessionID:)` → `renderingCoordinator.scrollToBottom(...)`
+      `func isScrolledBack(sessionID:) -> Bool` → `renderingCoordinator.isScrolledBack(...)`
+      `func gridSnapshot(for:) -> GridSnapshot?` → `renderingCoordinator.gridSnapshot(for:)`
+      `func clearShellBuffer(sessionID:)` → `renderingCoordinator.clearShellBuffer(...)`
+- [ ] In `appendShellLine(_:to:)` callers: update to `await renderingCoordinator.appendShellLine(_:to:)`
+- [ ] In `applyPlaybackStep(_:to:)` in recording coordinator (Phase 5d): update to use
+      `manager?.renderingCoordinator.applyPlaybackStep(_:to:)`
+- [ ] Delete coordinator-owned private properties and methods from SessionManager
+
+#### Step 5c.5 — Build check
+```bash
+xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build
+# Must print: ** BUILD SUCCEEDED **
+```
+- [ ] BUILD SUCCEEDED
+
+#### Step 5c.6 — Commit
+- [ ] Commit: `refactor: extract TerminalRenderingCoordinator from SessionManager`
+
+---
+
+### Sub-Phase 5d — Extract `SessionRecordingCoordinator` (~85 lines extracted)
+
+**New file:** `ProSSHMac/Services/SessionRecordingCoordinator.swift`
+**Header:** `// Extracted from SessionManager.swift`
+
+#### Step 5d.1 — Read SessionManager.swift recording section (lines 47, 714–778, 1081–1098, 1252–1266)
+- [ ] Confirm: `sessionRecorder: SessionRecorder` (line 47) moves into coordinator
+- [ ] Confirm `@Published` properties STAYING on SessionManager (drop `private(set)`):
+      `isRecordingBySessionID`, `hasRecordingBySessionID`, `isPlaybackRunningBySessionID`,
+      `latestRecordingURLBySessionID`
+- [ ] Confirm methods: `toggleRecording`, `startRecording`, `stopRecording`, `playLastRecording`,
+      `exportLastRecordingAsCast`, `finalizeRecordingIfNeeded`, `applyPlaybackStep`
+- [ ] Note: `recordParsedChunk` (line 1081) stays on SessionManager but its recording step
+      (`sessionRecorder.isRecording(...)` + `sessionRecorder.recordOutputData(...)`) is extracted
+      to `recordingCoordinator.recordIfActive(sessionID:chunk:throughputMode:)`
+
+#### Step 5d.2 — Create `SessionRecordingCoordinator.swift`
+- [ ] Create file at `ProSSHMac/Services/SessionRecordingCoordinator.swift`
+- [ ] First non-blank, non-import line: `// Extracted from SessionManager.swift`
+- [ ] Declare `@MainActor final class SessionRecordingCoordinator`
+- [ ] Properties:
+  - `weak var manager: SessionManager?`
+  - `let sessionRecorder: SessionRecorder`
+- [ ] `init(manager: SessionManager, recorder: SessionRecorder = SessionRecorder())`
+- [ ] `nonisolated deinit {}`
+- [ ] Move all recording methods into coordinator; write `@Published` state via `manager?.prop = value`
+- [ ] `func recordIfActive(sessionID: UUID, chunk: Data, throughputMode: Bool)` — replaces the
+      recording block in `recordParsedChunk`; uses `sessionRecorder.isRecording(...)` and
+      `sessionRecorder.recordOutputData(...)`
+- [ ] In `playLastRecording`, call `manager?.renderingCoordinator.clearShellBuffer(sessionID:)` for
+      the clear-screen step and `manager?.renderingCoordinator.appendShellLine(_:to:)` for messages
+- [ ] `applyPlaybackStep(_:to:)` calls `manager?.renderingCoordinator.applyPlaybackStep(_:to:)`
+- [ ] File must pass `-strict-concurrency=complete`
+
+#### Step 5d.3 — Widen visibility in SessionManager.swift
+- [ ] Drop `private(set)` from: `isRecordingBySessionID`, `hasRecordingBySessionID`,
+      `isPlaybackRunningBySessionID`, `latestRecordingURLBySessionID`
+
+#### Step 5d.4 — Add coordinator to SessionManager.swift + remove recording state
+- [ ] Add `let recordingCoordinator: SessionRecordingCoordinator`
+- [ ] In `init()`: change `self.sessionRecorder = sessionRecorder` to pass it into coordinator:
+      `recordingCoordinator = SessionRecordingCoordinator(manager: self, recorder: sessionRecorder)`
+      (or create recorder internally in coordinator and remove it from SessionManager's init params)
+- [ ] Remove `private let sessionRecorder: SessionRecorder` declaration
+- [ ] Add public forwarding wrappers:
+      `func toggleRecording(sessionID:)` → `await recordingCoordinator.toggleRecording(...)`
+      `func startRecording(sessionID:)` → `await recordingCoordinator.startRecording(...)`
+      `func stopRecording(sessionID:)` → `await recordingCoordinator.stopRecording(...)`
+      `func playLastRecording(sessionID:speed:)` → `await recordingCoordinator.playLastRecording(...)`
+      `func exportLastRecordingAsCast(sessionID:columns:rows:)` → `await recordingCoordinator.exportLastRecordingAsCast(...)`
+- [ ] In `disconnect()` (line ~511): replace `finalizeRecordingIfNeeded(sessionID: sessionID)` with
+      `recordingCoordinator.finalizeRecordingIfNeeded(sessionID: sessionID)`
+- [ ] In `removeSession()` (line ~1243): same replacement
+- [ ] In `handleShellStreamEnded()` (line ~1149, 1181): same replacement
+- [ ] In `recordParsedChunk()` (line ~1081): replace the `sessionRecorder.isRecording(...)` block with
+      `recordingCoordinator.recordIfActive(sessionID: sessionID, chunk: chunk, throughputMode: throughputModeEnabled)`
+      — NOTE: `throughputModeEnabled` computed is still on SessionManager (rendering coordinator also uses it)
+      — actually `throughputModeEnabled` moved to TerminalRenderingCoordinator in 5c;
+        call `renderingCoordinator.throughputModeEnabled` or keep a copy as internal computed on SessionManager
+- [ ] In `sendShellInput` (line ~581) and `sendRawShellInput` (line ~607) and
+      `executeCommandAndWait` (line ~855): replace `sessionRecorder.recordInput(...)` with
+      `recordingCoordinator.sessionRecorder.recordInput(...)` or add a forwarding method
+- [ ] Delete `finalizeRecordingIfNeeded`, `applyPlaybackStep` from SessionManager
+- [ ] Delete private methods that moved to coordinator
+
+#### Step 5d.5 — Build check
+```bash
+xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build
+# Must print: ** BUILD SUCCEEDED **
+```
+- [ ] BUILD SUCCEEDED
+
+#### Step 5d.6 — Commit
+- [ ] Commit: `refactor: extract SessionRecordingCoordinator from SessionManager`
+
+---
+
+### Sub-Phase 5e — SessionManager Slim-Down
+
+#### Step 5e.1 — Verify no dangling declarations
+- [ ] Scan SessionManager.swift for any private property declarations that should have been removed
+      in 5a–5d (grep for `pendingReconnectHosts`, `reconnectTask`, `networkMonitor`,
+      `networkMonitorQueue`, `isNetworkReachable`, `keepaliveTask`, `desiredPTYBySessionID`,
+      `gridSnapshotsBySessionID`, `pendingSnapshotPublishTasksBySessionID`, `scrollOffsetBySessionID`,
+      `lastShellBufferPublishAtBySessionID`, `lastBellTimeBySessionID`, `pendingResizeTasks`,
+      `sessionRecorder` as private let)
+- [ ] Verify all four coordinators are properly initialized in `init()`
+- [ ] Verify `nonisolated deinit {}` is present
+
+#### Step 5e.2 — Count lines
+```bash
+wc -l ProSSHMac/Services/SessionManager.swift
+```
+- [ ] Record line count. Target: < 300 lines.
+- [ ] If line count < 400: remove `// swiftlint:disable file_length` from line 1
+
+#### Step 5e.3 — Run full test suite
+```bash
+xcodebuild -scheme ProSSHMac -destination 'platform=macOS' test 2>&1 | grep -E 'Test Suite.*passed|Test Suite.*failed|error:'
+```
+- [ ] Expected: 186 tests, ≤ 2 pre-existing failures (emoji rendering)
+
+#### Step 5e.4 — Update CLAUDE.md
+- [ ] Phase 5 → **COMPLETE** in phase status table with commit hash
+- [ ] Update "Current State" block: current phase = Phase 6, status = NOT PLANNED
+- [ ] Add Refactor Log entry dated 2026-02-24
+
+#### Step 5e.5 — Update docs/featurelist.md
+- [ ] Add dated loop-log entry for Phase 5
+
+#### Step 5e.6 — Commit
+- [ ] Commit: `refactor: SessionManager slim-down, inject coordinators`
 
 ---
 
