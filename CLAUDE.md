@@ -18,36 +18,57 @@ The long-term memory for this project lives in `docs/featurelist.md`.
 
 ## Active Refactor: Strict Concurrency (RefactorTheActor.md)
 
-**Effort:** Separate concerns, eliminate god files, establish clean actor isolation boundaries so
-Swift strict concurrency (`-strict-concurrency=complete`) can be enabled incrementally.
+### ► CURRENT STATE — START HERE
 
-**Spec & execution guide:** `RefactorTheActor.md` — this file WILL be fully optimized before
-any code work begins. Every phase and every step will be expanded into a granular, numbered
-step-by-step guide that can be executed mechanically. After optimization it serves as both the
-spec and the run-book.
+```
+Active branch : refactor/actor-isolation
+Current phase : Phase 1 — Split SSHTransport.swift
+Phase status  : PLANNED (steps written in RefactorTheActor.md — execute them now)
+Immediate action: Open RefactorTheActor.md → Phase 1 → start at Step 1.0
+Key source file : ProSSHMac/Services/SSHTransport.swift  (1,653 lines)
+Last commit   : 97a602b  "docs: expand Phase 1 plan in RefactorTheActor.md"
+```
 
-**Workflow (plan → refactor → repeat):**
-1. For the next phase, update `RefactorTheActor.md` with a detailed, step-by-step execution plan
-   for that phase — every file creation, every symbol move, every build verification, in order.
-2. Execute the refactor by following those steps exactly, one at a time.
-3. Commit the completed phase, then return to step 1 for the next phase.
+**Update this block after every phase** — it is the first thing any new agent reads.
 
-**Branch:** `refactor/actor-isolation` — create it with `git checkout -b refactor/actor-isolation`
-before starting Phase 0. All refactor commits go on this branch.
+---
 
-### Phase Status (as of 2026-02-24)
+### Workflow — two states, repeat until Phase 8
+
+Every phase is in one of two states. Know which state you are in before doing anything.
+
+**State A — Phase is NOT PLANNED** (`RefactorTheActor.md` has only the sketch for this phase):
+1. Read every source file the phase will touch — understand what is there before moving anything.
+2. Expand the sketch into a granular, numbered step-by-step plan directly in `RefactorTheActor.md`:
+   every file to create, every symbol to move, every access modifier to change, every build check.
+3. Commit the plan: `docs: expand Phase N plan in RefactorTheActor.md`
+4. → Phase is now PLANNED. Switch to State B.
+
+**State B — Phase is PLANNED** (`RefactorTheActor.md` has the full numbered steps):
+1. Open `RefactorTheActor.md`, find the current phase, read every step before touching any file.
+2. Execute each step in order. After each build-check step, verify `** BUILD SUCCEEDED **`.
+3. Check off each `[ ]` as you complete it.
+4. When all steps are checked: run tests, commit the phase, update CLAUDE.md phase status table
+   and "Current State" block above, add a Refactor Log entry below.
+5. → Phase is COMPLETE. Move to the next phase (State A if unplanned, State B if already planned).
+
+**Branch:** `refactor/actor-isolation` — already created. All refactor commits go on this branch.
+
+---
+
+### Phase Status
 
 | Phase | Name | Status |
 |-------|------|--------|
-| 0 | Baseline audit & branch setup | **COMPLETE** (2026-02-24) |
-| 1 | Split `SSHTransport.swift` into `Services/SSH/` | PLANNED — ready to execute |
-| 2 | Kill CString pyramid, inject credential resolver | NOT STARTED |
-| 3 | Deduplicate remote path utilities → `RemotePath.swift` | NOT STARTED |
-| 4 | Generic `PersistentStore<T>` for store boilerplate | NOT STARTED |
-| 5 | Decompose `SessionManager.swift` into 5 coordinators | NOT STARTED |
-| 6 | Decompose `OpenAIAgentService.swift` into `Services/AI/` | NOT STARTED |
-| 7 | Strict concurrency pass (`-strict-concurrency=complete`) | NOT STARTED |
-| 8 | Test coverage backfill for all extracted types | NOT STARTED |
+| 0 | Baseline audit & branch setup | **COMPLETE** (2026-02-24, commit `9913cdc`) |
+| 1 | Split `SSHTransport.swift` into `Services/SSH/` | **PLANNED** — execute steps in RefactorTheActor.md |
+| 2 | Kill CString pyramid, inject credential resolver | NOT PLANNED |
+| 3 | Deduplicate remote path utilities → `RemotePath.swift` | NOT PLANNED |
+| 4 | Generic `PersistentStore<T>` for store boilerplate | NOT PLANNED |
+| 5 | Decompose `SessionManager.swift` into 5 coordinators | NOT PLANNED |
+| 6 | Decompose `OpenAIAgentService.swift` into `Services/AI/` | NOT PLANNED |
+| 7 | Strict concurrency pass (`-strict-concurrency=complete`) | NOT PLANNED |
+| 8 | Test coverage backfill for all extracted types | NOT PLANNED |
 
 ### Target Directory Layout After Phases 1–6
 
@@ -168,16 +189,18 @@ ProSSHMac/
 
 ## Key Files (most frequently edited)
 
+All paths below are relative to the repo root. Source files live under `ProSSHMac/` (not at root).
+
 | File | What it does | Size / Notes |
 |------|-------------|--------------|
-| `UI/Terminal/TerminalView.swift` | Main terminal UI, sidebar layout, focus management, input capture | ~3,425 lines |
-| `UI/Terminal/TerminalAIAssistantPane.swift` | AI copilot sidebar, composer text view, message rendering | ~781 lines |
-| `UI/Terminal/MetalTerminalSessionSurface.swift` | SwiftUI ↔ Metal bridge, snapshot application, selection | Medium |
-| `Terminal/Renderer/MetalTerminalRenderer.swift` | Metal draw loop, cell buffer upload, cursor/selection render | ~1,438 lines |
-| `Services/SessionManager.swift` | Session lifecycle, shell I/O, SFTP, grid snapshots, history | **1,639 lines — being decomposed in Phase 5** |
-| `Services/SSHTransport.swift` | All SSH transport types, protocols, mock actors, LibSSH actors | **1,652 lines — being split into `Services/SSH/` in Phase 1** |
-| `Services/OpenAIAgentService.swift` | Agent tool loop, tool dispatch, streaming parser, context mgmt | **1,945 lines — being decomposed into `Services/AI/` in Phase 6** |
-| `Terminal/Grid/TerminalGrid.swift` | Terminal grid state, character printing, scrolling, resize/reflow | ~2,311 lines |
+| `ProSSHMac/UI/Terminal/TerminalView.swift` | Main terminal UI, sidebar layout, focus management, input capture | ~3,425 lines |
+| `ProSSHMac/UI/Terminal/TerminalAIAssistantPane.swift` | AI copilot sidebar, composer text view, message rendering | ~781 lines |
+| `ProSSHMac/UI/Terminal/MetalTerminalSessionSurface.swift` | SwiftUI ↔ Metal bridge, snapshot application, selection | Medium |
+| `ProSSHMac/Terminal/Renderer/MetalTerminalRenderer.swift` | Metal draw loop, cell buffer upload, cursor/selection render | ~1,438 lines |
+| `ProSSHMac/Services/SessionManager.swift` | Session lifecycle, shell I/O, SFTP, grid snapshots, history | **1,640 lines — being decomposed in Phase 5** |
+| `ProSSHMac/Services/SSHTransport.swift` | All SSH transport types, protocols, mock actors, LibSSH actors | **1,653 lines — being split into `ProSSHMac/Services/SSH/` in Phase 1** |
+| `ProSSHMac/Services/OpenAIAgentService.swift` | Agent tool loop, tool dispatch, streaming parser, context mgmt | **1,946 lines — being decomposed into `ProSSHMac/Services/AI/` in Phase 6** |
+| `ProSSHMac/Terminal/Grid/TerminalGrid.swift` | Terminal grid state, character printing, scrolling, resize/reflow | ~2,311 lines |
 
 ---
 
@@ -228,26 +251,37 @@ ProSSHMac/
 
 ---
 
-## Recent Changes (Session Log)
+## Recent Changes
 
-- **2026-02-24**: Completed Phase 0. Branch `refactor/actor-isolation` created. Build baseline:
-  0 warnings, BUILD SUCCEEDED. Test baseline: 861 tests, 23 pre-existing failures (color rendering
-  + mouse encoding, unrelated to refactor). `// swiftlint:disable file_length` added to all three
-  god files as line 1. `WARNINGS_BASELINE.txt` created and gitignored. Commit: `9913cdc`.
-  Note: actual file paths are `ProSSHMac/Services/` not `Services/` — update all Phase 1+ steps
-  accordingly.
-- **2026-02-24**: Established the Strict Concurrency Refactor plan. `RefactorTheActor.md` added to
-  repo root as the 8-phase spec. `CLAUDE.md` updated to reflect refactor phase status, rules, and
-  the plan→refactor→plan workflow. `RefactorTheActor.md` WILL be edited: each phase gets a full
-  step-by-step execution plan written into it before any code is touched for that phase. No code
-  has been changed yet — next step is to fully expand Phase 0 in `RefactorTheActor.md`, then
-  execute it. Current state: `Services/` is flat (no `SSH/` or `AI/` subdirs), all three god files
-  are untouched (SSHTransport.swift = 1,652L, SessionManager.swift = 1,639L,
-  OpenAIAgentService.swift = 1,945L), `refactor/actor-isolation` branch does not exist yet.
-- **2026-02-23**: Fixed terminal focus loss after clicking AI chat composer. Root cause: clicking the chat input made the `ComposerTextView` first responder, but clicking back on the terminal couldn't reclaim focus because `armForKeyboardInputIfNeeded()` bailed out when `isTextInputFocused` detected the still-active NSTextView. Fix: `focusSessionAndPane()` now explicitly calls `window.makeFirstResponder(nil)` to resign any active NSTextView before setting SwiftUI state, allowing the normal `armForKeyboardInputIfNeeded()` path to succeed.
-- **2026-02-23**: Implemented Shell Integration / Device Type configuration. Per-host `ShellIntegrationType` (none, zsh/bash/fish/posixSh, 8 network vendors, custom regex) stored in `ShellIntegrationConfig` on `Host`. UI picker in `HostFormView`. `ShellIntegrationScripts` provides OSC 133 injection for Unix shells (zsh precmd/preexec, bash PROMPT_COMMAND/DEBUG, fish events, POSIX sh PS1 wrapping). Vendor types use regex prompt detection in `TerminalHistoryIndex.looksLikePrompt()`. Local shells inject via overlay rc files; SSH sessions inject via post-connect raw input with 500ms delay. Key new file: `Terminal/Features/ShellIntegrationScripts.swift`.
-- **2026-02-23**: Fixed invisible text after TUI programs exit. `disableAlternateBuffer()` now resets SGR attributes to defaults instead of restoring saved (potentially corrupted) colors. Metal shader now has a minimum-contrast safety net: if both fg and bg luminance < 0.06, fg is replaced with white (skipped when `hidden` attribute is set).
-- **2026-02-23**: Transformed AI copilot into autonomous terminal agent. Added `execute_and_wait` tool (runs command + returns output/exit code in one step). Rewrote system prompt to declare full terminal control, encourage multi-step reasoning, remove artificial limits. Enabled context persistence. Raised iteration limits (default 50, direct action 15). Increased output caps (command output 16K, screen 300 lines). Enriched tool descriptions. Narrowed direct action detection. All 14 agent tests pass.
+### Refactor Log (strict concurrency refactor — most recent first)
+
+- **2026-02-24 — Phase 1 PLANNED** (`97a602b`): Expanded Phase 1 from a 4-bullet sketch into a
+  17-step execution plan based on reading `SSHTransport.swift` in full. Key corrections captured:
+  `UncheckedOpaquePointer` → `SSHTransportTypes.swift` (used by LibSSH actors, not just Mock);
+  `LibSSHConnectResult/Failure/AuthMaterial` stay in `LibSSHTransport.swift`; mock branch in
+  `SSHTransportFactory` needs `#if DEBUG` guard; `private extension AuthMethod` and
+  `private extension Array<CChar>` lose `private` keyword so LibSSHShellChannel/ForwardChannel
+  can see `asString`. Xcode target registration steps included per sub-phase.
+- **2026-02-24 — Phase 0 COMPLETE** (`9913cdc`): Branch `refactor/actor-isolation` created.
+  Build baseline: 0 warnings, BUILD SUCCEEDED. Test baseline: 861 tests, 23 pre-existing failures
+  (color rendering + mouse encoding, unrelated to refactor). `// swiftlint:disable file_length`
+  added to all three god files as line 1. `WARNINGS_BASELINE.txt` created and gitignored.
+- **2026-02-24 — Refactor established**: `RefactorTheActor.md` added as 8-phase spec. Workflow
+  defined: expand phase plan in `RefactorTheActor.md` → execute → commit → repeat. Each phase gets
+  a full granular plan before any code is touched. `Services/` is flat (no subdirs yet). God file
+  sizes at start: SSHTransport=1,652L, SessionManager=1,639L, OpenAIAgentService=1,945L.
+
+### Feature Log (non-refactor changes — most recent first)
+
+- **2026-02-23**: Fixed terminal focus loss after clicking AI chat composer. `focusSessionAndPane()`
+  now calls `window.makeFirstResponder(nil)` to resign the NSTextView before setting SwiftUI state.
+- **2026-02-23**: Implemented Shell Integration / Device Type configuration. Per-host
+  `ShellIntegrationType` stored in `ShellIntegrationConfig`. OSC 133 injection for Unix shells.
+  New file: `ProSSHMac/Terminal/Features/ShellIntegrationScripts.swift`.
+- **2026-02-23**: Fixed invisible text after TUI programs exit. `disableAlternateBuffer()` resets
+  SGR to defaults. Metal shader minimum-contrast safety net added.
+- **2026-02-23**: Transformed AI copilot into autonomous terminal agent. Added `execute_and_wait`
+  tool. Raised iteration limits, increased output caps. All 14 agent tests pass.
 
 ---
 
