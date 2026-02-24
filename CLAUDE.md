@@ -166,10 +166,10 @@ Each starts with `// Extracted from TerminalView.swift` as first non-blank, non-
 
 ```
 Active branch   : master
-Current phase   : Phase 5 — NOT STARTED
+Current phase   : Phase 6 — NOT STARTED
 Phase status    : NOT STARTED
-Immediate action: Begin Phase 5 (extract Scrolling → TerminalGrid+Scrolling.swift).
-Last commit     : 5ce0ae4 "refactor(RefactorTG Phase 4): extract Cursor Movement + Cell R/W to TerminalGrid+CursorOps.swift"
+Immediate action: Begin Phase 6 (extract Erasing → TerminalGrid+Erasing.swift).
+Last commit     : <hash> "refactor(RefactorTG Phase 5): extract Scrolling to TerminalGrid+Scrolling.swift"
 ```
 
 **Update this block after every phase.**
@@ -183,7 +183,7 @@ Last commit     : 5ce0ae4 "refactor(RefactorTG Phase 4): extract Cursor Movement
 | 2 | Extract OSC Handlers → `TerminalGrid+OSCHandlers.swift` | **COMPLETE** (2026-02-24) |
 | 3 | Extract Tab Stops + Dirty Tracking → `TerminalGrid+TabsAndDirty.swift` | **COMPLETE** (2026-02-25) |
 | 4 | Extract Cursor Movement + Cell R/W → `TerminalGrid+CursorOps.swift` | **COMPLETE** (2026-02-25) |
-| 5 | Extract Scrolling → `TerminalGrid+Scrolling.swift` | NOT STARTED |
+| 5 | Extract Scrolling → `TerminalGrid+Scrolling.swift` | **COMPLETE** (2026-02-25) |
 | 6 | Extract Erasing → `TerminalGrid+Erasing.swift` | NOT STARTED |
 | 7 | Extract Line Operations → `TerminalGrid+LineOps.swift` | NOT STARTED |
 | 8 | Extract Screen Buffer + Cursor Save/Restore → `TerminalGrid+ScreenBuffer.swift` | NOT STARTED |

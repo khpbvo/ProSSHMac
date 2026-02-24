@@ -19,10 +19,10 @@ Follow the same workflow as `RefactorTerminalView.md`:
 
 ```
 Active branch   : master
-Current phase   : Phase 5 — NOT STARTED
+Current phase   : Phase 6 — NOT STARTED
 Phase status    : NOT STARTED
-Immediate action: Begin Phase 5 (extract Scrolling → TerminalGrid+Scrolling.swift).
-Last commit     : 5ce0ae4 "refactor(RefactorTG Phase 4): extract Cursor Movement + Cell R/W to TerminalGrid+CursorOps.swift"
+Immediate action: Begin Phase 6 (extract Erasing → TerminalGrid+Erasing.swift).
+Last commit     : <hash> "refactor(RefactorTG Phase 5): extract Scrolling to TerminalGrid+Scrolling.swift"
 ```
 
 **Update this block after every phase.**
@@ -38,7 +38,7 @@ Last commit     : 5ce0ae4 "refactor(RefactorTG Phase 4): extract Cursor Movement
 | 2 | Extract OSC Handlers → `TerminalGrid+OSCHandlers.swift` | **COMPLETE** (2026-02-24) |
 | 3 | Extract Tab Stops + Dirty Tracking → `TerminalGrid+TabsAndDirty.swift` | **COMPLETE** (2026-02-25) |
 | 4 | Extract Cursor Movement + Cell R/W → `TerminalGrid+CursorOps.swift` | **COMPLETE** (2026-02-25) |
-| 5 | Extract Scrolling → `TerminalGrid+Scrolling.swift` | NOT STARTED |
+| 5 | Extract Scrolling → `TerminalGrid+Scrolling.swift` | **COMPLETE** (2026-02-25) |
 | 6 | Extract Erasing → `TerminalGrid+Erasing.swift` | NOT STARTED |
 | 7 | Extract Line Operations → `TerminalGrid+LineOps.swift` | NOT STARTED |
 | 8 | Extract Screen Buffer + Cursor Save/Restore → `TerminalGrid+ScreenBuffer.swift` | NOT STARTED |
@@ -287,12 +287,12 @@ The scroll methods call `resolveSideTableEntries` (when pushing rows to scrollba
 
 ### Steps (6 steps)
 
-- [ ] **5.1** Read `// MARK: - A.6.4 Scroll Up/Down` and `// MARK: - A.6.9 Scroll Region` in `TerminalGrid.swift` in full.
-- [ ] **5.2** Create `ProSSHMac/Terminal/Grid/TerminalGrid+Scrolling.swift`.
-- [ ] **5.3** File header: `// Extracted from TerminalGrid.swift`, `import Foundation`, `extension TerminalGrid {`, close `}`.
-- [ ] **5.4** Cut both MARK blocks from `TerminalGrid.swift` and paste into the extension. Keep MARK headers.
-- [ ] **5.5** Build: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`. Verify `** BUILD SUCCEEDED **`.
-- [ ] **5.6** Commit: `refactor(RefactorTG Phase 5): extract Scrolling + Scroll Region to TerminalGrid+Scrolling.swift`
+- [x] **5.1** Read `// MARK: - A.6.4 Scroll Up/Down` and `// MARK: - A.6.9 Scroll Region` in `TerminalGrid.swift` in full (A.6.4 at lines 788–920, A.6.9 at lines 1160–1186 after prior shifts).
+- [x] **5.2** Create `ProSSHMac/Terminal/Grid/TerminalGrid+Scrolling.swift`.
+- [x] **5.3** File header: `// Extracted from TerminalGrid.swift`, `import Foundation`, `extension TerminalGrid {`, close `}`.
+- [x] **5.4** Cut both MARK blocks from `TerminalGrid.swift` and paste into the extension. Removed A.6.9 first (bottom block) to keep A.6.4 line numbers stable. Added `nonisolated` to all 9 methods.
+- [x] **5.5** Build: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`. Verify `** BUILD SUCCEEDED **`.
+- [x] **5.6** Commit: `refactor(RefactorTG Phase 5): extract Scrolling + Scroll Region to TerminalGrid+Scrolling.swift`
 
 **Expected TerminalGrid.swift line count after phase:** ~1,685 lines
 
@@ -506,6 +506,14 @@ property stays in the main file (it's a class-level declaration); the extension 
 ---
 
 ## Refactor Log (most recent first)
+
+- **2026-02-25 — Phase 5 COMPLETE**: Extracted `// MARK: - A.6.4 Scroll Up/Down` (7 methods:
+  `scrollUp`, `scrollDown`, `index`, `reverseIndex`, `lineFeed`, `carriageReturn`, `backspace`)
+  and `// MARK: - A.6.9 Scroll Region` (2 methods: `setScrollRegion`, `resetScrollRegion`) from
+  `TerminalGrid.swift` into `ProSSHMac/Terminal/Grid/TerminalGrid+Scrolling.swift`. The two blocks
+  are non-adjacent (A.6.4 at lines 788–920, A.6.9 at lines 1160–1186); removed A.6.9 first to keep
+  A.6.4 line numbers stable for the second edit. All 9 methods annotated `nonisolated`.
+  `TerminalGrid.swift`: ~1,722 lines (from ~1,855). Build: SUCCEEDED, 0 new warnings.
 
 - **2026-02-25 — Phase 4 COMPLETE**: Extracted `// MARK: - A.6.1 Cell Read/Write` (2 methods:
   `cellAt`, `setCellAt`) and `// MARK: - A.6.2 Cursor Movement` (9 methods: `moveCursorTo`,
