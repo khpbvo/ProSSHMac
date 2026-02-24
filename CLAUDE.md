@@ -129,10 +129,10 @@ Services/
 
 ```
 Active branch   : master
-Current phase   : Phase 1 — NOT STARTED
+Current phase   : Phase 2 — NOT STARTED
 Phase status    : NOT STARTED
-Immediate action: Read RefactorTerminalView.md, begin Phase 1 (extract DirectTerminalInputNSView)
-Last commit     : 60b4f08 "chore(RefactorTV Phase 0): baseline — add swiftlint:disable to TerminalView.swift"
+Immediate action: Read RefactorTerminalView.md, begin Phase 2 (extract TerminalSessionHeaderView + TerminalSessionMetadataView)
+Last commit     : (see git log — Phase 1 commit)
 ```
 
 **Update this block after every phase.**
@@ -142,7 +142,7 @@ Last commit     : 60b4f08 "chore(RefactorTV Phase 0): baseline — add swiftlint
 | Phase | Name | Status |
 |-------|------|--------|
 | 0 | Baseline audit | COMPLETE (2026-02-24) |
-| 1 | Extract DirectTerminalInputNSView + supporting types | NOT STARTED |
+| 1 | Extract DirectTerminalInputNSView + supporting types | COMPLETE (2026-02-24) |
 | 2 | Extract TerminalSessionHeaderView + TerminalSessionMetadataView | NOT STARTED |
 | 3 | Extract TerminalSearchBarView | NOT STARTED |
 | 4 | Extract TerminalSessionActionsBar | NOT STARTED |

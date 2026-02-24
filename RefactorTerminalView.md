@@ -19,10 +19,10 @@ Follow the same workflow as `RefactorTheActor.md`:
 
 ```
 Active branch   : master
-Current phase   : Phase 1 — NOT STARTED
+Current phase   : Phase 2 — NOT STARTED
 Phase status    : NOT STARTED
-Immediate action: Read RefactorTerminalView.md, begin Phase 1 (extract DirectTerminalInputNSView)
-Last commit     : 60b4f08 "chore(RefactorTV Phase 0): baseline — add swiftlint:disable to TerminalView.swift"
+Immediate action: Read RefactorTerminalView.md, begin Phase 2 (extract TerminalSessionHeaderView + TerminalSessionMetadataView)
+Last commit     : (see git log — Phase 1 commit)
 ```
 
 **Update this block after every phase.**
@@ -34,7 +34,7 @@ Last commit     : 60b4f08 "chore(RefactorTV Phase 0): baseline — add swiftlint
 | Phase | Name | Status |
 |-------|------|--------|
 | 0 | Baseline audit — add swiftlint:disable, verify build | COMPLETE (2026-02-24) |
-| 1 | Extract `DirectTerminalInputNSView` + supporting types | NOT STARTED |
+| 1 | Extract `DirectTerminalInputNSView` + supporting types | COMPLETE (2026-02-24) |
 | 2 | Extract `TerminalSessionHeaderView` + `TerminalSessionMetadataView` | NOT STARTED |
 | 3 | Extract `TerminalSearchBarView` | NOT STARTED |
 | 4 | Extract `TerminalSessionActionsBar` | NOT STARTED |
@@ -131,19 +131,19 @@ plus an empty `View` extension. None of these types have inward dependencies on 
 
 ### Steps (11 steps)
 
-- [ ] **1.1** Read `TerminalView.swift` lines 3050–3425 in full to confirm the exact content before moving anything.
-- [ ] **1.2** Create `ProSSHMac/UI/Terminal/TerminalInputCaptureView.swift`.
-- [ ] **1.3** Add header: first line = `// Extracted from TerminalView.swift`. Then `import SwiftUI`, `import AppKit`.
-- [ ] **1.4** Copy `SafeTerminalRenderedLine` (lines 3052–3056) into the new file. Change `private struct` → `struct`.
-- [ ] **1.5** Copy `DirectTerminalInputCaptureView: NSViewRepresentable` (lines 3058–3087) verbatim (already `internal`).
-- [ ] **1.6** Copy `DirectTerminalInputNSView: NSView` (lines 3089–3400) verbatim (already `internal`).
-- [ ] **1.7** Copy `extension View { func terminalInputBehavior() }` (lines 3404–3409). Remove the `private` keyword — make it `extension View`.
-- [ ] **1.8** Copy `TerminalScrollOffsetPreferenceKey` and `TerminalScrollContentHeightPreferenceKey` (lines 3411–3425). Change `private struct` → `struct` on both.
-- [ ] **1.9** In `TerminalView.swift`, delete lines 3050–3425 (the comment "// MARK: - Supporting Types" and everything after it). Save.
-- [ ] **1.10** Run build: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`. Verify `** BUILD SUCCEEDED **`. Fix any access-level errors (e.g., if `terminalInputBehavior()` is still called with `private` visibility somewhere).
-- [ ] **1.11** Commit: `refactor(RefactorTV Phase 1): extract DirectTerminalInputNSView + supporting types to TerminalInputCaptureView.swift`
+- [x] **1.1** Read `TerminalView.swift` lines 3050–3425 in full to confirm the exact content before moving anything.
+- [x] **1.2** Create `ProSSHMac/UI/Terminal/TerminalInputCaptureView.swift`.
+- [x] **1.3** Add header: first line = `// Extracted from TerminalView.swift`. Then `import SwiftUI`, `import AppKit`.
+- [x] **1.4** Copy `SafeTerminalRenderedLine` (lines 3052–3056) into the new file. Change `private struct` → `struct`.
+- [x] **1.5** Copy `DirectTerminalInputCaptureView: NSViewRepresentable` (lines 3058–3087) verbatim (already `internal`).
+- [x] **1.6** Copy `DirectTerminalInputNSView: NSView` (lines 3089–3400) verbatim (already `internal`).
+- [x] **1.7** Copy `extension View { func terminalInputBehavior() }` (lines 3404–3409). Remove the `private` keyword — make it `extension View`.
+- [x] **1.8** Copy `TerminalScrollOffsetPreferenceKey` and `TerminalScrollContentHeightPreferenceKey` (lines 3411–3425). Change `private struct` → `struct` on both.
+- [x] **1.9** In `TerminalView.swift`, delete lines 3050–3425 (the comment "// MARK: - Supporting Types" and everything after it). Save.
+- [x] **1.10** Run build: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`. Verify `** BUILD SUCCEEDED **`. Fix any access-level errors (e.g., if `terminalInputBehavior()` is still called with `private` visibility somewhere).
+- [x] **1.11** Commit: `refactor(RefactorTV Phase 1): extract DirectTerminalInputNSView + supporting types to TerminalInputCaptureView.swift`
 
-**Expected TerminalView.swift line count after phase:** ~3,060
+**Actual TerminalView.swift line count after phase:** 3,049 lines (expected ~3,060 ✓)
 
 ---
 
@@ -655,6 +655,16 @@ After all 9 phases are committed and the build is clean:
 ---
 
 ## Refactor Log (most recent first)
+
+- **2026-02-24 — Phase 1 COMPLETE**: Extracted 6 file-scope types that lived after the closing
+  brace of `struct TerminalView` into `ProSSHMac/UI/Terminal/TerminalInputCaptureView.swift`
+  (380 lines). Types moved: `SafeTerminalRenderedLine` (private→internal), `DirectTerminalInputCaptureView`
+  (already internal), `DirectTerminalInputNSView` (already internal), `View.terminalInputBehavior()`
+  extension (private→internal), `TerminalScrollOffsetPreferenceKey` (private→internal),
+  `TerminalScrollContentHeightPreferenceKey` (private→internal). No call-site changes needed —
+  Swift resolves all as module-level internal types. `TerminalView.swift`: 3,426 → 3,049 lines
+  (−377). Build: `** BUILD SUCCEEDED **`, 0 new warnings. SourceKit diagnostics in new file are
+  expected false positives (project uses cross-file type resolution via PBXFileSystemSynchronizedRootGroup).
 
 - **2026-02-24 — Phase 0 COMPLETE** (commit `60b4f08`): Added `// swiftlint:disable file_length`
   as line 1 of `TerminalView.swift` (3,425 → 3,426 lines after insert). Build verified:
