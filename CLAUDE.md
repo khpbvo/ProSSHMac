@@ -169,7 +169,7 @@ Active branch   : master
 Current phase   : Phase 2 — NOT STARTED
 Phase status    : NOT STARTED
 Immediate action: Begin Phase 2 (extract OSC Handlers → TerminalGrid+OSCHandlers.swift).
-Last commit     : <see git log> "refactor(RefactorTG Phase 1): extract Mode Setters to TerminalGrid+ModeSetters.swift"
+Last commit     : b68d5dd "refactor(RefactorTG Phase 1): extract Mode Setters to TerminalGrid+ModeSetters.swift"
 ```
 
 **Update this block after every phase.**
