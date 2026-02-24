@@ -166,10 +166,10 @@ Each starts with `// Extracted from TerminalView.swift` as first non-blank, non-
 
 ```
 Active branch   : master
-Current phase   : Phase 11 — NOT STARTED
-Phase status    : NOT STARTED
-Immediate action: Begin Phase 11 (extract Snapshot + Text Extraction → TerminalGrid+Snapshot.swift).
-Last commit     : 5604935 "refactor(RefactorTG Phase 10): extract Print Character to TerminalGrid+Printing.swift"
+Current phase   : Phase 11 — COMPLETE
+Phase status    : COMPLETE
+Immediate action: All 11 phases done. TerminalGrid.swift is ~457 lines. Refactor complete.
+Last commit     : <pending> "refactor(RefactorTG Phase 11): extract Snapshot + Text Extraction to TerminalGrid+Snapshot.swift"
 ```
 
 **Update this block after every phase.**
@@ -189,7 +189,7 @@ Last commit     : 5604935 "refactor(RefactorTG Phase 10): extract Print Characte
 | 8 | Extract Screen Buffer + Cursor Save/Restore → `TerminalGrid+ScreenBuffer.swift` | **COMPLETE** (2026-02-25) |
 | 9 | Extract Lifecycle (Full Reset + Resize) → `TerminalGrid+Lifecycle.swift` | **COMPLETE** (2026-02-25) |
 | 10 | Extract Print Character → `TerminalGrid+Printing.swift` | **COMPLETE** (2026-02-25) |
-| 11 | Extract Snapshot + Text Extraction → `TerminalGrid+Snapshot.swift` | NOT STARTED |
+| 11 | Extract Snapshot + Text Extraction → `TerminalGrid+Snapshot.swift` | **COMPLETE** (2026-02-25) |
 
 **Run-book:** `RefactorTerminalGrid.md` (project root) — contains the full step-by-step checklist.
 Read it before starting any phase.
@@ -292,7 +292,18 @@ All paths below are relative to the repo root. Source files live under `ProSSHMa
 | `ProSSHMac/Services/AI/AIToolDefinitions.swift` | Developer prompt, 11 tool schemas, static helpers | ~373 lines |
 | `ProSSHMac/Services/AI/AIAgentRunner.swift` | Agent iteration loop, response recovery, timeout | ~187 lines |
 | `ProSSHMac/Services/AI/AIConversationContext.swift` | previousResponseID store keyed by session UUID | ~21 lines |
-| `ProSSHMac/Terminal/Grid/TerminalGrid.swift` | Terminal grid state, character printing, scrolling, resize/reflow | ~2,311 lines |
+| `ProSSHMac/Terminal/Grid/TerminalGrid.swift` | Terminal grid state, init, buffer access, grapheme encoding, helpers | ~457 lines (was 2,311) |
+| `ProSSHMac/Terminal/Grid/TerminalGrid+ModeSetters.swift` | Mode flag setters (DEC modes, mouse, charset, SGR) | Phase 1 |
+| `ProSSHMac/Terminal/Grid/TerminalGrid+OSCHandlers.swift` | OSC title/color/hyperlink handlers | Phase 2 |
+| `ProSSHMac/Terminal/Grid/TerminalGrid+TabsAndDirty.swift` | Tab stops + dirty-row tracking | Phase 3 |
+| `ProSSHMac/Terminal/Grid/TerminalGrid+CursorOps.swift` | Cursor movement + cell read/write | Phase 4 |
+| `ProSSHMac/Terminal/Grid/TerminalGrid+Scrolling.swift` | Scroll up/down, index, LF, CR, scroll region | Phase 5 |
+| `ProSSHMac/Terminal/Grid/TerminalGrid+Erasing.swift` | Erase in line/display, erase characters | Phase 6 |
+| `ProSSHMac/Terminal/Grid/TerminalGrid+LineOps.swift` | Insert/delete characters and lines | Phase 7 |
+| `ProSSHMac/Terminal/Grid/TerminalGrid+ScreenBuffer.swift` | Alternate screen buffer + cursor save/restore | Phase 8 |
+| `ProSSHMac/Terminal/Grid/TerminalGrid+Lifecycle.swift` | Full reset, soft reset, resize, simpleResizeBuffer | Phase 9 |
+| `ProSSHMac/Terminal/Grid/TerminalGrid+Printing.swift` | printCharacter, printASCIIBytesBulk, processGroundTextBytes, performWrap | Phase 10 |
+| `ProSSHMac/Terminal/Grid/TerminalGrid+Snapshot.swift` | snapshot(), scrollback snapshot, visibleText() | Phase 11 |
 
 ---
 

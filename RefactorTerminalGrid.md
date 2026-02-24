@@ -19,10 +19,10 @@ Follow the same workflow as `RefactorTerminalView.md`:
 
 ```
 Active branch   : master
-Current phase   : Phase 11 — NOT STARTED
-Phase status    : NOT STARTED
-Immediate action: Begin Phase 11 (extract Snapshot + Text Extraction → TerminalGrid+Snapshot.swift).
-Last commit     : 5604935 "refactor(RefactorTG Phase 10): extract Print Character to TerminalGrid+Printing.swift"
+Current phase   : Phase 11 — COMPLETE
+Phase status    : COMPLETE
+Immediate action: All 11 phases done. Run post-refactor test suite (see Post-Refactor Checklist).
+Last commit     : <pending> "refactor(RefactorTG Phase 11): extract Snapshot + Text Extraction to TerminalGrid+Snapshot.swift"
 ```
 
 **Update this block after every phase.**
@@ -44,7 +44,7 @@ Last commit     : 5604935 "refactor(RefactorTG Phase 10): extract Print Characte
 | 8 | Extract Screen Buffer + Cursor Save/Restore → `TerminalGrid+ScreenBuffer.swift` | **COMPLETE** (2026-02-25) |
 | 9 | Extract Lifecycle (Full Reset + Resize) → `TerminalGrid+Lifecycle.swift` | **COMPLETE** (2026-02-25) |
 | 10 | Extract Print Character → `TerminalGrid+Printing.swift` | **COMPLETE** (2026-02-25) |
-| 11 | Extract Snapshot + Text Extraction → `TerminalGrid+Snapshot.swift` | NOT STARTED |
+| 11 | Extract Snapshot + Text Extraction → `TerminalGrid+Snapshot.swift` | **COMPLETE** (2026-02-25) |
 | — | Full test suite run | NOT STARTED |
 
 ---
@@ -469,10 +469,10 @@ property stays in the main file (it's a class-level declaration); the extension 
 
 ### Steps (8 steps)
 
-- [ ] **11.1** Read `// MARK: - A.6.14 Grid Snapshot Generation` and `// MARK: - A.6.15 Text Extraction` in full.
-- [ ] **11.2** Confirm `perfSignpostLog` stays in `TerminalGrid.swift` (it is a `static let` on the class — leaving it there makes it accessible as `TerminalGrid.perfSignpostLog` from the extension).
-- [ ] **11.3** Create `ProSSHMac/Terminal/Grid/TerminalGrid+Snapshot.swift`.
-- [ ] **11.4** File header:
+- [x] **11.1** Read `// MARK: - A.6.14 Grid Snapshot Generation` and `// MARK: - A.6.15 Text Extraction` in full.
+- [x] **11.2** Confirm `perfSignpostLog` stays in `TerminalGrid.swift` (it is a `static let` on the class — leaving it there makes it accessible as `TerminalGrid.perfSignpostLog` from the extension).
+- [x] **11.3** Create `ProSSHMac/Terminal/Grid/TerminalGrid+Snapshot.swift`.
+- [x] **11.4** File header:
   ```swift
   // Extracted from TerminalGrid.swift
 
@@ -484,10 +484,10 @@ property stays in the main file (it's a class-level declaration); the extension 
   extension TerminalGrid {
   ```
   Close with `}`.
-- [ ] **11.5** Cut `// MARK: - A.6.14 Grid Snapshot Generation` and `// MARK: - A.6.15 Text Extraction` from `TerminalGrid.swift` and paste into the extension.
-- [ ] **11.6** Build: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`. Verify `** BUILD SUCCEEDED **`.
-- [ ] **11.7** Check final line count of `TerminalGrid.swift`. If ≤ 400 lines, remove `// swiftlint:disable file_length` from line 1.
-- [ ] **11.8** Commit: `refactor(RefactorTG Phase 11): extract Snapshot + Text Extraction to TerminalGrid+Snapshot.swift`
+- [x] **11.5** Cut `// MARK: - A.6.14 Grid Snapshot Generation` and `// MARK: - A.6.15 Text Extraction` from `TerminalGrid.swift` and paste into the extension.
+- [x] **11.6** Build: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`. Verify `** BUILD SUCCEEDED **`.
+- [x] **11.7** Check final line count of `TerminalGrid.swift`. If ≤ 400 lines, remove `// swiftlint:disable file_length` from line 1. → 457 lines, disable retained.
+- [x] **11.8** Commit: `refactor(RefactorTG Phase 11): extract Snapshot + Text Extraction to TerminalGrid+Snapshot.swift`
 
 **Expected TerminalGrid.swift line count after phase:** ~451 lines (state + init + buffer access + grapheme encoding + scrollback getter + helpers)
 
@@ -506,6 +506,16 @@ property stays in the main file (it's a class-level declaration); the extension 
 ---
 
 ## Refactor Log (most recent first)
+
+- **2026-02-25 — Phase 11 COMPLETE**: Extracted `// MARK: - A.6.14 Grid Snapshot Generation`
+  (2 methods + 1 computed var: `snapshot()`, `snapshot(scrollOffset:)`, `scrollbackCount`) and
+  `// MARK: - A.6.15 Text Extraction` (1 method: `visibleText()`) from `TerminalGrid.swift`
+  (lines 431–727, ~297 lines) into `ProSSHMac/Terminal/Grid/TerminalGrid+Snapshot.swift`.
+  All methods/var annotated `nonisolated`. Added `#if DEBUG import os.signpost #endif` for
+  `OSSignpostID`/`os_signpost` calls; `perfSignpostLog` static let stays in main file (line 19)
+  and is accessed as `Self.perfSignpostLog` from the extension. `TerminalGrid.swift`: 457 lines
+  (from ~787) — `// swiftlint:disable file_length` retained (457 > 400).
+  Build: SUCCEEDED, 0 new warnings. All 11 phases complete.
 
 - **2026-02-25 — Phase 10 COMPLETE**: Extracted `// MARK: - A.6.3 Print Character` (5 methods:
   `printCharacter`, `repeatLastCharacter`, `printASCIIBytesBulk`, `processGroundTextBytes`,
