@@ -22,7 +22,7 @@ Active branch   : master
 Current phase   : Phase 4 — NOT STARTED
 Phase status    : NOT STARTED
 Immediate action: Read RefactorTerminalView.md, begin Phase 4 (extract TerminalSessionActionsBar)
-Last commit     : TBD "refactor(RefactorTV Phase 3): extract search bar to TerminalSearchBarView"
+Last commit     : 7bc5e1e "refactor(RefactorTV Phase 3): extract search bar to TerminalSearchBarView"
 ```
 
 **Update this block after every phase.**
@@ -656,7 +656,7 @@ After all 9 phases are committed and the build is clean:
 
 ## Refactor Log (most recent first)
 
-- **2026-02-24 — Phase 3 COMPLETE** (commit TBD): Extracted `searchBar` computed property and its
+- **2026-02-24 — Phase 3 COMPLETE** (commit `7bc5e1e`): Extracted `searchBar` computed property and its
   three companion binding helpers (`searchQueryBinding`, `searchRegexBinding`,
   `searchCaseSensitiveBinding`) into `TerminalSearchBarView.swift` (~115 lines). Bridged the
   `@FocusState` boundary with the `searchFocusNonce: Int` pattern (same as `directInputActivationNonce`).

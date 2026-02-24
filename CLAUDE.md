@@ -132,7 +132,7 @@ Active branch   : master
 Current phase   : Phase 4 — NOT STARTED
 Phase status    : NOT STARTED
 Immediate action: Read RefactorTerminalView.md, begin Phase 4 (extract TerminalSessionActionsBar)
-Last commit     : TBD "refactor(RefactorTV Phase 3): extract search bar to TerminalSearchBarView"
+Last commit     : 7bc5e1e "refactor(RefactorTV Phase 3): extract search bar to TerminalSearchBarView"
 ```
 
 **Update this block after every phase.**
