@@ -160,6 +160,47 @@ Each starts with `// Extracted from TerminalView.swift` as first non-blank, non-
 
 ---
 
+## Active Refactor: TerminalGrid.swift Decomposition (RefactorTerminalGrid.md)
+
+### ► CURRENT STATE — START HERE
+
+```
+Active branch   : master
+Current phase   : Phase 1 — NOT STARTED
+Phase status    : NOT STARTED
+Immediate action: Begin Phase 1 (extract Mode Setters → TerminalGrid+ModeSetters.swift).
+Last commit     : (Phase 0 commit — see git log)
+```
+
+**Update this block after every phase.**
+
+### Phase Status
+
+| Phase | Name | Status |
+|-------|------|--------|
+| 0 | Baseline — swiftlint:disable + internal access | **COMPLETE** (2026-02-24) |
+| 1 | Extract Mode Setters → `TerminalGrid+ModeSetters.swift` | NOT STARTED |
+| 2 | Extract OSC Handlers → `TerminalGrid+OSCHandlers.swift` | NOT STARTED |
+| 3 | Extract Tab Stops + Dirty Tracking → `TerminalGrid+TabsAndDirty.swift` | NOT STARTED |
+| 4 | Extract Cursor Movement + Cell R/W → `TerminalGrid+CursorOps.swift` | NOT STARTED |
+| 5 | Extract Scrolling → `TerminalGrid+Scrolling.swift` | NOT STARTED |
+| 6 | Extract Erasing → `TerminalGrid+Erasing.swift` | NOT STARTED |
+| 7 | Extract Line Operations → `TerminalGrid+LineOps.swift` | NOT STARTED |
+| 8 | Extract Screen Buffer + Cursor Save/Restore → `TerminalGrid+ScreenBuffer.swift` | NOT STARTED |
+| 9 | Extract Lifecycle (Full Reset + Resize) → `TerminalGrid+Lifecycle.swift` | NOT STARTED |
+| 10 | Extract Print Character → `TerminalGrid+Printing.swift` | NOT STARTED |
+| 11 | Extract Snapshot + Text Extraction → `TerminalGrid+Snapshot.swift` | NOT STARTED |
+
+**Run-book:** `RefactorTerminalGrid.md` (project root) — contains the full step-by-step checklist.
+Read it before starting any phase.
+
+**Key difference from prior refactors:** All extractions use `extension TerminalGrid` (no new types).
+Phase 0 changes `private var` / `private func` → internal throughout the class to enable cross-file
+extension access. New files go in `ProSSHMac/Terminal/Grid/`. Naming: `TerminalGrid+<Concern>.swift`.
+Each file starts with `// Extracted from TerminalGrid.swift`.
+
+---
+
 ## Project Overview
 
 **ProSSHMac** is a native macOS SSH/terminal client built with SwiftUI + Metal.
@@ -459,7 +500,8 @@ All paths below are relative to the repo root. Source files live under `ProSSHMa
 
 | Doc | Purpose |
 |-----|---------|
-| `RefactorTheActor.md` | **Active refactor spec & run-book** — optimized per phase before execution; each phase gets a full step-by-step plan written here before any code is touched |
+| `RefactorTerminalGrid.md` | **Active refactor spec & run-book** — 12-phase plan to decompose `TerminalGrid.swift` (2,311 lines) into `extension TerminalGrid` files in `Terminal/Grid/` |
+| `RefactorTheActor.md` | Completed refactor spec (actor isolation, Phases 0–8) |
 | `docs/featurelist.md` | **Long-term memory** — phase plan, loop log, progress checklist |
 | `docs/bugs.md` | 68-bug audit by subsystem and severity |
 | `docs/FutureFeatures.md` | Prioritized feature roadmap (competitive analysis) |

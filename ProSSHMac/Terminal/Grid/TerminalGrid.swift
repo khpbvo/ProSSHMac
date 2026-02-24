@@ -1,3 +1,4 @@
+// swiftlint:disable file_length
 // TerminalGrid.swift
 // ProSSHV2
 //
@@ -15,54 +16,54 @@ import os.signpost
 
 nonisolated final class TerminalGrid: @unchecked Sendable {
     #if DEBUG
-    private static let perfSignpostLog = OSLog(subsystem: "com.prossh", category: "TerminalPerf")
+    static let perfSignpostLog = OSLog(subsystem: "com.prossh", category: "TerminalPerf")
     #endif
 
     /// Reuse one-character ASCII strings to avoid per-character allocations
     /// in the common shell-output fast path.
-    private static let asciiScalarStringCache: [String] = (0..<128).map {
+    static let asciiScalarStringCache: [String] = (0..<128).map {
         String(UnicodeScalar($0)!)
     }
 
     /// Reuse ASCII Characters for parser fast-path bulk printing.
-    private static let asciiCharacterCache: [Character] = (0..<128).map {
+    static let asciiCharacterCache: [Character] = (0..<128).map {
         Character(UnicodeScalar($0)!)
     }
 
     // MARK: - Dimensions
 
-    private(set) var columns: Int
-    private(set) var rows: Int
+    var columns: Int
+    var rows: Int
 
     // MARK: - Screen Buffers
 
     /// Primary screen buffer (normal shell output).
-    private var primaryCells: [[TerminalCell]]
+    var primaryCells: [[TerminalCell]]
     /// Ring-buffer base offset for primaryCells (logical row 0 -> physical row base).
-    private var primaryRowBase: Int = 0
+    var primaryRowBase: Int = 0
     /// Logical-to-physical row indirection for primary buffer.
-    private var primaryRowMap: [Int]
+    var primaryRowMap: [Int]
 
     /// Alternate screen buffer (for full-screen TUI apps: htop, vim, etc.).
-    private var alternateCells: [[TerminalCell]]
+    var alternateCells: [[TerminalCell]]
     /// Ring-buffer base offset for alternateCells.
-    private var alternateRowBase: Int = 0
+    var alternateRowBase: Int = 0
     /// Logical-to-physical row indirection for alternate buffer.
-    private var alternateRowMap: [Int]
+    var alternateRowMap: [Int]
 
     /// Which buffer is currently active.
-    private(set) var usingAlternateBuffer: Bool = false
+    var usingAlternateBuffer: Bool = false
 
     // MARK: - Scrollback
 
-    private var scrollback: ScrollbackBuffer
+    var scrollback: ScrollbackBuffer
 
     // MARK: - Grapheme Side Table
 
     /// Storage for multi-codepoint grapheme clusters. Cells store a sentinel
     /// codepoint referencing this table; entries are resolved when scrolling
     /// to scrollback or extracting text.
-    private var graphemeSideTable = GraphemeSideTable()
+    var graphemeSideTable = GraphemeSideTable()
 
     /// Maximum scrollback lines.
     let maxScrollbackLines: Int
@@ -90,11 +91,11 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
     var applicationCursorKeys: Bool = false   // DECCKM
     var applicationKeypad: Bool = false       // DECKPAM/DECKPNM
     var bracketedPasteMode: Bool = false      // Mode 2004
-    private(set) var synchronizedOutput: Bool = false // Mode 2026
+    var synchronizedOutput: Bool = false // Mode 2026
     /// Snapshot captured at the moment synchronized output ended.
     /// Used by SessionManager to show the intermediate visible frame
     /// when sync-off and sync-on happen within a single data chunk.
-    private(set) var syncExitSnapshot: GridSnapshot?
+    var syncExitSnapshot: GridSnapshot?
     var reverseVideo: Bool = false            // DECSCNM
     var mouseTracking: MouseTrackingMode = .none
     var mouseEncoding: MouseEncoding = .x10
@@ -110,7 +111,7 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
     // MARK: - Tab Stops
 
     /// Internal tab-stop mask indexed by column (true = tab stop).
-    private var tabStopMask: [Bool]
+    var tabStopMask: [Bool]
 
     /// Tab stops as column indices (used by tests and diagnostics).
     var tabStops: Set<Int> {
@@ -124,28 +125,28 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
     // MARK: - Window Title
 
     /// The window/tab title set by OSC 0/1/2.
-    private(set) var windowTitle: String = ""
+    var windowTitle: String = ""
 
     /// The icon name set by OSC 1.
-    private(set) var iconName: String = ""
+    var iconName: String = ""
 
     // MARK: - Bell
 
     /// Accumulated bell events since the last snapshot read.
     /// The renderer reads and resets this counter each frame.
-    private(set) var pendingBellCount: Int = 0
+    var pendingBellCount: Int = 0
 
     // MARK: - Working Directory (OSC 7)
 
     /// The current working directory reported by the shell via OSC 7.
-    private(set) var workingDirectory: String = ""
+    var workingDirectory: String = ""
 
     // MARK: - Hyperlink State (OSC 8)
 
     /// The currently active hyperlink URI (nil = no hyperlink).
     /// When set, all subsequently printed characters are part of this hyperlink.
     /// Stub: stored but not yet rendered differently or made clickable.
-    private(set) var currentHyperlink: String?
+    var currentHyperlink: String?
 
     /// Increment the pending bell counter (called on BEL 0x07).
     func ringBell() {
@@ -163,16 +164,16 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
 
     /// Custom color palette overrides. Key = palette index, value = (r, g, b).
     /// If an index is not in this dictionary, the default from ColorPalette is used.
-    private var customPalette: [UInt8: (UInt8, UInt8, UInt8)] = [:]
+    var customPalette: [UInt8: (UInt8, UInt8, UInt8)] = [:]
 
     /// The cursor color set by OSC 12 (nil = use default).
-    private(set) var cursorColor: (UInt8, UInt8, UInt8)?
+    var cursorColor: (UInt8, UInt8, UInt8)?
 
     /// Current default foreground RGB (OSC 10 override).
-    private var defaultForegroundColor: (UInt8, UInt8, UInt8) = (255, 255, 255)
+    var defaultForegroundColor: (UInt8, UInt8, UInt8) = (255, 255, 255)
 
     /// Current default background RGB (OSC 11 override).
-    private var defaultBackgroundColor: (UInt8, UInt8, UInt8) = (0, 0, 0)
+    var defaultBackgroundColor: (UInt8, UInt8, UInt8) = (0, 0, 0)
 
     // MARK: - Current Text Attributes (applied to next printed character)
 
@@ -185,16 +186,16 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
     // MARK: - Cached Packed Colors (for hot-path TerminalCell construction)
 
     /// Pre-computed packed RGBA for currentFgColor, updated on color mutation.
-    private var currentFgPacked: UInt32 = 0
+    var currentFgPacked: UInt32 = 0
     /// Pre-computed packed RGBA for currentBgColor, updated on color mutation.
-    private var currentBgPacked: UInt32 = 0
+    var currentBgPacked: UInt32 = 0
     /// Pre-computed packed RGBA for currentUnderlineColor, updated on color mutation.
-    private var currentUnderlinePacked: UInt32 = 0
+    var currentUnderlinePacked: UInt32 = 0
 
     /// Recompute cached packed RGBA values from the current colors.
     /// Must be called after any mutation of currentFgColor/currentBgColor/currentUnderlineColor.
     @inline(__always)
-    private func invalidatePackedColors() {
+    func invalidatePackedColors() {
         currentFgPacked = currentFgColor.packedRGBA()
         currentBgPacked = currentBgColor.packedRGBA()
         currentUnderlinePacked = currentUnderlineColor.packedRGBA()
@@ -203,14 +204,14 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
     // MARK: - Dirty Tracking
 
     /// Range of rows that have been modified since last snapshot.
-    private var dirtyRowMin: Int = Int.max
-    private var dirtyRowMax: Int = -1
+    var dirtyRowMin: Int = Int.max
+    var dirtyRowMax: Int = -1
 
     /// Whether any cell has changed since the last snapshot.
-    private var hasDirtyCells: Bool = false
+    var hasDirtyCells: Bool = false
 
     /// Cached snapshot returned during synchronized output (mode 2026).
-    private var lastSnapshot: GridSnapshot?
+    var lastSnapshot: GridSnapshot?
 
     // MARK: - Pre-allocated Snapshot Buffers
 
@@ -219,9 +220,9 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
     /// owned (ref count 1) by the time we write to it, avoiding copy-on-write.
     /// At 120fps with 10,000 cells (24 bytes each), this eliminates ~28.8 MB/s
     /// of allocation churn in steady state.
-    private var snapshotBufferA = ContiguousArray<CellInstance>()
-    private var snapshotBufferB = ContiguousArray<CellInstance>()
-    private var useSnapshotBufferA = true
+    var snapshotBufferA = ContiguousArray<CellInstance>()
+    var snapshotBufferB = ContiguousArray<CellInstance>()
+    var useSnapshotBufferA = true
 
     // MARK: - Initialization
 
@@ -245,7 +246,7 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
     // MARK: - Active Buffer Access
 
     /// The currently active cell buffer.
-    private var cells: [[TerminalCell]] {
+    var cells: [[TerminalCell]] {
         get { usingAlternateBuffer ? alternateCells : primaryCells }
         set {
             if usingAlternateBuffer {
@@ -257,7 +258,7 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
     }
 
     /// Active buffer ring base (logical row 0 -> physical row index).
-    private var activeRowBase: Int {
+    var activeRowBase: Int {
         get { usingAlternateBuffer ? alternateRowBase : primaryRowBase }
         set {
             if usingAlternateBuffer {
@@ -269,7 +270,7 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
     }
 
     /// Mutate the active buffer and its ring base together.
-    private func withActiveBuffer(_ body: (inout [[TerminalCell]], inout Int) -> Void) {
+    func withActiveBuffer(_ body: (inout [[TerminalCell]], inout Int) -> Void) {
         if usingAlternateBuffer {
             body(&alternateCells, &alternateRowBase)
         } else {
@@ -278,7 +279,7 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
     }
 
     /// Mutate the active buffer, ring base, and logical row map together.
-    private func withActiveBufferState(_ body: (inout [[TerminalCell]], inout Int, inout [Int]) -> Void) {
+    func withActiveBufferState(_ body: (inout [[TerminalCell]], inout Int, inout [Int]) -> Void) {
         if usingAlternateBuffer {
             body(&alternateCells, &alternateRowBase, &alternateRowMap)
         } else {
@@ -287,7 +288,7 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
     }
 
     /// Active buffer logical-to-physical row map.
-    private var activeRowMap: [Int] {
+    var activeRowMap: [Int] {
         get { usingAlternateBuffer ? alternateRowMap : primaryRowMap }
         set {
             if usingAlternateBuffer {
@@ -300,13 +301,13 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
 
     /// Translate a logical row index into the backing physical row index.
     @inline(__always)
-    private func physicalRow(_ logicalRow: Int, base: Int) -> Int {
+    func physicalRow(_ logicalRow: Int, base: Int) -> Int {
         let map = activeRowMap
         return physicalRow(logicalRow, base: base, map: map)
     }
 
     @inline(__always)
-    private func logicalRowIndex(_ logicalRow: Int, base: Int) -> Int {
+    func logicalRowIndex(_ logicalRow: Int, base: Int) -> Int {
         guard rows > 0 else { return 0 }
         let idx = logicalRow + base
         return idx >= rows ? idx - rows : idx
@@ -314,12 +315,12 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
 
     /// Translate a logical row index into the backing physical row index for an explicit row map.
     @inline(__always)
-    private func physicalRow(_ logicalRow: Int, base: Int, map: [Int]) -> Int {
+    func physicalRow(_ logicalRow: Int, base: Int, map: [Int]) -> Int {
         map[logicalRowIndex(logicalRow, base: base)]
     }
 
     /// Return a logically ordered copy of a ring-backed screen buffer.
-    private func linearizedRows(_ buffer: [[TerminalCell]], base: Int, map: [Int]) -> [[TerminalCell]] {
+    func linearizedRows(_ buffer: [[TerminalCell]], base: Int, map: [Int]) -> [[TerminalCell]] {
         guard rows > 0 else { return buffer }
         let isIdentityMap = map.count == rows && map.enumerated().allSatisfy { index, value in
             index == value
@@ -368,7 +369,7 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
     /// Release a cell's side-table entry if it has one.
     /// Fast no-op for the 99%+ of cells that are not side-table references.
     @inline(__always)
-    private func releaseCellGrapheme(_ codepoint: UInt32) {
+    func releaseCellGrapheme(_ codepoint: UInt32) {
         guard codepoint & GraphemeSideTable.sentinel != 0 else { return }
         graphemeSideTable.release(codepoint)
     }
@@ -376,7 +377,7 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
     /// Resolve side-table entries in a row, mutating codepoints to first-scalar values.
     /// Returns grapheme overrides dictionary for multi-codepoint entries.
     /// Used before pushing rows to scrollback.
-    private func resolveSideTableEntries(in row: inout [TerminalCell]) -> [Int: String]? {
+    func resolveSideTableEntries(in row: inout [TerminalCell]) -> [Int: String]? {
         guard graphemeSideTable.activeCount > 0 else { return nil }
         var overrides: [Int: String]? = nil
         for col in 0..<row.count {
@@ -398,7 +399,7 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
     /// Resolve all side-table entries in both buffers, replacing sentinel
     /// codepoints with their first scalar value. Used before resize/reflow
     /// to ensure no stale side-table indices survive.
-    private func resolveAllSideTableEntries() {
+    func resolveAllSideTableEntries() {
         guard graphemeSideTable.activeCount > 0 else { return }
         for physical in 0..<primaryCells.count {
             for col in 0..<primaryCells[physical].count {
@@ -621,7 +622,7 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
     /// checks (ASCII is never wide), and calls `markDirty` once per affected
     /// row range. This avoids per-character overhead in high-throughput output.
     /// Accepts Data + range to avoid per-chunk byte array materialization from VTParser.
-    private func printASCIIBytesBulk(_ bytes: Data, range: Range<Int>) {
+    func printASCIIBytesBulk(_ bytes: Data, range: Range<Int>) {
         guard !range.isEmpty else { return }
 
         // Insert mode is rare; fall back to the per-character path for all
@@ -842,7 +843,7 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
     }
 
     /// Perform the actual line wrap: CR + LF, scrolling if needed.
-    private func performWrap() {
+    func performWrap() {
         // Mark the current line as wrapped
         if cursor.col < columns {
             let row = cursor.row
@@ -1162,7 +1163,7 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
     }
 
     /// Helper: insert blank characters at a specific position in a row.
-    private func insertBlanks(count: Int, atRow row: Int, col: Int) {
+    func insertBlanks(count: Int, atRow row: Int, col: Int) {
         let erasedCell = TerminalCell.erased(bgColor: currentBgColor, bgPacked: currentBgPacked)
 
         withActiveBuffer { buf, base in
@@ -1426,21 +1427,21 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
     // MARK: - A.6.13 Dirty Tracking
 
     /// Mark a specific row as dirty.
-    private func markDirty(row: Int) {
+    func markDirty(row: Int) {
         hasDirtyCells = true
         dirtyRowMin = min(dirtyRowMin, row)
         dirtyRowMax = max(dirtyRowMax, row)
     }
 
     /// Mark all rows as dirty (used after buffer switch, full reset, resize).
-    private func markAllDirty() {
+    func markAllDirty() {
         hasDirtyCells = true
         dirtyRowMin = 0
         dirtyRowMax = rows - 1
     }
 
     /// Clear the dirty state after producing a snapshot.
-    private func clearDirtyState() {
+    func clearDirtyState() {
         hasDirtyCells = false
         dirtyRowMin = Int.max
         dirtyRowMax = -1
@@ -1945,7 +1946,7 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
     }
 
     /// Simple buffer resize without reflow (for alternate screen buffer).
-    private func simpleResizeBuffer(
+    func simpleResizeBuffer(
         _ buffer: [[TerminalCell]],
         newRows: Int, newColumns: Int
     ) -> [[TerminalCell]] {
@@ -2292,7 +2293,7 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
     // MARK: - Helpers
 
     /// Create a blank row with the current background color.
-    private func makeBlankRow() -> [TerminalCell] {
+    func makeBlankRow() -> [TerminalCell] {
         let cell = TerminalCell.erased(bgColor: currentBgColor, bgPacked: currentBgPacked)
         return [TerminalCell](repeating: cell, count: columns)
     }
