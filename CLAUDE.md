@@ -169,7 +169,7 @@ Active branch   : master
 Current phase   : Phase 4 — NOT STARTED
 Phase status    : NOT STARTED
 Immediate action: Begin Phase 4 (extract Cursor Movement + Cell R/W → TerminalGrid+CursorOps.swift).
-Last commit     : <hash> "refactor(RefactorTG Phase 3): extract Tab Stops + Dirty Tracking to TerminalGrid+TabsAndDirty.swift"
+Last commit     : 5e446f2 "refactor(RefactorTG Phase 3): extract Tab Stops + Dirty Tracking to TerminalGrid+TabsAndDirty.swift"
 ```
 
 **Update this block after every phase.**
