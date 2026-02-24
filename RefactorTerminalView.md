@@ -22,7 +22,7 @@ Active branch   : master
 Current phase   : Phase 3 — NOT STARTED
 Phase status    : NOT STARTED
 Immediate action: Read RefactorTerminalView.md, begin Phase 3 (extract TerminalSearchBarView)
-Last commit     : TBD "refactor(RefactorTV Phase 2): extract session header + metadata views"
+Last commit     : 524fc9b "refactor(RefactorTV Phase 2): extract session header + metadata views"
 ```
 
 **Update this block after every phase.**
@@ -656,7 +656,7 @@ After all 9 phases are committed and the build is clean:
 
 ## Refactor Log (most recent first)
 
-- **2026-02-24 — Phase 2 COMPLETE** (commit TBD): Extracted two display-only view functions from
+- **2026-02-24 — Phase 2 COMPLETE** (commit `524fc9b`): Extracted two display-only view functions from
   `TerminalView`. Created `TerminalSessionHeaderView.swift` (~67 lines) containing `header(for:)`
   body and `stateColor(for:)` private helper. Created `TerminalSessionMetadataView.swift`
   (~116 lines) containing `sessionMetadata(for:)` body, `metadataRow(label:value:)` private helper,

@@ -132,7 +132,7 @@ Active branch   : master
 Current phase   : Phase 3 — NOT STARTED
 Phase status    : NOT STARTED
 Immediate action: Read RefactorTerminalView.md, begin Phase 3 (extract TerminalSearchBarView)
-Last commit     : TBD "refactor(RefactorTV Phase 2): extract session header + metadata views"
+Last commit     : 524fc9b "refactor(RefactorTV Phase 2): extract session header + metadata views"
 ```
 
 **Update this block after every phase.**
