@@ -22,11 +22,11 @@ The long-term memory for this project lives in `docs/featurelist.md`.
 
 ```
 Active branch : refactor/actor-isolation
-Current phase : Phase 1 — Split SSHTransport.swift
-Phase status  : PLANNED (steps written in RefactorTheActor.md — execute them now)
-Immediate action: Open RefactorTheActor.md → Phase 1 → start at Step 1.0
-Key source file : ProSSHMac/Services/SSHTransport.swift  (1,653 lines)
-Last commit   : 97a602b  "docs: expand Phase 1 plan in RefactorTheActor.md"
+Current phase : Phase 2 — Kill CString pyramid, inject credential resolver
+Phase status  : NOT PLANNED
+Immediate action: Open RefactorTheActor.md → Phase 2 → expand sketch into detailed plan (State A)
+Key source file : ProSSHMac/Services/SSH/LibSSHTransport.swift  (~797 lines)
+Last commit   : f2ff073  "refactor: Phase 1 — split SSHTransport.swift into focused files in Services/SSH/"
 ```
 
 **Update this block after every phase** — it is the first thing any new agent reads.
@@ -61,7 +61,7 @@ Every phase is in one of two states. Know which state you are in before doing an
 | Phase | Name | Status |
 |-------|------|--------|
 | 0 | Baseline audit & branch setup | **COMPLETE** (2026-02-24, commit `9913cdc`) |
-| 1 | Split `SSHTransport.swift` into `Services/SSH/` | **PLANNED** — execute steps in RefactorTheActor.md |
+| 1 | Split `SSHTransport.swift` into `Services/SSH/` | **COMPLETE** (2026-02-24, commit `f2ff073`) |
 | 2 | Kill CString pyramid, inject credential resolver | NOT PLANNED |
 | 3 | Deduplicate remote path utilities → `RemotePath.swift` | NOT PLANNED |
 | 4 | Generic `PersistentStore<T>` for store boilerplate | NOT PLANNED |
@@ -198,7 +198,7 @@ All paths below are relative to the repo root. Source files live under `ProSSHMa
 | `ProSSHMac/UI/Terminal/MetalTerminalSessionSurface.swift` | SwiftUI ↔ Metal bridge, snapshot application, selection | Medium |
 | `ProSSHMac/Terminal/Renderer/MetalTerminalRenderer.swift` | Metal draw loop, cell buffer upload, cursor/selection render | ~1,438 lines |
 | `ProSSHMac/Services/SessionManager.swift` | Session lifecycle, shell I/O, SFTP, grid snapshots, history | **1,640 lines — being decomposed in Phase 5** |
-| `ProSSHMac/Services/SSHTransport.swift` | All SSH transport types, protocols, mock actors, LibSSH actors | **1,653 lines — being split into `ProSSHMac/Services/SSH/` in Phase 1** |
+| `ProSSHMac/Services/SSH/LibSSHTransport.swift` | LibSSH transport actor, connect/auth/shell/SFTP/forward logic | ~797 lines — Phase 1 COMPLETE |
 | `ProSSHMac/Services/OpenAIAgentService.swift` | Agent tool loop, tool dispatch, streaming parser, context mgmt | **1,946 lines — being decomposed into `ProSSHMac/Services/AI/` in Phase 6** |
 | `ProSSHMac/Terminal/Grid/TerminalGrid.swift` | Terminal grid state, character printing, scrolling, resize/reflow | ~2,311 lines |
 
@@ -255,6 +255,15 @@ All paths below are relative to the repo root. Source files live under `ProSSHMa
 
 ### Refactor Log (strict concurrency refactor — most recent first)
 
+- **2026-02-24 — Phase 1 COMPLETE** (`f2ff073`): Split SSHTransport.swift (1,653L) into 6 files
+  under Services/SSH/. Key corrections vs. original plan: removed xcodeproj registration steps
+  (project uses PBXFileSystemSynchronizedRootGroup file-system sync); added #if DEBUG guard to
+  AppDependencies.swift line 46 (MockSSHTransport now DEBUG-only); kept swiftlint:disable in
+  LibSSHTransport.swift (~797L) and MockSSHTransport.swift (~466L); kept Array<CChar>.asString
+  private in LibSSHTransport.swift (conflict with KeyForgeService.swift's private copy) and added
+  private copies to LibSSHShellChannel.swift and LibSSHForwardChannel.swift instead; made
+  extension AuthMethod non-private (no conflict). Build: SUCCEEDED. Tests: 22 failures (all
+  pre-existing color rendering — within ≤23 baseline). Phase 2 is NOT PLANNED.
 - **2026-02-24 — Phase 1 PLANNED** (`97a602b`): Expanded Phase 1 from a 4-bullet sketch into a
   17-step execution plan based on reading `SSHTransport.swift` in full. Key corrections captured:
   `UncheckedOpaquePointer` → `SSHTransportTypes.swift` (used by LibSSH actors, not just Mock);
