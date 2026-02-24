@@ -1256,29 +1256,102 @@ Notes:
 
 ## Phase 4 — Generic `PersistentStore<T>` for the Store Boilerplate
 
-> **Context note for Claude Code:** `HostStore`, `KeyStore`, `CertificateStore`,
-> `AuditLogStore`, `CertificateAuthorityStore` all follow the same
-> load-from-JSON / save-to-JSON / publish-via-Combine pattern.
+> **Sketch corrections vs. original:** `@MainActor final class` (not `actor`) to stay compatible
+> with all four `@MainActor` domain protocols without bridging. No `upsert`/`delete` — no call
+> site uses per-item operations (bulk array load/save only). No `Identifiable` constraint needed.
+> `AuditLogStore` (NSLock + append + maxEntries) and `KnownHostsStore` (actor, complex trust API)
+> are NOT fits — left untouched. Keychain-backed stores (`BiometricPasswordStore`,
+> `OpenAIAPIKeyStore`) also left alone.
 
-- [ ] Audit all `*Store.swift` files in `Services/`; document their shared interface in a comment
-- [ ] Create `Services/PersistentStore.swift`
-  ```swift
-  actor PersistentStore<T: Codable & Identifiable> {
-      init(filename: String, decoder: JSONDecoder, encoder: JSONEncoder)
-      func loadAll() throws -> [T]
-      func save(_ items: [T]) throws
-      func upsert(_ item: T) throws
-      func delete(id: T.ID) throws
-  }
-  ```
-- [ ] Refactor `HostStore` to use `PersistentStore<Host>` internally
-- [ ] Refactor `KeyStore` to use `PersistentStore<StoredSSHKey>`
-- [ ] Refactor `CertificateStore` to use `PersistentStore<SSHCertificate>`
-- [ ] Refactor `CertificateAuthorityStore` to use `PersistentStore<CertificateAuthority>`
-- [ ] Refactor `AuditLogStore` — may need a custom policy (size-limited log rotation);
-      use `PersistentStore` for the base and add rotation logic as an extension
-- [ ] Verify each store's public API is unchanged (no ViewModel changes needed)
-- [ ] Run tests; commit: `refactor: introduce PersistentStore<T>, consolidate store boilerplate`
+### Step 4.1 — Create `Services/PersistentStore.swift`
+
+- [ ] Create `ProSSHMac/Services/PersistentStore.swift` with:
+  - `@MainActor final class PersistentStore<T: Codable>`
+  - `init(filename: String, fileManager: FileManager = .default)` — builds fileURL from
+    `.applicationSupportDirectory/ProSSHV2/<filename>`, fallback to `.temporaryDirectory`
+  - `func load() async throws -> [T]` — guard fileExists, JSONDecoder/.iso8601, EncryptedStorage.loadJSON
+  - `func save(_ items: [T]) async throws` — JSONEncoder/.prettyPrinted/.sortedKeys/.iso8601, EncryptedStorage.saveJSON
+  - Four conditional conformance extensions:
+    - `extension PersistentStore: HostStoreProtocol where T == Host`
+    - `extension PersistentStore: KeyStoreProtocol where T == StoredSSHKey`
+    - `extension PersistentStore: CertificateStoreProtocol where T == SSHCertificate`
+    - `extension PersistentStore: CertificateAuthorityStoreProtocol where T == CertificateAuthorityModel`
+
+### Step 4.2 — Build check (new file coexists with originals)
+
+```bash
+xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build 2>&1 | tail -3
+# Must show: ** BUILD SUCCEEDED **
+```
+
+- [ ] BUILD SUCCEEDED
+
+### Step 4.3 — Delete `FileHostStore` from `HostStore.swift`
+
+- [ ] Delete `@MainActor final class FileHostStore` block (lines 10–57)
+- [ ] File shrinks from 57L to ~8L (just `HostStoreProtocol`)
+- [ ] No remaining references to `FileHostStore` in the file
+
+### Step 4.4 — Delete `FileKeyStore` from `KeyStore.swift`
+
+- [ ] Delete `@MainActor final class FileKeyStore` block (lines 21–66)
+- [ ] File shrinks from 66L to ~18L (`StoredSSHKey` struct + `KeyStoreProtocol`)
+- [ ] Keep `StoredSSHKey` struct untouched
+
+### Step 4.5 — Delete `FileCertificateStore` from `CertificateStore.swift`
+
+- [ ] Delete `@MainActor final class FileCertificateStore` block (lines 10–55)
+- [ ] File shrinks from 55L to ~8L (just `CertificateStoreProtocol`)
+
+### Step 4.6 — Delete `FileCertificateAuthorityStore` from `CertificateAuthorityStore.swift`
+
+- [ ] Delete `@MainActor final class FileCertificateAuthorityStore` block (lines 10–55)
+- [ ] File shrinks from 55L to ~8L (just `CertificateAuthorityStoreProtocol`)
+
+### Step 4.7 — Update `AppDependencies.swift` (4 instantiation sites)
+
+- [ ] Line ~69: `FileHostStore()` → `PersistentStore<Host>(filename: "hosts.json")`
+- [ ] Line ~89: `FileKeyStore()` → `PersistentStore<StoredSSHKey>(filename: "keys.json")`
+- [ ] Line ~97: `FileCertificateStore()` → `PersistentStore<SSHCertificate>(filename: "certificates.json")`
+- [ ] Line ~96: `FileCertificateAuthorityStore()` → `PersistentStore<CertificateAuthorityModel>(filename: "certificate_authorities.json")`
+- [ ] `ScreenshotHostStore` and `ScreenshotKeyStore` — untouched
+
+### Step 4.8 — Build check after all deletions
+
+```bash
+xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build 2>&1 | tail -3
+# Must show: ** BUILD SUCCEEDED **
+```
+
+- [ ] BUILD SUCCEEDED
+
+### Step 4.9 — Run tests and commit
+
+```bash
+xcodebuild -scheme ProSSHMac -destination 'platform=macOS' test 2>&1 \
+  | grep -E 'Executed [0-9]+ test|FAILED|SUCCEEDED' | tail -5
+# Failures must be ≤ 23 (pre-existing baseline)
+```
+
+```bash
+git add ProSSHMac/Services/PersistentStore.swift \
+        ProSSHMac/Services/HostStore.swift \
+        ProSSHMac/Services/KeyStore.swift \
+        ProSSHMac/Services/CertificateStore.swift \
+        ProSSHMac/Services/CertificateAuthorityStore.swift \
+        ProSSHMac/App/AppDependencies.swift
+git commit -m "refactor: introduce PersistentStore<T>, consolidate store boilerplate"
+```
+
+- [ ] Tests ≤ 23 failures
+- [ ] Committed
+
+### Step 4.10 — Update CLAUDE.md
+
+- [ ] "Current State" block: phase → Phase 5, status → NOT PLANNED
+- [ ] Phase Status table: Phase 4 → COMPLETE (2026-02-24, commit `<hash>`)
+- [ ] Refactor Log entry added
+- [ ] Commit: `docs: mark Phase 4 complete in CLAUDE.md`
 
 ---
 
