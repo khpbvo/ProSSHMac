@@ -19,10 +19,10 @@ Follow the same workflow as `RefactorTerminalView.md`:
 
 ```
 Active branch   : master
-Current phase   : Phase 3 — NOT STARTED
+Current phase   : Phase 4 — NOT STARTED
 Phase status    : NOT STARTED
-Immediate action: Begin Phase 3 (extract Tab Stops + Dirty Tracking → TerminalGrid+TabsAndDirty.swift).
-Last commit     : eff03e6 "refactor(RefactorTG Phase 2): extract OSC Handlers to TerminalGrid+OSCHandlers.swift"
+Immediate action: Begin Phase 4 (extract Cursor Movement + Cell R/W → TerminalGrid+CursorOps.swift).
+Last commit     : <hash> "refactor(RefactorTG Phase 3): extract Tab Stops + Dirty Tracking to TerminalGrid+TabsAndDirty.swift"
 ```
 
 **Update this block after every phase.**
@@ -36,7 +36,7 @@ Last commit     : eff03e6 "refactor(RefactorTG Phase 2): extract OSC Handlers to
 | 0 | Baseline — swiftlint:disable + remove all `private` from stored properties | **COMPLETE** (2026-02-24) |
 | 1 | Extract Mode Setters → `TerminalGrid+ModeSetters.swift` | **COMPLETE** (2026-02-24) |
 | 2 | Extract OSC Handlers → `TerminalGrid+OSCHandlers.swift` | **COMPLETE** (2026-02-24) |
-| 3 | Extract Tab Stops + Dirty Tracking → `TerminalGrid+TabsAndDirty.swift` | NOT STARTED |
+| 3 | Extract Tab Stops + Dirty Tracking → `TerminalGrid+TabsAndDirty.swift` | **COMPLETE** (2026-02-25) |
 | 4 | Extract Cursor Movement + Cell R/W → `TerminalGrid+CursorOps.swift` | NOT STARTED |
 | 5 | Extract Scrolling → `TerminalGrid+Scrolling.swift` | NOT STARTED |
 | 6 | Extract Erasing → `TerminalGrid+Erasing.swift` | NOT STARTED |
@@ -235,12 +235,12 @@ other via `self`.
 
 ### Steps (6 steps)
 
-- [ ] **3.1** Read the two MARK blocks in `TerminalGrid.swift` in full (find current line numbers after Phase 1–2 shifts).
-- [ ] **3.2** Create `ProSSHMac/Terminal/Grid/TerminalGrid+TabsAndDirty.swift`.
-- [ ] **3.3** File header: `// Extracted from TerminalGrid.swift`, `import Foundation`, `extension TerminalGrid {`, close `}`.
-- [ ] **3.4** Cut `// MARK: - A.6.12 Tab Stop Management` and `// MARK: - A.6.13 Dirty Tracking` from `TerminalGrid.swift` and paste into the extension.
-- [ ] **3.5** Build: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`. Verify `** BUILD SUCCEEDED **`.
-- [ ] **3.6** Commit: `refactor(RefactorTG Phase 3): extract Tab Stops + Dirty Tracking to TerminalGrid+TabsAndDirty.swift`
+- [x] **3.1** Read the two MARK blocks in `TerminalGrid.swift` in full (found at lines 1384–1448 after Phase 1–2 shifts).
+- [x] **3.2** Create `ProSSHMac/Terminal/Grid/TerminalGrid+TabsAndDirty.swift`.
+- [x] **3.3** File header: `// Extracted from TerminalGrid.swift`, `import Foundation`, `extension TerminalGrid {`, close `}`.
+- [x] **3.4** Cut `// MARK: - A.6.12 Tab Stop Management` (5 methods) and `// MARK: - A.6.13 Dirty Tracking` (3 methods) from `TerminalGrid.swift` and paste into the extension. Added `nonisolated` to all 8 methods.
+- [x] **3.5** Build: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`. Verify `** BUILD SUCCEEDED **`.
+- [x] **3.6** Commit: `refactor(RefactorTG Phase 3): extract Tab Stops + Dirty Tracking to TerminalGrid+TabsAndDirty.swift`
 
 **Expected TerminalGrid.swift line count after phase:** ~1,929 lines
 
@@ -506,6 +506,15 @@ property stays in the main file (it's a class-level declaration); the extension 
 ---
 
 ## Refactor Log (most recent first)
+
+- **2026-02-25 — Phase 3 COMPLETE**: Extracted `// MARK: - A.6.12 Tab Stop Management` (5 methods:
+  `tabForward`, `tabBackward`, `setTabStop`, `clearTabStop`, `resetTabStops`) and
+  `// MARK: - A.6.13 Dirty Tracking` (3 methods: `markDirty`, `markAllDirty`, `clearDirtyState`)
+  from `TerminalGrid.swift` (lines 1384–1448, 66 lines) into
+  `ProSSHMac/Terminal/Grid/TerminalGrid+TabsAndDirty.swift`. All 8 methods annotated `nonisolated`.
+  Cross-file callers of `markAllDirty()` (in +OSCHandlers) and `resetTabStops()` (called by
+  `fullReset` still in main file) resolve fine via `self.` dispatch on `extension TerminalGrid`.
+  `TerminalGrid.swift`: ~1,937 lines (from ~2,003). Build: SUCCEEDED, 0 new warnings.
 
 - **2026-02-24 — Phase 2 COMPLETE**: Extracted `// MARK: - Window Title (OSC 0/1/2)` (4 methods) and
   `// MARK: - Color Palette (OSC 4/10/11/12)` (9 methods) from `TerminalGrid.swift` (lines 1982–2059,
