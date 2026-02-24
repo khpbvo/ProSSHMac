@@ -19,10 +19,10 @@ Follow the same workflow as `RefactorTheActor.md`:
 
 ```
 Active branch   : master
-Current phase   : Phase 5 — NOT STARTED
+Current phase   : Phase 6 — NOT STARTED
 Phase status    : NOT STARTED
-Immediate action: Read RefactorTerminalView.md, begin Phase 5 (extract TerminalSessionTabBar)
-Last commit     : 661dc50 "refactor(RefactorTV Phase 4): extract session actions toolbar to TerminalSessionActionsBar"
+Immediate action: Read RefactorTerminalView.md, begin Phase 6 (extract TerminalQuickCommandPanel)
+Last commit     : TBD "refactor(RefactorTV Phase 5): extract tab bar to TerminalSessionTabBar"
 ```
 
 **Update this block after every phase.**
@@ -38,7 +38,7 @@ Last commit     : 661dc50 "refactor(RefactorTV Phase 4): extract session actions
 | 2 | Extract `TerminalSessionHeaderView` + `TerminalSessionMetadataView` | COMPLETE (2026-02-24) |
 | 3 | Extract `TerminalSearchBarView` | COMPLETE (2026-02-24) |
 | 4 | Extract `TerminalSessionActionsBar` | COMPLETE (2026-02-24) |
-| 5 | Extract `TerminalSessionTabBar` | NOT STARTED |
+| 5 | Extract `TerminalSessionTabBar` | COMPLETE (2026-02-24) |
 | 6 | Extract `TerminalQuickCommandPanel` | NOT STARTED |
 | 7 | Extract `TerminalFileBrowserSidebar` | NOT STARTED |
 | 8 | Extract `TerminalSurfaceView` | NOT STARTED |
@@ -312,9 +312,9 @@ Tab selection, pinning, and reordering call `tabManager` directly (no callback n
 
 ### Steps (8 steps)
 
-- [ ] **5.1** Read `TerminalView.swift` lines 789–948 and 2447–2452 in full before starting.
-- [ ] **5.2** Create `ProSSHMac/UI/Terminal/TerminalSessionTabBar.swift`. Header: `// Extracted from TerminalView.swift`. Imports: `import SwiftUI`.
-- [ ] **5.3** Write `struct TerminalSessionTabBar: View` with:
+- [x] **5.1** Read `TerminalView.swift` lines 681–840 and 2100–2105 in full before starting.
+- [x] **5.2** Create `ProSSHMac/UI/Terminal/TerminalSessionTabBar.swift`. Header: `// Extracted from TerminalView.swift`. Imports: `import SwiftUI`.
+- [x] **5.3** Write `struct TerminalSessionTabBar: View` with:
   - `@ObservedObject var tabManager: SessionTabManager`
   - `@ObservedObject var paneManager: PaneManager`
   - `@EnvironmentObject private var sessionManager: SessionManager`
@@ -325,23 +325,14 @@ Tab selection, pinning, and reordering call `tabManager` directly (no callback n
   - `var onOpenLocalTerminal: () -> Void`
   - `var onSplitWithExisting: (UUID, UUID, SplitDirection) -> Void`
   - `@State private var hoveredTabID: UUID?`
-  - `private func tabBackground(for sessionID: UUID) -> Color` (copy verbatim)
-- [ ] **5.4** Copy the content of `sessionTabs` as the `body`. All call sites already use `tabManager` directly; only the three action callbacks need wiring.
-- [ ] **5.5** In `TerminalView.swift`: remove `@State private var hoveredTabID: UUID?`.
-- [ ] **5.6** In `TerminalView.swift` `macOSBody`: replace all `sessionTabs` call sites (there may be 2: the split-pane path and the single-session path) with:
-  ```swift
-  TerminalSessionTabBar(
-      tabManager: tabManager,
-      paneManager: paneManager,
-      onRequestClose: { s in requestCloseSession(s) },
-      onOpenLocalTerminal: { openLocalTerminal() },
-      onSplitWithExisting: { sid, pid, dir in splitWithExistingSession(sid, beside: pid, direction: dir) }
-  )
-  ```
-- [ ] **5.7** Delete `sessionTabs` and `tabBackground(for:)` from `TerminalView.swift`. Verify `tabBackground` has no remaining callers in `TerminalView.swift`.
-- [ ] **5.8** Run build: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`. Verify `** BUILD SUCCEEDED **`. Commit: `refactor(RefactorTV Phase 5): extract tab bar to TerminalSessionTabBar`
+  - `private func tabBackground(for session: Session) -> Color` (copy verbatim)
+- [x] **5.4** Copy the content of `sessionTabs` as the `body`. All call sites already use `tabManager` directly; only the three action callbacks need wiring.
+- [x] **5.5** In `TerminalView.swift`: remove `@State private var hoveredTabID: UUID?`.
+- [x] **5.6** In `TerminalView.swift`: replace all three `sessionTabs` call sites (macOSBody split-pane, macOSBody single-session, splitPaneBody) with `TerminalSessionTabBar(...)` initializer. `.padding(.vertical, 8)` retained at call sites in macOSBody.
+- [x] **5.7** Delete `sessionTabs` (~160 lines) and `tabBackground(for:)` (6 lines) from `TerminalView.swift`. Verified no remaining callers.
+- [x] **5.8** Run build: `** BUILD SUCCEEDED **`. TerminalView.swift: 2,522 lines (was 2,673). Committed: `refactor(RefactorTV Phase 5): extract tab bar to TerminalSessionTabBar`
 
-**Expected TerminalView.swift line count after phase:** ~2,560
+**Actual TerminalView.swift line count after phase:** 2,522 (expected ~2,560)
 
 ---
 
@@ -655,6 +646,16 @@ After all 9 phases are committed and the build is clean:
 ---
 
 ## Refactor Log (most recent first)
+
+- **2026-02-24 — Phase 5 COMPLETE** (commit TBD): Extracted `sessionTabs` (~160 lines),
+  `tabBackground(for:)` (6 lines), and `@State private var hoveredTabID: UUID?` into
+  `TerminalSessionTabBar.swift`. Three call sites in `TerminalView.swift` replaced with
+  `TerminalSessionTabBar(tabManager:paneManager:onRequestClose:onOpenLocalTerminal:onSplitWithExisting:)`.
+  Three callbacks bridge TerminalView-level actions: `requestCloseSession`, `openLocalTerminal`,
+  `splitWithExistingSession`. `@ObservedObject` for `tabManager`/`paneManager`; `@EnvironmentObject`
+  for `sessionManager`/`navigationCoordinator`; `@Environment(\.openWindow)` and
+  `@Environment(\.colorScheme)` re-declared in child. `TerminalView.swift`: 2,673 → 2,522 lines
+  (−151). Build: `** BUILD SUCCEEDED **`, 0 new warnings.
 
 - **2026-02-24 — Phase 4 COMPLETE** (commit `661dc50`): Extracted `terminalActions(for:)` (~108 lines)
   into `TerminalSessionActionsBar.swift`. `onRestartLocal: (Session) -> Void` callback replaces
