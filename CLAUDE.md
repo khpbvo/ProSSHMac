@@ -22,11 +22,10 @@ The long-term memory for this project lives in `docs/featurelist.md`.
 
 ```
 Active branch : refactor/actor-isolation
-Current phase : Phase 6 — Decompose OpenAIAgentService.swift into Services/AI/
+Current phase : Phase 7 — Strict concurrency pass (-strict-concurrency=complete)
 Phase status  : NOT PLANNED
-Immediate action: Open RefactorTheActor.md → Phase 6 → expand sketch into granular plan (State A)
-Key source file : ProSSHMac/Services/OpenAIAgentService.swift (~1,946 lines)
-Last commit   : 0e876c2  "refactor: extract SessionRecordingCoordinator from SessionManager"
+Immediate action: Open RefactorTheActor.md → Phase 7 → expand sketch into granular plan (State A)
+Last commit   : 16043ad  "refactor: extract AIAgentRunner from OpenAIAgentService"
 ```
 
 **Update this block after every phase** — it is the first thing any new agent reads.
@@ -67,7 +66,7 @@ Every phase is in one of two states. Know which state you are in before doing an
 | 3 | Deduplicate remote path utilities → `RemotePath.swift` | **COMPLETE** (2026-02-24, commit `2fcdc50`) |
 | 4 | Generic `PersistentStore<T>` for store boilerplate | **COMPLETE** (2026-02-24, commit `35bfcfb`) |
 | 5 | Decompose `SessionManager.swift` into 5 coordinators | **COMPLETE** (2026-02-24, commit `0e876c2`) |
-| 6 | Decompose `OpenAIAgentService.swift` into `Services/AI/` | NOT PLANNED |
+| 6 | Decompose `OpenAIAgentService.swift` into `Services/AI/` | **COMPLETE** (2026-02-24, commits `d12e2ca`–`16043ad`) |
 | 7 | Strict concurrency pass (`-strict-concurrency=complete`) | NOT PLANNED |
 | 8 | Test coverage backfill for all extracted types | NOT PLANNED |
 
@@ -205,7 +204,11 @@ All paths below are relative to the repo root. Source files live under `ProSSHMa
 | `ProSSHMac/Terminal/Renderer/MetalTerminalRenderer.swift` | Metal draw loop, cell buffer upload, cursor/selection render | ~1,438 lines |
 | `ProSSHMac/Services/SessionManager.swift` | Session lifecycle, shell I/O, SFTP, grid snapshots, history | **1,177 lines** — Phase 5 COMPLETE; 4 coordinators extracted |
 | `ProSSHMac/Services/SSH/LibSSHTransport.swift` | LibSSH transport actor, connect/auth/shell/SFTP/forward logic | ~797 lines — Phase 1 COMPLETE |
-| `ProSSHMac/Services/OpenAIAgentService.swift` | Agent tool loop, tool dispatch, streaming parser, context mgmt | **1,946 lines — being decomposed into `ProSSHMac/Services/AI/` in Phase 6** |
+| `ProSSHMac/Services/OpenAIAgentService.swift` | Thin orchestrator: protocols, error types, coordinator wiring | **~108 lines — Phase 6 COMPLETE** |
+| `ProSSHMac/Services/AI/AIToolHandler.swift` | Tool dispatch + 11 tool implementations (local + remote) | ~1,406 lines |
+| `ProSSHMac/Services/AI/AIToolDefinitions.swift` | Developer prompt, 11 tool schemas, static helpers | ~373 lines |
+| `ProSSHMac/Services/AI/AIAgentRunner.swift` | Agent iteration loop, response recovery, timeout | ~187 lines |
+| `ProSSHMac/Services/AI/AIConversationContext.swift` | previousResponseID store keyed by session UUID | ~21 lines |
 | `ProSSHMac/Terminal/Grid/TerminalGrid.swift` | Terminal grid state, character printing, scrolling, resize/reflow | ~2,311 lines |
 
 ---
@@ -260,6 +263,26 @@ All paths below are relative to the repo root. Source files live under `ProSSHMa
 ## Recent Changes
 
 ### Refactor Log (strict concurrency refactor — most recent first)
+
+- **2026-02-24 — Phase 6 COMPLETE** (commits `d12e2ca`–`16043ad`, plan commit: `4fbc3a9`): Decomposed
+  `OpenAIAgentService.swift` (1,946→108 lines) into four `@MainActor final class` coordinators under
+  `ProSSHMac/Services/AI/` using the same weak-reference coordinator pattern as Phase 5.
+  Created: `AIToolDefinitions` (caseless `enum`, ~373L — developer prompt, 11 tool schemas, 8 static
+  helpers; caseless enum prevents Swift 6 `@MainActor` inference on statics); `AIConversationContext`
+  (~21L — `previousResponseIDBySessionID: [UUID: String]` with `responseID(for:)`, `update(responseID:for:)`,
+  `clear(sessionID:)` methods); `AIToolHandler` (~1,406L — `executeToolCalls`, 11 `handle*` tool
+  implementations, `nonisolated static` local filesystem methods, remote tool execution via
+  `sessionProvider` extracted from `service?` at dispatch entry point); `AIAgentRunner` (~187L —
+  `run(sessionID:prompt:)` agent loop, `createResponseWithRecovery(request:previousResponseID:traceID:)`,
+  `runWithTimeout(timeoutSeconds:operation:)` with explicit timeout parameter).
+  Key corrections vs. plan sketch: `AIResponseStreamParser.swift` → `AIToolDefinitions.swift` (no
+  SSE streaming in `OpenAIAgentService`); `nonisolated static` filesystem methods stay on
+  `AIToolHandler` (not moved to separate file); `runWithTimeout` takes explicit `timeoutSeconds: Int`
+  parameter (coordinator accesses `service?.requestTimeoutSeconds` and passes in). OpenAIAgentService
+  `private let` properties widened to `let` (internal) so coordinators can access via `service?`.
+  Build: SUCCEEDED. Strict concurrency: zero warnings with `-strict-concurrency=complete`. Pre-existing
+  test build failure in `SSHConfigParserTests.swift` (actor isolation errors, unrelated to Phase 6).
+  Phase 7 is NOT PLANNED.
 
 - **2026-02-24 — Phase 5 COMPLETE** (`0e876c2`, plan commit: `597c147`): Decomposed
   `SessionManager.swift` (1,640→1,177 lines) into four `@MainActor final class` coordinators using
