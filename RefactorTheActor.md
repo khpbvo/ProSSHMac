@@ -13,15 +13,103 @@
 
 ## Phase 0 — Baseline Audit & Branch Setup
 
-> One-time prep. Do this before touching any source.
+> One-time prep. Do this before touching any source. Every step must complete successfully
+> before moving to the next. Phase 0 ends with a single commit containing only the
+> `// swiftlint:disable file_length` additions.
 
-- [ ] Create branch: `git checkout -b refactor/actor-isolation`
-- [ ] Run full build; record any existing warnings in a `WARNINGS_BASELINE.txt` scratch file (not committed)
-- [ ] Run all existing tests; record pass/fail count as baseline
-- [ ] Add `// swiftlint:disable file_length` suppressions to the three giant files so lint doesn't
-      block future commits during the refactor:
-      `SSHTransport.swift`, `SessionManager.swift`, `OpenAIAgentService.swift`
-- [ ] Confirm `CLAUDE.md` build instructions are accurate (no stale steps)
+### Step 0.1 — Create the refactor branch
+
+```bash
+git checkout -b refactor/actor-isolation
+```
+
+- [ ] Verify: `git branch --show-current` prints `refactor/actor-isolation`
+- [ ] All subsequent work in this refactor goes on this branch
+
+### Step 0.2 — Run full build and capture warning count
+
+```bash
+xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build 2>&1 | tee /tmp/prossh_build.txt
+grep -c ': warning:' /tmp/prossh_build.txt
+```
+
+- [ ] Build must succeed (exit 0) before continuing — if it fails, fix it first and do not proceed
+- [ ] Note the warning count from `grep` output; you will need it in Step 0.4
+
+### Step 0.3 — Run full test suite and capture results
+
+```bash
+xcodebuild -scheme ProSSHMac -destination 'platform=macOS' test 2>&1 | tee /tmp/prossh_test.txt
+grep -E 'Test Suite.*passed|Test Suite.*failed' /tmp/prossh_test.txt | tail -5
+```
+
+- [ ] Note the number of tests passed and failed from the summary lines; you will need it in Step 0.4
+- [ ] A failing test here is a pre-existing issue — note it but do not block Phase 0 on it
+
+### Step 0.4 — Create WARNINGS_BASELINE.txt (scratch file, do NOT commit)
+
+Create `WARNINGS_BASELINE.txt` at the repo root with this exact format, filling in the numbers
+from Steps 0.2 and 0.3:
+
+```
+Date: 2026-02-24
+Branch: refactor/actor-isolation (before any source changes)
+Build warning count: <N>
+Test results: <M> passed, <K> failed
+Note: delete this file when Phase 8 is complete. Never commit it.
+```
+
+- [ ] File created at repo root
+- [ ] Add `WARNINGS_BASELINE.txt` to `.gitignore` so it cannot be accidentally committed:
+  ```bash
+  echo 'WARNINGS_BASELINE.txt' >> .gitignore
+  git add .gitignore
+  ```
+
+### Step 0.5 — Add `// swiftlint:disable file_length` to SSHTransport.swift
+
+- [ ] Open `Services/SSHTransport.swift`
+- [ ] Insert `// swiftlint:disable file_length` as **line 1** — before any imports or declarations
+- [ ] Save the file
+- [ ] Verify line 1 of the file is exactly `// swiftlint:disable file_length`
+
+### Step 0.6 — Add `// swiftlint:disable file_length` to SessionManager.swift
+
+- [ ] Open `Services/SessionManager.swift`
+- [ ] Insert `// swiftlint:disable file_length` as **line 1** — before any imports or declarations
+- [ ] Save the file
+- [ ] Verify line 1 of the file is exactly `// swiftlint:disable file_length`
+
+### Step 0.7 — Add `// swiftlint:disable file_length` to OpenAIAgentService.swift
+
+- [ ] Open `Services/OpenAIAgentService.swift`
+- [ ] Insert `// swiftlint:disable file_length` as **line 1** — before any imports or declarations
+- [ ] Save the file
+- [ ] Verify line 1 of the file is exactly `// swiftlint:disable file_length`
+
+### Step 0.8 — Verify build still passes after the three edits
+
+```bash
+xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build
+```
+
+- [ ] Build exits 0 — if it fails, fix the issue before committing
+- [ ] This also confirms that `CLAUDE.md`'s build command is accurate (Step 0.9 is satisfied)
+
+### Step 0.9 — Commit Phase 0
+
+Stage only the three modified Swift files and the `.gitignore` update — do NOT stage
+`WARNINGS_BASELINE.txt`:
+
+```bash
+git add Services/SSHTransport.swift Services/SessionManager.swift Services/OpenAIAgentService.swift .gitignore
+git status   # confirm WARNINGS_BASELINE.txt is NOT listed as staged
+git commit -m "chore: Phase 0 — add swiftlint:disable file_length to god files"
+```
+
+- [ ] Commit created on `refactor/actor-isolation`
+- [ ] `WARNINGS_BASELINE.txt` is untracked (not staged, not committed)
+- [ ] Phase 0 complete — proceed to expand Phase 1 in this file before writing any code
 
 ---
 
