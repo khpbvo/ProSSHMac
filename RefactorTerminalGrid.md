@@ -22,7 +22,7 @@ Active branch   : master
 Current phase   : Phase 8 — NOT STARTED
 Phase status    : NOT STARTED
 Immediate action: Begin Phase 8 (extract Screen Buffer + Cursor Save/Restore → TerminalGrid+ScreenBuffer.swift).
-Last commit     : <hash> "refactor(RefactorTG Phase 7): extract Line Operations to TerminalGrid+LineOps.swift"
+Last commit     : d05a3c9 "refactor(RefactorTG Phase 7): extract Line Operations to TerminalGrid+LineOps.swift"
 ```
 
 **Update this block after every phase.**
