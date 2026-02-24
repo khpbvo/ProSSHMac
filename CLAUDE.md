@@ -169,7 +169,7 @@ Active branch   : master
 Current phase   : Phase 7 — NOT STARTED
 Phase status    : NOT STARTED
 Immediate action: Begin Phase 7 (extract Line Operations → TerminalGrid+LineOps.swift).
-Last commit     : <hash> "refactor(RefactorTG Phase 6): extract Erasing to TerminalGrid+Erasing.swift"
+Last commit     : aa9a10f "refactor(RefactorTG Phase 6): extract Erasing to TerminalGrid+Erasing.swift"
 ```
 
 **Update this block after every phase.**
