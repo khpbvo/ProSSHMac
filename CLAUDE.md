@@ -169,7 +169,7 @@ Active branch   : master
 Current phase   : Phase 9 — NOT STARTED
 Phase status    : NOT STARTED
 Immediate action: Begin Phase 9 (extract Lifecycle → TerminalGrid+Lifecycle.swift).
-Last commit     : <pending> "refactor(RefactorTG Phase 8): extract Screen Buffer + Cursor Save/Restore to TerminalGrid+ScreenBuffer.swift"
+Last commit     : 443ed58 "refactor(RefactorTG Phase 8): extract Screen Buffer + Cursor Save/Restore to TerminalGrid+ScreenBuffer.swift"
 ```
 
 **Update this block after every phase.**
