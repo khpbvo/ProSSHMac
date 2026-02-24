@@ -2121,20 +2121,258 @@ Expected:
 
 ## Phase 7 — Strict Concurrency Pass
 
-> **Context note for Claude Code:** This phase enables Swift's strict concurrency checks
-> incrementally, file by file, fixing warnings before moving on.
-> Do NOT enable project-wide until every file is clean.
+> **Status: PLANNED** — Full numbered plan below (State B). Execute each step in order.
+>
+> **Context:** App target already runs Swift 6 mode (`SWIFT_VERSION = 6.0`) with
+> `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` and produces 0 warnings with
+> `-strict-concurrency=complete`. No app-source changes needed. Work is entirely in
+> test target build settings + committing untracked files + cleanup.
 
-- [ ] Enable `-strict-concurrency=targeted` in build settings (less aggressive than `complete`)
-- [ ] Fix all `Sendable` warnings in `Services/SSH/` files (extracted in Phase 1–3)
-- [ ] Fix all `Sendable` warnings in `Services/PersistentStore.swift` and `*Store.swift` files
-- [ ] Fix all `Sendable` warnings in new coordinator files (Phase 5)
-- [ ] Fix all `Sendable` warnings in AI service files (Phase 6)
-- [ ] Fix all `Sendable` warnings in `Models/` (likely minor — add `Sendable` conformances)
-- [ ] Fix all `Sendable` warnings in `ViewModels/`
-- [ ] Upgrade to `-strict-concurrency=complete`; fix any remaining warnings
-- [ ] Verify zero concurrency warnings in a clean build
-- [ ] Run tests; commit: `chore: enable strict concurrency, fix all Sendable conformances`
+### Step 7.0 — Write this plan into RefactorTheActor.md (State A → State B)
+
+- [ ] Replace the Phase 7 sketch with this full numbered plan
+- [ ] Commit: `docs: expand Phase 7 plan in RefactorTheActor.md`
+
+---
+
+### Step 7.1 — Baseline Audit (read-only)
+
+Run and confirm each expected output before touching any file:
+
+- [ ] **7.1a** — App target builds with 0 warnings under `-strict-concurrency=complete`:
+  ```bash
+  xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build \
+    OTHER_SWIFT_FLAGS="-strict-concurrency=complete" 2>&1 \
+    | grep -E "warning:|BUILD SUCCEEDED|BUILD FAILED"
+  ```
+  Expected: `** BUILD SUCCEEDED **` with no warning lines.
+
+- [ ] **7.1b** — Confirm build settings in `project.pbxproj`:
+  ```bash
+  grep -n "SWIFT_VERSION\|SWIFT_STRICT_CONCURRENCY\|SWIFT_DEFAULT_ACTOR_ISOLATION" \
+    ProSSHMac.xcodeproj/project.pbxproj
+  ```
+  Expected:
+  - `SWIFT_VERSION = 6.0;` (app target, both configs)
+  - `SWIFT_STRICT_CONCURRENCY = minimal;` (test target ONLY, `AB100009` + `AB10000A`)
+  - `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;` (app target ONLY, `AA00000E` + `AA00000F`)
+
+- [ ] **7.1c** — Confirm untracked files:
+  ```bash
+  git status --short
+  ```
+  Expected:
+  ```
+  ?? ProSSHMac/Services/SSHConfigParser.swift
+  ?? ProSSHMacTests/Terminal/Tests/SSHConfigParserTests.swift
+  ```
+
+- [ ] **7.1d** — Confirm `WARNINGS_BASELINE.txt` exists (will be deleted in 7.6):
+  ```bash
+  ls -la WARNINGS_BASELINE.txt
+  ```
+  Expected: file listed (≈276 bytes).
+
+---
+
+### Step 7.2 — Update Test Target Build Settings in `project.pbxproj`
+
+**File:** `ProSSHMac.xcodeproj/project.pbxproj`
+
+Read the file first (confirm line numbers match before editing).
+
+- [ ] **7.2a** — In the `AB100009` block (Test target, Debug config, ~line 441):
+
+  Change:
+  ```
+  SWIFT_STRICT_CONCURRENCY = minimal;
+  ```
+  To:
+  ```
+  SWIFT_STRICT_CONCURRENCY = complete;
+  SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+  ```
+
+- [ ] **7.2b** — In the `AB10000A` block (Test target, Release config, ~line 468):
+
+  Change:
+  ```
+  SWIFT_STRICT_CONCURRENCY = minimal;
+  ```
+  To:
+  ```
+  SWIFT_STRICT_CONCURRENCY = complete;
+  SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+  ```
+
+  **Rationale:** `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` makes all test methods implicitly
+  `@MainActor`, matching the app module's isolation model. This resolves actor isolation errors
+  in `SSHConfigParserTests.swift` at the module level. `SWIFT_STRICT_CONCURRENCY = complete`
+  is set for consistency (redundant in Swift 6 mode but explicit).
+
+- [ ] **Build check:**
+  ```bash
+  xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build 2>&1 | tail -3
+  ```
+  Must output: `** BUILD SUCCEEDED **`
+
+  If actor isolation errors persist in `SSHConfigParserTests.swift` after this change
+  (e.g., `@autoclosure` arguments still rejected), proceed to Step 7.3. Otherwise skip to 7.4.
+
+---
+
+### Step 7.3 — Fix SSHConfigParserTests.swift (only if Step 7.2 alone is insufficient)
+
+**Only execute if** the build after Step 7.2 still shows errors in `SSHConfigParserTests.swift`.
+
+- [ ] Read `ProSSHMacTests/Terminal/Tests/SSHConfigParserTests.swift`, find the class declaration.
+- [ ] Add `@MainActor` explicitly to the class:
+  ```swift
+  // Before:
+  final class SSHConfigParserTests: XCTestCase {
+
+  // After:
+  @MainActor final class SSHConfigParserTests: XCTestCase {
+  ```
+  This explicit annotation overrides remaining `@autoclosure`-isolation ambiguity. Safe: XCTest
+  fully supports `@MainActor` test classes; setUp/tearDown/test methods all run on the main actor.
+
+- [ ] **Build check:**
+  ```bash
+  xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build 2>&1 | tail -3
+  ```
+  Must output: `** BUILD SUCCEEDED **`
+
+---
+
+### Step 7.4 — Commit Untracked Files + Project Settings
+
+- [ ] Stage and commit:
+  ```bash
+  git add ProSSHMac.xcodeproj/project.pbxproj \
+          ProSSHMac/Services/SSHConfigParser.swift \
+          ProSSHMacTests/Terminal/Tests/SSHConfigParserTests.swift
+  git commit -m "chore: enable SWIFT_DEFAULT_ACTOR_ISOLATION=MainActor on test target, commit SSHConfigParser files (Phase 7)"
+  ```
+
+---
+
+### Step 7.5 — Run Full Test Suite
+
+- [ ] Run tests:
+  ```bash
+  xcodebuild -scheme ProSSHMac -destination 'platform=macOS' test 2>&1 \
+    | grep -E "Test Suite.*started|Test Suite.*passed|Test Suite.*failed|\*\* TEST"
+  ```
+  Expected: `** TEST PASSED **` or `** TEST FAILED **` with **≤23 pre-existing failures** only
+  (color rendering + mouse encoding — unrelated to concurrency).
+
+  If new failures appear beyond the ≤23 baseline, read failure details, determine root cause,
+  and fix before continuing. Do not proceed with unexpected regressions.
+
+---
+
+### Step 7.6 — Delete WARNINGS_BASELINE.txt
+
+- [ ] Delete and verify:
+  ```bash
+  rm WARNINGS_BASELINE.txt
+  git status --short | grep WARNINGS_BASELINE
+  ```
+  Expected: no output (file is gitignored, does not appear in `git status`).
+
+  If the file IS NOT gitignored (appears in `git status`), add it to `.gitignore` first, then
+  delete it.
+
+---
+
+### Step 7.7 — Update CLAUDE.md
+
+- [ ] **Current State block** (top of Active Refactor section) — update to:
+  ```
+  Active branch : refactor/actor-isolation
+  Current phase : Phase 8 — Test coverage backfill for all extracted types
+  Phase status  : NOT PLANNED
+  Immediate action: Open RefactorTheActor.md → Phase 8 → expand sketch into granular plan (State A)
+  Last commit   : <Phase 7 commit hash>  "chore: mark Phase 7 complete in CLAUDE.md"
+  ```
+
+- [ ] **Phase Status table** — update Phase 7 row:
+  ```
+  | 7 | Strict concurrency pass (`-strict-concurrency=complete`) | **COMPLETE** (2026-02-24, commit `<hash>`) |
+  ```
+
+- [ ] **Refactor Log** — insert above Phase 6 entry (most-recent-first):
+  ```
+  - **2026-02-24 — Phase 7 COMPLETE** (commit `<hash>`, plan commit: `<plan-hash>`): Verified app
+    target already fully strict-concurrency clean under Swift 6 + SWIFT_DEFAULT_ACTOR_ISOLATION =
+    MainActor (0 warnings with -strict-concurrency=complete, no source changes). Updated test
+    target (ProSSHMacTests) build configs AB100009 + AB10000A: SWIFT_STRICT_CONCURRENCY minimal →
+    complete; added SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor to match app target's isolation model.
+    Committed two previously-untracked files (SSHConfigParser.swift + SSHConfigParserTests.swift)
+    that were blocking test bundle compilation. If autoclosure actor-isolation errors persisted
+    after the build-setting change, @MainActor was added explicitly to SSHConfigParserTests class.
+    Deleted WARNINGS_BASELINE.txt (Phase 0 scratch file, gitignored). Build: SUCCEEDED.
+    Tests: ≤23 pre-existing failures. Phase 8 is NOT PLANNED.
+  ```
+
+---
+
+### Step 7.8 — Update docs/featurelist.md
+
+- [ ] Add loop-log entry immediately after the Phase 6 entry (most-recent-first):
+  ```
+  - 2026-02-24: Phase 7 COMPLETE (commit `<hash>`). Strict concurrency verified project-wide.
+    App target already clean: Swift 6 + SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor = 0 warnings.
+    Test target upgraded: SWIFT_STRICT_CONCURRENCY minimal → complete +
+    SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor added to both Debug/Release build configs.
+    Committed SSHConfigParser.swift + SSHConfigParserTests.swift (previously untracked, blocked
+    test bundle compilation). @MainActor added to SSHConfigParserTests class if autoclosure
+    errors persisted after build-setting change. WARNINGS_BASELINE.txt deleted (Phase 0 scratch,
+    gitignored). Phase 8 is NOT PLANNED.
+  ```
+
+---
+
+### Step 7.9 — Final Docs Commit
+
+- [ ] Commit docs:
+  ```bash
+  git add CLAUDE.md docs/featurelist.md
+  git commit -m "docs: mark Phase 7 complete in CLAUDE.md"
+  ```
+
+---
+
+### End-of-Phase Verification Checklist
+
+Run all four commands and confirm expected outputs before marking Phase 7 complete:
+
+- [ ] **V1** — App target builds clean:
+  ```bash
+  xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build 2>&1 | tail -3
+  ```
+  Expected: `** BUILD SUCCEEDED **`
+
+- [ ] **V2** — Test suite within baseline:
+  ```bash
+  xcodebuild -scheme ProSSHMac -destination 'platform=macOS' test 2>&1 \
+    | grep -E "\*\* TEST" | tail -1
+  ```
+  Expected: `** TEST PASSED **` or `** TEST FAILED **` with ≤23 pre-existing failures only.
+
+- [ ] **V3** — WARNINGS_BASELINE.txt gone:
+  ```bash
+  ls WARNINGS_BASELINE.txt 2>&1
+  ```
+  Expected: `ls: WARNINGS_BASELINE.txt: No such file or directory`
+
+- [ ] **V4** — Test target settings updated:
+  ```bash
+  grep -A 30 "AB100009" ProSSHMac.xcodeproj/project.pbxproj \
+    | grep -E "SWIFT_STRICT_CONCURRENCY|SWIFT_DEFAULT_ACTOR_ISOLATION"
+  ```
+  Expected: `SWIFT_STRICT_CONCURRENCY = complete;` AND `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;`
 
 ---
 
