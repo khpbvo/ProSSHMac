@@ -22,10 +22,10 @@ The long-term memory for this project lives in `docs/featurelist.md`.
 
 ```
 Active branch : refactor/actor-isolation
-Current phase : Phase 8 — Test coverage backfill for all extracted types
-Phase status  : NOT PLANNED
-Immediate action: Open RefactorTheActor.md → Phase 8 → expand sketch into granular plan (State A)
-Last commit   : c46e29f  "docs: add Phase 7 loop-log entry to featurelist.md"
+Current phase : Phase 8 — COMPLETE
+Phase status  : COMPLETE
+Immediate action: All 8 phases done. Consider merging to master.
+Last commit   : 816b9be  "test: add unit tests for refactored components (Phase 8)"
 ```
 
 **Update this block after every phase** — it is the first thing any new agent reads.
@@ -68,7 +68,7 @@ Every phase is in one of two states. Know which state you are in before doing an
 | 5 | Decompose `SessionManager.swift` into 5 coordinators | **COMPLETE** (2026-02-24, commit `0e876c2`) |
 | 6 | Decompose `OpenAIAgentService.swift` into `Services/AI/` | **COMPLETE** (2026-02-24, commits `d12e2ca`–`16043ad`) |
 | 7 | Strict concurrency pass (`-strict-concurrency=complete`) | **COMPLETE** (2026-02-24, commit `2c90d5b`) |
-| 8 | Test coverage backfill for all extracted types | NOT PLANNED |
+| 8 | Test coverage backfill for all extracted types | **COMPLETE** (2026-02-24, commit `816b9be`) |
 
 ### Target Directory Layout After Phases 1–6
 
@@ -263,6 +263,21 @@ All paths below are relative to the repo root. Source files live under `ProSSHMa
 ## Recent Changes
 
 ### Refactor Log (strict concurrency refactor — most recent first)
+
+- **2026-02-24 — Phase 8 COMPLETE** (commit `816b9be`, plan commit: `c5d3ded`): Added 8 test files
+  covering all Phase 1–6 extracted types. New test classes: `RemotePathTests` (15 cases — normalize,
+  parent, join), `AIConversationContextTests` (7 cases — CRUD on session response IDs),
+  `PersistentStoreTests` (6 cases — Host + StoredSSHKey round-trips via EncryptedStorage/Keychain),
+  `AIToolDefinitionsTests` (9 cases — static helpers, isDirectActionPrompt, shortTraceID),
+  `MockSSHTransportTests` (5 cases — connect/auth/disconnect/sessionNotFound/listDirectory),
+  `SessionReconnectCoordinatorTests` (5 cases — pending hosts, scheduleReconnect, cancelPending),
+  `SessionKeepaliveCoordinatorTests` (4 cases — task lifecycle with UserDefaults toggle),
+  `LibSSHJumpCallParamsTests` (5 cases — LibSSHTargetParams + LibSSHJumpCallParams construction;
+  required widening LibSSHAuthenticationMaterial/LibSSHTargetParams/LibSSHJumpCallParams from
+  private → internal). Skipped DefaultSSHCredentialResolver (no filesystem injection point).
+  AIResponseStreamParser sketch item invalid — file doesn't exist; substituted with
+  AIToolDefinitionsTests. Build: SUCCEEDED. Tests: 13 failures (all pre-existing —
+  color/mouse/emoji/Base32Tests). Refactor complete — all 8 phases done.
 
 - **2026-02-24 — Phase 7 COMPLETE** (commit `2c90d5b`, plan commit: `dbdb216`): Verified app
   target already fully strict-concurrency clean under Swift 6 + SWIFT_DEFAULT_ACTOR_ISOLATION =
