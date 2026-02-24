@@ -22,7 +22,7 @@ Active branch   : master
 Current phase   : Phase 6 — NOT STARTED
 Phase status    : NOT STARTED
 Immediate action: Begin Phase 6 (extract Erasing → TerminalGrid+Erasing.swift).
-Last commit     : <hash> "refactor(RefactorTG Phase 5): extract Scrolling to TerminalGrid+Scrolling.swift"
+Last commit     : 7ee4abf "refactor(RefactorTG Phase 5): extract Scrolling to TerminalGrid+Scrolling.swift"
 ```
 
 **Update this block after every phase.**
