@@ -19,10 +19,10 @@ Follow the same workflow as `RefactorTerminalView.md`:
 
 ```
 Active branch   : master
-Current phase   : Phase 6 — NOT STARTED
+Current phase   : Phase 7 — NOT STARTED
 Phase status    : NOT STARTED
-Immediate action: Begin Phase 6 (extract Erasing → TerminalGrid+Erasing.swift).
-Last commit     : 7ee4abf "refactor(RefactorTG Phase 5): extract Scrolling to TerminalGrid+Scrolling.swift"
+Immediate action: Begin Phase 7 (extract Line Operations → TerminalGrid+LineOps.swift).
+Last commit     : <hash> "refactor(RefactorTG Phase 6): extract Erasing to TerminalGrid+Erasing.swift"
 ```
 
 **Update this block after every phase.**
@@ -39,7 +39,7 @@ Last commit     : 7ee4abf "refactor(RefactorTG Phase 5): extract Scrolling to Te
 | 3 | Extract Tab Stops + Dirty Tracking → `TerminalGrid+TabsAndDirty.swift` | **COMPLETE** (2026-02-25) |
 | 4 | Extract Cursor Movement + Cell R/W → `TerminalGrid+CursorOps.swift` | **COMPLETE** (2026-02-25) |
 | 5 | Extract Scrolling → `TerminalGrid+Scrolling.swift` | **COMPLETE** (2026-02-25) |
-| 6 | Extract Erasing → `TerminalGrid+Erasing.swift` | NOT STARTED |
+| 6 | Extract Erasing → `TerminalGrid+Erasing.swift` | **COMPLETE** (2026-02-25) |
 | 7 | Extract Line Operations → `TerminalGrid+LineOps.swift` | NOT STARTED |
 | 8 | Extract Screen Buffer + Cursor Save/Restore → `TerminalGrid+ScreenBuffer.swift` | NOT STARTED |
 | 9 | Extract Lifecycle (Full Reset + Resize) → `TerminalGrid+Lifecycle.swift` | NOT STARTED |
@@ -313,12 +313,12 @@ Both call `makeBlankRow()` and `markDirty()` / `markAllDirty()`. All internal af
 
 ### Steps (6 steps)
 
-- [ ] **6.1** Read both MARK blocks in `TerminalGrid.swift` in full. Note any calls to scrollback or other helpers.
-- [ ] **6.2** Create `ProSSHMac/Terminal/Grid/TerminalGrid+Erasing.swift`.
-- [ ] **6.3** File header: `// Extracted from TerminalGrid.swift`, `import Foundation`, `extension TerminalGrid {`, close `}`.
-- [ ] **6.4** Cut `// MARK: - A.6.5 Erase in Line` and `// MARK: - A.6.6 Erase in Display` from `TerminalGrid.swift` and paste into the extension.
-- [ ] **6.5** Build: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`. Verify `** BUILD SUCCEEDED **`.
-- [ ] **6.6** Commit: `refactor(RefactorTG Phase 6): extract Erasing to TerminalGrid+Erasing.swift`
+- [x] **6.1** Read both MARK blocks in `TerminalGrid.swift` in full (A.6.5 at lines 788–821, A.6.6 at lines 823–912 after prior shifts). `eraseCharacters` is an unnumbered method within the A.6.6 block — included in extraction.
+- [x] **6.2** Create `ProSSHMac/Terminal/Grid/TerminalGrid+Erasing.swift`.
+- [x] **6.3** File header: `// Extracted from TerminalGrid.swift`, `import Foundation`, `extension TerminalGrid {`, close `}`.
+- [x] **6.4** Cut `// MARK: - A.6.5 Erase in Line` (1 method) and `// MARK: - A.6.6 Erase in Display` (2 methods: `eraseInDisplay`, `eraseCharacters`) from `TerminalGrid.swift` and paste into the extension. Added `nonisolated` to all 3 methods.
+- [x] **6.5** Build: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`. Verify `** BUILD SUCCEEDED **`.
+- [x] **6.6** Commit: `refactor(RefactorTG Phase 6): extract Erasing to TerminalGrid+Erasing.swift`
 
 **Expected TerminalGrid.swift line count after phase:** ~1,559 lines
 
@@ -506,6 +506,13 @@ property stays in the main file (it's a class-level declaration); the extension 
 ---
 
 ## Refactor Log (most recent first)
+
+- **2026-02-25 — Phase 6 COMPLETE**: Extracted `// MARK: - A.6.5 Erase in Line` (1 method:
+  `eraseInLine`) and `// MARK: - A.6.6 Erase in Display` (2 methods: `eraseInDisplay`,
+  `eraseCharacters`) from `TerminalGrid.swift` (lines 788–912, 126 lines) into
+  `ProSSHMac/Terminal/Grid/TerminalGrid+Erasing.swift`. All 3 methods annotated `nonisolated`.
+  `eraseInDisplay(mode:3)` calls `scrollback.clear()` — `scrollback` is internal after Phase 0.
+  `TerminalGrid.swift`: ~1,596 lines (from ~1,722). Build: SUCCEEDED, 0 new warnings.
 
 - **2026-02-25 — Phase 5 COMPLETE**: Extracted `// MARK: - A.6.4 Scroll Up/Down` (7 methods:
   `scrollUp`, `scrollDown`, `index`, `reverseIndex`, `lineFeed`, `carriageReturn`, `backspace`)
