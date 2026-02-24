@@ -22,11 +22,11 @@ The long-term memory for this project lives in `docs/featurelist.md`.
 
 ```
 Active branch : refactor/actor-isolation
-Current phase : Phase 2 — Kill CString pyramid, inject credential resolver
-Phase status  : PLANNED — execute State B (read every step, then execute in order)
-Immediate action: Open RefactorTheActor.md → Phase 2 → execute steps 2a.0 through 2b.6
-Key source file : ProSSHMac/Services/SSH/LibSSHTransport.swift  (~800 lines)
-Last commit   : 32dcd70  "chore: Phase 1b — Swift 6 strict concurrency pass on Phase 1 files"
+Current phase : Phase 3 — Deduplicate remote path utilities → RemotePath.swift
+Phase status  : NOT PLANNED
+Immediate action: Open RefactorTheActor.md → Phase 3 → expand sketch into granular plan (State A)
+Key source file : ProSSHMac/Services/SSH/LibSSHTransport.swift  (~700 lines)
+Last commit   : d7d891d  "refactor: flatten jump host CString pyramid into LibSSHJumpCallParams"
 ```
 
 **Update this block after every phase** — it is the first thing any new agent reads.
@@ -63,7 +63,7 @@ Every phase is in one of two states. Know which state you are in before doing an
 | 0 | Baseline audit & branch setup | **COMPLETE** (2026-02-24, commit `9913cdc`) |
 | 1 | Split `SSHTransport.swift` into `Services/SSH/` | **COMPLETE** (2026-02-24, commit `f2ff073`) |
 | 1b | Swift 6 strict concurrency pass on Phase 1 files | **COMPLETE** (2026-02-24, commit `32dcd70`) |
-| 2 | Kill CString pyramid, inject credential resolver | NOT PLANNED |
+| 2 | Kill CString pyramid, inject credential resolver | **COMPLETE** (2026-02-24, commit `d7d891d`) |
 | 3 | Deduplicate remote path utilities → `RemotePath.swift` | NOT PLANNED |
 | 4 | Generic `PersistentStore<T>` for store boilerplate | NOT PLANNED |
 | 5 | Decompose `SessionManager.swift` into 5 coordinators | NOT PLANNED |
@@ -261,6 +261,17 @@ All paths below are relative to the repo root. Source files live under `ProSSHMa
 
 ### Refactor Log (strict concurrency refactor — most recent first)
 
+- **2026-02-24 — Phase 2 COMPLETE** (`d7d891d`, Phase 2a: `334afc4`): Extracted 6 credential-loading
+  helpers from `LibSSHTransport` into `DefaultSSHCredentialResolver` (implementing new
+  `SSHCredentialResolving` protocol). Injected resolver via `init(credentialResolver:)` with
+  `DefaultSSHCredentialResolver()` default. Dropped `nonisolated` from `resolveAuthenticationMaterial`.
+  Added `LibSSHTargetParams` and `LibSSHJumpCallParams` file-scope structs; replaced the 140-line
+  18-level `withCString` pyramid in `connectViaJumpHost` with a clean 40-line body.
+  Key correction vs plan: Swift 6 infers `@MainActor` on file-scope struct methods and protocol
+  declarations in this module — all affected methods required explicit `nonisolated` annotation.
+  `Int32(errorBuffer.count)` cast was wrong direction; C function takes `Int`. Build: SUCCEEDED.
+  Tests: 186 tests, 2 pre-existing failures (emoji rendering — within ≤23 baseline).
+  Phase 3 is NOT PLANNED.
 - **2026-02-24 — Phase 1b COMPLETE** (`32dcd70`): Added explicit Sendable conformances to
   Host, AuthMethod, AlgorithmPreferences, PortForwardingRule (Models/Host.swift);
   SSHBackendKind, SSHTransportError (SSHTransportTypes.swift); SSHAlgorithmPolicy
