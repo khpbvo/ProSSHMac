@@ -132,7 +132,7 @@ Active branch   : master
 Current phase   : Phase 2 — NOT STARTED
 Phase status    : NOT STARTED
 Immediate action: Read RefactorTerminalView.md, begin Phase 2 (extract TerminalSessionHeaderView + TerminalSessionMetadataView)
-Last commit     : (see git log — Phase 1 commit)
+Last commit     : e6f3f99 "refactor(RefactorTV Phase 1): extract DirectTerminalInputNSView + supporting types to TerminalInputCaptureView.swift"
 ```
 
 **Update this block after every phase.**
