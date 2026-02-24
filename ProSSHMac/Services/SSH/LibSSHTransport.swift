@@ -24,14 +24,14 @@ nonisolated private enum LibSSHConnectFailure: LocalizedError, Sendable {
     }
 }
 
-nonisolated private struct LibSSHAuthenticationMaterial: Sendable {
+nonisolated struct LibSSHAuthenticationMaterial: Sendable {
     var password: String? = nil
     var privateKey: String? = nil
     var certificate: String? = nil
     var keyPassphrase: String? = nil
 }
 
-private struct LibSSHTargetParams: Sendable {
+struct LibSSHTargetParams: Sendable {
     let hostname: String
     let port: UInt16
     let username: String
@@ -53,7 +53,7 @@ private struct LibSSHTargetParams: Sendable {
     }
 }
 
-private struct LibSSHJumpCallParams: Sendable {
+struct LibSSHJumpCallParams: Sendable {
     let jumpHostname: String
     let jumpPort: UInt16
     let jumpUsername: String
