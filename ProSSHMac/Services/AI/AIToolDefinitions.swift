@@ -87,6 +87,12 @@ enum AIToolDefinitions {
           +Third line
           *** End Patch
 
+        IMPORTANT — markers are NOT written to the file:
+        The *** Begin Patch, *** End Patch, *** Add File:, and *** Update File: lines
+        are control directives consumed by the patcher. They never appear in the output
+        file. After a successful create or update, do NOT follow up with another patch
+        to remove them — they are already gone.
+
         Diff format rules:
         - Wrap the diff in *** Begin Patch / *** End Patch
         - Start with *** Update File: <path> or *** Add File: <path>
