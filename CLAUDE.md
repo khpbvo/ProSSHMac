@@ -166,10 +166,10 @@ Each starts with `// Extracted from TerminalView.swift` as first non-blank, non-
 
 ```
 Active branch   : master
-Current phase   : Phase 8 — NOT STARTED
+Current phase   : Phase 9 — NOT STARTED
 Phase status    : NOT STARTED
-Immediate action: Begin Phase 8 (extract Screen Buffer + Cursor Save/Restore → TerminalGrid+ScreenBuffer.swift).
-Last commit     : d05a3c9 "refactor(RefactorTG Phase 7): extract Line Operations to TerminalGrid+LineOps.swift"
+Immediate action: Begin Phase 9 (extract Lifecycle → TerminalGrid+Lifecycle.swift).
+Last commit     : <pending> "refactor(RefactorTG Phase 8): extract Screen Buffer + Cursor Save/Restore to TerminalGrid+ScreenBuffer.swift"
 ```
 
 **Update this block after every phase.**
@@ -186,7 +186,7 @@ Last commit     : d05a3c9 "refactor(RefactorTG Phase 7): extract Line Operations
 | 5 | Extract Scrolling → `TerminalGrid+Scrolling.swift` | **COMPLETE** (2026-02-25) |
 | 6 | Extract Erasing → `TerminalGrid+Erasing.swift` | **COMPLETE** (2026-02-25) |
 | 7 | Extract Line Operations → `TerminalGrid+LineOps.swift` | **COMPLETE** (2026-02-25) |
-| 8 | Extract Screen Buffer + Cursor Save/Restore → `TerminalGrid+ScreenBuffer.swift` | NOT STARTED |
+| 8 | Extract Screen Buffer + Cursor Save/Restore → `TerminalGrid+ScreenBuffer.swift` | **COMPLETE** (2026-02-25) |
 | 9 | Extract Lifecycle (Full Reset + Resize) → `TerminalGrid+Lifecycle.swift` | NOT STARTED |
 | 10 | Extract Print Character → `TerminalGrid+Printing.swift` | NOT STARTED |
 | 11 | Extract Snapshot + Text Extraction → `TerminalGrid+Snapshot.swift` | NOT STARTED |

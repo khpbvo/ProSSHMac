@@ -19,10 +19,10 @@ Follow the same workflow as `RefactorTerminalView.md`:
 
 ```
 Active branch   : master
-Current phase   : Phase 8 — NOT STARTED
+Current phase   : Phase 9 — NOT STARTED
 Phase status    : NOT STARTED
-Immediate action: Begin Phase 8 (extract Screen Buffer + Cursor Save/Restore → TerminalGrid+ScreenBuffer.swift).
-Last commit     : d05a3c9 "refactor(RefactorTG Phase 7): extract Line Operations to TerminalGrid+LineOps.swift"
+Immediate action: Begin Phase 9 (extract Lifecycle → TerminalGrid+Lifecycle.swift).
+Last commit     : <pending> "refactor(RefactorTG Phase 8): extract Screen Buffer + Cursor Save/Restore to TerminalGrid+ScreenBuffer.swift"
 ```
 
 **Update this block after every phase.**
@@ -41,7 +41,7 @@ Last commit     : d05a3c9 "refactor(RefactorTG Phase 7): extract Line Operations
 | 5 | Extract Scrolling → `TerminalGrid+Scrolling.swift` | **COMPLETE** (2026-02-25) |
 | 6 | Extract Erasing → `TerminalGrid+Erasing.swift` | **COMPLETE** (2026-02-25) |
 | 7 | Extract Line Operations → `TerminalGrid+LineOps.swift` | **COMPLETE** (2026-02-25) |
-| 8 | Extract Screen Buffer + Cursor Save/Restore → `TerminalGrid+ScreenBuffer.swift` | NOT STARTED |
+| 8 | Extract Screen Buffer + Cursor Save/Restore → `TerminalGrid+ScreenBuffer.swift` | **COMPLETE** (2026-02-25) |
 | 9 | Extract Lifecycle (Full Reset + Resize) → `TerminalGrid+Lifecycle.swift` | NOT STARTED |
 | 10 | Extract Print Character → `TerminalGrid+Printing.swift` | NOT STARTED |
 | 11 | Extract Snapshot + Text Extraction → `TerminalGrid+Snapshot.swift` | NOT STARTED |
@@ -364,12 +364,12 @@ write `usingAlternateBuffer`. `saveCursor` / `restoreCursor` write `cursor` dire
 
 ### Steps (6 steps)
 
-- [ ] **8.1** Read both MARK blocks in `TerminalGrid.swift` in full.
-- [ ] **8.2** Create `ProSSHMac/Terminal/Grid/TerminalGrid+ScreenBuffer.swift`.
-- [ ] **8.3** File header: `// Extracted from TerminalGrid.swift`, `import Foundation`, `extension TerminalGrid {`, close `}`.
-- [ ] **8.4** Cut `// MARK: - A.6.10 Alternate Screen Buffer` and `// MARK: - A.6.11 Cursor Save/Restore` from `TerminalGrid.swift` and paste into the extension.
-- [ ] **8.5** Build: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`. Verify `** BUILD SUCCEEDED **`.
-- [ ] **8.6** Commit: `refactor(RefactorTG Phase 8): extract Screen Buffer + Cursor Save/Restore to TerminalGrid+ScreenBuffer.swift`
+- [x] **8.1** Read both MARK blocks in `TerminalGrid.swift` in full.
+- [x] **8.2** Create `ProSSHMac/Terminal/Grid/TerminalGrid+ScreenBuffer.swift`.
+- [x] **8.3** File header: `// Extracted from TerminalGrid.swift`, `import Foundation`, `extension TerminalGrid {`, close `}`.
+- [x] **8.4** Cut `// MARK: - A.6.10 Alternate Screen Buffer` and `// MARK: - A.6.11 Cursor Save/Restore` from `TerminalGrid.swift` and paste into the extension.
+- [x] **8.5** Build: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`. Verify `** BUILD SUCCEEDED **`.
+- [x] **8.6** Commit: `refactor(RefactorTG Phase 8): extract Screen Buffer + Cursor Save/Restore to TerminalGrid+ScreenBuffer.swift`
 
 **Expected TerminalGrid.swift line count after phase:** ~1,333 lines
 
@@ -506,6 +506,15 @@ property stays in the main file (it's a class-level declaration); the extension 
 ---
 
 ## Refactor Log (most recent first)
+
+- **2026-02-25 — Phase 8 COMPLETE**: Extracted `// MARK: - A.6.10 Alternate Screen Buffer (Mode 1049)`
+  (2 methods: `enableAlternateBuffer`, `disableAlternateBuffer`) and `// MARK: - A.6.11 Cursor
+  Save/Restore (DECSC/DECRC)` (2 methods: `saveCursor`, `restoreCursor`) from `TerminalGrid.swift`
+  (lines 788–901, ~114 lines) into `ProSSHMac/Terminal/Grid/TerminalGrid+ScreenBuffer.swift`.
+  All 4 methods annotated `nonisolated`. Cross-file calls: `makeBlankRow()` + `invalidatePackedColors()`
+  in Helpers (still in main file), `markAllDirty()` in `TerminalGrid+TabsAndDirty.swift` — all
+  resolve via extension dispatch. `TerminalGrid.swift`: ~1,370 lines (from ~1,484).
+  Build: SUCCEEDED, 0 new warnings.
 
 - **2026-02-25 — Phase 7 COMPLETE**: Extracted `// MARK: - A.6.7 Insert/Delete Characters`
   (3 methods: `insertCharacters`, `deleteCharacters`, `insertBlanks`) and
