@@ -19,10 +19,10 @@ Follow the same workflow as `RefactorTheActor.md`:
 
 ```
 Active branch   : master
-Current phase   : Phase 2 — NOT STARTED
+Current phase   : Phase 3 — NOT STARTED
 Phase status    : NOT STARTED
-Immediate action: Read RefactorTerminalView.md, begin Phase 2 (extract TerminalSessionHeaderView + TerminalSessionMetadataView)
-Last commit     : e6f3f99 "refactor(RefactorTV Phase 1): extract DirectTerminalInputNSView + supporting types to TerminalInputCaptureView.swift"
+Immediate action: Read RefactorTerminalView.md, begin Phase 3 (extract TerminalSearchBarView)
+Last commit     : TBD "refactor(RefactorTV Phase 2): extract session header + metadata views"
 ```
 
 **Update this block after every phase.**
@@ -35,7 +35,7 @@ Last commit     : e6f3f99 "refactor(RefactorTV Phase 1): extract DirectTerminalI
 |-------|------|--------|
 | 0 | Baseline audit — add swiftlint:disable, verify build | COMPLETE (2026-02-24) |
 | 1 | Extract `DirectTerminalInputNSView` + supporting types | COMPLETE (2026-02-24) |
-| 2 | Extract `TerminalSessionHeaderView` + `TerminalSessionMetadataView` | NOT STARTED |
+| 2 | Extract `TerminalSessionHeaderView` + `TerminalSessionMetadataView` | COMPLETE (2026-02-24) |
 | 3 | Extract `TerminalSearchBarView` | NOT STARTED |
 | 4 | Extract `TerminalSessionActionsBar` | NOT STARTED |
 | 5 | Extract `TerminalSessionTabBar` | NOT STARTED |
@@ -170,20 +170,20 @@ injection needed since those are already in the environment chain inherited from
 
 ### Steps (12 steps)
 
-- [ ] **2.1** Read `TerminalView.swift` lines 364–476 (sessionMetadata + metadataRow) and lines 1451–1500 (header) in full before starting.
-- [ ] **2.2** Create `ProSSHMac/UI/Terminal/TerminalSessionHeaderView.swift`. Header: `// Extracted from TerminalView.swift`. Imports: `import SwiftUI`.
-- [ ] **2.3** Write `struct TerminalSessionHeaderView: View` with `let session: Session`. Body = exact content of `header(for: session)`. Add `private func stateColor(for state: SessionState) -> Color` as a private helper (copy verbatim).
-- [ ] **2.4** Create `ProSSHMac/UI/Terminal/TerminalSessionMetadataView.swift`. Header: `// Extracted from TerminalView.swift`. Imports: `import SwiftUI`.
-- [ ] **2.5** Write `struct TerminalSessionMetadataView: View` with: `let session: Session`, `@EnvironmentObject private var sessionManager: SessionManager`, `@EnvironmentObject private var portForwardingManager: PortForwardingManager`, `@State private var expandedSessions: Set<UUID> = []`.
-- [ ] **2.6** Copy the body of `sessionMetadata(for:)` as the `body` property of the new struct. Replace every reference to `expandedMetadataSessions` with `expandedSessions`.
-- [ ] **2.7** Copy `metadataRow(label:value:)` as a `private func` inside `TerminalSessionMetadataView`.
-- [ ] **2.8** In `TerminalView.swift`: delete `@State private var expandedMetadataSessions: Set<UUID> = []`.
-- [ ] **2.9** In `TerminalView.swift` `sessionPanel` function: replace `sessionMetadata(for: session)` call with `TerminalSessionMetadataView(session: session)`. Replace `header(for: session)` call with `TerminalSessionHeaderView(session: session)`.
-- [ ] **2.10** In `TerminalView.swift`: delete `sessionMetadata(for:)`, `metadataRow(label:value:)`, and `header(for:)` function bodies entirely. Delete `stateColor(for:)` if it is ONLY used in `header(for:)` — verify no remaining call sites in `TerminalView.swift` first.
-- [ ] **2.11** Run build: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`. Verify `** BUILD SUCCEEDED **`.
-- [ ] **2.12** Commit: `refactor(RefactorTV Phase 2): extract session header + metadata views`
+- [x] **2.1** Read `TerminalView.swift` lines 364–476 (sessionMetadata + metadataRow) and lines 1451–1500 (header) in full before starting.
+- [x] **2.2** Create `ProSSHMac/UI/Terminal/TerminalSessionHeaderView.swift`. Header: `// Extracted from TerminalView.swift`. Imports: `import SwiftUI`.
+- [x] **2.3** Write `struct TerminalSessionHeaderView: View` with `let session: Session`. Body = exact content of `header(for: session)`. Add `private func stateColor(for state: SessionState) -> Color` as a private helper (copy verbatim).
+- [x] **2.4** Create `ProSSHMac/UI/Terminal/TerminalSessionMetadataView.swift`. Header: `// Extracted from TerminalView.swift`. Imports: `import SwiftUI`.
+- [x] **2.5** Write `struct TerminalSessionMetadataView: View` with: `let session: Session`, `@EnvironmentObject private var sessionManager: SessionManager`, `@EnvironmentObject private var portForwardingManager: PortForwardingManager`, `@State private var expandedSessions: Set<UUID> = []`.
+- [x] **2.6** Copy the body of `sessionMetadata(for:)` as the `body` property of the new struct. Replace every reference to `expandedMetadataSessions` with `expandedSessions`.
+- [x] **2.7** Copy `metadataRow(label:value:)` as a `private func` inside `TerminalSessionMetadataView`.
+- [x] **2.8** In `TerminalView.swift`: delete `@State private var expandedMetadataSessions: Set<UUID> = []`.
+- [x] **2.9** In `TerminalView.swift` `sessionPanel` function: replace `sessionMetadata(for: session)` call with `TerminalSessionMetadataView(session: session)`. Replace `header(for: session)` call with `TerminalSessionHeaderView(session: session)`.
+- [x] **2.10** In `TerminalView.swift`: delete `sessionMetadata(for:)`, `metadataRow(label:value:)`, and `header(for:)` function bodies entirely. Delete `stateColor(for:)` — confirmed only used in `header(for:)` (no remaining call sites in TerminalView.swift).
+- [x] **2.11** Run build: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`. Verify `** BUILD SUCCEEDED **`. ✓
+- [x] **2.12** Commit: `refactor(RefactorTV Phase 2): extract session header + metadata views`
 
-**Expected TerminalView.swift line count after phase:** ~2,910
+**Actual TerminalView.swift line count after phase:** 2,874 lines (expected ~2,910 ✓)
 
 ---
 
@@ -655,6 +655,17 @@ After all 9 phases are committed and the build is clean:
 ---
 
 ## Refactor Log (most recent first)
+
+- **2026-02-24 — Phase 2 COMPLETE** (commit TBD): Extracted two display-only view functions from
+  `TerminalView`. Created `TerminalSessionHeaderView.swift` (~67 lines) containing `header(for:)`
+  body and `stateColor(for:)` private helper. Created `TerminalSessionMetadataView.swift`
+  (~116 lines) containing `sessionMetadata(for:)` body, `metadataRow(label:value:)` private helper,
+  and `@State private var expandedSessions: Set<UUID> = []` (moved from TerminalView).
+  `stateColor(for:)` confirmed only called from `header(for:)` — moved entirely to header file,
+  deleted from TerminalView. Plan note "also in sessionTabs" was incorrect.
+  Call sites in `sessionPanel(for:)` updated to use new struct types. Deleted: 1 `@State` var +
+  4 functions. `TerminalView.swift`: 3,049 → 2,874 lines (−175). Build: `** BUILD SUCCEEDED **`,
+  0 new warnings.
 
 - **2026-02-24 — Phase 1 COMPLETE**: Extracted 6 file-scope types that lived after the closing
   brace of `struct TerminalView` into `ProSSHMac/UI/Terminal/TerminalInputCaptureView.swift`

@@ -58,7 +58,6 @@ struct TerminalView: View {
     @State private var terminalContentOffset: CGFloat = 0
     @State private var terminalViewportSize: CGSize = .zero
     @State private var directInputBufferBySessionID: [UUID: String] = [:]
-    @State private var expandedMetadataSessions: Set<UUID> = []
     @State private var hoveredTabID: UUID?
     @State private var directInputActivationNonce: Int = 0
     @State private var selectedFileBrowserPath: String?
@@ -343,9 +342,9 @@ struct TerminalView: View {
         isFocused: Bool = true
     ) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            header(for: session)
+            TerminalSessionHeaderView(session: session)
 
-            sessionMetadata(for: session)
+            TerminalSessionMetadataView(session: session)
 
             if includeSearch, terminalSearch.isPresented {
                 searchBar
@@ -359,120 +358,6 @@ struct TerminalView: View {
             }
 
             terminalActions(for: session)
-        }
-    }
-
-    @ViewBuilder
-    private func sessionMetadata(for session: Session) -> some View {
-        if session.isLocal {
-            let cwd = sessionManager.workingDirectoryBySessionID[session.id] ?? "~"
-            let displayCwd = cwd.replacingOccurrences(
-                of: ProcessInfo.processInfo.environment["HOME"] ?? "/nonexistent",
-                with: "~"
-            )
-            Text("Shell: \(session.shellPath ?? "/bin/zsh")  |  CWD: \(displayCwd)  |  TERM: xterm-256color")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-        } else {
-            if let kex = session.negotiatedKEX,
-               let cipher = session.negotiatedCipher,
-               let hostKey = session.negotiatedHostKeyType {
-                let fingerprint = session.negotiatedHostFingerprint ?? "unknown"
-                let isExpanded = expandedMetadataSessions.contains(session.id)
-                let isLegacy = session.usesLegacyCrypto
-
-                HStack(spacing: 4) {
-                    Image(systemName: isLegacy ? "lock.trianglebadge.exclamationmark" : "lock.fill")
-                        .font(.caption)
-                        .foregroundStyle(isLegacy ? .orange : .green)
-                    Text(isLegacy ? "Legacy Crypto" : "Secure")
-                        .font(.caption)
-                        .foregroundStyle(isLegacy ? .orange : .secondary)
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            if isExpanded {
-                                expandedMetadataSessions.remove(session.id)
-                            } else {
-                                expandedMetadataSessions.insert(session.id)
-                            }
-                        }
-                    } label: {
-                        Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                }
-
-                if isExpanded {
-                    VStack(alignment: .leading, spacing: 2) {
-                        metadataRow(label: "KEX", value: kex)
-                        metadataRow(label: "Cipher", value: cipher)
-                        metadataRow(label: "Host Key", value: hostKey)
-                        metadataRow(label: "FP", value: fingerprint)
-                    }
-                    .padding(.leading, 4)
-                }
-            }
-
-            if let advisory = session.securityAdvisory {
-                Label(advisory, systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            }
-
-            let forwards = portForwardingManager.activeForwards.filter { $0.sessionID == session.id }
-            if !forwards.isEmpty {
-                let listeningCount = forwards.filter { $0.state == .listening }.count
-                Label("\(listeningCount)/\(forwards.count) forwards active", systemImage: "arrow.right.arrow.left")
-                    .font(.caption)
-                    .foregroundStyle(.green)
-            }
-        }
-
-        if session.state == .connected {
-            TimelineView(.periodic(from: .now, by: 60)) { _ in
-                let duration = Date.now.timeIntervalSince(session.startedAt)
-                let hours = Int(duration) / 3600
-                let minutes = (Int(duration) % 3600) / 60
-                Text("Duration: \(hours > 0 ? "\(hours)h " : "")\(minutes)m")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-
-        if session.state == .connected, !session.isLocal {
-            let lastActivity = sessionManager.lastActivityBySessionID[session.id]
-            TimelineView(.periodic(from: .now, by: 30)) { _ in
-                let idleSeconds = lastActivity.map { Date.now.timeIntervalSince($0) } ?? 0
-                if idleSeconds > 600 {
-                    let idleMinutes = Int(idleSeconds) / 60
-                    Label("Idle for \(idleMinutes)m — session may time out", systemImage: "clock.badge.exclamationmark")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                }
-            }
-        }
-
-        if let errorMessage = session.errorMessage {
-            Text(errorMessage)
-                .font(.caption)
-                .foregroundStyle(.red)
-        }
-    }
-
-    @ViewBuilder
-    private func metadataRow(label: String, value: String) -> some View {
-        HStack(alignment: .top, spacing: 6) {
-            Text(label + ":")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-                .frame(width: 60, alignment: .trailing)
-            Text(value)
-                .font(.caption.monospaced())
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
         }
     }
 
@@ -1449,57 +1334,6 @@ struct TerminalView: View {
         }
     }
 
-    @ViewBuilder
-    private func header(for session: Session) -> some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                if session.isLocal {
-                    HStack(spacing: 6) {
-                        Image(systemName: "terminal.fill")
-                            .foregroundStyle(.secondary)
-                        Text("Local Terminal")
-                            .font(.headline)
-                    }
-
-                    let shellName = session.shellPath.map { ($0 as NSString).lastPathComponent } ?? "shell"
-                    Text("\(session.username)@localhost (\(shellName))")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                } else {
-                    HStack(spacing: 6) {
-                        Text(session.hostLabel)
-                            .font(.headline)
-
-                        if session.usesLegacyCrypto {
-                            Label("Legacy", systemImage: "shield.lefthalf.filled")
-                                .font(.caption)
-                                .foregroundStyle(.orange)
-                        }
-
-                        if session.usesAgentForwarding {
-                            Label("Agent Fwd", systemImage: "arrow.triangle.branch")
-                                .font(.caption)
-                                .foregroundStyle(.teal)
-                        }
-                    }
-
-                    Text("\(session.username)@\(session.hostname):\(session.port)")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            Spacer()
-
-            Text(session.state.rawValue.capitalized)
-                .font(.caption)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(stateColor(for: session.state).opacity(0.15), in: Capsule())
-                .foregroundStyle(stateColor(for: session.state))
-        }
-    }
-
     private func terminalSurface(for session: Session, isFocused: Bool = true, paneID: UUID? = nil) -> some View {
         Group {
             if isMacOSTerminalSafetyModeEnabled {
@@ -2162,15 +1996,6 @@ struct TerminalView: View {
             get: { pendingInput[sessionID, default: ""] },
             set: { pendingInput[sessionID] = $0 }
         )
-    }
-
-    private func stateColor(for state: SessionState) -> Color {
-        switch state {
-        case .connecting: return .orange
-        case .connected: return .green
-        case .disconnected: return .gray
-        case .failed: return .red
-        }
     }
 
     private var selectedFileBrowserItem: FileBrowserEntry? {

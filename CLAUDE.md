@@ -129,10 +129,10 @@ Services/
 
 ```
 Active branch   : master
-Current phase   : Phase 2 — NOT STARTED
+Current phase   : Phase 3 — NOT STARTED
 Phase status    : NOT STARTED
-Immediate action: Read RefactorTerminalView.md, begin Phase 2 (extract TerminalSessionHeaderView + TerminalSessionMetadataView)
-Last commit     : e6f3f99 "refactor(RefactorTV Phase 1): extract DirectTerminalInputNSView + supporting types to TerminalInputCaptureView.swift"
+Immediate action: Read RefactorTerminalView.md, begin Phase 3 (extract TerminalSearchBarView)
+Last commit     : TBD "refactor(RefactorTV Phase 2): extract session header + metadata views"
 ```
 
 **Update this block after every phase.**
@@ -143,7 +143,7 @@ Last commit     : e6f3f99 "refactor(RefactorTV Phase 1): extract DirectTerminalI
 |-------|------|--------|
 | 0 | Baseline audit | COMPLETE (2026-02-24) |
 | 1 | Extract DirectTerminalInputNSView + supporting types | COMPLETE (2026-02-24) |
-| 2 | Extract TerminalSessionHeaderView + TerminalSessionMetadataView | NOT STARTED |
+| 2 | Extract TerminalSessionHeaderView + TerminalSessionMetadataView | COMPLETE (2026-02-24) |
 | 3 | Extract TerminalSearchBarView | NOT STARTED |
 | 4 | Extract TerminalSessionActionsBar | NOT STARTED |
 | 5 | Extract TerminalSessionTabBar | NOT STARTED |
