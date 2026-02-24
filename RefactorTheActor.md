@@ -1760,30 +1760,362 @@ xcodebuild -scheme ProSSHMac -destination 'platform=macOS' test 2>&1 | grep -E '
 
 ---
 
-## Phase 6 — Decompose `OpenAIAgentService.swift` (83KB)
+## Phase 6 — Decompose `OpenAIAgentService.swift` (1,946 lines → 4 new files + thin orchestrator)
 
-> **Context note for Claude Code:** Read `OpenAIAgentService.swift` fully before starting.
-> This file likely contains: agent runner loop, tool dispatch table, individual tool implementations,
-> streaming response parsing, conversation context management, and error handling.
-> Each of these is a separate concern.
+> **Correction vs. original sketch:** The original sketch listed `AIResponseStreamParser.swift`
+> as one of the four new files. Exploration confirmed there is **no** SSE/streaming parsing in
+> `OpenAIAgentService.swift` — that lives in `OpenAIResponsesService.swift` (unchanged).
+> The correct fourth file is `AIToolDefinitions.swift` (caseless enum namespace for the developer
+> prompt, `buildToolDefinitions`, and static utility helpers).
+>
+> **Architecture:** Same coordinator pattern as Phase 5. Each new class is `@MainActor final class`,
+> owned (strong) by `OpenAIAgentService`, holding a `weak var service: OpenAIAgentService?`
+> back-reference where needed. `AIToolDefinitions` is a caseless `enum` (prevents Swift 6's
+> `@MainActor` inference on `nonisolated` statics). `Services/AI/` uses
+> `PBXFileSystemSynchronizedRootGroup` — no `.xcodeproj` edits needed.
+>
+> **Sub-phases must run in order:** 6.1 → 6.2 → 6.3 → 6.4 → 6.5 → 6.6 → 6.7.
+> Build must succeed after every sub-phase before proceeding.
 
-- [ ] Read and annotate `OpenAIAgentService.swift` — add `// MARK: - [ConcernName]` markers
-      to identify the distinct sections before extracting anything
-- [ ] Create `Services/AI/AIToolHandler.swift`
-  - Protocol: `AIToolHandling` — one method: `handle(input: [String: Any]) async throws -> String`
-  - One concrete type per tool (e.g. `ShellCommandToolHandler`, `SFTPToolHandler`, etc.)
-- [ ] Create `Services/AI/AIConversationContext.swift`
-  - Owns conversation history (messages array), context window management,
-    truncation strategy
-- [ ] Create `Services/AI/AIResponseStreamParser.swift`
-  - Owns SSE/streaming response parsing, `delta` accumulation, tool call reconstruction
-- [ ] Create `Services/AI/AIAgentRunner.swift`
-  - Owns the agent loop: sends message → handles tool calls → loops until `stop`
-  - Depends on injected `[AIToolHandling]` array and `AIConversationContext`
-- [ ] Slim `OpenAIAgentService` down to: configuration, initialization,
-      public API surface (`ask(...)`, `stream(...)`) delegating to `AIAgentRunner`
-- [ ] Remove `// swiftlint:disable file_length` added in Phase 0
-- [ ] Run tests; commit: `refactor: decompose OpenAIAgentService into focused AI service types`
+---
+
+### Sub-Phase 6.0 — Create Services/AI/ directory
+
+- [x] `mkdir -p ProSSHMac/Services/AI`
+- [x] Directory exists on disk; no `.xcodeproj` edits needed
+
+---
+
+### Sub-Phase 6.1 — Extract AIToolDefinitions.swift (~295 lines)
+
+**New file:** `ProSSHMac/Services/AI/AIToolDefinitions.swift`
+Header (first non-blank, non-import line): `// Extracted from OpenAIAgentService.swift`
+
+#### Symbols extracted from `OpenAIAgentService` class body:
+
+| Symbol | Original visibility | Lines (approx.) |
+|--------|---------------------|-----------------|
+| `developerPrompt()` | `private static func` | 1627–1671 |
+| `buildToolDefinitions()` | `private static func` | 1714–1945 |
+| `directActionToolDefinitions(from:)` | `private nonisolated static func` | 1697–1706 |
+| `isDirectActionPrompt(_:)` | `private nonisolated static func` | 1708–1712 |
+| `jsonString(from:)` | `private static func` | 1673–1681 |
+| `shortTraceID()` | `private nonisolated static func` | 1683–1685 |
+| `shortSessionID(_:)` | `private nonisolated static func` | 1687–1689 |
+| `elapsedMillis(since:)` | `private nonisolated static func` | 1691–1695 |
+| `isPreviousResponseIDError(message:)` | `private static func` | 1515–1519 |
+
+All go into `enum AIToolDefinitions { ... }` (caseless enum — all statics implicitly
+`nonisolated`, Swift 6 cannot infer `@MainActor` on caseless enum statics).
+
+#### Changes in `OpenAIAgentService.swift`:
+
+- [x] Remove all 9 static functions listed above from the class body
+- [x] `self.toolDefinitions = Self.buildToolDefinitions()` in `init` →
+      `self.toolDefinitions = AIToolDefinitions.buildToolDefinitions()`
+- [x] All `Self.shortTraceID()` call sites → `AIToolDefinitions.shortTraceID()`
+- [x] All `Self.shortSessionID(_:)` call sites → `AIToolDefinitions.shortSessionID(_:)`
+- [x] All `Self.elapsedMillis(since:)` call sites → `AIToolDefinitions.elapsedMillis(since:)`
+- [x] All `Self.isDirectActionPrompt(_:)` call sites → `AIToolDefinitions.isDirectActionPrompt(_:)`
+- [x] All `Self.directActionToolDefinitions(from:)` call sites →
+      `AIToolDefinitions.directActionToolDefinitions(from:)`
+- [x] All `Self.developerPrompt()` call sites → `AIToolDefinitions.developerPrompt()`
+- [x] All `Self.jsonString(from:)` call sites → `AIToolDefinitions.jsonString(from:)`
+- [x] All `Self.isPreviousResponseIDError(message:)` call sites →
+      `AIToolDefinitions.isPreviousResponseIDError(message:)`
+
+**Build check:**
+```bash
+xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build
+# Must output: ** BUILD SUCCEEDED **
+```
+
+**Commit:** `refactor: extract AIToolDefinitions from OpenAIAgentService`
+
+---
+
+### Sub-Phase 6.2 — Extract AIConversationContext.swift (~35 lines)
+
+**New file:** `ProSSHMac/Services/AI/AIConversationContext.swift`
+Header: `// Extracted from OpenAIAgentService.swift`
+
+#### Symbol extracted:
+
+| Symbol | Original | Lines |
+|--------|----------|-------|
+| `previousResponseIDBySessionID: [UUID: String]` | `private var` stored property | 78 |
+
+#### Implementation:
+
+```swift
+// Extracted from OpenAIAgentService.swift
+import Foundation
+
+@MainActor final class AIConversationContext {
+    private(set) var previousResponseIDBySessionID: [UUID: String] = [:]
+
+    init() {}
+    nonisolated deinit {}
+
+    func responseID(for sessionID: UUID) -> String? {
+        previousResponseIDBySessionID[sessionID]
+    }
+
+    func update(responseID: String?, for sessionID: UUID) {
+        previousResponseIDBySessionID[sessionID] = responseID
+    }
+
+    func clear(sessionID: UUID) {
+        previousResponseIDBySessionID.removeValue(forKey: sessionID)
+    }
+}
+```
+
+#### Changes in `OpenAIAgentService.swift`:
+
+- [x] Remove `private var previousResponseIDBySessionID: [UUID: String] = [:]`
+- [x] Add `let conversationContext = AIConversationContext()` as stored property
+- [x] `clearConversation(sessionID:)` body →
+      `conversationContext.clear(sessionID: sessionID)`
+- [x] Read sites `previousResponseIDBySessionID[sessionID]` →
+      `conversationContext.responseID(for: sessionID)`
+- [x] Write sites `previousResponseIDBySessionID[sessionID] = response.id` →
+      `conversationContext.update(responseID: response.id, for: sessionID)`
+- [x] Nil-write sites `previousResponseIDBySessionID.removeValue(forKey: sessionID)` →
+      `conversationContext.clear(sessionID: sessionID)`
+
+**Build check:** `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`
+
+**Commit:** `refactor: extract AIConversationContext from OpenAIAgentService`
+
+---
+
+### Sub-Phase 6.3 — Extract AIToolHandler.swift (~1,080 lines — largest)
+
+**New file:** `ProSSHMac/Services/AI/AIToolHandler.swift`
+Header: `// Extracted from OpenAIAgentService.swift`
+
+#### Symbols extracted:
+
+**Instance state:**
+- `iso8601Formatter: ISO8601DateFormatter` — moves into `AIToolHandler.init()`
+
+**Instance methods (become methods on AIToolHandler, access service via `weak var service`):**
+- `executeToolCalls(sessionID:toolCalls:traceID:) async -> [OpenAIResponsesToolOutput]` (~lines 264–301)
+- `executeSingleToolCall(sessionID:toolCall:) async throws -> String` (giant switch, ~lines 303–672)
+- `searchFilesystemEntriesRemote(sessionID:path:namePattern:maxResults:) async -> OpenAIJSONValue` (~777–811)
+- `searchFileContentsRemote(sessionID:path:textPattern:maxResults:) async -> OpenAIJSONValue` (~813–847)
+- `readRemoteFileChunk(sessionID:path:startLine:lineCount:) async -> OpenAIJSONValue` (~849–885)
+- `executeRemoteToolCommand(sessionID:commandBody:timeoutSeconds:) async -> RemoteToolExecutionResult` (~887–928)
+
+**Private type (moves into AIToolHandler file):**
+- `RemoteToolExecutionResult` struct (~771–775)
+
+**Static helpers (stay as statics on AIToolHandler — used only by tool execution):**
+- `decodeArguments(toolName:rawArguments:) throws -> [String: OpenAIJSONValue]` (~674–696)
+- `requiredString(key:in:toolName:) throws -> String` (~698–720)
+- `requiredInt(key:in:toolName:) throws -> Int` (~722–748)
+- `optionalInt(key:in:) -> Int?` (~750–765)
+- `clamp(_:min:max:) -> Int` (~767–769)
+- `commandBlockSummary(_:) -> OpenAIJSONValue` (~1505–1513)
+- `parseReadFileChunkOutput(_:path:startLine:lineCount:source:) -> OpenAIJSONValue` (~1521–1560)
+- `readBoundViolationMessage(for:) -> String?` (~1562–1594)
+- `firstCapturedInt(in:pattern:) -> Int?` (~1596–1607)
+- `firstCapturedRange(in:pattern:) -> (Int, Int)?` (~1609–1625)
+- `parseRemoteWrappedCommandOutput(_:marker:) -> (String, Int?)` (~930–953)
+- `parseRemoteFilesystemSearchOutput(_:path:namePattern:maxResults:)` (~955–997)
+- `parseRemoteFileContentSearchOutput(_:path:textPattern:maxResults:)` (~999–1042)
+- `remotePathNotFoundToken: String` static let (~1044)
+- `remoteNotRegularFileToken: String` static let (~1045)
+- `remoteContentLineRegex: NSRegularExpression` static let (~1046)
+- `parseRemoteFilesystemResultLine(_:) -> (path:isDirectory:)?` (~1048–1074)
+- `remoteOutputPreview(_:maxCharacters:) -> String` (~1076–1080)
+- `parseRemoteContentMatchLine(_:) -> (path:lineNumber:line:)?` (~1082–1103)
+- `buildRemoteFilesystemSearchCommand(path:namePattern:maxResults:) -> String` (~1105–1129)
+- `buildRemoteFileContentSearchCommand(path:textPattern:maxResults:) -> String` (~1131–1151)
+- `buildRemoteReadFileChunkCommand(path:startLine:endLine:) -> String` (~1153–1166)
+- `shellSingleQuoted(_:) -> String` (~1168–1171)
+
+**Nonisolated static methods (keep `nonisolated static`):**
+- `searchFilesystemEntries(path:namePattern:maxResults:workingDirectory:) async throws -> OpenAIJSONValue` (~1173–1246)
+- `searchFileContents(path:textPattern:maxResults:workingDirectory:) async throws -> OpenAIJSONValue` (~1248–1328)
+- `readLocalFileChunk(path:startLine:lineCount:workingDirectory:) async throws -> OpenAIJSONValue` (~1330–1408)
+- `resolvedLocalSearchURL(path:workingDirectory:) throws -> URL` (~1410–1428)
+- `filenameMatches(_:pattern:) -> Bool` (~1430–1437)
+- `groupMatchesByFile(_:) -> [OpenAIJSONValue]` (~1439–1463)
+- `contentMatchesForFile(fileURL:textPattern:maxRemaining:maxFileBytes:) -> [OpenAIJSONValue]?` (~1465–1503)
+
+#### Access visibility changes on `OpenAIAgentService`:
+
+The following `private` properties must become `internal` (remove `private`) so
+`AIToolHandler` and `AIAgentRunner` can access them through the `service` weak reference:
+- `responsesService` → `let` (internal)
+- `sessionProvider` → `let` (internal)
+- `requestTimeoutSeconds` → `let` (internal)
+- `maxToolIterations` → `let` (internal)
+- `persistConversationContext` → `let` (internal)
+
+#### Changes in `OpenAIAgentService.swift`:
+
+- [x] Remove `iso8601Formatter`, all moved instance methods, all moved statics from class body
+- [x] Add `let toolHandler: AIToolHandler` stored property (initialized in `init`)
+- [x] In `init`: `toolHandler = AIToolHandler(); toolHandler.service = self` (after all stored
+      properties initialized)
+- [x] In `executeToolCalls` call site in `generateReply`:
+      `await executeToolCalls(...)` → `await toolHandler.executeToolCalls(...)`
+- [x] Change `private let responsesService`, `private let sessionProvider`,
+      `private let requestTimeoutSeconds`, `private let maxToolIterations`,
+      `private let persistConversationContext` → remove `private`
+
+**Build check:** `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`
+
+**Commit:** `refactor: extract AIToolHandler from OpenAIAgentService`
+
+---
+
+### Sub-Phase 6.4 — Extract AIAgentRunner.swift (~160 lines)
+
+**New file:** `ProSSHMac/Services/AI/AIAgentRunner.swift`
+Header: `// Extracted from OpenAIAgentService.swift`
+
+#### Symbols extracted:
+
+- `generateReply(sessionID:prompt:) async throws -> OpenAIAgentReply` body
+  → `run(sessionID:prompt:) async throws -> OpenAIAgentReply`
+- `createResponseWithRecovery(request:previousResponseID:traceID:) async throws -> OpenAIResponsesResponse`
+- `runWithTimeout<T: Sendable>(operation:) async throws -> T`
+
+#### Implementation sketch:
+
+```swift
+// Extracted from OpenAIAgentService.swift
+import Foundation
+import os.log
+
+@MainActor final class AIAgentRunner {
+    private static let logger = Logger(subsystem: "com.prossh", category: "AICopilot.AgentRunner")
+    weak var service: OpenAIAgentService?
+
+    init() {}
+    nonisolated deinit {}
+
+    func run(sessionID: UUID, prompt: String) async throws -> OpenAIAgentReply { ... }
+
+    private func createResponseWithRecovery(
+        request: OpenAIResponsesRequest,
+        previousResponseID: inout String?,
+        traceID: String
+    ) async throws -> OpenAIResponsesResponse { ... }
+
+    private func runWithTimeout<T: Sendable>(
+        operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T { ... }
+}
+```
+
+Inside `run(...)`, replace all `self.*` references:
+- `sessionProvider.sessions` → `service?.sessionProvider.sessions ?? []`
+- `Self.shortTraceID()` → `AIToolDefinitions.shortTraceID()`
+- `Self.shortSessionID(_:)` → `AIToolDefinitions.shortSessionID(_:)`
+- `Self.isDirectActionPrompt(_:)` → `AIToolDefinitions.isDirectActionPrompt(_:)`
+- `Self.directActionToolDefinitions(from:)` → `AIToolDefinitions.directActionToolDefinitions(from:)`
+- `toolDefinitions` → `service?.toolDefinitions ?? []`
+- `maxToolIterations` → `service?.maxToolIterations ?? 50`
+- `persistConversationContext` → `service?.persistConversationContext ?? true`
+- `previousResponseIDBySessionID[sessionID]` → `service?.conversationContext.responseID(for: sessionID)`
+- `Self.developerPrompt()` → `AIToolDefinitions.developerPrompt()`
+- `createResponseWithRecovery(...)` → `self.createResponseWithRecovery(...)`
+- `Self.elapsedMillis(since:)` → `AIToolDefinitions.elapsedMillis(since:)`
+- `previousResponseIDBySessionID[sessionID] = response.id` → `service?.conversationContext.update(responseID: response.id, for: sessionID)`
+- `previousResponseIDBySessionID.removeValue(forKey: sessionID)` → `service?.conversationContext.clear(sessionID: sessionID)`
+- `await executeToolCalls(...)` → `await (service?.toolHandler.executeToolCalls(...)) ?? []`
+- `Self.logger.*` → `Self.logger.*` (AIAgentRunner has its own logger)
+
+Inside `createResponseWithRecovery(...)`:
+- `responsesService` → `service?.responsesService` (guard-unwrap at top)
+- `Self.isPreviousResponseIDError(message:)` → `AIToolDefinitions.isPreviousResponseIDError(message:)`
+
+Inside `runWithTimeout(...)`:
+- `requestTimeoutSeconds` → `service?.requestTimeoutSeconds ?? 60`
+
+#### Changes in `OpenAIAgentService.swift`:
+
+- [x] Remove `generateReply` body, `createResponseWithRecovery`, `runWithTimeout`
+- [x] Add `let agentRunner: AIAgentRunner` stored property (initialized in `init`)
+- [x] In `init`: `agentRunner = AIAgentRunner(); agentRunner.service = self`
+- [x] Public `generateReply(sessionID:prompt:)` becomes a one-line delegate:
+      `return try await agentRunner.run(sessionID: sessionID, prompt: prompt)`
+
+**Build check:** `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`
+
+**Commit:** `refactor: extract AIAgentRunner from OpenAIAgentService`
+
+---
+
+### Sub-Phase 6.5 — OpenAIAgentService Slim-Down
+
+- [x] Verify all moved symbols are deleted — no dangling declarations
+- [x] Count lines: `wc -l ProSSHMac/Services/OpenAIAgentService.swift` — expect < 200 lines
+- [x] Remove `// swiftlint:disable file_length` from line 1 (file is well under 400 lines)
+- [x] Remaining content in `OpenAIAgentService.swift`:
+  - `OpenAIAgentServicing` protocol
+  - `OpenAIAgentReply` struct (add `Sendable` if missing)
+  - `OpenAIAgentServiceError` enum (add `Sendable` if missing)
+  - `OpenAIAgentSessionProviding` protocol
+  - `CommandExecutionResult` struct
+  - `extension SessionManager: OpenAIAgentSessionProviding {}`
+  - `@MainActor final class OpenAIAgentService`:
+    - Stored: `conversationContext`, `agentRunner`, `toolHandler`, `responsesService`,
+      `sessionProvider`, `requestTimeoutSeconds`, `maxToolIterations`, `persistConversationContext`,
+      `toolDefinitions`, `logger`
+    - `init(responsesService:sessionProvider:requestTimeoutSeconds:maxToolIterations:persistConversationContext:)`
+    - `generateReply(sessionID:prompt:)` — one-line delegate to `agentRunner.run`
+    - `clearConversation(sessionID:)` — delegates to `conversationContext.clear`
+
+**Build check:** `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`
+
+**Commit:** `refactor: OpenAIAgentService slim-down, inject AI coordinators (Phase 6 complete)`
+
+---
+
+### Sub-Phase 6.6 — Strict Concurrency Verification
+
+For each new file in `Services/AI/`:
+1. Temporarily add `-strict-concurrency=complete` to Other Swift Flags in Xcode build settings
+2. Build — fix all warnings (Sendable conformances, actor isolation, nonisolated annotations)
+3. Remove the flag before committing
+
+Expected:
+- `AIToolDefinitions` (caseless enum): all statics implicitly `nonisolated` — zero warnings
+- `AIConversationContext`: `@MainActor` class — zero cross-isolation issues
+- `AIAgentRunner`: `@MainActor` class; `service?` access is same actor — safe
+- `AIToolHandler`: `nonisolated static` filesystem methods must keep `nonisolated`;
+  `RemoteToolExecutionResult` needs `Sendable` conformance
+- `CommandExecutionResult`, `OpenAIAgentReply`: confirm `Sendable` conformances present
+
+---
+
+### Sub-Phase 6.7 — Docs Update & Final Commit
+
+- [x] Run full test suite:
+  ```bash
+  xcodebuild -scheme ProSSHMac -destination 'platform=macOS' test
+  # Expected: ≤23 pre-existing failures (color rendering + mouse encoding)
+  ```
+- [x] Update `CLAUDE.md`:
+  - Phase 6 → **COMPLETE** with commit hash
+  - Update "Current State" block: current phase = Phase 7, status = NOT PLANNED
+  - Fix target directory layout: `AIResponseStreamParser.swift` → `AIToolDefinitions.swift`
+  - Add Refactor Log entry dated 2026-02-24
+  - Update Key Files table: `OpenAIAgentService.swift` entry to reflect Phase 6 COMPLETE
+- [x] Update `docs/featurelist.md` loop log
+- [x] Commit: `docs: mark Phase 6 complete in CLAUDE.md`
+
+---
+
+> **PLANNED 2026-02-24** — Full numbered plan expanded from sketch.
+> Correction noted: `AIResponseStreamParser.swift` replaced by `AIToolDefinitions.swift`
+> (no SSE parsing lives in OpenAIAgentService.swift — it lives in OpenAIResponsesService.swift).
 
 ---
 
