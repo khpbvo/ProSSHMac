@@ -40,26 +40,22 @@ final class SessionManager: ObservableObject {
     @Published private(set) var latestCompletedCommandBlockBySessionID: [UUID: CommandBlock] = [:]
     @Published private(set) var commandCompletionNonceBySessionID: [UUID: Int] = [:]
 
-    private let transport: any SSHTransporting
+    let transport: any SSHTransporting
     private let knownHostsStore: any KnownHostsStoreProtocol
     private let auditLogManager: AuditLogManager?
     private let portForwardingManager: PortForwardingManager?
     private let sessionRecorder: SessionRecorder
-    private let terminalHistoryIndex = TerminalHistoryIndex()
-    private var shellChannels: [UUID: any SSHShellChannel] = [:]
+    let terminalHistoryIndex = TerminalHistoryIndex()
+    var shellChannels: [UUID: any SSHShellChannel] = [:]
     private var parserReaderTasks: [UUID: Task<Void, Never>] = [:]
-    private var engines: [UUID: TerminalEngine] = [:]
+    var engines: [UUID: TerminalEngine] = [:]
     private var desiredPTYBySessionID: [UUID: PTYConfiguration] = [:]
-    private var hostBySessionID: [UUID: Host] = [:]
-    private(set) var lastActivityBySessionID: [UUID: Date] = [:]
-    private var jumpHostBySessionID: [UUID: Host] = [:]
-    private var pendingReconnectHosts: [UUID: (host: Host, jumpHost: Host?)] = [:]
-    private var reconnectTask: Task<Void, Never>?
-    private var manuallyDisconnectingSessions: Set<UUID> = []
-    private let networkMonitor = NWPathMonitor()
-    private let networkMonitorQueue = DispatchQueue(label: "prosshv2.network.monitor")
-    private var isNetworkReachable = true
+    var hostBySessionID: [UUID: Host] = [:]
+    var lastActivityBySessionID: [UUID: Date] = [:]
+    var jumpHostBySessionID: [UUID: Host] = [:]
+    var manuallyDisconnectingSessions: Set<UUID> = []
     private var pendingResizeTasks: [UUID: Task<Void, Never>] = [:]
+    let reconnectCoordinator: SessionReconnectCoordinator
     /// Tracks last bell event time per session for throughput mode rate-limiting.
     private var lastBellTimeBySessionID: [UUID: Date] = [:]
     /// Per-session coalesced snapshot publish task (max one publish per frame interval).
@@ -114,27 +110,25 @@ final class SessionManager: ObservableObject {
         self.auditLogManager = auditLogManager
         self.portForwardingManager = portForwardingManager
         self.sessionRecorder = sessionRecorder
+        let coord = SessionReconnectCoordinator()
+        self.reconnectCoordinator = coord
 
         Task { @MainActor [weak self] in
             await self?.refreshKnownHosts()
         }
 
-        networkMonitor.pathUpdateHandler = { [weak self] path in
-            Task { @MainActor [weak self] in
-                self?.handleNetworkStatusChange(isReachable: path.status == .satisfied)
-            }
-        }
-        networkMonitor.start(queue: networkMonitorQueue)
+        coord.manager = self
+        coord.start()
     }
 
-    deinit {
-        networkMonitor.cancel()
-        reconnectTask?.cancel()
-        keepaliveTask?.cancel()
-    }
+    nonisolated deinit {}
 
     func connect(to host: Host, jumpHost: Host? = nil, passwordOverride: String? = nil, keyPassphraseOverride: String? = nil) async throws -> Session {
         try await connect(to: host, jumpHost: jumpHost, automaticReconnect: false, passwordOverride: passwordOverride, keyPassphraseOverride: keyPassphraseOverride)
+    }
+
+    func reconnectConnect(host: Host, jumpHost: Host?) async throws -> Session {
+        try await connect(to: host, jumpHost: jumpHost, automaticReconnect: true, passwordOverride: nil)
     }
 
     func closeSession(sessionID: UUID) async {
@@ -250,15 +244,11 @@ final class SessionManager: ObservableObject {
     }
 
     func applicationDidEnterBackground() {
-        for session in sessions where session.state == .connected {
-            if let host = hostBySessionID[session.id] {
-                pendingReconnectHosts[session.id] = (host: host, jumpHost: jumpHostBySessionID[session.id])
-            }
-        }
+        reconnectCoordinator.applicationDidEnterBackground()
     }
 
     func applicationDidBecomeActive() {
-        scheduleReconnectAttempt(after: .milliseconds(0))
+        reconnectCoordinator.applicationDidBecomeActive()
     }
 
     private func connect(
@@ -368,9 +358,7 @@ final class SessionManager: ObservableObject {
             if let jumpHost {
                 jumpHostBySessionID[sessionID] = jumpHost
             }
-            for (key, entry) in pendingReconnectHosts where entry.host.id == host.id {
-                pendingReconnectHosts.removeValue(forKey: key)
-            }
+            reconnectCoordinator.removePendingForHost(host.id)
 
             let securityNote: String
             if details.usedLegacyAlgorithms {
@@ -494,7 +482,7 @@ final class SessionManager: ObservableObject {
         manuallyDisconnectingSessions.insert(sessionID)
         defer { manuallyDisconnectingSessions.remove(sessionID) }
 
-        pendingReconnectHosts.removeValue(forKey: sessionID)
+        reconnectCoordinator.cancelPending(sessionID: sessionID)
         hostBySessionID.removeValue(forKey: sessionID)
         jumpHostBySessionID.removeValue(forKey: sessionID)
 
@@ -1158,9 +1146,7 @@ final class SessionManager: ObservableObject {
         stopKeepaliveTimerIfIdle()
 
         let host = hostBySessionID[sessionID]
-        if let host {
-            pendingReconnectHosts[sessionID] = (host: host, jumpHost: jumpHostBySessionID[sessionID])
-        }
+        let jumpHost = jumpHostBySessionID[sessionID]
 
         await auditLogManager?.record(
             category: .session,
@@ -1181,7 +1167,7 @@ final class SessionManager: ObservableObject {
         finalizeRecordingIfNeeded(sessionID: sessionID)
         removeSessionArtifacts(sessionID: sessionID)
         await transport.disconnect(sessionID: sessionID)
-        scheduleReconnectAttempt(after: .seconds(1))
+        reconnectCoordinator.scheduleReconnect(for: sessionID, host: host, jumpHost: jumpHost)
     }
 
     private func appendShellLine(_ line: String, to sessionID: UUID) async {
@@ -1236,7 +1222,7 @@ final class SessionManager: ObservableObject {
                 await pfm.deactivateAll(for: sessionID)
             }
         }
-        pendingReconnectHosts.removeValue(forKey: sessionID)
+        reconnectCoordinator.cancelPending(sessionID: sessionID)
         hostBySessionID.removeValue(forKey: sessionID)
         jumpHostBySessionID.removeValue(forKey: sessionID)
         sessions.removeAll(where: { $0.id == sessionID })
@@ -1542,58 +1528,6 @@ final class SessionManager: ObservableObject {
 
         for sessionID in obsolete {
             removeSession(sessionID: sessionID)
-        }
-    }
-
-    private func handleNetworkStatusChange(isReachable: Bool) {
-        let wasReachable = isNetworkReachable
-        isNetworkReachable = isReachable
-
-        if isReachable && !wasReachable {
-            scheduleReconnectAttempt(after: .milliseconds(250))
-        }
-    }
-
-    private func scheduleReconnectAttempt(after delay: Duration) {
-        guard reconnectTask == nil else {
-            return
-        }
-
-        reconnectTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            if delay > .zero {
-                try? await Task.sleep(for: delay)
-            }
-
-            await self.attemptPendingReconnects()
-            self.reconnectTask = nil
-
-            if self.isNetworkReachable && !self.pendingReconnectHosts.isEmpty {
-                self.scheduleReconnectAttempt(after: .seconds(5))
-            }
-        }
-    }
-
-    private func attemptPendingReconnects() async {
-        guard isNetworkReachable else {
-            return
-        }
-
-        let snapshot = pendingReconnectHosts
-        for (oldSessionID, entry) in snapshot {
-            if activeSession(for: entry.host.id) != nil {
-                pendingReconnectHosts.removeValue(forKey: oldSessionID)
-                continue
-            }
-
-            do {
-                _ = try await connect(to: entry.host, jumpHost: entry.jumpHost, automaticReconnect: true, passwordOverride: nil)
-                pendingReconnectHosts.removeValue(forKey: oldSessionID)
-            } catch SessionConnectionError.hostVerificationRequired {
-                pendingReconnectHosts.removeValue(forKey: oldSessionID)
-            } catch {
-                // Keep entry in pending queue for a later retry.
-            }
         }
     }
 
