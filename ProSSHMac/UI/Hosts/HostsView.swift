@@ -14,6 +14,7 @@ struct HostsView: View {
     @State private var passwordPromptValue = ""
     @State private var passphrasePromptHost: Host?
     @State private var passphrasePromptValue = ""
+    @State private var sshConfigImportPreview: SSHConfigImportService.ImportPreview? = nil
 
     private enum PresentedAlert: Identifiable {
         case hostVerification(PendingHostVerification)
@@ -68,12 +69,12 @@ struct HostsView: View {
                     }
 
                     Button("Import SSH Config From Clipboard", systemImage: "square.and.arrow.down") {
-                        Task {
-                            let clipboard = PlatformClipboard.readString() ?? ""
-                            let importedCount = await hostListViewModel.importSSHConfig(clipboard)
-                            operationMessage = importedCount == 0
-                                ? "No valid SSH host entries found in clipboard."
-                                : "Imported \(importedCount) host(s) from SSH config."
+                        let clipboard = PlatformClipboard.readString() ?? ""
+                        let preview = hostListViewModel.previewSSHConfigImport(clipboard)
+                        if preview.results.isEmpty {
+                            operationMessage = "No valid SSH host entries found in clipboard."
+                        } else {
+                            sshConfigImportPreview = preview
                         }
                     }
                 } label: {
@@ -97,7 +98,8 @@ struct HostsView: View {
                 draft: $draft,
                 availableJumpHosts: hostListViewModel.hosts,
                 availableKeys: keyForgeViewModel.keys,
-                editingHostID: editingHostID
+                editingHostID: editingHostID,
+                totpStore: hostListViewModel.totpStore
             ) { savedDraft in
                 Task {
                     if let editingHostID {
@@ -108,6 +110,19 @@ struct HostsView: View {
                     showForm = false
                 }
             }
+        }
+        .sheet(isPresented: Binding(
+            get: { sshConfigImportPreview != nil },
+            set: { if !$0 { sshConfigImportPreview = nil } }
+        )) {
+            SSHConfigImportPreviewView(
+                preview: sshConfigImportPreview!,
+                onImport: { selected in
+                    Task { await hostListViewModel.importSSHConfig(selected) }
+                    sshConfigImportPreview = nil
+                },
+                onCancel: { sshConfigImportPreview = nil }
+            )
         }
         .sheet(item: $passwordPromptHost) { host in
             NavigationStack {

@@ -70,6 +70,7 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
     var hasSavedPassword: Bool { passwordReference != nil }
     var passphraseReference: String?
     var hasSavedPassphrase: Bool { passphraseReference != nil }
+    var totpConfiguration: TOTPConfiguration?
     var jumpHost: UUID?
     var algorithmPreferences: AlgorithmPreferences?
     var pinnedHostKeyAlgorithms: [String]
@@ -94,6 +95,7 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
         certificateReference: UUID?,
         passwordReference: String?,
         passphraseReference: String? = nil,
+        totpConfiguration: TOTPConfiguration? = nil,
         jumpHost: UUID?,
         algorithmPreferences: AlgorithmPreferences?,
         pinnedHostKeyAlgorithms: [String],
@@ -117,6 +119,7 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
         self.certificateReference = certificateReference
         self.passwordReference = passwordReference
         self.passphraseReference = passphraseReference
+        self.totpConfiguration = totpConfiguration
         self.jumpHost = jumpHost
         self.algorithmPreferences = algorithmPreferences
         self.pinnedHostKeyAlgorithms = pinnedHostKeyAlgorithms
@@ -142,6 +145,7 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
         case certificateReference
         case passwordReference
         case passphraseReference
+        case totpConfiguration
         case jumpHost
         case algorithmPreferences
         case pinnedHostKeyAlgorithms
@@ -168,6 +172,7 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
         certificateReference = try container.decodeIfPresent(UUID.self, forKey: .certificateReference)
         passwordReference = try container.decodeIfPresent(String.self, forKey: .passwordReference)
         passphraseReference = try container.decodeIfPresent(String.self, forKey: .passphraseReference)
+        totpConfiguration = try container.decodeIfPresent(TOTPConfiguration.self, forKey: .totpConfiguration)
         jumpHost = try container.decodeIfPresent(UUID.self, forKey: .jumpHost)
         algorithmPreferences = try container.decodeIfPresent(AlgorithmPreferences.self, forKey: .algorithmPreferences)
         pinnedHostKeyAlgorithms = try container.decodeIfPresent([String].self, forKey: .pinnedHostKeyAlgorithms) ?? []
@@ -194,6 +199,7 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
         try container.encodeIfPresent(certificateReference, forKey: .certificateReference)
         try container.encodeIfPresent(passwordReference, forKey: .passwordReference)
         try container.encodeIfPresent(passphraseReference, forKey: .passphraseReference)
+        try container.encodeIfPresent(totpConfiguration, forKey: .totpConfiguration)
         try container.encodeIfPresent(jumpHost, forKey: .jumpHost)
         try container.encodeIfPresent(algorithmPreferences, forKey: .algorithmPreferences)
         try container.encode(pinnedHostKeyAlgorithms, forKey: .pinnedHostKeyAlgorithms)
@@ -272,6 +278,7 @@ struct HostDraft: Equatable {
     var tags: String = ""
     var notes: String = ""
     var jumpHost: UUID? = nil
+    var totpConfiguration: TOTPConfiguration? = nil
 
     var validationError: String? {
         if label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -322,6 +329,7 @@ struct HostDraft: Equatable {
             keyReference: keyReference,
             certificateReference: nil,
             passwordReference: nil,
+            totpConfiguration: totpConfiguration,
             jumpHost: jumpHost,
             algorithmPreferences: nil,
             pinnedHostKeyAlgorithms: parsedPinnedHostKeyAlgorithms,
@@ -374,5 +382,6 @@ extension HostDraft {
         self.tags = host.tags.joined(separator: ", ")
         self.notes = host.notes ?? ""
         self.jumpHost = host.jumpHost
+        self.totpConfiguration = host.totpConfiguration
     }
 }

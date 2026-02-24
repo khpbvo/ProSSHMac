@@ -89,6 +89,7 @@ final class HostListViewModel: ObservableObject {
     private let searchIndexer: (any HostSearchIndexing)?
     private let biometricPasswordStore: (any BiometricPasswordStoring)?
     private let biometricPassphraseStore: (any BiometricPasswordStoring)?
+    let totpStore: TOTPStore?
     private var hasLoaded = false
 
     init(
@@ -97,7 +98,8 @@ final class HostListViewModel: ObservableObject {
         auditLogManager: AuditLogManager? = nil,
         searchIndexer: (any HostSearchIndexing)? = nil,
         biometricPasswordStore: (any BiometricPasswordStoring)? = nil,
-        biometricPassphraseStore: (any BiometricPasswordStoring)? = nil
+        biometricPassphraseStore: (any BiometricPasswordStoring)? = nil,
+        totpStore: TOTPStore? = nil
     ) {
         self.hostStore = hostStore
         self.sessionManager = sessionManager
@@ -105,6 +107,7 @@ final class HostListViewModel: ObservableObject {
         self.searchIndexer = searchIndexer
         self.biometricPasswordStore = biometricPasswordStore
         self.biometricPassphraseStore = biometricPassphraseStore
+        self.totpStore = totpStore
     }
 
     func loadHostsIfNeeded() async {
@@ -443,53 +446,32 @@ final class HostListViewModel: ObservableObject {
     }
 
     func exportSSHConfig() -> String {
-        var lines: [String] = [
-            "# ProSSH v2 host export",
-            "# Generated: \(ISO8601DateFormatter().string(from: .now))",
-            ""
-        ]
-
-        for host in hosts.sorted(by: Self.sortHosts) {
-            let alias = host.label.replacingOccurrences(of: " ", with: "_")
-            lines.append("Host \(alias)")
-            lines.append("    HostName \(host.hostname)")
-            lines.append("    User \(host.username)")
-            lines.append("    Port \(host.port)")
-            if let folder = host.folder, !folder.isEmpty {
-                lines.append("    # Folder: \(folder)")
-            }
-            if !host.tags.isEmpty {
-                lines.append("    # Tags: \(host.tags.joined(separator: ", "))")
-            }
-            if host.legacyModeEnabled {
-                lines.append("    # LegacyMode: true")
-            }
-            if !host.pinnedHostKeyAlgorithms.isEmpty {
-                lines.append("    # PinnedHostKeyAlgorithms: \(host.pinnedHostKeyAlgorithms.joined(separator: ", "))")
-            }
-            if host.agentForwardingEnabled {
-                lines.append("    ForwardAgent yes")
-            }
-            if let jumpHostID = host.jumpHost,
-               let jumpHost = hosts.first(where: { $0.id == jumpHostID }) {
-                lines.append("    ProxyJump \(jumpHost.username)@\(jumpHost.hostname):\(jumpHost.port)")
-            }
-            lines.append("")
-        }
-
-        return lines.joined(separator: "\n")
+        let exporter = SSHConfigExporter()
+        return exporter.export(
+            hosts,
+            options: SSHConfigExporter.ExportOptions(
+                includeHeader: true,
+                includeProSSHNotes: true,
+                allHosts: hosts,
+                allKeys: []
+            )
+        )
     }
 
-    func importSSHConfig(_ configText: String) async -> Int {
-        let imported = Self.parseSSHConfig(configText)
-        guard !imported.isEmpty else {
-            return 0
-        }
+    func previewSSHConfigImport(_ configText: String) -> SSHConfigImportService.ImportPreview {
+        SSHConfigImportService().preview(
+            configText: configText,
+            existingHosts: hosts,
+            existingKeys: []
+        )
+    }
 
-        hosts.append(contentsOf: imported)
+    func importSSHConfig(_ selectedHosts: [Host]) async -> Int {
+        guard !selectedHosts.isEmpty else { return 0 }
+        hosts.append(contentsOf: selectedHosts)
         hosts.sort(by: Self.sortHosts)
         await persist()
-        return imported.count
+        return selectedHosts.count
     }
 
     private func cleanupKeychainForHost(_ host: Host) {
@@ -498,6 +480,9 @@ final class HostListViewModel: ObservableObject {
         }
         if host.hasSavedPassphrase {
             try? biometricPassphraseStore?.delete(forHostID: host.id)
+        }
+        if host.totpConfiguration != nil {
+            Task { try? await totpStore?.deleteSecret(forHostID: host.id) }
         }
     }
 
@@ -531,130 +516,6 @@ final class HostListViewModel: ObservableObject {
         return lhs.label.localizedCaseInsensitiveCompare(rhs.label) == .orderedAscending
     }
 
-    private static func parseSSHConfig(_ configText: String) -> [Host] {
-        struct PartialHost {
-            var label = ""
-            var folder: String?
-            var hostname = ""
-            var username = ""
-            var port: UInt16 = 22
-            var tags: [String] = []
-            var legacyModeEnabled = false
-            var pinnedHostKeyAlgorithms: [String] = []
-            var agentForwardingEnabled = false
-            var proxyJump: String?
-        }
-
-        var parsedHosts: [Host] = []
-        var current: PartialHost?
-
-        func finalizeCurrent() {
-            guard let candidate = current else { return }
-            guard !candidate.label.isEmpty, !candidate.hostname.isEmpty, !candidate.username.isEmpty else { return }
-
-            var importNotes = "Imported from SSH config"
-            if let proxyJump = candidate.proxyJump, !proxyJump.isEmpty {
-                importNotes += "\nProxyJump: \(proxyJump)"
-            }
-
-            parsedHosts.append(
-                Host(
-                    id: UUID(),
-                    label: candidate.label.replacingOccurrences(of: "_", with: " "),
-                    folder: candidate.folder,
-                    hostname: candidate.hostname,
-                    port: candidate.port,
-                    username: candidate.username,
-                    authMethod: .publicKey,
-                    keyReference: nil,
-                    certificateReference: nil,
-                    passwordReference: nil,
-                    jumpHost: nil,
-                    algorithmPreferences: nil,
-                    pinnedHostKeyAlgorithms: candidate.pinnedHostKeyAlgorithms,
-                    agentForwardingEnabled: candidate.agentForwardingEnabled,
-                    legacyModeEnabled: candidate.legacyModeEnabled,
-                    tags: candidate.tags,
-                    notes: importNotes,
-                    lastConnected: nil,
-                    createdAt: .now
-                )
-            )
-        }
-
-        for rawLine in configText.components(separatedBy: .newlines) {
-            let trimmed = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed.isEmpty {
-                continue
-            }
-
-            if trimmed.hasPrefix("#") {
-                guard var candidate = current else { continue }
-
-                let comment = trimmed.dropFirst().trimmingCharacters(in: .whitespacesAndNewlines)
-                if comment.lowercased().hasPrefix("folder:") {
-                    candidate.folder = comment.dropFirst("folder:".count).trimmingCharacters(in: .whitespacesAndNewlines)
-                } else if comment.lowercased().hasPrefix("tags:") {
-                    candidate.tags = comment.dropFirst("tags:".count)
-                        .split(separator: ",")
-                        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                        .filter { !$0.isEmpty }
-                } else if comment.lowercased().hasPrefix("legacymode:") {
-                    let value = comment.dropFirst("legacymode:".count).trimmingCharacters(in: .whitespacesAndNewlines)
-                    candidate.legacyModeEnabled = (value as NSString).boolValue
-                } else if comment.lowercased().hasPrefix("pinnedhostkeyalgorithms:") {
-                    candidate.pinnedHostKeyAlgorithms = comment.dropFirst("pinnedhostkeyalgorithms:".count)
-                        .split(separator: ",")
-                        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                        .filter { !$0.isEmpty }
-                }
-                current = candidate
-                continue
-            }
-
-            if trimmed.lowercased().hasPrefix("host ") {
-                finalizeCurrent()
-
-                let alias = trimmed.dropFirst("host ".count).trimmingCharacters(in: .whitespacesAndNewlines)
-                if alias.contains("*") || alias.contains("?") {
-                    current = nil
-                    continue
-                }
-
-                current = PartialHost(label: alias)
-                continue
-            }
-
-            guard var candidate = current else { continue }
-
-            let parts = trimmed.split(separator: " ", maxSplits: 1).map(String.init)
-            guard parts.count == 2 else { continue }
-
-            let key = parts[0].lowercased()
-            let value = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
-
-            switch key {
-            case "hostname":
-                candidate.hostname = value
-            case "user":
-                candidate.username = value
-            case "port":
-                candidate.port = UInt16(value) ?? 22
-            case "proxyjump":
-                candidate.proxyJump = value
-            case "forwardagent":
-                let lowered = value.lowercased()
-                candidate.agentForwardingEnabled = lowered == "yes" || lowered == "true" || lowered == "on" || lowered == "1"
-            default:
-                break
-            }
-
-            current = candidate
-        }
-
-        finalizeCurrent()
-        return parsedHosts
-    }
 }
 
 private extension SSHAlgorithmClass {

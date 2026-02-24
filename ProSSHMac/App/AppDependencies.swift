@@ -51,11 +51,15 @@ final class AppDependencies: ObservableObject {
         let portForwardingManager = PortForwardingManager(transport: transport, auditLogManager: auditLogManager)
         self.portForwardingManager = portForwardingManager
 
+        let biometricPasswordStore = BiometricPasswordStore()
+        let totpStore = TOTPStore(store: biometricPasswordStore)
+
         let sessionManager = SessionManager(
             transport: transport,
             knownHostsStore: FileKnownHostsStore(),
             auditLogManager: auditLogManager,
-            portForwardingManager: portForwardingManager
+            portForwardingManager: portForwardingManager,
+            totpStore: totpStore
         )
         self.sessionManager = sessionManager
 
@@ -70,8 +74,9 @@ final class AppDependencies: ObservableObject {
                 sessionManager: sessionManager,
                 auditLogManager: auditLogManager,
                 searchIndexer: HostSpotlightIndexer(),
-                biometricPasswordStore: BiometricPasswordStore(),
-                biometricPassphraseStore: BiometricPasswordStore(service: "nl.budgetsoft.ProSSHV2.key-passphrases")
+                biometricPasswordStore: biometricPasswordStore,
+                biometricPassphraseStore: BiometricPasswordStore(service: "nl.budgetsoft.ProSSHV2.key-passphrases"),
+                totpStore: totpStore
             )
         }
 

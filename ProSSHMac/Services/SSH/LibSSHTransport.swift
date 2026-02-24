@@ -632,7 +632,7 @@ actor LibSSHTransport: SSHTransporting {
             }
             return LibSSHAuthenticationMaterial(password: normalizedPassword)
         case .keyboardInteractive:
-            return LibSSHAuthenticationMaterial()
+            return LibSSHAuthenticationMaterial(password: passwordOverride)
         case .publicKey:
             guard let keyReference = host.keyReference else {
                 return LibSSHAuthenticationMaterial()

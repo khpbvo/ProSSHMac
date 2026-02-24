@@ -398,6 +398,14 @@ All paths below are relative to the repo root. Source files live under `ProSSHMa
 
 ### Feature Log (non-refactor changes — most recent first)
 
+- **2026-02-24**: Integrated TOTP 2FA module and SSH Config Import/Export pipeline.
+  - `Host` model gains `totpConfiguration: TOTPConfiguration?` (Codable, persisted in `hosts.json`).
+  - `BiometricPasswordStore` conforms to `SecretStorageProtocol` via raw-Keychain helpers (no biometric gate, `kSecAttrAccessibleAfterFirstUnlock`). `TOTPStore` initialised in `AppDependencies`, injected into `SessionManager` + `HostListViewModel`.
+  - `SessionManager.connect()` auto-fills TOTP before `transport.authenticate()` when `authMethod == .keyboardInteractive` and `totpConfiguration != nil`; uses `generateSmartCode` to avoid near-expiry codes; logs to audit log.
+  - C kbdint loop in `ProSSHLibSSHWrapper.c` now sends TOTP code as answer to prompt[0].
+  - `HostFormView` has new "Two-Factor Authentication" section (keyboard-interactive, edit-mode only): `TOTPLiveCodeView` (1s timer, countdown ring) + `TOTPProvisioningSheetView` (URI-paste and manual-entry tabs).
+  - `exportSSHConfig()` upgraded to use `SSHConfigExporter` (full field coverage); `importSSHConfig` replaced with `previewSSHConfigImport` + preview-sheet flow via new `SSHConfigImportPreviewView`.
+  - Old `parseSSHConfig()` static helper removed from `HostListViewModel`.
 - **2026-02-23**: Fixed terminal focus loss after clicking AI chat composer. `focusSessionAndPane()`
   now calls `window.makeFirstResponder(nil)` to resign the NSTextView before setting SwiftUI state.
 - **2026-02-23**: Implemented Shell Integration / Device Type configuration. Per-host

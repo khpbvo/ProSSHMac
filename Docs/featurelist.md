@@ -290,3 +290,27 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 - [x] Command execution from AI requires explicit user intent in the prompt.
 - [x] Network/API failures fail safely with user-visible errors.
 - [x] AI file ingestion uses bounded chunk reads (max 200 lines) instead of full-file reads.
+
+## Loop Log
+
+### 2026-02-24 — TOTP 2FA + SSH Config Import/Export Integration
+
+**Module 2: SSH Config Import/Export pipeline upgrade**
+- Replaced hand-rolled `exportSSHConfig()` (30 lines) with `SSHConfigExporter.export(_:options:)` — full algorithm preferences, port forwarding rules, shell integration notes, and ProSSH-specific comments are now included.
+- Replaced `parseSSHConfig()` (124 lines, basic parser) with `SSHConfigImportService.preview()` — full parser with token expansion, jump-host resolution, key reference matching, legacy mode detection, and per-host notes.
+- Changed import flow to show a preview sheet (`SSHConfigImportPreviewView`) before committing: user can deselect hosts, see parser warnings, and identify duplicates.
+- Added `previewSSHConfigImport(_:)` + new `importSSHConfig(_: [Host])` to `HostListViewModel`.
+- Created `UI/Hosts/SSHConfigImportPreviewView.swift` (~130 lines): toggle list with duplicate badges, warning notes, collapsible parser-warnings section.
+
+**Module 1: TOTP 2FA wiring**
+- Added `totpConfiguration: TOTPConfiguration?` to `Host` struct (stored property, Codable, Hashable, Sendable) and `HostDraft`.
+- Added raw-Keychain helpers (`saveRaw/retrieveRaw/deleteRaw`) to `BiometricPasswordStore` using `kSecAttrAccessibleAfterFirstUnlock` (no biometric gate — needed for auth-flow auto-fill).
+- Conformed `BiometricPasswordStore` to `SecretStorageProtocol` so `TOTPStore` can use the existing Keychain infrastructure.
+- Initialized `TOTPStore` in `AppDependencies` and injected into both `SessionManager` and `HostListViewModel`.
+- Added TOTP auto-fill in `SessionManager.connect()`: if `host.authMethod == .keyboardInteractive` and `host.totpConfiguration != nil`, generates a smart code (avoids near-expiry codes) and logs to audit log.
+- Updated `LibSSHTransport.resolveAuthenticationMaterial` to pass `passwordOverride` for `.keyboardInteractive` (previously always returned empty material).
+- Updated C kbdint loop in `ProSSHLibSSHWrapper.c`: first prompt receives the TOTP code; subsequent prompts fall back to `""`.
+- Added TOTP cleanup to `cleanupKeychainForHost()` in `HostListViewModel` (runs on host deletion).
+- Added TOTP section to `HostFormView` (appears only for `.keyboardInteractive` auth when editing an existing host): live code view (`TOTPLiveCodeView`) with 1-second timer, provisioning sheet (`TOTPProvisioningSheetView`) with URI paste and manual Base32 tabs.
+
+**Tests**: 37/37 pass (TOTPGeneratorRFCTests, TOTPAutoFillDetectorTests, SSHConfigParserTests). Build: SUCCEEDED.

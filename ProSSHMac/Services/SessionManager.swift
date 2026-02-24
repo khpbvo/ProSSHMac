@@ -40,6 +40,7 @@ final class SessionManager: ObservableObject {
     private let knownHostsStore: any KnownHostsStoreProtocol
     private let auditLogManager: AuditLogManager?
     private let portForwardingManager: PortForwardingManager?
+    private let totpStore: TOTPStore?
     let terminalHistoryIndex = TerminalHistoryIndex()
     var shellChannels: [UUID: any SSHShellChannel] = [:]
     private var parserReaderTasks: [UUID: Task<Void, Never>] = [:]
@@ -73,12 +74,14 @@ final class SessionManager: ObservableObject {
         transport: any SSHTransporting,
         knownHostsStore: any KnownHostsStoreProtocol,
         auditLogManager: AuditLogManager? = nil,
-        portForwardingManager: PortForwardingManager? = nil
+        portForwardingManager: PortForwardingManager? = nil,
+        totpStore: TOTPStore? = nil
     ) {
         self.transport = transport
         self.knownHostsStore = knownHostsStore
         self.auditLogManager = auditLogManager
         self.portForwardingManager = portForwardingManager
+        self.totpStore = totpStore
         let coord = SessionReconnectCoordinator()
         self.reconnectCoordinator = coord
         self.keepaliveCoordinator = SessionKeepaliveCoordinator()
@@ -320,7 +323,23 @@ final class SessionManager: ObservableObject {
                 throw SessionConnectionError.hostVerificationRequired(challenge)
             }
 
-            try await transport.authenticate(sessionID: sessionID, to: host, passwordOverride: passwordOverride, keyPassphraseOverride: keyPassphraseOverride)
+            var effectivePasswordOverride = passwordOverride
+            if host.authMethod == .keyboardInteractive,
+               let config = host.totpConfiguration,
+               let secret = try? await totpStore?.retrieveSecret(forHostID: host.id) {
+                let result = TOTPGenerator().generateSmartCode(secret: secret, configuration: config)
+                effectivePasswordOverride = result.code
+                await auditLogManager?.record(
+                    category: .authentication,
+                    action: "TOTP 2FA auto-fill",
+                    outcome: .info,
+                    host: host,
+                    sessionID: sessionID,
+                    details: "Code valid for \(result.secondsRemaining)s, issuer: \(config.issuer ?? "unknown")"
+                )
+            }
+
+            try await transport.authenticate(sessionID: sessionID, to: host, passwordOverride: effectivePasswordOverride, keyPassphraseOverride: keyPassphraseOverride)
 
             session.state = .connected
             session.negotiatedKEX = details.negotiatedKEX

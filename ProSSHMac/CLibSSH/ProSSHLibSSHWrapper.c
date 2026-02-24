@@ -279,7 +279,8 @@ static int prossh_authenticate(
         while (auth_result == SSH_AUTH_INFO) {
             int prompts = ssh_userauth_kbdint_getnprompts(handle->session);
             for (int i = 0; i < prompts; i++) {
-                ssh_userauth_kbdint_setanswer(handle->session, i, "");
+                const char *answer = (i == 0 && password != NULL && password[0] != '\0') ? password : "";
+                ssh_userauth_kbdint_setanswer(handle->session, i, answer);
             }
             auth_result = ssh_userauth_kbdint(handle->session, NULL, NULL);
         }

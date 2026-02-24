@@ -164,4 +164,83 @@ final class BiometricPasswordStore: BiometricPasswordStoring {
         // errSecInteractionNotAllowed means the item exists but requires biometric
         return status == errSecSuccess || status == errSecInteractionNotAllowed
     }
+
+    // MARK: - Raw Keychain helpers (no biometric gate — used for TOTP auto-fill)
+
+    /// Save arbitrary base64-encoded data under a string account key with no biometric requirement.
+    /// Uses kSecAttrAccessibleAfterFirstUnlock so it can be read during background auth flows.
+    func saveRaw(_ base64: String, account: String) throws {
+        guard let data = base64.data(using: .utf8) else {
+            throw BiometricPasswordError.dataConversionFailed
+        }
+        let deleteQuery: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+        SecItemDelete(deleteQuery as CFDictionary)
+
+        let addQuery: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
+        ]
+        let status = SecItemAdd(addQuery as CFDictionary, nil)
+        guard status == errSecSuccess else {
+            throw BiometricPasswordError.saveFailed(status)
+        }
+    }
+
+    /// Retrieve a base64-encoded string stored under a raw account key (no biometric prompt).
+    func retrieveRaw(account: String) throws -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess,
+              let data = result as? Data,
+              let string = String(data: data, encoding: .utf8) else {
+            throw BiometricPasswordError.retrieveFailed(status)
+        }
+        return string
+    }
+
+    /// Delete a raw Keychain item stored under a string account key.
+    func deleteRaw(account: String) throws {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+        let status = SecItemDelete(query as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw BiometricPasswordError.deleteFailed(status)
+        }
+    }
+}
+
+// MARK: - SecretStorageProtocol conformance (used by TOTPStore)
+
+extension BiometricPasswordStore: SecretStorageProtocol {
+    func saveData(_ data: Data, forKey key: String) async throws {
+        let base64 = data.base64EncodedString()
+        try saveRaw(base64, account: key)
+    }
+
+    func retrieveData(forKey key: String) async throws -> Data? {
+        guard let base64 = try retrieveRaw(account: key) else { return nil }
+        return Data(base64Encoded: base64)
+    }
+
+    func deleteData(forKey key: String) async throws {
+        try deleteRaw(account: key)
+    }
 }
