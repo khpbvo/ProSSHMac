@@ -22,7 +22,7 @@ Active branch   : master
 Current phase   : Phase 1 — NOT STARTED
 Phase status    : NOT STARTED
 Immediate action: Begin Phase 1 (extract Mode Setters → TerminalGrid+ModeSetters.swift).
-Last commit     : (see Phase 0 commit)
+Last commit     : 0300d7c "chore(RefactorTG Phase 0): baseline — swiftlint:disable + internal access for extension files"
 ```
 
 **Update this block after every phase.**
