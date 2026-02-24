@@ -19,10 +19,10 @@ Follow the same workflow as `RefactorTerminalView.md`:
 
 ```
 Active branch   : master
-Current phase   : Phase 9 — NOT STARTED
+Current phase   : Phase 10 — NOT STARTED
 Phase status    : NOT STARTED
-Immediate action: Begin Phase 9 (extract Lifecycle → TerminalGrid+Lifecycle.swift).
-Last commit     : 443ed58 "refactor(RefactorTG Phase 8): extract Screen Buffer + Cursor Save/Restore to TerminalGrid+ScreenBuffer.swift"
+Immediate action: Begin Phase 10 (extract Print Character → TerminalGrid+Printing.swift).
+Last commit     : <pending> "refactor(RefactorTG Phase 9): extract Lifecycle (Full Reset + Resize) to TerminalGrid+Lifecycle.swift"
 ```
 
 **Update this block after every phase.**
@@ -42,7 +42,7 @@ Last commit     : 443ed58 "refactor(RefactorTG Phase 8): extract Screen Buffer +
 | 6 | Extract Erasing → `TerminalGrid+Erasing.swift` | **COMPLETE** (2026-02-25) |
 | 7 | Extract Line Operations → `TerminalGrid+LineOps.swift` | **COMPLETE** (2026-02-25) |
 | 8 | Extract Screen Buffer + Cursor Save/Restore → `TerminalGrid+ScreenBuffer.swift` | **COMPLETE** (2026-02-25) |
-| 9 | Extract Lifecycle (Full Reset + Resize) → `TerminalGrid+Lifecycle.swift` | NOT STARTED |
+| 9 | Extract Lifecycle (Full Reset + Resize) → `TerminalGrid+Lifecycle.swift` | **COMPLETE** (2026-02-25) |
 | 10 | Extract Print Character → `TerminalGrid+Printing.swift` | NOT STARTED |
 | 11 | Extract Snapshot + Text Extraction → `TerminalGrid+Snapshot.swift` | NOT STARTED |
 | — | Full test suite run | NOT STARTED |
@@ -393,13 +393,13 @@ The resize method writes `self.columns` and `self.rows`. Confirm in Phase 0 that
 
 ### Steps (7 steps)
 
-- [ ] **9.1** Read `// MARK: - Full Reset` and `// MARK: - Resize` in `TerminalGrid.swift` in full.
-- [ ] **9.2** Confirm `columns` and `rows` are plain `var` (writable from extension). If still `private(set)`, remove `private(set)` now.
-- [ ] **9.3** Create `ProSSHMac/Terminal/Grid/TerminalGrid+Lifecycle.swift`.
-- [ ] **9.4** File header: `// Extracted from TerminalGrid.swift`, `import Foundation`, `extension TerminalGrid {`, close `}`.
-- [ ] **9.5** Cut `// MARK: - Full Reset (RIS — ESC c)` and `// MARK: - Resize` from `TerminalGrid.swift` and paste into the extension.
-- [ ] **9.6** Build: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`. Verify `** BUILD SUCCEEDED **`.
-- [ ] **9.7** Commit: `refactor(RefactorTG Phase 9): extract Lifecycle (Full Reset + Resize) to TerminalGrid+Lifecycle.swift`
+- [x] **9.1** Read `// MARK: - Full Reset` and `// MARK: - Resize` in `TerminalGrid.swift` in full.
+- [x] **9.2** Confirm `columns` and `rows` are plain `var` (writable from extension). If still `private(set)`, remove `private(set)` now.
+- [x] **9.3** Create `ProSSHMac/Terminal/Grid/TerminalGrid+Lifecycle.swift`.
+- [x] **9.4** File header: `// Extracted from TerminalGrid.swift`, `import Foundation`, `extension TerminalGrid {`, close `}`.
+- [x] **9.5** Cut `// MARK: - Full Reset (RIS — ESC c)` and `// MARK: - Resize` from `TerminalGrid.swift` and paste into the extension.
+- [x] **9.6** Build: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`. Verify `** BUILD SUCCEEDED **`.
+- [x] **9.7** Commit: `refactor(RefactorTG Phase 9): extract Lifecycle (Full Reset + Resize) to TerminalGrid+Lifecycle.swift`
 
 **Expected TerminalGrid.swift line count after phase:** ~1,106 lines
 
@@ -506,6 +506,14 @@ property stays in the main file (it's a class-level declaration); the extension 
 ---
 
 ## Refactor Log (most recent first)
+
+- **2026-02-25 — Phase 9 COMPLETE**: Extracted `// MARK: - Full Reset (RIS — ESC c)` (3 methods:
+  `fullReset`, `softReset`, `screenAlignmentPattern`) and `// MARK: - Resize` (2 methods: `resize`,
+  `simpleResizeBuffer`) from `TerminalGrid.swift` (lines 1086–1311, ~226 lines) into
+  `ProSSHMac/Terminal/Grid/TerminalGrid+Lifecycle.swift`. All 5 methods annotated `nonisolated`.
+  `columns` and `rows` confirmed plain `var` — no access change needed. `simpleResizeBuffer` has no
+  MARK of its own but is a helper of `resize`; moved with it. `TerminalGrid.swift`: ~1,143 lines
+  (from ~1,370). Build: SUCCEEDED, 0 new warnings.
 
 - **2026-02-25 — Phase 8 COMPLETE**: Extracted `// MARK: - A.6.10 Alternate Screen Buffer (Mode 1049)`
   (2 methods: `enableAlternateBuffer`, `disableAlternateBuffer`) and `// MARK: - A.6.11 Cursor
