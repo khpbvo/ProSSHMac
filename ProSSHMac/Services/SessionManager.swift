@@ -56,6 +56,7 @@ final class SessionManager: ObservableObject {
     var manuallyDisconnectingSessions: Set<UUID> = []
     private var pendingResizeTasks: [UUID: Task<Void, Never>] = [:]
     let reconnectCoordinator: SessionReconnectCoordinator
+    let keepaliveCoordinator: SessionKeepaliveCoordinator
     /// Tracks last bell event time per session for throughput mode rate-limiting.
     private var lastBellTimeBySessionID: [UUID: Date] = [:]
     /// Per-session coalesced snapshot publish task (max one publish per frame interval).
@@ -64,7 +65,6 @@ final class SessionManager: ObservableObject {
     private var scrollOffsetBySessionID: [UUID: Int] = [:]
     /// Throttles expensive visible-text extraction/publishing during heavy output.
     private var lastShellBufferPublishAtBySessionID: [UUID: Date] = [:]
-    private var keepaliveTask: Task<Void, Never>?
     private var latestPublishedCommandBlockIDBySessionID: [UUID: UUID] = [:]
     private let shellBufferPublishInterval: TimeInterval = 1.0 / 30.0
     private let throughputShellBufferPublishInterval: TimeInterval = 1.0 / 5.0
@@ -82,15 +82,6 @@ final class SessionManager: ObservableObject {
     /// Toggle via: `defaults write com.prossh terminal.throughput.mode.enabled -bool true`
     private var throughputModeEnabled: Bool {
         UserDefaults.standard.bool(forKey: "terminal.throughput.mode.enabled")
-    }
-
-    private var keepaliveEnabled: Bool {
-        UserDefaults.standard.bool(forKey: "ssh.keepalive.enabled")
-    }
-
-    private var keepaliveInterval: TimeInterval {
-        let stored = UserDefaults.standard.integer(forKey: "ssh.keepalive.interval")
-        return stored > 0 ? TimeInterval(stored) : 30
     }
 
     private var configuredScrollbackLines: Int {
@@ -112,6 +103,7 @@ final class SessionManager: ObservableObject {
         self.sessionRecorder = sessionRecorder
         let coord = SessionReconnectCoordinator()
         self.reconnectCoordinator = coord
+        self.keepaliveCoordinator = SessionKeepaliveCoordinator()
 
         Task { @MainActor [weak self] in
             await self?.refreshKnownHosts()
@@ -119,6 +111,7 @@ final class SessionManager: ObservableObject {
 
         coord.manager = self
         coord.start()
+        keepaliveCoordinator.manager = self
     }
 
     nonisolated deinit {}
@@ -398,7 +391,7 @@ final class SessionManager: ObservableObject {
             }
 
             try await openShell(for: session)
-            startKeepaliveTimerIfNeeded()
+            keepaliveCoordinator.startIfNeeded()
 
             // Inject shell integration script for SSH sessions (Unix shell types only).
             // Uses compact single-line version to minimize terminal echo noise.
@@ -506,7 +499,7 @@ final class SessionManager: ObservableObject {
         session.state = .disconnected
         session.endedAt = .now
         replaceSession(session)
-        stopKeepaliveTimerIfIdle()
+        keepaliveCoordinator.stopIfIdle()
 
         await auditLogManager?.record(
             category: .session,
@@ -1061,7 +1054,7 @@ final class SessionManager: ObservableObject {
 
             // Detect disconnection.
             if !Task.isCancelled {
-                await self?.handleShellStreamEnded(sessionID: sessionID)
+                await self?.handleShellStreamEndedInternal(sessionID: sessionID)
             }
         }
     }
@@ -1112,7 +1105,7 @@ final class SessionManager: ObservableObject {
         )
     }
 
-    private func handleShellStreamEnded(sessionID: UUID) async {
+    func handleShellStreamEndedInternal(sessionID: UUID) async {
         guard !manuallyDisconnectingSessions.contains(sessionID) else {
             return
         }
@@ -1143,7 +1136,7 @@ final class SessionManager: ObservableObject {
         session.endedAt = .now
         session.errorMessage = "Connection lost. Reconnecting when network is available."
         replaceSession(session)
-        stopKeepaliveTimerIfIdle()
+        keepaliveCoordinator.stopIfIdle()
 
         let host = hostBySessionID[sessionID]
         let jumpHost = jumpHostBySessionID[sessionID]
@@ -1410,42 +1403,6 @@ final class SessionManager: ObservableObject {
         let cwd = await engine.workingDirectory
         if !cwd.isEmpty {
             workingDirectoryBySessionID[sessionID] = cwd
-        }
-    }
-
-    // MARK: - SSH Keepalive
-
-    private func startKeepaliveTimerIfNeeded() {
-        guard keepaliveEnabled, keepaliveTask == nil else { return }
-        keepaliveTask = Task { @MainActor [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(self?.keepaliveInterval ?? 30))
-                guard !Task.isCancelled else { break }
-                await self?.sendKeepalives()
-            }
-        }
-    }
-
-    private func stopKeepaliveTimerIfIdle() {
-        let hasConnectedSSHSession = sessions.contains { $0.state == .connected && !$0.isLocal }
-        if !hasConnectedSSHSession {
-            keepaliveTask?.cancel()
-            keepaliveTask = nil
-        }
-    }
-
-    private func sendKeepalives() async {
-        let connectedSSHSessions = sessions.filter { $0.state == .connected && !$0.isLocal }
-        for session in connectedSSHSessions {
-            let lastActivity = lastActivityBySessionID[session.id] ?? .distantPast
-            if Date.now.timeIntervalSince(lastActivity) < keepaliveInterval * 0.8 {
-                continue
-            }
-
-            let alive = await transport.sendKeepalive(sessionID: session.id)
-            if !alive {
-                await handleShellStreamEnded(sessionID: session.id)
-            }
         }
     }
 
