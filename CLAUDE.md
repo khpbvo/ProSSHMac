@@ -22,10 +22,10 @@ The long-term memory for this project lives in `docs/featurelist.md`.
 
 ```
 Active branch : refactor/actor-isolation
-Current phase : Phase 7 — Strict concurrency pass (-strict-concurrency=complete)
+Current phase : Phase 8 — Test coverage backfill for all extracted types
 Phase status  : NOT PLANNED
-Immediate action: Open RefactorTheActor.md → Phase 7 → expand sketch into granular plan (State A)
-Last commit   : 16043ad  "refactor: extract AIAgentRunner from OpenAIAgentService"
+Immediate action: Open RefactorTheActor.md → Phase 8 → expand sketch into granular plan (State A)
+Last commit   : 2c90d5b  "chore: mark Phase 7 complete in CLAUDE.md"
 ```
 
 **Update this block after every phase** — it is the first thing any new agent reads.
@@ -67,7 +67,7 @@ Every phase is in one of two states. Know which state you are in before doing an
 | 4 | Generic `PersistentStore<T>` for store boilerplate | **COMPLETE** (2026-02-24, commit `35bfcfb`) |
 | 5 | Decompose `SessionManager.swift` into 5 coordinators | **COMPLETE** (2026-02-24, commit `0e876c2`) |
 | 6 | Decompose `OpenAIAgentService.swift` into `Services/AI/` | **COMPLETE** (2026-02-24, commits `d12e2ca`–`16043ad`) |
-| 7 | Strict concurrency pass (`-strict-concurrency=complete`) | NOT PLANNED |
+| 7 | Strict concurrency pass (`-strict-concurrency=complete`) | **COMPLETE** (2026-02-24, commit `2c90d5b`) |
 | 8 | Test coverage backfill for all extracted types | NOT PLANNED |
 
 ### Target Directory Layout After Phases 1–6
@@ -263,6 +263,17 @@ All paths below are relative to the repo root. Source files live under `ProSSHMa
 ## Recent Changes
 
 ### Refactor Log (strict concurrency refactor — most recent first)
+
+- **2026-02-24 — Phase 7 COMPLETE** (commit `2c90d5b`, plan commit: `dbdb216`): Verified app
+  target already fully strict-concurrency clean under Swift 6 + SWIFT_DEFAULT_ACTOR_ISOLATION =
+  MainActor (0 warnings with -strict-concurrency=complete, no source changes). Updated test
+  target (ProSSHMacTests) build configs AB100009 + AB10000A: SWIFT_STRICT_CONCURRENCY minimal →
+  complete; added SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor to match app target's isolation model.
+  Committed two previously-untracked files (SSHConfigParser.swift + SSHConfigParserTests.swift)
+  that were blocking test bundle compilation. Build settings change alone resolved all actor
+  isolation errors — no @MainActor annotation needed on SSHConfigParserTests class.
+  Deleted WARNINGS_BASELINE.txt (Phase 0 scratch file, gitignored). Build: SUCCEEDED.
+  Tests: 12 pre-existing failures (within ≤23 baseline). Phase 8 is NOT PLANNED.
 
 - **2026-02-24 — Phase 6 COMPLETE** (commits `d12e2ca`–`16043ad`, plan commit: `4fbc3a9`): Decomposed
   `OpenAIAgentService.swift` (1,946→108 lines) into four `@MainActor final class` coordinators under
