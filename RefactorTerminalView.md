@@ -22,7 +22,7 @@ Active branch   : master
 Current phase   : Phase 6 — NOT STARTED
 Phase status    : NOT STARTED
 Immediate action: Read RefactorTerminalView.md, begin Phase 6 (extract TerminalQuickCommandPanel)
-Last commit     : TBD "refactor(RefactorTV Phase 5): extract tab bar to TerminalSessionTabBar"
+Last commit     : 662c5a2 "refactor(RefactorTV Phase 5): extract tab bar to TerminalSessionTabBar"
 ```
 
 **Update this block after every phase.**
@@ -647,7 +647,7 @@ After all 9 phases are committed and the build is clean:
 
 ## Refactor Log (most recent first)
 
-- **2026-02-24 — Phase 5 COMPLETE** (commit TBD): Extracted `sessionTabs` (~160 lines),
+- **2026-02-24 — Phase 5 COMPLETE** (commit `662c5a2`): Extracted `sessionTabs` (~160 lines),
   `tabBackground(for:)` (6 lines), and `@State private var hoveredTabID: UUID?` into
   `TerminalSessionTabBar.swift`. Three call sites in `TerminalView.swift` replaced with
   `TerminalSessionTabBar(tabManager:paneManager:onRequestClose:onOpenLocalTerminal:onSplitWithExisting:)`.

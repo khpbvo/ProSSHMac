@@ -132,7 +132,7 @@ Active branch   : master
 Current phase   : Phase 6 — NOT STARTED
 Phase status    : NOT STARTED
 Immediate action: Read RefactorTerminalView.md, begin Phase 6 (extract TerminalQuickCommandPanel)
-Last commit     : TBD "refactor(RefactorTV Phase 5): extract tab bar to TerminalSessionTabBar"
+Last commit     : 662c5a2 "refactor(RefactorTV Phase 5): extract tab bar to TerminalSessionTabBar"
 ```
 
 **Update this block after every phase.**
@@ -146,7 +146,7 @@ Last commit     : TBD "refactor(RefactorTV Phase 5): extract tab bar to Terminal
 | 2 | Extract TerminalSessionHeaderView + TerminalSessionMetadataView | COMPLETE (2026-02-24) |
 | 3 | Extract TerminalSearchBarView | COMPLETE (2026-02-24) |
 | 4 | Extract TerminalSessionActionsBar | COMPLETE (2026-02-24) |
-| 5 | Extract TerminalSessionTabBar | COMPLETE (2026-02-24, commit TBD) |
+| 5 | Extract TerminalSessionTabBar | COMPLETE (2026-02-24, commit `662c5a2`) |
 | 6 | Extract TerminalQuickCommandPanel | NOT STARTED |
 | 7 | Extract TerminalFileBrowserSidebar | NOT STARTED |
 | 8 | Extract TerminalSurfaceView | NOT STARTED |
