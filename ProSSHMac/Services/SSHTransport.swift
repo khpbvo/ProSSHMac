@@ -1,3 +1,4 @@
+// swiftlint:disable file_length
 import Foundation
 
 enum SSHBackendKind: String, Codable {

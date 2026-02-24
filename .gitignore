@@ -46,3 +46,4 @@ Package.pins
 # Optional: local env files
 .env
 .env.local
+WARNINGS_BASELINE.txt
