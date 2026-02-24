@@ -121,11 +121,38 @@ struct TerminalView: View {
         ZStack {
             terminalContentWithFileBrowser
 
-            terminalShortcutLayer
-                .frame(width: 0, height: 0)
-                .opacity(0.001)
-                .accessibilityHidden(true)
-                .allowsHitTesting(false)
+            TerminalKeyboardShortcutLayer(
+                onSendCommand:         { sendSelectedCommandShortcut() },
+                onSendCtrlC:           { sendControl("\u{03}") },
+                onSendCtrlD:           { sendControl("\u{04}") },
+                onShowSearch:          { showSearchBar() },
+                onToggleQuickCommands: { quickCommands.toggleDrawer() },
+                onToggleFileBrowser:   { showFileBrowser.toggle() },
+                onToggleAIAssistant:   { showAIAssistant.toggle() },
+                onClearBuffer:         { clearSelectedBuffer() },
+                onPreviousSession:     { stepSelectedSession(direction: -1) },
+                onNextSession:         { stepSelectedSession(direction: 1) },
+                onDisconnectOrClose:   { disconnectOrCloseSelectedSession() },
+                onSplitRight:          { splitNextAvailableSession(direction: .vertical) },
+                onSplitDown:           { splitNextAvailableSession(direction: .horizontal) },
+                onFocusNextPane:       { paneManager.focusNext() },
+                onFocusPreviousPane:   { paneManager.focusPrevious() },
+                onMaximizePane:        { paneManager.toggleMaximize(paneManager.focusedPaneId) },
+                onNewLocalTerminal:    { openLocalTerminal() },
+                onZoomIn:              { adjustTerminalFontSize(by: 1) },
+                onZoomOut:             { adjustTerminalFontSize(by: -1) },
+                onCopy:                { copyActiveContentToClipboard() },
+                onPaste:               {
+                    let sid = paneManager.focusedSessionID ?? focusedSessionID ?? tabManager.selectedSessionID
+                    if let sessionID = sid { pasteClipboardToSession(sessionID) }
+                },
+                onSelectAll:           { selectAllInFocusedTerminal() },
+                onToggleMaximize:      { navigationCoordinator.toggleTerminalMaximize() }
+            )
+            .frame(width: 0, height: 0)
+            .opacity(0.001)
+            .accessibilityHidden(true)
+            .allowsHitTesting(false)
         }
         .overlay {
             TerminalQuickCommandPanel(
@@ -381,65 +408,36 @@ struct TerminalView: View {
     }
 
     private func sidebarLayoutContextKey(for session: Session) -> String {
-        switch session.kind {
-        case let .ssh(hostID):
-            return "host:\(hostID.uuidString.lowercased())"
-        case .local:
-            return "session:\(session.id.uuidString.lowercased())"
-        }
+        TerminalSidebarLayoutStore.contextKey(for: session)
     }
 
     private func sidebarLayoutStorageKey(_ suffix: String, context: String) -> String {
-        "terminal.sidebar.layout.\(context).\(suffix)"
+        TerminalSidebarLayoutStore.storageKey(suffix, context: context)
     }
 
     private func restoreSidebarLayoutForSelection() {
         guard let session = selectedSession else { return }
-        let contextKey = sidebarLayoutContextKey(for: session)
-
-        if loadedSidebarLayoutContextKey == contextKey {
-            return
-        }
-
-        let defaults = UserDefaults.standard
+        let contextKey = TerminalSidebarLayoutStore.contextKey(for: session)
+        guard loadedSidebarLayoutContextKey != contextKey else { return }
         isApplyingSidebarLayout = true
-        defer {
-            isApplyingSidebarLayout = false
-            loadedSidebarLayoutContextKey = contextKey
-        }
-
-        let fileVisibleKey = sidebarLayoutStorageKey("fileBrowser.visible", context: contextKey)
-        let fileWidthKey = sidebarLayoutStorageKey("fileBrowser.width", context: contextKey)
-        let aiVisibleKey = sidebarLayoutStorageKey("aiAssistant.visible", context: contextKey)
-        let aiWidthKey = sidebarLayoutStorageKey("aiAssistant.width", context: contextKey)
-
-        if defaults.object(forKey: fileVisibleKey) != nil {
-            showFileBrowser = defaults.bool(forKey: fileVisibleKey)
-        }
-        if defaults.object(forKey: fileWidthKey) != nil {
-            fileBrowserWidth = defaults.double(forKey: fileWidthKey)
-        }
-        if defaults.object(forKey: aiVisibleKey) != nil {
-            showAIAssistant = defaults.bool(forKey: aiVisibleKey)
-        }
-        if defaults.object(forKey: aiWidthKey) != nil {
-            aiAssistantWidth = defaults.double(forKey: aiWidthKey)
-        }
-
-        fileBrowserWidth = clampedFileBrowserWidth
-        aiAssistantWidth = clampedAIAssistantWidth
+        defer { isApplyingSidebarLayout = false; loadedSidebarLayoutContextKey = contextKey }
+        let values = TerminalSidebarLayoutStore.restore(contextKey: contextKey)
+        if let v = values.showFileBrowser   { showFileBrowser   = v }
+        if let v = values.fileBrowserWidth  { fileBrowserWidth  = v }
+        if let v = values.showAIAssistant   { showAIAssistant   = v }
+        if let v = values.aiAssistantWidth  { aiAssistantWidth  = v }
+        fileBrowserWidth  = clampedFileBrowserWidth
+        aiAssistantWidth  = clampedAIAssistantWidth
     }
 
     private func persistSidebarLayoutForSelection() {
         guard !isApplyingSidebarLayout, let session = selectedSession else { return }
-        let contextKey = sidebarLayoutContextKey(for: session)
-        loadedSidebarLayoutContextKey = contextKey
-
-        let defaults = UserDefaults.standard
-        defaults.set(showFileBrowser, forKey: sidebarLayoutStorageKey("fileBrowser.visible", context: contextKey))
-        defaults.set(clampedFileBrowserWidth, forKey: sidebarLayoutStorageKey("fileBrowser.width", context: contextKey))
-        defaults.set(showAIAssistant, forKey: sidebarLayoutStorageKey("aiAssistant.visible", context: contextKey))
-        defaults.set(clampedAIAssistantWidth, forKey: sidebarLayoutStorageKey("aiAssistant.width", context: contextKey))
+        loadedSidebarLayoutContextKey = TerminalSidebarLayoutStore.contextKey(for: session)
+        TerminalSidebarLayoutStore.persist(
+            contextKey: loadedSidebarLayoutContextKey!,
+            showFileBrowser: showFileBrowser, fileBrowserWidth: clampedFileBrowserWidth,
+            showAIAssistant: showAIAssistant, aiAssistantWidth: clampedAIAssistantWidth
+        )
     }
 
     private var terminalContentWithFileBrowser: some View {
@@ -523,52 +521,6 @@ struct TerminalView: View {
                     }
             )
         }
-    }
-
-    private var splitPaneBody: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if sessionManager.sessions.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("No Active Sessions")
-                        .font(.headline)
-                    Text("Connect to a host from the Hosts tab to start an SSH session.")
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.vertical, 8)
-                Spacer(minLength: 0)
-            } else {
-                TerminalSessionTabBar(
-                    tabManager: tabManager,
-                    paneManager: paneManager,
-                    onRequestClose: { s in requestCloseSession(s) },
-                    onOpenLocalTerminal: { openLocalTerminal() },
-                    onSplitWithExisting: { sid, pid, dir in splitWithExistingSession(sid, beside: pid, direction: dir) }
-                )
-
-                SplitNodeView(
-                    node: paneManager.displayNode,
-                    paneManager: paneManager,
-                    onNewSSHSession: { _ in navigationCoordinator.navigate(to: .hosts) },
-                    onNewLocalTerminal: nil,
-                    onMoveToNewTab: { paneID in moveToNewTab(paneID: paneID) },
-                    onSplitWithNewSession: { sourceSessionID in
-                        createSessionForNewPane(duplicatingFrom: sourceSessionID)
-                    },
-                    availableSessions: tabManager.tabs.map { ($0.id, $0.session.hostLabel) },
-                    onSplitWithExistingSession: { sessionID, paneID, direction in
-                        splitWithExistingSession(sessionID, beside: paneID, direction: direction)
-                    }
-                ) { pane in
-                    if let session = sessionForPane(pane) {
-                        let paneFocused = pane.id == paneManager.focusedPaneId
-                        sessionPanel(for: session, includeSearch: paneFocused, isFocused: paneFocused)
-                    } else {
-                        noSessionPlaceholder
-                    }
-                }
-            }
-        }
-        .padding(.vertical, 8)
     }
 
     private func sessionForPane(_ pane: TerminalPane) -> Session? {
@@ -707,138 +659,6 @@ struct TerminalView: View {
 
     private var newWindowToolbarPlacement: ToolbarItemPlacement {
         return .automatic
-    }
-
-    private var terminalShortcutLayer: some View {
-        Group {
-            Button("Send Command") {
-                sendSelectedCommandShortcut()
-            }
-            .keyboardShortcut(.return, modifiers: [.command])
-
-            Button("Send Ctrl-C") {
-                sendControl("\u{03}")
-            }
-            .keyboardShortcut("c", modifiers: [.control])
-
-            Button("Send Ctrl-D") {
-                sendControl("\u{04}")
-            }
-            .keyboardShortcut("d", modifiers: [.control])
-
-            Button("Find in Terminal") {
-                showSearchBar()
-            }
-            .keyboardShortcut("f", modifiers: [.command])
-
-            Button("Toggle Quick Commands") {
-                quickCommands.toggleDrawer()
-            }
-            .keyboardShortcut("p", modifiers: [.command, .shift])
-
-            Button("Toggle File Browser") {
-                showFileBrowser.toggle()
-            }
-            .keyboardShortcut("b", modifiers: [.command])
-
-            Button("Toggle AI Copilot") {
-                showAIAssistant.toggle()
-            }
-            .keyboardShortcut("i", modifiers: [.command, .option])
-
-            Button("Clear Buffer") {
-                clearSelectedBuffer()
-            }
-            .keyboardShortcut("k", modifiers: [.command])
-
-            Button("Previous Session") {
-                stepSelectedSession(direction: -1)
-            }
-            .keyboardShortcut("[", modifiers: [.command, .shift])
-
-            Button("Next Session") {
-                stepSelectedSession(direction: 1)
-            }
-            .keyboardShortcut("]", modifiers: [.command, .shift])
-
-            Button("Disconnect or Close Session") {
-                disconnectOrCloseSelectedSession()
-            }
-            .keyboardShortcut("x", modifiers: [.command, .shift])
-
-            Button("Split Right") {
-                splitNextAvailableSession(direction: .vertical)
-            }
-            .keyboardShortcut("d", modifiers: [.command])
-
-            Button("Split Down") {
-                splitNextAvailableSession(direction: .horizontal)
-            }
-            .keyboardShortcut("d", modifiers: [.command, .shift])
-
-            Button("Focus Next Pane") {
-                paneManager.focusNext()
-            }
-            .keyboardShortcut("]", modifiers: [.command])
-
-            Button("Focus Previous Pane") {
-                paneManager.focusPrevious()
-            }
-            .keyboardShortcut("[", modifiers: [.command])
-
-            Button("Maximize/Restore Pane") {
-                paneManager.toggleMaximize(paneManager.focusedPaneId)
-            }
-            .keyboardShortcut(.return, modifiers: [.command, .shift])
-
-            Button("New Local Terminal") {
-                openLocalTerminal()
-            }
-            .keyboardShortcut("t", modifiers: [.command, .shift])
-
-            Button("New Tab (Local)") {
-                openLocalTerminal()
-            }
-            .keyboardShortcut("t", modifiers: [.command])
-
-            Button("Zoom In") {
-                adjustTerminalFontSize(by: 1)
-            }
-            .keyboardShortcut("+", modifiers: [.command])
-
-            Button("Zoom In (Alt Binding)") {
-                adjustTerminalFontSize(by: 1)
-            }
-            .keyboardShortcut("=", modifiers: [.command])
-
-            Button("Zoom Out") {
-                adjustTerminalFontSize(by: -1)
-            }
-            .keyboardShortcut("-", modifiers: [.command])
-
-            Button("Copy") {
-                copyActiveContentToClipboard()
-            }
-            .keyboardShortcut("c", modifiers: [.command])
-
-            Button("Paste") {
-                let targetSessionID = paneManager.focusedSessionID ?? focusedSessionID ?? tabManager.selectedSessionID
-                if let sessionID = targetSessionID {
-                    pasteClipboardToSession(sessionID)
-                }
-            }
-            .keyboardShortcut("v", modifiers: [.command])
-
-            Button("Select All") {
-                selectAllInFocusedTerminal()
-            }
-            .keyboardShortcut("a", modifiers: [.command])
-
-            Button("Toggle Maximize") {
-                navigationCoordinator.toggleTerminalMaximize()
-            }
-            .keyboardShortcut("f", modifiers: [.command, .shift])
-        }
     }
 
     private var clampedAIAssistantWidth: Double {

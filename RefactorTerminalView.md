@@ -19,10 +19,10 @@ Follow the same workflow as `RefactorTheActor.md`:
 
 ```
 Active branch   : master
-Current phase   : Phase 9 — NOT STARTED
-Phase status    : NOT STARTED
-Immediate action: Read RefactorTerminalView.md, begin Phase 9 (extract TerminalSidebarLayoutStore + TerminalKeyboardShortcutLayer)
-Last commit     : 680d4e2 "refactor(RefactorTV Phase 8): extract terminal surface rendering to TerminalSurfaceView"
+Current phase   : Phase 9 — COMPLETE
+Phase status    : COMPLETE
+Immediate action: All 9 phases done. TerminalView.swift is ~1,002 lines. Consider merging or declaring done.
+Last commit     : (see git log — "refactor(RefactorTV Phase 9): extract sidebar layout store + keyboard shortcut layer, remove dead code")
 ```
 
 **Update this block after every phase.**
@@ -42,8 +42,8 @@ Last commit     : 680d4e2 "refactor(RefactorTV Phase 8): extract terminal surfac
 | 6 | Extract `TerminalQuickCommandPanel` | COMPLETE (2026-02-24) |
 | 7 | Extract `TerminalFileBrowserSidebar` | COMPLETE (2026-02-24) |
 | 8 | Extract `TerminalSurfaceView` | COMPLETE (2026-02-24) |
-| 9 | Extract `TerminalSidebarLayoutStore` + `TerminalKeyboardShortcutLayer`, final cleanup | NOT STARTED |
-| — | Full test suite run | NOT STARTED |
+| 9 | Extract `TerminalSidebarLayoutStore` + `TerminalKeyboardShortcutLayer`, final cleanup | COMPLETE (2026-02-24) |
+| — | Full test suite run | COMPLETE (2026-02-24) |
 
 ---
 
