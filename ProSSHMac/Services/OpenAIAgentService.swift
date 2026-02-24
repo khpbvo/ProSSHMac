@@ -75,7 +75,7 @@ final class OpenAIAgentService: OpenAIAgentServicing {
     private let requestTimeoutSeconds: Int
     private let maxToolIterations: Int
     private let persistConversationContext: Bool
-    private var previousResponseIDBySessionID: [UUID: String] = [:]
+    let conversationContext = AIConversationContext()
     private let iso8601Formatter = ISO8601DateFormatter()
 
     init(
@@ -94,7 +94,7 @@ final class OpenAIAgentService: OpenAIAgentServicing {
     }
 
     func clearConversation(sessionID: UUID) {
-        previousResponseIDBySessionID.removeValue(forKey: sessionID)
+        conversationContext.clear(sessionID: sessionID)
     }
 
     func generateReply(
@@ -129,7 +129,7 @@ final class OpenAIAgentService: OpenAIAgentServicing {
         )
 
         var previousResponseID = persistConversationContext
-            ? previousResponseIDBySessionID[sessionID]
+            ? conversationContext.responseID(for: sessionID)
             : nil
         var pendingMessages: [OpenAIResponsesMessage] = [
             .init(role: .developer, text: AIToolDefinitions.developerPrompt()),
@@ -159,9 +159,9 @@ final class OpenAIAgentService: OpenAIAgentServicing {
 
             previousResponseID = response.id
             if persistConversationContext {
-                previousResponseIDBySessionID[sessionID] = response.id
+                conversationContext.update(responseID: response.id, for: sessionID)
             } else {
-                previousResponseIDBySessionID.removeValue(forKey: sessionID)
+                conversationContext.clear(sessionID: sessionID)
             }
 
             let toolCalls = response.toolCalls
