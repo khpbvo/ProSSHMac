@@ -19,10 +19,10 @@ Follow the same workflow as `RefactorTheActor.md`:
 
 ```
 Active branch   : master
-Current phase   : Phase 6 — NOT STARTED
+Current phase   : Phase 7 — NOT STARTED
 Phase status    : NOT STARTED
-Immediate action: Read RefactorTerminalView.md, begin Phase 6 (extract TerminalQuickCommandPanel)
-Last commit     : 662c5a2 "refactor(RefactorTV Phase 5): extract tab bar to TerminalSessionTabBar"
+Immediate action: Read RefactorTerminalView.md, begin Phase 7 (extract TerminalFileBrowserSidebar)
+Last commit     : TBD "refactor(RefactorTV Phase 6): extract quick command panel to TerminalQuickCommandPanel"
 ```
 
 **Update this block after every phase.**
@@ -39,7 +39,7 @@ Last commit     : 662c5a2 "refactor(RefactorTV Phase 5): extract tab bar to Term
 | 3 | Extract `TerminalSearchBarView` | COMPLETE (2026-02-24) |
 | 4 | Extract `TerminalSessionActionsBar` | COMPLETE (2026-02-24) |
 | 5 | Extract `TerminalSessionTabBar` | COMPLETE (2026-02-24) |
-| 6 | Extract `TerminalQuickCommandPanel` | NOT STARTED |
+| 6 | Extract `TerminalQuickCommandPanel` | COMPLETE (2026-02-24) |
 | 7 | Extract `TerminalFileBrowserSidebar` | NOT STARTED |
 | 8 | Extract `TerminalSurfaceView` | NOT STARTED |
 | 9 | Extract `TerminalSidebarLayoutStore` + `TerminalKeyboardShortcutLayer`, final cleanup | NOT STARTED |
@@ -360,18 +360,18 @@ Three sheet/importer modifiers currently on `TerminalView.body` move into the pa
 
 ### Steps (13 steps)
 
-- [ ] **6.1** Read `TerminalView.swift` lines 1028–1449 in full. Read `Terminal/Features/QuickCommands.swift` in full to understand the `QuickCommands` API (methods called: `toggleDrawer()`, `dismissDrawer()`, `presentDrawer()`, `isDrawerPresented`, `snippets`, `addSnippet`, `updateSnippet`, `deleteSnippet`, `importLibrary`, `exportLibrary`).
-- [ ] **6.2** Create `ProSSHMac/UI/Terminal/TerminalQuickCommandPanel.swift`. Header: `// Extracted from TerminalView.swift`. Imports: `import SwiftUI`, `import UniformTypeIdentifiers`.
-- [ ] **6.3** Write `struct TerminalQuickCommandPanel: View` with:
+- [x] **6.1** Read `TerminalView.swift` lines 1028–1449 in full. Read `Terminal/Features/QuickCommands.swift` in full to understand the `QuickCommands` API (methods called: `toggleDrawer()`, `dismissDrawer()`, `presentDrawer()`, `isDrawerPresented`, `snippets`, `addSnippet`, `updateSnippet`, `deleteSnippet`, `importLibrary`, `exportLibrary`).
+- [x] **6.2** Create `ProSSHMac/UI/Terminal/TerminalQuickCommandPanel.swift`. Header: `// Extracted from TerminalView.swift`. Imports: `import SwiftUI`, `import UniformTypeIdentifiers`.
+- [x] **6.3** Write `struct TerminalQuickCommandPanel: View` with:
   - `@ObservedObject var quickCommands: QuickCommands`
   - `var selectedSession: Session?`
   - `var onSendShellInput: (UUID, String) -> Void`
   - All 12 `@State` quick-command draft properties (from lines 44–55 of `TerminalView`)
-- [ ] **6.4** `body`: a `ZStack(alignment: .trailing)` containing scrim + `quickCommandDrawerLayer`. Apply `.sheet(isPresented: $isQuickCommandEditorPresented)`, `.sheet(item: $quickCommandPendingSnippet)`, and `.fileImporter(isPresented: $isQuickCommandImportPresented, ...)` modifiers. Wrap in `.animation(.easeInOut(duration: 0.2), value: quickCommands.isDrawerPresented)`.
-- [ ] **6.5** Copy all helper view properties and functions: `quickCommandDrawerLayer`, `quickCommandDrawer(width:)`, `quickCommandDrawerHeader`, `quickCommandDrawerTarget`, `quickCommandDrawerBody`, `quickCommandSnippetRow(_:)`, `quickCommandVisibleSnippets`, `quickCommandEditorSheet`, `quickCommandVariableSheet(for:)`, `quickCommandDraftVariableNames`, `quickCommandDraftCanSave`, `quickCommandDraftDefaultBinding(for:)`, `presentQuickCommandEditor(for:)`, `saveQuickCommandFromDraft()`, `runQuickCommandSnippet(_:)`, `sendQuickCommand(snippet:values:)`, `exportQuickCommandLibrary()`, `handleQuickCommandImport(result:)`.
-- [ ] **6.6** Replace `sendQuickCommand`'s `sessionManager.sendShellInput(...)` call with `onSendShellInput(sessionID, command)`.
-- [ ] **6.7** In `TerminalView.swift body`: remove `.sheet(isPresented: $isQuickCommandEditorPresented)`, `.sheet(item: $quickCommandPendingSnippet)`, and `.fileImporter(isPresented: $isQuickCommandImportPresented, ...)` modifier blocks.
-- [ ] **6.8** In `TerminalView.swift terminalBaseView`: replace the two `.overlay` blocks for `quickCommandScrim` and `quickCommandDrawerLayer` with:
+- [x] **6.4** `body`: a `ZStack(alignment: .trailing)` containing scrim + `quickCommandDrawerLayer`. Apply `.sheet(isPresented: $isQuickCommandEditorPresented)`, `.sheet(item: $quickCommandPendingSnippet)`, and `.fileImporter(isPresented: $isQuickCommandImportPresented, ...)` modifiers. Wrap in `.animation(.easeInOut(duration: 0.2), value: quickCommands.isDrawerPresented)`.
+- [x] **6.5** Copy all helper view properties and functions: `quickCommandDrawerLayer`, `quickCommandDrawer(width:)`, `quickCommandDrawerHeader`, `quickCommandDrawerTarget`, `quickCommandDrawerBody`, `quickCommandSnippetRow(_:)`, `quickCommandVisibleSnippets`, `quickCommandEditorSheet`, `quickCommandVariableSheet(for:)`, `quickCommandDraftVariableNames`, `quickCommandDraftCanSave`, `quickCommandDraftDefaultBinding(for:)`, `presentQuickCommandEditor(for:)`, `saveQuickCommandFromDraft()`, `runQuickCommandSnippet(_:)`, `sendQuickCommand(snippet:values:)`, `exportQuickCommandLibrary()`, `handleQuickCommandImport(result:)`.
+- [x] **6.6** Replace `sendQuickCommand`'s `sessionManager.sendShellInput(...)` call with `onSendShellInput(sessionID, command)`.
+- [x] **6.7** In `TerminalView.swift body`: remove `.sheet(isPresented: $isQuickCommandEditorPresented)`, `.sheet(item: $quickCommandPendingSnippet)`, and `.fileImporter(isPresented: $isQuickCommandImportPresented, ...)` modifier blocks.
+- [x] **6.8** In `TerminalView.swift terminalBaseView`: replace the two `.overlay` blocks for `quickCommandScrim` and `quickCommandDrawerLayer` with:
   ```swift
   .overlay(alignment: .trailing) {
       TerminalQuickCommandPanel(
@@ -384,11 +384,11 @@ Three sheet/importer modifiers currently on `TerminalView.body` move into the pa
   }
   ```
   Remove the existing `.animation` modifier for quick command drawer (now inside the panel).
-- [ ] **6.9** Delete all 12 `@State` quick-command draft properties from `TerminalView.swift`.
-- [ ] **6.10** Delete from `TerminalView.swift`: `quickCommandScrim`, `quickCommandDrawerLayer`, `quickCommandDrawer(width:)`, and all other quick-command functions/properties listed in step 6.5.
-- [ ] **6.11** Verify `terminalShortcutLayer` still calls `quickCommands.toggleDrawer()` / `quickCommands.presentDrawer()` — these work because `quickCommands` is still a `@StateObject` in `TerminalView` and is passed into both the panel and the shortcut layer.
-- [ ] **6.12** Run build: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`. Verify `** BUILD SUCCEEDED **`.
-- [ ] **6.13** Commit: `refactor(RefactorTV Phase 6): extract quick command panel to TerminalQuickCommandPanel`
+- [x] **6.9** Delete all 12 `@State` quick-command draft properties from `TerminalView.swift`.
+- [x] **6.10** Delete from `TerminalView.swift`: `quickCommandScrim`, `quickCommandDrawerLayer`, `quickCommandDrawer(width:)`, and all other quick-command functions/properties listed in step 6.5.
+- [x] **6.11** Verify `terminalShortcutLayer` still calls `quickCommands.toggleDrawer()` / `quickCommands.presentDrawer()` — these work because `quickCommands` is still a `@StateObject` in `TerminalView` and is passed into both the panel and the shortcut layer.
+- [x] **6.12** Run build: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`. Verify `** BUILD SUCCEEDED **`.
+- [x] **6.13** Commit: `refactor(RefactorTV Phase 6): extract quick command panel to TerminalQuickCommandPanel`
 
 **Expected TerminalView.swift line count after phase:** ~2,140
 
@@ -646,6 +646,17 @@ After all 9 phases are committed and the build is clean:
 ---
 
 ## Refactor Log (most recent first)
+
+- **2026-02-24 — Phase 6 COMPLETE** (commit TBD): Extracted quick command panel subsystem (~450 lines)
+  into `TerminalQuickCommandPanel.swift`. Moved 12 `@State` draft-editing vars, 3 sheet/fileImporter
+  modifiers, 2 overlay blocks (scrim + drawer layer), and 19 computed properties/functions. Struct
+  takes `@ObservedObject var quickCommands: QuickCommands`, `var selectedSession: Session?`, and
+  `var onSendShellInput: (UUID, String) -> Void` callback. `sendQuickCommand` replaced
+  `Task { await sessionManager.sendShellInput(...) }` with `onSendShellInput(session.id, resolved)`
+  (Task wrapper moved to call site in TerminalView). `shouldEnableDirectTerminalInput` simplified from
+  3 separate quickCommand state checks to single `if quickCommands.isDrawerPresented { return false }`.
+  Added `@Environment(\.colorScheme)` to panel (used in `quickCommandDrawer` and `quickCommandSnippetRow`).
+  `TerminalView.swift`: 2,522 → 2,072 lines (−450). Build: `** BUILD SUCCEEDED **`, 0 new warnings.
 
 - **2026-02-24 — Phase 5 COMPLETE** (commit `662c5a2`): Extracted `sessionTabs` (~160 lines),
   `tabBackground(for:)` (6 lines), and `@State private var hoveredTabID: UUID?` into
