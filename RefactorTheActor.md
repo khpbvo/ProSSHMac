@@ -591,42 +591,548 @@ git commit -m "chore: Phase 1b — Swift 6 strict concurrency pass on Phase 1 fi
 
 ## Phase 2 — Kill the CString Pyramid & Inject Credential Resolver
 
-> **Context note for Claude Code:** This phase only touches `LibSSHTransport.swift`
-> and introduces one new protocol file. No UI or ViewModel changes.
+> **Before touching any code:** Read `LibSSHTransport.swift` in full. The methods to be moved
+> and the pyramid to flatten are all actor-isolated or nonisolated private helpers.
+> Understand every call site before moving any symbol.
+>
+> **Two sub-phases, two commits:**
+> - Phase 2a (commit 1): Extract credential-loading helpers into `DefaultSSHCredentialResolver`;
+>   inject the resolver into `LibSSHTransport` via `init`.
+> - Phase 2b (commit 2): Wrap the 18-level `withCString` pyramid inside
+>   `LibSSHJumpCallParams.invoke`; slim `connectViaJumpHost` to ~30 lines with ≤ 3 nesting levels.
 
-### 2a. Introduce `SSHCredentialResolving` protocol
+---
 
-- [ ] Create `Services/SSH/SSHCredentialResolver.swift`
+### Phase 2a — Credential Resolver Extraction
+
+#### Step 2a.0 — Audit call sites and access modifiers (no file changes)
+
+Before writing any code, confirm the call graph from the actual source:
+
+| Method | Lines (current) | Callers | Disposition |
+|--------|----------------|---------|-------------|
+| `resolveAuthenticationMaterial(for:passwordOverride:keyPassphraseOverride:)` | 565–603 | `connectViaJumpHost` (104), `authenticate` (244) | **STAYS** in `LibSSHTransport`; drop `nonisolated` |
+| `resolvePrivateKey(reference:)` | 605–618 | `resolveAuthenticationMaterial` | Move → `DefaultSSHCredentialResolver.privateKey(for:)` |
+| `resolveCertificate(reference:)` | 620–643 | `resolveAuthenticationMaterial` | Move → `DefaultSSHCredentialResolver.certificate(for:)` |
+| `loadStoredKeys()` | 645–655 | `resolvePrivateKey` | Move → private helper in `DefaultSSHCredentialResolver` |
+| `loadStoredCertificates()` | 657–667 | `resolveCertificate` | Move → private helper in `DefaultSSHCredentialResolver` |
+| `applicationSupportFileURL(filename:)` | 669–677 | `loadStoredKeys`, `loadStoredCertificates` | Move → private static helper in `DefaultSSHCredentialResolver` |
+| `readSSHStringPrefix(from:)` | 679–699 | `resolveCertificate` | Move → private static helper in `DefaultSSHCredentialResolver` |
+| `withOptionalCString(_:_:)` | 701–709 | `connectViaJumpHost` (129–132), `authenticate` (246–249) | **STAYS** — promote to file-scope `private func` |
+| `extractCTupleString(_:capacity:)` | 711–717 | `connectViaJumpHost` (188) | **STAYS** as `private static` on actor |
+
+- [ ] Audit confirmed — no other callers of the 6 methods-to-move exist in the file
+- [ ] Confirm `EncryptedStorage.loadJSON` is the only external dependency in the 6 moved methods
+  (no `KeyStore` or `CertificateStore` actor calls — these use raw file I/O only)
+
+---
+
+#### Step 2a.1 — Create `SSHCredentialResolver.swift`
+
+- [ ] Create `ProSSHMac/Services/SSH/SSHCredentialResolver.swift` with this exact content:
   ```swift
+  // Extracted from LibSSHTransport.swift
+  import Foundation
+
   protocol SSHCredentialResolving: Sendable {
       func privateKey(for reference: UUID) throws -> String
       func certificate(for reference: UUID) throws -> String
   }
   ```
-- [ ] Create `Services/SSH/DefaultSSHCredentialResolver.swift`
-  - Extract `loadStoredKeys()`, `loadStoredCertificates()`, `applicationSupportFileURL(filename:)`,
-    `resolvePrivateKey(reference:)`, `resolveCertificate(reference:)`, `readSSHStringPrefix(from:)`
-    from `LibSSHTransport` into a `struct DefaultSSHCredentialResolver: SSHCredentialResolving`
-- [ ] Update `LibSSHTransport.init` to accept `credentialResolver: any SSHCredentialResolving`
-      (default: `DefaultSSHCredentialResolver()`)
-- [ ] Replace all direct `loadStoredKeys()` / `loadStoredCertificates()` calls in
-      `LibSSHTransport` with calls through `self.credentialResolver`
-- [ ] Verify `LibSSHTransport` no longer imports `EncryptedStorage` directly for key/cert loading
-- [ ] Update `SSHTransportFactory.makePreferredTransport()` to pass default resolver
-- [ ] Run tests; commit: `refactor: inject SSHCredentialResolving into LibSSHTransport`
+- [ ] File confirmed created on disk under `ProSSHMac/Services/SSH/`
+- [ ] No additional imports needed — `UUID` is in `Foundation`
 
-### 2b. Flatten the jump host CString pyramid
+---
 
-- [ ] Create `nonisolated private struct LibSSHJumpCallParams` inside `LibSSHTransport.swift`
-  - Fields: `hostname`, `port`, `username`, policy strings, material strings, `expectedFingerprint`
-  - Single method: `func invoke(handle: OpaquePointer, target: LibSSHTargetParams, errorBuffer: inout [CChar]) -> Int32`
-    — all `withCString` nesting lives here, behind a clean call site
-- [ ] Create `nonisolated private struct LibSSHTargetParams`
-  - Fields: `hostname`, `port`, `username`, policy strings
-- [ ] Refactor `connectViaJumpHost` to build `LibSSHJumpCallParams` + `LibSSHTargetParams`
-      and call `params.invoke(...)` — the call site should be ~10 lines, not 80
-- [ ] Verify `connectViaJumpHost` nesting depth is ≤ 3 levels
-- [ ] Run tests; commit: `refactor: flatten jump host CString pyramid into LibSSHJumpCallParams`
+#### Step 2a.2 — Create `DefaultSSHCredentialResolver.swift`
+
+- [ ] Create `ProSSHMac/Services/SSH/DefaultSSHCredentialResolver.swift` with header:
+  ```swift
+  // Extracted from LibSSHTransport.swift
+  import Foundation
+  ```
+- [ ] Declare `struct DefaultSSHCredentialResolver: SSHCredentialResolving` — no stored
+  properties; the struct is stateless (all data comes from the file system on demand).
+  A stateless struct automatically satisfies `Sendable`.
+- [ ] Move (copy then delete-from-source in Step 2a.7) the following methods, adapting
+  signatures as noted:
+
+  **`privateKey(for reference: UUID) throws -> String`** — renamed from `resolvePrivateKey(reference:)`;
+  drop `nonisolated`:
+  ```swift
+  func privateKey(for reference: UUID) throws -> String {
+      let keys = try loadStoredKeys()
+      guard let storedKey = keys.first(where: { $0.id == reference }) else {
+          throw SSHTransportError.transportFailure(message: "Referenced SSH private key was not found.")
+      }
+      let privateKey = storedKey.privateKey.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !privateKey.isEmpty else {
+          throw SSHTransportError.transportFailure(
+              message: "Referenced SSH key does not contain private key material."
+          )
+      }
+      return privateKey
+  }
+  ```
+
+  **`certificate(for reference: UUID) throws -> String`** — renamed from `resolveCertificate(reference:)`;
+  drop `nonisolated`; replace `Self.readSSHStringPrefix` with just `Self.readSSHStringPrefix`
+  (still works — `Self` now refers to `DefaultSSHCredentialResolver`):
+  ```swift
+  func certificate(for reference: UUID) throws -> String {
+      let certificates = try loadStoredCertificates()
+      guard let certificate = certificates.first(where: { $0.id == reference }) else {
+          throw SSHTransportError.transportFailure(message: "Referenced SSH certificate was not found.")
+      }
+      if let authorized = certificate.authorizedRepresentation?.trimmingCharacters(in: .whitespacesAndNewlines),
+         !authorized.isEmpty {
+          return authorized
+      }
+      guard let keyType = Self.readSSHStringPrefix(from: certificate.rawCertificateData) else {
+          throw SSHTransportError.transportFailure(
+              message: "Referenced certificate is missing OpenSSH authorized representation."
+          )
+      }
+      let base64 = certificate.rawCertificateData.base64EncodedString()
+      let comment = certificate.keyId.trimmingCharacters(in: .whitespacesAndNewlines)
+      if comment.isEmpty {
+          return "\(keyType) \(base64)"
+      }
+      return "\(keyType) \(base64) \(comment)"
+  }
+  ```
+
+  **Private helpers** — copy verbatim, drop `nonisolated`, keep `private` (or `private static`):
+  - `private func loadStoredKeys() throws -> [StoredSSHKey]`
+  - `private func loadStoredCertificates() throws -> [SSHCertificate]`
+  - `private static func applicationSupportFileURL(filename: String) -> URL`
+  - `private static func readSSHStringPrefix(from data: Data) -> String?`
+
+---
+
+#### Step 2a.3 — Build check after new files (pre-deletion)
+
+```bash
+xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build 2>&1 | tail -3
+```
+
+- [ ] `** BUILD SUCCEEDED **`
+  (The 6 methods still exist in `LibSSHTransport` at this point — intentional duplication
+  until Step 2a.7. Build will succeed because there are no conflicts yet.)
+
+---
+
+#### Step 2a.4 — Promote `withOptionalCString` to file-scope function in `LibSSHTransport.swift`
+
+`LibSSHJumpCallParams` (added in Phase 2b) is a file-scope struct and cannot call a
+`private static` method on `LibSSHTransport`. Lifting `withOptionalCString` to file scope
+makes it available to both the actor and the struct within the same file.
+
+- [ ] Open `ProSSHMac/Services/SSH/LibSSHTransport.swift`
+- [ ] Find and delete the `nonisolated private static func withOptionalCString` declaration
+  (lines 701–709) from inside the actor body
+- [ ] Add the function at file scope, between `LibSSHAuthenticationMaterial` and
+  `actor LibSSHTransport`:
+  ```swift
+  private func withOptionalCString<Result>(
+      _ value: String?,
+      _ body: (UnsafePointer<CChar>?) -> Result
+  ) -> Result {
+      guard let value else {
+          return body(nil)
+      }
+      return value.withCString(body)
+  }
+  ```
+- [ ] Update all 7 call sites in `LibSSHTransport.swift` — change `Self.withOptionalCString(...)` → `withOptionalCString(...)`:
+  - [ ] `connectViaJumpHost` (4 occurrences: lines ~129–132)
+  - [ ] `authenticate` (3 occurrences: lines ~246–249)
+
+---
+
+#### Step 2a.5 — Inject `credentialResolver` stored property and `init` into `LibSSHTransport`
+
+- [ ] Open `ProSSHMac/Services/SSH/LibSSHTransport.swift`
+- [ ] Add stored property immediately after `private var handles: [UUID: OpaquePointer] = [:]`:
+  ```swift
+  private let credentialResolver: any SSHCredentialResolving
+  ```
+- [ ] Add custom `init` immediately after the stored property:
+  ```swift
+  init(credentialResolver: any SSHCredentialResolving = DefaultSSHCredentialResolver()) {
+      self.credentialResolver = credentialResolver
+  }
+  ```
+  Note: The default value means `SSHTransportFactory` (`LibSSHTransport()`) needs no change.
+
+---
+
+#### Step 2a.6 — Drop `nonisolated` from `resolveAuthenticationMaterial`; update its call sites
+
+After the move, `resolveAuthenticationMaterial` calls `credentialResolver.privateKey(for:)` and
+`credentialResolver.certificate(for:)` — both accesses to an actor-isolated stored property —
+so the method must become actor-isolated (drop `nonisolated`).
+
+- [ ] Find line 565:
+  ```swift
+  nonisolated private func resolveAuthenticationMaterial(for host: Host, passwordOverride: String?, keyPassphraseOverride: String? = nil) throws -> LibSSHAuthenticationMaterial {
+  ```
+- [ ] Drop `nonisolated`:
+  ```swift
+  private func resolveAuthenticationMaterial(for host: Host, passwordOverride: String?, keyPassphraseOverride: String? = nil) throws -> LibSSHAuthenticationMaterial {
+  ```
+- [ ] Inside `resolveAuthenticationMaterial`, replace the two helper call sites:
+  - `let privateKey = try resolvePrivateKey(reference: keyReference)` →
+    `let privateKey = try credentialResolver.privateKey(for: keyReference)`
+  - `let certificate = try resolveCertificate(reference: certificateReference)` →
+    `let certificate = try credentialResolver.certificate(for: certificateReference)`
+- [ ] Verify callers of `resolveAuthenticationMaterial` (`connectViaJumpHost`, `authenticate`)
+  are both actor-isolated methods — no `await` or other change needed at call sites
+
+---
+
+#### Step 2a.7 — Delete the 6 moved methods from `LibSSHTransport.swift`
+
+- [ ] Delete `resolvePrivateKey(reference:)` (lines 605–618)
+- [ ] Delete `resolveCertificate(reference:)` (lines 620–643)
+- [ ] Delete `loadStoredKeys()` (lines 645–655)
+- [ ] Delete `loadStoredCertificates()` (lines 657–667)
+- [ ] Delete `applicationSupportFileURL(filename:)` (lines 669–677)
+- [ ] Delete `readSSHStringPrefix(from:)` (lines 679–699)
+- [ ] Search `LibSSHTransport.swift` for each deleted name — zero remaining references expected:
+  `resolvePrivateKey`, `resolveCertificate`, `loadStoredKeys`, `loadStoredCertificates`,
+  `applicationSupportFileURL`, `readSSHStringPrefix`
+
+---
+
+#### Step 2a.8 — Build check after LibSSHTransport edits
+
+```bash
+xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build 2>&1 | tail -3
+```
+
+- [ ] `** BUILD SUCCEEDED **`
+- [ ] If `cannot find` errors appear for `EncryptedStorage`, `StoredSSHKey`, or `SSHCertificate`
+  in `DefaultSSHCredentialResolver.swift`: these symbols are module-wide (same target);
+  no import is needed — check for a typo or missing file registration.
+
+---
+
+#### Step 2a.9 — Run tests and commit Phase 2a
+
+```bash
+xcodebuild -scheme ProSSHMac -destination 'platform=macOS' test 2>&1 \
+  | grep -E 'Executed [0-9]+ test|FAILED|SUCCEEDED' | tail -5
+```
+
+- [ ] Test results: ≤ 23 failures (same pre-existing baseline — no regressions)
+
+```bash
+git add ProSSHMac/Services/SSH/SSHCredentialResolver.swift \
+        ProSSHMac/Services/SSH/DefaultSSHCredentialResolver.swift \
+        ProSSHMac/Services/SSH/LibSSHTransport.swift
+git commit -m "refactor: inject SSHCredentialResolving into LibSSHTransport"
+```
+
+- [ ] Commit created on `refactor/actor-isolation`
+
+---
+
+### Phase 2b — Flatten the Jump Host CString Pyramid
+
+#### Step 2b.0 — Locate the pyramid (no file changes)
+
+- [ ] Open `ProSSHMac/Services/SSH/LibSSHTransport.swift`
+- [ ] Find `connectViaJumpHost` (~line 98). The `let connectResult: Int32 = jumpHost.hostname.withCString { ...`
+  block (lines 122–184 in the original; will have shifted after Phase 2a edits) has
+  **18 levels of nesting** and is the target.
+- [ ] Note the error-handling block and post-connect block after the pyramid — those stay in
+  `connectViaJumpHost` and are not moved into the struct.
+
+---
+
+#### Step 2b.1 — Add `LibSSHTargetParams` struct to `LibSSHTransport.swift`
+
+- [ ] In `ProSSHMac/Services/SSH/LibSSHTransport.swift`, add `LibSSHTargetParams` as a
+  file-scope `private struct`, between the `withOptionalCString` function and `actor LibSSHTransport`:
+
+  ```swift
+  private struct LibSSHTargetParams: Sendable {
+      let hostname: String
+      let port: UInt16
+      let username: String
+      let kex: String
+      let ciphers: String
+      let hostKeys: String
+      let macs: String
+
+      init(host: Host, policy: SSHAlgorithmPolicy) {
+          hostname = host.hostname
+          port = host.port
+          username = host.username
+          let selectedHostKeys = host.pinnedHostKeyAlgorithms.isEmpty
+              ? policy.hostKeys : host.pinnedHostKeyAlgorithms
+          kex = policy.keyExchange.joined(separator: ",")
+          ciphers = policy.ciphers.joined(separator: ",")
+          hostKeys = selectedHostKeys.joined(separator: ",")
+          macs = policy.macs.joined(separator: ",")
+      }
+  }
+  ```
+
+  Note: No `nonisolated` keyword — this is a file-scope struct, not an actor member.
+
+---
+
+#### Step 2b.2 — Add `LibSSHJumpCallParams` struct with `invoke` to `LibSSHTransport.swift`
+
+- [ ] Immediately after `LibSSHTargetParams`, add:
+
+  ```swift
+  private struct LibSSHJumpCallParams: Sendable {
+      let jumpHostname: String
+      let jumpPort: UInt16
+      let jumpUsername: String
+      let jumpKex: String
+      let jumpCiphers: String
+      let jumpHostKeys: String
+      let jumpMacs: String
+      let expectedFingerprint: String
+      let jumpAuthMethod: ProSSHAuthMethod
+      let jumpPassword: String?
+      let jumpPrivateKey: String?
+      let jumpCertificate: String?
+      let jumpKeyPassphrase: String?
+
+      init(jumpHost: Host, policy: SSHAlgorithmPolicy,
+           material: LibSSHAuthenticationMaterial, expectedFingerprint: String) {
+          jumpHostname = jumpHost.hostname
+          jumpPort = jumpHost.port
+          jumpUsername = jumpHost.username
+          jumpKex = policy.keyExchange.joined(separator: ",")
+          jumpCiphers = policy.ciphers.joined(separator: ",")
+          jumpHostKeys = policy.hostKeys.joined(separator: ",")
+          jumpMacs = policy.macs.joined(separator: ",")
+          self.expectedFingerprint = expectedFingerprint
+          jumpAuthMethod = jumpHost.authMethod.libsshAuthMethod
+          jumpPassword = material.password
+          jumpPrivateKey = material.privateKey
+          jumpCertificate = material.certificate
+          jumpKeyPassphrase = material.keyPassphrase
+      }
+
+      func invoke(handle: OpaquePointer, target: LibSSHTargetParams,
+                  config: inout ProSSHJumpHostConfig,
+                  errorBuffer: inout [CChar]) -> Int32 {
+          return jumpHostname.withCString { jumpHostnamePtr in
+              jumpUsername.withCString { jumpUsernamePtr in
+                  jumpKex.withCString { jumpKexPtr in
+                      jumpCiphers.withCString { jumpCiphersPtr in
+                          jumpHostKeys.withCString { jumpHostKeysPtr in
+                              jumpMacs.withCString { jumpMacsPtr in
+                                  expectedFingerprint.withCString { fpPtr in
+                                      withOptionalCString(jumpPassword) { pwPtr in
+                                          withOptionalCString(jumpPrivateKey) { pkPtr in
+                                              withOptionalCString(jumpCertificate) { certPtr in
+                                                  withOptionalCString(jumpKeyPassphrase) { ppPtr in
+                                                      target.hostname.withCString { hostnamePtr in
+                                                          target.username.withCString { usernamePtr in
+                                                              target.kex.withCString { kexPtr in
+                                                                  target.ciphers.withCString { ciphersPtr in
+                                                                      target.hostKeys.withCString { hostKeysPtr in
+                                                                          target.macs.withCString { macsPtr in
+                                                                              config.jump_hostname = jumpHostnamePtr
+                                                                              config.jump_username = jumpUsernamePtr
+                                                                              config.jump_port = jumpPort
+                                                                              config.kex = jumpKexPtr
+                                                                              config.ciphers = jumpCiphersPtr
+                                                                              config.hostkeys = jumpHostKeysPtr
+                                                                              config.macs = jumpMacsPtr
+                                                                              config.timeout_seconds = 10
+                                                                              config.expected_fingerprint = fpPtr
+                                                                              config.auth_method = jumpAuthMethod
+                                                                              config.password = pwPtr
+                                                                              config.private_key = pkPtr
+                                                                              config.certificate = certPtr
+                                                                              config.key_passphrase = ppPtr
+                                                                              return prossh_libssh_connect_with_jump(
+                                                                                  handle,
+                                                                                  hostnamePtr,
+                                                                                  target.port,
+                                                                                  usernamePtr,
+                                                                                  kexPtr,
+                                                                                  ciphersPtr,
+                                                                                  hostKeysPtr,
+                                                                                  macsPtr,
+                                                                                  10,
+                                                                                  &config,
+                                                                                  &errorBuffer,
+                                                                                  Int32(errorBuffer.count)
+                                                                              )
+                                                                          }
+                                                                      }
+                                                                  }
+                                                              }
+                                                          }
+                                                      }
+                                                  }
+                                              }
+                                          }
+                                      }
+                                  }
+                              }
+                          }
+                      }
+                  }
+              }
+          }
+      }
+  }
+  ```
+
+  Key notes:
+  - `withOptionalCString` is the file-scope function promoted in Step 2a.4 — callable without prefix
+  - `errorBuffer.count` cast to `Int32` matches the C function signature
+  - `config` is `inout` — the method mutates the caller's `ProSSHJumpHostConfig` in place
+  - `ProSSHAuthMethod` is a C enum visible to Swift via `CLibSSH/` — no import needed
+
+---
+
+#### Step 2b.3 — Refactor `connectViaJumpHost` to use the two structs
+
+- [ ] Replace the entire body of `connectViaJumpHost` with the following ~35-line implementation:
+
+  ```swift
+  private func connectViaJumpHost(sessionID: UUID, host: Host, jumpConfig: JumpHostConfig) throws -> SSHConnectionDetails {
+      guard let handle = prossh_libssh_create() else {
+          throw SSHTransportError.transportFailure(message: "Failed to allocate libssh session handle.")
+      }
+
+      let jumpHost = jumpConfig.host
+      let jumpMaterial = try resolveAuthenticationMaterial(for: jumpHost, passwordOverride: nil)
+      let jumpPolicy: SSHAlgorithmPolicy = jumpHost.legacyModeEnabled ? .legacy : .modern
+      let targetPolicy: SSHAlgorithmPolicy = host.legacyModeEnabled ? .legacy : .modern
+
+      let jumpParams = LibSSHJumpCallParams(
+          jumpHost: jumpHost,
+          policy: jumpPolicy,
+          material: jumpMaterial,
+          expectedFingerprint: jumpConfig.expectedFingerprint
+      )
+      let targetParams = LibSSHTargetParams(host: host, policy: targetPolicy)
+
+      var errorBuffer = [CChar](repeating: 0, count: 512)
+      var jumpCConfig = ProSSHJumpHostConfig()
+      let connectResult = jumpParams.invoke(
+          handle: handle,
+          target: targetParams,
+          config: &jumpCConfig,
+          errorBuffer: &errorBuffer
+      )
+
+      if connectResult != 0 {
+          let errorMessage = errorBuffer.asString
+          let actualFP = Self.extractCTupleString(&jumpCConfig.actual_fingerprint, capacity: 256)
+          prossh_libssh_destroy(handle)
+          switch connectResult {
+          case -10, -11:
+              throw SSHTransportError.jumpHostVerificationFailed(
+                  jumpHostname: jumpHost.hostname,
+                  actualFingerprint: actualFP
+              )
+          case -12:
+              throw SSHTransportError.jumpHostAuthenticationFailed(jumpHostname: jumpHost.hostname)
+          default:
+              throw SSHTransportError.jumpHostConnectionFailed(
+                  jumpHostname: jumpHost.hostname,
+                  message: errorMessage.isEmpty ? "Connection via jump host failed." : errorMessage
+              )
+          }
+      }
+
+      handles[sessionID] = handle
+
+      var kexBuffer = [CChar](repeating: 0, count: 128)
+      var cipherBuffer = [CChar](repeating: 0, count: 128)
+      var hostKeyBuffer = [CChar](repeating: 0, count: 128)
+      var fingerprintBuffer = [CChar](repeating: 0, count: 256)
+      _ = prossh_libssh_get_negotiated(
+          handle,
+          &kexBuffer, kexBuffer.count,
+          &cipherBuffer, cipherBuffer.count,
+          &hostKeyBuffer, hostKeyBuffer.count,
+          &fingerprintBuffer, fingerprintBuffer.count
+      )
+
+      let usedLegacy = host.legacyModeEnabled
+      return SSHConnectionDetails(
+          negotiatedKEX: kexBuffer.asString,
+          negotiatedCipher: cipherBuffer.asString,
+          negotiatedHostKeyType: hostKeyBuffer.asString,
+          negotiatedHostFingerprint: fingerprintBuffer.asString,
+          usedLegacyAlgorithms: usedLegacy,
+          securityAdvisory: usedLegacy ? "This session uses legacy cryptography for compatibility with older infrastructure." : nil,
+          backend: .libssh
+      )
+  }
+  ```
+
+  Key changes vs. original:
+  - Cases `-10` and `-11` are merged into a single `case -10, -11:` branch (both had identical bodies)
+  - All 18 levels of `withCString` nesting are gone from the call site
+  - The intermediate local `let` bindings (`jumpKex`, `targetKex`, etc.) are eliminated —
+    they are now computed inside `LibSSHTargetParams.init` and `LibSSHJumpCallParams.init`
+
+---
+
+#### Step 2b.4 — Build check after pyramid flattening
+
+```bash
+xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build 2>&1 | tail -3
+```
+
+- [ ] `** BUILD SUCCEEDED **`
+- [ ] Confirm `connectViaJumpHost` body nesting depth is ≤ 3 levels at the call site
+  (the pyramid is now entirely hidden inside `LibSSHJumpCallParams.invoke`)
+
+---
+
+#### Step 2b.5 — Run tests and commit Phase 2b
+
+```bash
+xcodebuild -scheme ProSSHMac -destination 'platform=macOS' test 2>&1 \
+  | grep -E 'Executed [0-9]+ test|FAILED|SUCCEEDED' | tail -5
+```
+
+- [ ] Test results: ≤ 23 failures (same pre-existing baseline — no regressions)
+
+```bash
+git add ProSSHMac/Services/SSH/LibSSHTransport.swift
+git commit -m "refactor: flatten jump host CString pyramid into LibSSHJumpCallParams"
+```
+
+- [ ] Commit created on `refactor/actor-isolation`
+
+---
+
+#### Step 2b.6 — Update CLAUDE.md
+
+- [ ] Update "Current State" block in `CLAUDE.md`:
+  - `Current phase`: `Phase 3 — Deduplicate remote path utilities → RemotePath.swift`
+  - `Phase status`: `NOT PLANNED`
+  - `Last commit`: hash of the Phase 2b commit
+- [ ] Update Phase Status table: mark Phase 2 as `**COMPLETE** (2026-02-24, commit <2b-hash>)`
+- [ ] Add Refactor Log entry under "Recent Changes / Refactor Log":
+  ```
+  - **2026-02-24 — Phase 2 COMPLETE**: 2 commits.
+    Phase 2a: extracted 6 credential-loading methods from LibSSHTransport into
+    DefaultSSHCredentialResolver; added SSHCredentialResolving protocol; injected via init with
+    default value (SSHTransportFactory unchanged); promoted withOptionalCString to file-scope.
+    Phase 2b: wrapped 18-level withCString nesting in LibSSHJumpCallParams.invoke +
+    LibSSHTargetParams; connectViaJumpHost reduced to ~35 lines with ≤ 3 nesting levels.
+    Build: SUCCEEDED. Tests: ≤ 23 failures (pre-existing baseline).
+  ```
+- [ ] Phase 2 complete — proceed to State A for Phase 3 (expand sketch before touching code)
 
 ---
 
