@@ -166,10 +166,10 @@ Each starts with `// Extracted from TerminalView.swift` as first non-blank, non-
 
 ```
 Active branch   : master
-Current phase   : Phase 1 — NOT STARTED
+Current phase   : Phase 2 — NOT STARTED
 Phase status    : NOT STARTED
-Immediate action: Begin Phase 1 (extract Mode Setters → TerminalGrid+ModeSetters.swift).
-Last commit     : 0300d7c "chore(RefactorTG Phase 0): baseline — swiftlint:disable + internal access for extension files"
+Immediate action: Begin Phase 2 (extract OSC Handlers → TerminalGrid+OSCHandlers.swift).
+Last commit     : <see git log> "refactor(RefactorTG Phase 1): extract Mode Setters to TerminalGrid+ModeSetters.swift"
 ```
 
 **Update this block after every phase.**
@@ -179,7 +179,7 @@ Last commit     : 0300d7c "chore(RefactorTG Phase 0): baseline — swiftlint:dis
 | Phase | Name | Status |
 |-------|------|--------|
 | 0 | Baseline — swiftlint:disable + internal access | **COMPLETE** (2026-02-24) |
-| 1 | Extract Mode Setters → `TerminalGrid+ModeSetters.swift` | NOT STARTED |
+| 1 | Extract Mode Setters → `TerminalGrid+ModeSetters.swift` | **COMPLETE** (2026-02-24) |
 | 2 | Extract OSC Handlers → `TerminalGrid+OSCHandlers.swift` | NOT STARTED |
 | 3 | Extract Tab Stops + Dirty Tracking → `TerminalGrid+TabsAndDirty.swift` | NOT STARTED |
 | 4 | Extract Cursor Movement + Cell R/W → `TerminalGrid+CursorOps.swift` | NOT STARTED |
@@ -198,6 +198,11 @@ Read it before starting any phase.
 Phase 0 changes `private var` / `private func` → internal throughout the class to enable cross-file
 extension access. New files go in `ProSSHMac/Terminal/Grid/`. Naming: `TerminalGrid+<Concern>.swift`.
 Each file starts with `// Extracted from TerminalGrid.swift`.
+
+**Critical pattern — `nonisolated` on all extension methods:** `TerminalGrid` is a `nonisolated final class`,
+but `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` causes extension methods in separate files to default to
+`@MainActor` (even though the class itself is `nonisolated`). All methods in every `TerminalGrid+*.swift`
+extension file must be explicitly marked `nonisolated`. Discovered in Phase 1.
 
 ---
 

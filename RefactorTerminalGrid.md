@@ -19,10 +19,10 @@ Follow the same workflow as `RefactorTerminalView.md`:
 
 ```
 Active branch   : master
-Current phase   : Phase 1 — NOT STARTED
+Current phase   : Phase 2 — NOT STARTED
 Phase status    : NOT STARTED
-Immediate action: Begin Phase 1 (extract Mode Setters → TerminalGrid+ModeSetters.swift).
-Last commit     : 0300d7c "chore(RefactorTG Phase 0): baseline — swiftlint:disable + internal access for extension files"
+Immediate action: Begin Phase 2 (extract OSC Handlers → TerminalGrid+OSCHandlers.swift).
+Last commit     : <see git log> "refactor(RefactorTG Phase 1): extract Mode Setters to TerminalGrid+ModeSetters.swift"
 ```
 
 **Update this block after every phase.**
@@ -34,7 +34,7 @@ Last commit     : 0300d7c "chore(RefactorTG Phase 0): baseline — swiftlint:dis
 | Phase | Name | Status |
 |-------|------|--------|
 | 0 | Baseline — swiftlint:disable + remove all `private` from stored properties | **COMPLETE** (2026-02-24) |
-| 1 | Extract Mode Setters → `TerminalGrid+ModeSetters.swift` | NOT STARTED |
+| 1 | Extract Mode Setters → `TerminalGrid+ModeSetters.swift` | **COMPLETE** (2026-02-24) |
 | 2 | Extract OSC Handlers → `TerminalGrid+OSCHandlers.swift` | NOT STARTED |
 | 3 | Extract Tab Stops + Dirty Tracking → `TerminalGrid+TabsAndDirty.swift` | NOT STARTED |
 | 4 | Extract Cursor Movement + Cell R/W → `TerminalGrid+CursorOps.swift` | NOT STARTED |
@@ -182,20 +182,12 @@ Both are now `internal` after Phase 0 so there are no access issues.
 
 ### Steps (6 steps)
 
-- [ ] **1.1** Read `TerminalGrid.swift` lines 1981–2213 in full to confirm content.
-- [ ] **1.2** Create `ProSSHMac/Terminal/Grid/TerminalGrid+ModeSetters.swift`.
-- [ ] **1.3** File header:
-  ```swift
-  // Extracted from TerminalGrid.swift
-
-  import Foundation
-
-  extension TerminalGrid {
-  ```
-  Close with `}` at end of file.
-- [ ] **1.4** Cut the entire `// MARK: - Mode Setters (for cross-actor access from VTParser)` block (lines 1981–2213) from `TerminalGrid.swift` and paste it inside the extension braces in the new file. Keep the MARK comment.
-- [ ] **1.5** Build: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`. Verify `** BUILD SUCCEEDED **`.
-- [ ] **1.6** Commit: `refactor(RefactorTG Phase 1): extract Mode Setters to TerminalGrid+ModeSetters.swift`
+- [x] **1.1** Read `TerminalGrid.swift` lines 1981–2213 in full to confirm content.
+- [x] **1.2** Create `ProSSHMac/Terminal/Grid/TerminalGrid+ModeSetters.swift`.
+- [x] **1.3** File header: `// Extracted from TerminalGrid.swift`, `import Foundation`, `extension TerminalGrid {`, close `}`.
+- [x] **1.4** Cut the entire `// MARK: - Mode Setters (for cross-actor access from VTParser)` block (lines 1982–2213) from `TerminalGrid.swift` and paste it inside the extension braces in the new file. Added `nonisolated` to all 29 methods (required: `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` causes extension methods to default to `@MainActor` even when the class is `nonisolated`; explicit `nonisolated` restores correct isolation).
+- [x] **1.5** Build: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`. Verify `** BUILD SUCCEEDED **`.
+- [x] **1.6** Commit: `refactor(RefactorTG Phase 1): extract Mode Setters to TerminalGrid+ModeSetters.swift`
 
 **Expected TerminalGrid.swift line count after phase:** ~2,080 lines
 
@@ -514,6 +506,17 @@ property stays in the main file (it's a class-level declaration); the extension 
 ---
 
 ## Refactor Log (most recent first)
+
+- **2026-02-24 — Phase 1 COMPLETE**: Extracted `// MARK: - Mode Setters (for cross-actor access from VTParser)`
+  block (lines 1982–2213, 232 lines, 29 methods) from `TerminalGrid.swift` into new file
+  `ProSSHMac/Terminal/Grid/TerminalGrid+ModeSetters.swift`. Key correction: all 29 methods required
+  explicit `nonisolated` annotation — with `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` in the app
+  target, extension methods in separate files default to `@MainActor` even when the class is
+  declared `nonisolated`. This caused callers in `CharsetHandler.swift` and `ESCHandler.swift`
+  to get "main actor-isolated cannot be called from nonisolated context" errors after the initial
+  extraction without `nonisolated`. Fix: prepend `nonisolated` to all 29 function declarations.
+  This pattern applies to all subsequent phases. `TerminalGrid.swift`: ~2,081 lines (from 2,313).
+  `TerminalGrid+ModeSetters.swift`: ~241 lines. Build: SUCCEEDED, 0 new warnings.
 
 - **2026-02-24 — Phase 0 COMPLETE**: Added `// swiftlint:disable file_length` as line 1.
   Removed `private` from all stored properties (20 `private var` → `var`, 11 `private(set) var` → `var`),
