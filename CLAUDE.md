@@ -132,7 +132,7 @@ Active branch   : master
 Current phase   : Phase 8 — NOT STARTED
 Phase status    : NOT STARTED
 Immediate action: Read RefactorTerminalView.md, begin Phase 8 (extract TerminalSurfaceView)
-Last commit     : TBD "refactor(RefactorTV Phase 7): extract file browser sidebar to TerminalFileBrowserSidebar"
+Last commit     : d414853 "refactor(RefactorTV Phase 7): extract file browser sidebar to TerminalFileBrowserSidebar"
 ```
 
 **Update this block after every phase.**

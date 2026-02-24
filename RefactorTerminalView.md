@@ -22,7 +22,7 @@ Active branch   : master
 Current phase   : Phase 8 — NOT STARTED
 Phase status    : NOT STARTED
 Immediate action: Read RefactorTerminalView.md, begin Phase 8 (extract TerminalSurfaceView)
-Last commit     : TBD "refactor(RefactorTV Phase 7): extract file browser sidebar to TerminalFileBrowserSidebar"
+Last commit     : d414853 "refactor(RefactorTV Phase 7): extract file browser sidebar to TerminalFileBrowserSidebar"
 ```
 
 **Update this block after every phase.**
@@ -647,7 +647,7 @@ After all 9 phases are committed and the build is clean:
 
 ## Refactor Log (most recent first)
 
-- **2026-02-24 — Phase 7 COMPLETE** (commit TBD): Extracted the entire file browser sidebar subsystem
+- **2026-02-24 — Phase 7 COMPLETE** (commit `d414853`): Extracted the entire file browser sidebar subsystem
   (~450 lines) into `TerminalFileBrowserSidebar.swift`. Removed 10 `@State` file-browser properties,
   2 private type aliases (`FileBrowserEntry`, `FileBrowserRow`), `fileBrowserSidebar` computed view,
   `fileBrowserRow(_:session:)`, `syncFileBrowserSession()`, and 16 helper functions from `TerminalView`.
