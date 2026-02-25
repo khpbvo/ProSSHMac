@@ -284,7 +284,15 @@ All paths below are relative to the repo root. Source files live under `ProSSHMa
 | `ProSSHMac/UI/Terminal/TerminalView.swift` | Main terminal UI, sidebar layout, focus management, input capture | ~3,425 lines → target ~1,100 after RefactorTerminalView |
 | `ProSSHMac/UI/Terminal/TerminalAIAssistantPane.swift` | AI copilot sidebar, composer text view, message rendering | ~781 lines |
 | `ProSSHMac/UI/Terminal/MetalTerminalSessionSurface.swift` | SwiftUI ↔ Metal bridge, snapshot application, selection | Medium |
-| `ProSSHMac/Terminal/Renderer/MetalTerminalRenderer.swift` | Metal draw loop, cell buffer upload, cursor/selection render | ~1,438 lines |
+| `ProSSHMac/Terminal/Renderer/MetalTerminalRenderer.swift` | Metal infrastructure: init, stored properties, `noGlyphIndex` sentinel | ~331 lines (was 1,438) — RefactorMTR COMPLETE |
+| `ProSSHMac/Terminal/Renderer/MetalTerminalRenderer+GlyphResolution.swift` | Glyph rasterization, atlas upload, font cache, glyph index resolution | Phase 1 |
+| `ProSSHMac/Terminal/Renderer/MetalTerminalRenderer+SnapshotUpdate.swift` | updateSnapshot, applyPendingSnapshotIfNeeded | Phase 2 |
+| `ProSSHMac/Terminal/Renderer/MetalTerminalRenderer+FontManagement.swift` | Font metrics init, font change handling, pixel alignment, grid recalc | Phase 3 |
+| `ProSSHMac/Terminal/Renderer/MetalTerminalRenderer+DrawLoop.swift` | draw(in:), encodeTerminalScenePass — main MTKViewDelegate draw path | Phase 4 |
+| `ProSSHMac/Terminal/Renderer/MetalTerminalRenderer+ViewConfiguration.swift` | mtkView resize, configureView, FPS control, pause | Phase 5 |
+| `ProSSHMac/Terminal/Renderer/MetalTerminalRenderer+Selection.swift` | setSelection, clearSelection, selectAll, selectedText, gridCell | Phase 6 |
+| `ProSSHMac/Terminal/Renderer/MetalTerminalRenderer+PostProcessing.swift` | CRT effect, gradient background, scanner effect, post-process textures | Phase 7 |
+| `ProSSHMac/Terminal/Renderer/MetalTerminalRenderer+Diagnostics.swift` | cacheHitRate, atlasPageCount, atlasMemoryBytes, cachedGlyphCount, performanceSnapshot | Phase 8 |
 | `ProSSHMac/Services/SessionManager.swift` | Session lifecycle, shell I/O, SFTP, grid snapshots, history | **1,177 lines** — Phase 5 COMPLETE; 4 coordinators extracted |
 | `ProSSHMac/Services/SSH/LibSSHTransport.swift` | LibSSH transport actor, connect/auth/shell/SFTP/forward logic | ~797 lines — Phase 1 COMPLETE |
 | `ProSSHMac/Services/OpenAIAgentService.swift` | Thin orchestrator: protocols, error types, coordinator wiring | **~108 lines — Phase 6 COMPLETE** |
@@ -359,6 +367,18 @@ All paths below are relative to the repo root. Source files live under `ProSSHMa
 ---
 
 ## Recent Changes
+
+### Refactor Log (MetalTerminalRenderer decomposition — most recent first)
+
+- **2026-02-25 — MetalTerminalRenderer refactor COMPLETE** (Phases 0–8): Decomposed
+  `MetalTerminalRenderer.swift` (1,438→331 lines) into 8 focused `extension MetalTerminalRenderer`
+  files in `ProSSHMac/Terminal/Renderer/`. Phase 0: widened all `private` members to internal,
+  moved `rawCellWidth`/`rawCellHeight` to Grid State section. Phases 1–8: extracted glyph
+  resolution, snapshot update, font management, draw loop, view configuration, selection, post-
+  processing effects, and diagnostics into separate files. All phase builds succeeded. No public
+  API changes. `// swiftlint:disable file_length` removed (main file 331L < 400L). Tests:
+  2 pre-existing failures (within ≤23 baseline). Commits: f2828c8 (P0), c96f7b2 (P1),
+  a6e3184 (P2), 8b0759f (P3), e04596a (P4), 697f559 (P5), f913b5a (P6), 2d431d3 (P7), P8.
 
 ### Refactor Log (strict concurrency refactor — most recent first)
 

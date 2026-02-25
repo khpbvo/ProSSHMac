@@ -112,6 +112,7 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 - 2026-02-25: Fixed AI reasoning bubble ordering in chat UI: reasoning messages now insert directly above the active assistant reply card (instead of always appending to the bottom), including late-arriving reasoning events. Updated `TerminalAIAssistantViewModelTests` with ordering assertions and a regression for late reasoning (`assistant` text arrives first, reasoning arrives after) to lock behavior. Targeted suite passes (`TerminalAIAssistantViewModelTests`, 6/6).
 - 2026-02-25: Reworked reasoning UX to a dedicated fixed-height rolling stream panel at the top of the AI chat pane. Reasoning is no longer emitted as inline chat bubbles; `TerminalAIAssistantViewModel` now tracks streaming reasoning summary/details separately and `TerminalAIAssistantPane` renders a fixed 150pt autoscrolling reasoning window (`Reasoning Stream`, live/idle state). Also strengthened assistant readability formatting by normalizing missing punctuation spacing and list-like capability responses into markdown bullets/paragraphs. Updated tests in `TerminalAIAssistantViewModelTests` for fixed-panel reasoning behavior (including late reasoning events) plus dense capability text formatting; targeted suite passes (7/7).
 - 2026-02-25: Polished reasoning + formatting UX after follow-up visual review. Reasoning panel now renders explicit `Summary`/`Thinking` sections (instead of markdown heading text inside one block) with a larger fixed-height 170pt rolling window and autoscroll on summary/detail stream updates, preventing merged heading/body rendering (e.g., `SummaryListing ...`). Assistant readability heuristics were tightened again for run-on capability responses (`X.Y`/`)Z` boundaries): improved spacing normalization, stronger bullet-list extraction for colon-prefixed capability lists, and paragraph reflow updates in both view-model and renderer paths. Added/updated `TerminalAIAssistantViewModelTests` assertions for sectioned reasoning text and complex tool-name capability run-ons; targeted suite passes (8/8).
+- 2026-02-25: Decomposed `AIToolHandler.swift` (1,481→503 lines) into 4 concern-based extension files under `Services/AI/` following the established `TerminalGrid+` extension pattern. Created: `AIToolHandler+ArgumentParsing.swift` (~117L — 6 static argument parsing helpers); `AIToolHandler+RemoteExecution.swift` (~421L — RemoteToolExecutionResult struct, 4 remote execution instance methods, 7 remote output parsing static methods, 4 remote command building static methods); `AIToolHandler+LocalFilesystem.swift` (~339L — 7 nonisolated static local filesystem methods); `AIToolHandler+OutputHelpers.swift` (~123L — 5 output formatting static methods). Also renamed `parseRemoteContentMatchLine` → `parseRemoteGrepMatchLine` to distinguish it from the output helpers `firstCapturedRange`. No functionality changes. Build: SUCCEEDED. Tests: 2 pre-existing failures (within ≤23 baseline). Commit: `881615c`.
 - 2026-02-25: Tightened agent formatting instructions in `AIToolDefinitions.developerPrompt` so explicit list requests (abilities/steps/options/checks) must be returned as markdown bullets or numbered lists. Verified with targeted `AIToolDefinitionsTests` run (9/9 passing).
 - 2026-02-24: Phase 8 COMPLETE (commit `816b9be`). Test coverage backfill for all Phase 1–6 extracted types. Added 8 new test files (51 test cases): RemotePathTests, AIConversationContextTests, PersistentStoreTests, AIToolDefinitionsTests, MockSSHTransportTests, SessionReconnectCoordinatorTests, SessionKeepaliveCoordinatorTests, LibSSHJumpCallParamsTests. Also widened LibSSHAuthenticationMaterial, LibSSHTargetParams, LibSSHJumpCallParams from private → internal to enable testing. Build: SUCCEEDED. Tests: 13 pre-existing failures (≤23 baseline). All 8 refactor phases complete.
 - 2026-02-24: Phase 7 COMPLETE (commit `2c90d5b`). Strict concurrency verified project-wide. App target already clean: Swift 6 + SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor = 0 warnings with `-strict-concurrency=complete`, no source changes needed. Test target upgraded: SWIFT_STRICT_CONCURRENCY minimal → complete + SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor added to both Debug (AB100009) and Release (AB10000A) build configs. Committed SSHConfigParser.swift + SSHConfigParserTests.swift (previously untracked, blocked test bundle compilation). Build settings change alone resolved all actor isolation errors — no explicit @MainActor annotation needed on SSHConfigParserTests class. WARNINGS_BASELINE.txt deleted (Phase 0 scratch, gitignored). Build: SUCCEEDED. Tests: 12 pre-existing failures (within ≤23 baseline). Phase 8 (test coverage backfill) is NOT PLANNED.
@@ -303,6 +304,32 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 - [x] AI file ingestion uses bounded chunk reads (max 200 lines) instead of full-file reads.
 
 ## Loop Log
+
+### 2026-02-25 — MetalTerminalRenderer.swift Decomposition (Phases 0–8) COMPLETE
+
+Decomposed `MetalTerminalRenderer.swift` (1,438 lines) into 8 focused `extension MetalTerminalRenderer`
+files under `ProSSHMac/Terminal/Renderer/`. Approach: widened all `private` members to internal in
+Phase 0 to enable cross-file extension access, then extracted method groups one phase per commit.
+
+- **Phase 0** (`f2828c8`): Added `// swiftlint:disable file_length`; moved `rawCellWidth`/`rawCellHeight`
+  to Grid State section; widened all `private let/var/func` → internal.
+- **Phase 1** (`c96f7b2`): `MetalTerminalRenderer+GlyphResolution.swift` — rasterizeAndUpload,
+  rebuildRasterFontCacheIfNeeded, resolveGlyphIndex, packAtlasEntry, resolveRenderFont (static), isEmojiRange (static).
+- **Phase 2** (`a6e3184`): `MetalTerminalRenderer+SnapshotUpdate.swift` — updateSnapshot, applyPendingSnapshotIfNeeded.
+- **Phase 3** (`8b0759f`): `MetalTerminalRenderer+FontManagement.swift` — initializeFontMetricsAndPrepopulate,
+  handleFontChange, setFontSize, setFontName, reloadFontStateFromManager, reapplyPixelAlignment, recalculateGridDimensions.
+- **Phase 4** (`e04596a`): `MetalTerminalRenderer+DrawLoop.swift` — draw(in:), encodeTerminalScenePass.
+- **Phase 5** (`697f559`): `MetalTerminalRenderer+ViewConfiguration.swift` — mtkView resize, configureView,
+  setPaused, setPreferredFPS, currentScreenMaximumFPS.
+- **Phase 6** (`f913b5a`): `MetalTerminalRenderer+Selection.swift` — setSelection, clearSelection, selectAll,
+  hasSelection, selectedText, gridCell.
+- **Phase 7** (`2d431d3`): `MetalTerminalRenderer+PostProcessing.swift` — CRT, gradient, scanner effects,
+  post-process texture helpers.
+- **Phase 8**: `MetalTerminalRenderer+Diagnostics.swift` — cacheHitRate, atlasPageCount, atlasMemoryBytes,
+  cachedGlyphCount, performanceSnapshot. Removed `// swiftlint:disable file_length` (main file 331L < 400L).
+
+Result: main file 331 lines (was 1,438). All 8 phase builds SUCCEEDED. Tests: 2 pre-existing failures
+(within ≤23 baseline). Zero regressions. Public API unchanged.
 
 ### 2026-02-24 — TOTP 2FA + SSH Config Import/Export Integration
 
