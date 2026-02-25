@@ -822,180 +822,36 @@ private enum AIAssistantRenderer {
     }
 
     static func markdownText(_ text: String) -> AttributedString {
-        let formatted = makeReadableMarkdown(text)
-        guard !formatted.isEmpty else { return AttributedString("") }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return AttributedString("") }
 
+        // AttributedString(markdown:) parses block-level structure (paragraphs,
+        // lists, headings) into presentationIntent attributes that SwiftUI's
+        // Text view ignores.  Work around this by parsing each line individually
+        // for inline formatting and rejoining with real newline characters.
         let options = AttributedString.MarkdownParsingOptions(
-            interpretedSyntax: .full,
+            interpretedSyntax: .inlineOnlyPreservingWhitespace,
             failurePolicy: .returnPartiallyParsedIfPossible
         )
 
-        if let parsed = try? AttributedString(markdown: formatted, options: options) {
-            return parsed
-        }
+        let lines = trimmed.components(separatedBy: "\n")
+        var result = AttributedString()
 
-        return AttributedString(formatted)
-    }
-
-    private static func makeReadableMarkdown(_ text: String) -> String {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return "" }
-
-        // Respect already-structured markdown.
-        if trimmed.contains("```") || hasStructuredMarkdown(trimmed) {
-            return trimmed
-        }
-
-        let spaced = normalizeInlineSpacing(trimmed)
-        let listified = bulletizeCapabilityListIfNeeded(spaced)
-        if hasStructuredMarkdown(listified) {
-            return listified
-        }
-        guard listified.count >= 120 else { return listified }
-
-        var sentences = splitSentences(from: listified)
-        if sentences.count < 2 {
-            sentences = splitSemicolonClauses(from: listified)
-        }
-        guard sentences.count >= 2 else { return listified }
-
-        var paragraphs: [String] = []
-        paragraphs.reserveCapacity((sentences.count + 1) / 2)
-
-        var index = 0
-        while index < sentences.count {
-            let end = min(sentences.count, index + 2)
-            paragraphs.append(sentences[index..<end].joined(separator: " "))
-            index = end
-        }
-
-        return paragraphs.joined(separator: "\n\n")
-    }
-
-    private static func splitSentences(from text: String) -> [String] {
-        let pattern = #"(?:(?<=[.!?])|(?<=\)))\s*(?=[A-Z0-9\"'`(])"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
-
-        let nsText = text as NSString
-        let fullRange = NSRange(location: 0, length: nsText.length)
-        var segments: [String] = []
-        var cursor = 0
-
-        regex.enumerateMatches(in: text, options: [], range: fullRange) { match, _, _ in
-            guard let match else { return }
-            let boundary = match.range.location
-            let segmentRange = NSRange(location: cursor, length: max(0, boundary - cursor))
-            let segment = nsText.substring(with: segmentRange).trimmingCharacters(in: .whitespacesAndNewlines)
-            if !segment.isEmpty {
-                segments.append(segment)
+        for (index, line) in lines.enumerated() {
+            if line.trimmingCharacters(in: .whitespaces).isEmpty {
+                // Preserve blank lines as paragraph breaks.
+                result += AttributedString("\n")
+            } else if let parsed = try? AttributedString(markdown: line, options: options) {
+                result += parsed
+            } else {
+                result += AttributedString(line)
             }
-            cursor = match.range.location + match.range.length
-        }
-
-        if cursor < nsText.length {
-            let tailRange = NSRange(location: cursor, length: nsText.length - cursor)
-            let tail = nsText.substring(with: tailRange).trimmingCharacters(in: .whitespacesAndNewlines)
-            if !tail.isEmpty {
-                segments.append(tail)
+            if index < lines.count - 1 {
+                result += AttributedString("\n")
             }
         }
 
-        return segments
-    }
-
-    private static func splitSemicolonClauses(from text: String) -> [String] {
-        text.split(separator: ";")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-            .map { clause in
-                clause.hasSuffix(".") ? clause : clause + "."
-            }
-    }
-
-    private static func normalizeInlineSpacing(_ text: String) -> String {
-        var result = text.replacingOccurrences(
-            of: #"[ \t]+"#,
-            with: " ",
-            options: .regularExpression
-        )
-        result = applyRegexReplacement(
-            pattern: #"(?<=[\.\!\?;:,\)])(?=[A-Z0-9\"'`(])"#,
-            replacement: " ",
-            to: result
-        )
-        return result.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private static func bulletizeCapabilityListIfNeeded(_ text: String) -> String {
-        let lowered = text.lowercased()
-        guard lowered.contains("i can")
-            || lowered.contains("abilities")
-            || lowered.contains("capabilities") else {
-            return text
-        }
-
-        guard let colonIndex = text.firstIndex(of: ":") else {
-            return text
-        }
-        let lead = String(text[..<colonIndex]).trimmingCharacters(in: .whitespacesAndNewlines)
-        let remainder = String(text[text.index(after: colonIndex)...])
-        let sentenceBounded = applyRegexReplacement(
-            pattern: #"(?:(?<=[.!?])|(?<=\)))\s*(?=[A-Z0-9\"'`(])"#,
-            replacement: "\n",
-            to: remainder
-        )
-        let semicolonSplit = sentenceBounded.split(
-            whereSeparator: { $0 == "\n" || $0 == ";" }
-        )
-        var clauses = semicolonSplit
-            .map { fragment in cleanListItem(String(fragment)) }
-            .filter { !$0.isEmpty }
-
-        if clauses.count < 3 {
-            clauses = sentenceBounded.split(
-                whereSeparator: { $0 == "\n" || $0 == ";" || $0 == "," }
-            )
-            .map { fragment in cleanListItem(String(fragment)) }
-            .filter { !$0.isEmpty }
-        }
-
-        guard clauses.count >= 3 else {
-            return text
-        }
-
-        let bullets = clauses.map { "- \($0)" }.joined(separator: "\n")
-        return "\(lead):\n\n\(bullets)"
-    }
-
-    private static func cleanListItem(_ raw: String) -> String {
-        var value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        let prefixes = ["and ", "or ", "then ", "also "]
-        for prefix in prefixes {
-            if value.lowercased().hasPrefix(prefix) {
-                value = String(value.dropFirst(prefix.count))
-            }
-        }
-        while let last = value.last, [".", ",", ";", ":"].contains(String(last)) {
-            value.removeLast()
-        }
-        return value.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private static func applyRegexReplacement(pattern: String, replacement: String, to text: String) -> String {
-        guard let regex = try? NSRegularExpression(pattern: pattern) else {
-            return text
-        }
-        let range = NSRange(location: 0, length: (text as NSString).length)
-        return regex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: replacement)
-    }
-
-    private static func hasStructuredMarkdown(_ text: String) -> Bool {
-        text.contains("\n#")
-            || text.contains("\n- ")
-            || text.contains("\n* ")
-            || text.contains("\n1. ")
-            || text.contains("\n2. ")
-            || text.contains("\n3. ")
+        return result
     }
 
     private static func applyRegex(_ pattern: String, color: NSColor, to attributed: NSMutableAttributedString) {
