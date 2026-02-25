@@ -195,18 +195,21 @@ The file is still 1,196 lines because the following concerns were NOT extracted:
 **Files to create:** `ProSSHMac/Services/SessionSFTPCoordinator.swift`
 
 **Steps:**
-- [ ] Read the entire SessionManager to locate all SFTP methods before moving anything.
+- [x] Read the entire SessionManager to locate all SFTP methods before moving anything.
   Look for: `listDirectory`, `uploadFile`, `downloadFile`, `deleteRemoteFile`,
   `createRemoteDirectory`, `renameRemoteFile`, any `sftp`-prefixed helpers.
-- [ ] Create `Services/SessionSFTPCoordinator.swift` using the same weak-reference
+- [x] Create `Services/SessionSFTPCoordinator.swift` using the same weak-reference
   coordinator pattern (`weak var manager: SessionManager?`). Header:
   `// Extracted from SessionManager.swift`.
-- [ ] Move each SFTP method; replace in `SessionManager` with one-line forwarding
+- [x] Move each SFTP method; replace in `SessionManager` with one-line forwarding
   wrappers that delegate to `sftpCoordinator`.
-- [ ] Add `let sftpCoordinator: SessionSFTPCoordinator` to `SessionManager` stored
+- [x] Add `let sftpCoordinator: SessionSFTPCoordinator` to `SessionManager` stored
   properties. Wire `sftpCoordinator.manager = self` in `init`.
-- [ ] Build. Fix any missing-symbol errors.
-- [ ] Commit: `refactor(RefactorFR Phase 6): extract SessionSFTPCoordinator`
+- [x] Build. Fix any missing-symbol errors.
+- [x] Commit: `refactor(RefactorFR Phase 6): extract SessionSFTPCoordinator`
+
+**Result:** 3 SFTP methods extracted (lines 652–671). SessionManager: 1,196 → 1,191 lines.
+Commit: `8b18935`. BUILD SUCCEEDED. (2026-02-25)
 
 ### Phase 7 — Extract `SessionAIToolCoordinator.swift`
 
