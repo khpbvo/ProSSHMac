@@ -424,6 +424,10 @@ enum ApplyPatchToolDefinition {
 
                 Safer than execute_command because paths are sandboxed, anchors disambiguate
                 the right location, and writes are atomic.
+
+                IMPORTANT: Try to make small, targeted patches that change only what is
+                necessary. Avoid rewriting large sections of a file unless the task
+                genuinely requires it.
                 """,
             parameters: .object([
                 "type": .string("object"),

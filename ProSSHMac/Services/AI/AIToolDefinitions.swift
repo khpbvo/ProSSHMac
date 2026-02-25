@@ -66,6 +66,12 @@ enum AIToolDefinitions {
         If the file does not yet exist, use operation="create". Never shell-create
         a file and then immediately patch it.
 
+        RULE 3 — Prefer small, targeted changes:
+        When modifying an existing file, try to patch only the lines that actually
+        need to change. Avoid rewriting large sections or the entire file unless
+        the task genuinely requires it — a minimal diff is easier to review and
+        less likely to introduce unintended side effects.
+
         The `diff` field uses V4A format. Do NOT include *** Begin Patch,
         *** End Patch, or *** Update File: markers — those are expressed by the
         `operation` and `path` fields of the tool call. Only the change body goes
