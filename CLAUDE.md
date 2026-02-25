@@ -16,7 +16,35 @@ The long-term memory for this project lives in `docs/featurelist.md`.
 
 ---
 
-## Active Refactor: Strict Concurrency (RefactorTheActor.md)
+## Active Refactor: Final Decomposition Run (RefactorTheFinalRun.md)
+
+### ► CURRENT STATE — START HERE
+
+```
+Active doc    : docs/RefactorTheFinalRun.md
+Active branch : refactor/final-run  (create from master before starting)
+Current phase : Phase 0 — NOT STARTED
+Phase status  : NOT STARTED
+Immediate action: Create branch refactor/final-run, then execute Phase 0 (add
+                  swiftlint:disable to OpenAIResponsesService.swift, establish baseline).
+```
+
+This is the **current working refactoring document**. Four god files remain after all
+prior refactors completed:
+
+| File | Lines | Phases |
+|------|-------|--------|
+| `Services/OpenAIResponsesService.swift` | 1,305 | 0–5 |
+| `Services/SessionManager.swift` | 1,196 | 6–9 |
+| `Services/SSHConfigParser.swift` | 1,018 | 10–14 |
+| `Services/CertificateAuthorityService.swift` | 985 | 15–19 |
+
+**Run-book:** `docs/RefactorTheFinalRun.md` — full step-by-step checklist for all 20
+phases. Read it before starting any phase.
+
+---
+
+## Completed Refactor: Strict Concurrency (RefactorTheActor.md)
 
 ### ► CURRENT STATE — START HERE
 
@@ -540,7 +568,8 @@ All paths below are relative to the repo root. Source files live under `ProSSHMa
 
 | Doc | Purpose |
 |-----|---------|
-| `RefactorTerminalGrid.md` | **Active refactor spec & run-book** — 12-phase plan to decompose `TerminalGrid.swift` (2,311 lines) into `extension TerminalGrid` files in `Terminal/Grid/` |
+| `docs/RefactorTheFinalRun.md` | **Current active refactor spec** — 20-phase plan to decompose the four remaining god files: `OpenAIResponsesService`, `SessionManager`, `SSHConfigParser`, `CertificateAuthorityService` |
+| `RefactorTerminalGrid.md` | Completed refactor spec — 12-phase decomposition of `TerminalGrid.swift` |
 | `RefactorTheActor.md` | Completed refactor spec (actor isolation, Phases 0–8) |
 | `docs/featurelist.md` | **Long-term memory** — phase plan, loop log, progress checklist |
 | `docs/bugs.md` | 68-bug audit by subsystem and severity |
