@@ -82,6 +82,67 @@ final class TerminalAIAssistantViewModelTests: XCTestCase {
         XCTAssertTrue(assistantText.contains("\n\n"))
     }
 
+    func testRequestPatchApprovalUsesModalStateWithoutInlineMessage() async throws {
+        let service = MockOpenAIAgentService(
+            nextReply: OpenAIAgentReply(text: "ok", responseID: "resp_patch", toolCallsExecuted: 0)
+        )
+        let viewModel = TerminalAIAssistantViewModel(
+            agentService: service,
+            streamChunkDelayNanoseconds: 0
+        )
+        let operation = PatchOperation(
+            type: .update,
+            path: "/tmp/example.swift",
+            diff: "@@\n-print(\"old\")\n+print(\"new\")"
+        )
+
+        let approvalTask = Task {
+            await viewModel.requestPatchApproval(operation: operation, fingerprint: "fp_patch")
+        }
+
+        try await waitUntil(timeout: 1.0) {
+            viewModel.activePatchApproval != nil
+        }
+
+        let approval = try XCTUnwrap(viewModel.activePatchApproval)
+        XCTAssertEqual(approval.operation, "update")
+        XCTAssertEqual(approval.path, "/tmp/example.swift")
+        XCTAssertEqual(approval.diffPreview, "@@\n-print(\"old\")\n+print(\"new\")")
+        XCTAssertTrue(viewModel.messages.isEmpty)
+
+        viewModel.approvePatch(remember: true)
+        let decision = await approvalTask.value
+        XCTAssertTrue(decision.0)
+        XCTAssertTrue(decision.1)
+        XCTAssertNil(viewModel.activePatchApproval)
+    }
+
+    func testPatchApprovalSheetDismissDeniesPendingApproval() async throws {
+        let service = MockOpenAIAgentService(
+            nextReply: OpenAIAgentReply(text: "ok", responseID: "resp_patch_dismiss", toolCallsExecuted: 0)
+        )
+        let viewModel = TerminalAIAssistantViewModel(
+            agentService: service,
+            streamChunkDelayNanoseconds: 0
+        )
+        let operation = PatchOperation(type: .create, path: "/tmp/new.txt", diff: "+hello")
+
+        let approvalTask = Task {
+            await viewModel.requestPatchApproval(operation: operation, fingerprint: "fp_patch_dismiss")
+        }
+
+        try await waitUntil(timeout: 1.0) {
+            viewModel.activePatchApproval != nil
+        }
+
+        viewModel.handlePatchApprovalDismissed()
+        let decision = await approvalTask.value
+        XCTAssertFalse(decision.0)
+        XCTAssertFalse(decision.1)
+        XCTAssertNil(viewModel.activePatchApproval)
+        XCTAssertTrue(viewModel.messages.isEmpty)
+    }
+
     func testSubmitPromptStreamsReasoningBubbleMessages() async throws {
         let sessionID = UUID()
         let service = MockOpenAIAgentService(

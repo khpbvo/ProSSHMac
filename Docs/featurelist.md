@@ -1,6 +1,6 @@
 # ProSSHMac AI + File Browser Expansion Checklist
 
-Last verified against repo: 2026-02-23
+Last verified against repo: 2026-02-25
 Required assistant model for this work: `gpt-5.1-codex-max`
 
 ## Goal
@@ -33,9 +33,25 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 - Task alignment (2026-02-25, AI command wrapper noise/timeout hardening):
   - Starting Point: `execute_and_wait` echoed long internal marker wrappers directly in terminal output and relied on finalized command blocks only, which could surface transient timeout reasoning.
   - End Point: internal marker rendering is visually suppressed in terminal output and completion detection now checks active raw command output before finalized-history fallback, reducing false timeout paths.
+- Task alignment (2026-02-25, patch approval popout UX):
+  - Starting Point: AI patch approvals rendered inline as chat cards in the narrow right sidebar with truncated diff previews, making review difficult and leaving stale approval cards in the message timeline.
+  - End Point: pending patch approvals open in a dedicated modal popout with a large scrollable diff preview and explicit approve/reject actions, while inline patch-preview cards are removed from the sidebar conversation.
+- Task alignment (2026-02-25, patch popout full-width diff layout):
+  - Starting Point: patch lines in the modal preview were measured at intrinsic content width inside horizontal scrolling, visually squeezing code into a narrow centered column.
+  - End Point: patch diff content is now viewport-bound (`minWidth` = modal preview width) so rows expand across the full modal width while still allowing horizontal scrolling for long lines.
+- Task alignment (2026-02-25, patch modal blank preview regression):
+  - Starting Point: after width-layout changes, some approvals rendered a black empty preview panel (no visible lines), especially when diff payloads were empty or when unbounded width layout inside horizontal scrolling produced non-rendering content.
+  - End Point: preview content uses bounded width layout (`VStack` + viewport `minWidth` only), and empty/whitespace diffs now render an explicit "No diff preview is available" message instead of a blank black panel.
+- Task alignment (2026-02-25, V4A apply_patch instruction correctness):
+  - Starting Point: agent/tool instructions still told the model to include unchanged context lines (2-3 above/below), which mismatched expected V4A usage and caused repeated patch retries.
+  - End Point: apply_patch instructions now enforce V4A changed-line blocks (`-`/`+`) with optional `@@ <anchor>` for placement/disambiguation, explicitly banning unified numeric hunks and unchanged context-line requirements.
 
 ## Loop Log
 
+- 2026-02-25: Reworked AI patch-approval UX from inline sidebar cards to a dedicated modal popout review flow. `TerminalAIAssistantViewModel` now exposes `activePatchApproval` modal state (no inline `.patchApproval` chat messages), `TerminalAIAssistantPane` presents a `sheet`-based patch review dialog, and `PatchApprovalCardView.swift` now renders a full-size `PatchApprovalSheetView` with full diff preview + Approve/Reject controls. Added regressions in `TerminalAIAssistantViewModelTests` for modal approval state and dismissal-deny behavior; targeted tests pass (`testRequestPatchApprovalUsesModalStateWithoutInlineMessage`, `testPatchApprovalSheetDismissDeniesPendingApproval`).
+- 2026-02-25: Fixed modal patch preview width usage so diff lines are no longer visually squeezed into the center. `PatchApprovalSheetView` now binds diff content to at least the viewport width via `GeometryReader` + `minWidth`, and each diff row now fills available width. Re-verified targeted approval-flow tests pass.
+- 2026-02-25: Fixed patch-approval modal blank-preview regression. Removed unbounded-width scroll-content layout (`maxWidth: .infinity` in horizontal scroll path), switched preview stack from `LazyVStack` to `VStack`, and treated empty/whitespace diffs as no-preview state so users get an explicit fallback message rather than a black panel. Re-verified targeted approval-flow tests pass.
+- 2026-02-25: Corrected V4A patching guidance in both model prompt and tool schema text. Updated `AIToolDefinitions.developerPrompt` and `ApplyPatchToolDefinition.description` to use changed-lines-first V4A blocks (`@@` / `@@ <anchor>` + only `-`/`+` lines), removed mandatory context-line guidance, and clarified no unified numeric hunk headers. Re-verified with targeted `AIToolDefinitionsTests` (9/9 passing).
 - 2026-02-22: Baseline feature checklist rewritten with phased plan and corrected claims.
 - 2026-02-22: Working-memory loop established in `AGENTS.md`; long-term memory source pinned to this file.
 - 2026-02-22: Fixed `TerminalView.swift` main-actor isolation warnings in `DirectTerminalInputNSView` observer/deinit paths; build re-verified.
@@ -273,6 +289,7 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 - [x] Allow command execution in Ask mode only when the user explicitly requests run/open/edit/check actions.
 - [x] Add keyboard shortcut for AI sidebar toggle and verify no collisions.
 - [x] Improve copilot readability/input ergonomics: markdown-rendered assistant text, visible resizable sidebar handle, multiline auto-growing composer with `Enter` send and `Shift+Enter` newline.
+- [x] Move `apply_patch` approval UX out of sidebar chat into a dedicated modal popout with a larger diff preview and approve/reject actions.
 - [x] Eliminate stuck file-browser loading states caused by stale async completions (request-ID based root/child load tracking with deterministic loading-flag cleanup).
 - [x] Improve AI response readability and incremental rendering behavior for long replies (paragraph reflow + visible chunk streaming + lighter in-flight rendering).
 

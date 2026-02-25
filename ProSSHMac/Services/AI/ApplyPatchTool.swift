@@ -411,19 +411,18 @@ enum ApplyPatchToolDefinition {
                   Example diff: "+line one\\n+line two\\n+line three"
 
                 "update" — modify an existing file. ALWAYS call read_file_chunk first.
-                  The diff field uses V4A context format (NOT unified @@ -N,M +N,M @@ headers):
-                  - Space-prefix ( ) unchanged context lines — include 2–3 above and below each change.
-                  - Prefix removed lines with -.
-                  - Prefix added lines with +.
-                  - Optionally start a section with "@@ <anchor>" where <anchor> is the verbatim
-                    text of a real line in the file, to jump to the right region when the same
-                    context appears more than once.
-                  - The patcher matches by context text, not line numbers — never use @@ -N,M specs.
-                  Example diff: "@@ def foo():\\n return old_val\\n-    return old_val\\n+    return new_val\\n"
+                  The diff field uses V4A blocks (NOT unified @@ -N,M +N,M @@ headers):
+                  - Use @@ or @@ <anchor> to start each change block.
+                  - Include only changed lines in each block:
+                    - removed lines with -
+                    - added lines with +
+                  - Do not include unchanged context lines.
+                  - For pure insertion, prefer @@ <anchor> to place the new lines.
+                  Example diff: "@@ def foo():\\n-    return old_val\\n+    return new_val\\n"
 
                 "delete" — remove a file. No diff field needed.
 
-                Safer than execute_command because paths are sandboxed, context lines verify
+                Safer than execute_command because paths are sandboxed, anchors disambiguate
                 the right location, and writes are atomic.
                 """,
             parameters: .object([
@@ -444,8 +443,8 @@ enum ApplyPatchToolDefinition {
                     "diff": .object([
                         "type": .string("string"),
                         "description": .string(
-                            "For 'create': file content or unified diff with only + lines. " +
-                            "For 'update': unified diff with @@ headers, context lines, and +/- lines. " +
+                            "For 'create': file content with + prefix per line. " +
+                            "For 'update': V4A blocks using @@/@@ <anchor> with only +/- changed lines (no unified numeric hunks). " +
                             "For 'delete': omit or leave empty."
                         ),
                     ]),

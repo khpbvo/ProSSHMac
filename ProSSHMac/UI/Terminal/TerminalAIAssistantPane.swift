@@ -33,6 +33,16 @@ struct TerminalAIAssistantPane: View {
                 .fill(colorScheme == .dark ? Color.white.opacity(0.15) : Color.black.opacity(0.12))
                 .frame(width: 1)
         }
+        .sheet(item: activePatchApprovalBinding) { approval in
+            PatchApprovalSheetView(
+                operation: approval.operation,
+                path: approval.path,
+                diffPreview: approval.diffPreview,
+                onApprove: { remember in viewModel.approvePatch(remember: remember) },
+                onDeny: { viewModel.denyPatch() }
+            )
+            .interactiveDismissDisabled(true)
+        }
     }
 
     private var header: some View {
@@ -82,14 +92,6 @@ struct TerminalAIAssistantPane: View {
                                     .id(message.id)
                             case .reasoning:
                                 EmptyView()
-                            case let .patchApproval(op, path, diffPreview, _, state):
-                                PatchApprovalCardView(
-                                    operation: op, path: path, diffPreview: diffPreview, state: state,
-                                    onApprove: { remember in viewModel.approvePatch(remember: remember) },
-                                    onDeny: { viewModel.denyPatch() }
-                                )
-                                .padding(.horizontal, 4)
-                                .id(message.id)
                             case let .patchResult(op, path, linesChanged, warnings, success):
                                 PatchResultNotificationView(
                                     operation: op, path: path, linesChanged: linesChanged,
@@ -214,6 +216,17 @@ struct TerminalAIAssistantPane: View {
             }
             return true
         }
+    }
+
+    private var activePatchApprovalBinding: Binding<PatchApprovalRequest?> {
+        Binding(
+            get: { viewModel.activePatchApproval },
+            set: { approval in
+                if case .none = approval {
+                    viewModel.handlePatchApprovalDismissed()
+                }
+            }
+        )
     }
 
     private var emptyState: some View {

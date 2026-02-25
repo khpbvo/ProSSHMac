@@ -59,8 +59,8 @@ enum AIToolDefinitions {
 
         RULE 1 — Always read before updating:
         Before calling apply_patch with operation="update", read the current file
-        with read_file_chunk. Copy context lines EXACTLY as they appear — the
-        patcher matches by text content, not by line numbers.
+        with read_file_chunk. Copy the exact OLD lines you want to replace into
+        `-` lines in the diff.
 
         RULE 2 — Create before patching:
         If the file does not yet exist, use operation="create". Never shell-create
@@ -85,45 +85,35 @@ enum AIToolDefinitions {
 
         ── UPDATE (operation="update") ────────────────────────────────────────────
         Rules:
-          • Space-prefix ( ) context lines — include 2–3 above AND below each change.
-          • Prefix lines to remove with -.
-          • Prefix lines to add with +.
-          • The patcher locates the change by matching context, NOT by line numbers.
-          • Use @@ <anchor> to jump to the right region when the same context
-            appears more than once. The text after @@ must be the EXACT content
-            of a real line in the file (copied verbatim from read_file_chunk).
-          • Do NOT use numeric hunk specs like @@ -5,4 +5,4 @@ — V4A ignores them.
+          • Use V4A blocks with @@ or @@ <anchor>.
+          • Include ONLY changed lines inside each block:
+            - lines to remove start with -
+            - lines to add start with +
+          • Do NOT include unchanged context lines.
+          • Do NOT use numeric hunk specs like @@ -5,4 +5,4 @@.
+          • Use @@ <anchor> when a change location is ambiguous or when inserting
+            lines without any removed (-) line. The anchor must match a real line.
 
-        Example — simple change, no anchor needed (read the file first):
+        Example — simple replacement:
 
           diff field:
-             import os
-             import sys
-            -HOST = "localhost"
-            +HOST = "0.0.0.0"
-             PORT = 8080
+            -debug = False
+            +debug = True
+            -timeout = 30
+            +timeout = 60
 
-        Example — anchor to a specific function when context is ambiguous:
+        Example — anchored change:
 
           diff field:
             @@ def process_payment(order):
-             try:
             -    charge = stripe.charge(order.total)
             +    charge = stripe.charge(order.total, currency="usd")
-             except stripe.CardError as e:
-                 log_error(e)
 
-        Example — two separate changes in one diff (bridge them with context):
+        Example — pure insertion anchored at a known line:
 
           diff field:
-             # section one
-            -debug = False
-            +debug = True
-             log_level = "info"
-             # section two
-            -timeout = 30
-            +timeout = 60
-             retries = 3
+            @@ import sys
+            +import pathlib
 
         ── DELETE (operation="delete") ────────────────────────────────────────────
         No diff field needed. The file is removed entirely.
