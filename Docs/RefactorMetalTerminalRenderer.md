@@ -22,7 +22,7 @@ Active branch   : master
 Current phase   : Phase 8 — COMPLETE
 Phase status    : COMPLETE
 Immediate action: All 8 phases done. MetalTerminalRenderer.swift is ~331 lines. Refactor complete.
-Last commit     : (Phase 8 commit pending)
+Last commit     : b4c0944 "refactor(RefactorMTR Phase 8): extract diagnostics, remove swiftlint:disable, update docs"
 ```
 
 **Update this block after every phase.**
