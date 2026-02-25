@@ -1,3 +1,4 @@
+// swiftlint:disable file_length
 // MetalTerminalRenderer.swift
 // ProSSHV2
 //
@@ -49,95 +50,100 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     // MARK: - Metal Infrastructure (B.8.1)
 
     /// The Metal device.
-    private let device: MTLDevice
+    let device: MTLDevice
 
     /// Command queue for submitting render work.
-    private let commandQueue: MTLCommandQueue
+    let commandQueue: MTLCommandQueue
 
     /// Compiled render pipeline state (vertex + fragment shaders).
-    private let pipelineState: MTLRenderPipelineState
+    let pipelineState: MTLRenderPipelineState
 
     /// Compiled render pipeline state for the post-processing pass.
-    private let postProcessPipelineState: MTLRenderPipelineState
+    let postProcessPipelineState: MTLRenderPipelineState
 
     // MARK: - Renderer Components
 
     /// Glyph texture atlas for storing rasterized glyphs.
-    private let glyphAtlas: GlyphAtlas
+    let glyphAtlas: GlyphAtlas
 
     /// LRU cache mapping GlyphKey to AtlasEntry.
-    private let glyphCache: GlyphCache
+    let glyphCache: GlyphCache
 
     /// GPU buffer for cell instance data (double-buffered).
-    private let cellBuffer: CellBuffer
+    let cellBuffer: CellBuffer
 
     /// GPU buffer for per-frame uniform data.
-    private let uniformBuffer: TerminalUniformBuffer
+    let uniformBuffer: TerminalUniformBuffer
 
     /// Font manager providing fonts and cell dimensions.
-    private let fontManager: FontManager
+    let fontManager: FontManager
 
     /// Cursor animation and styling state.
-    private let cursorRenderer = CursorRenderer()
+    let cursorRenderer = CursorRenderer()
 
     /// Selection model and selected-cell projection.
-    private let selectionRenderer = SelectionRenderer()
+    let selectionRenderer = SelectionRenderer()
 
     /// Rolling frame and draw-call profiler.
-    private let performanceMonitor = RendererPerformanceMonitor()
+    let performanceMonitor = RendererPerformanceMonitor()
 
     // MARK: - Grid State
 
     /// Current grid dimensions.
-    private var gridColumns: Int = 80
-    private var gridRows: Int = 24
+    var gridColumns: Int = 80
+    var gridRows: Int = 24
 
     /// Current cell dimensions in points.
-    private var cellWidth: CGFloat = 8
-    private var cellHeight: CGFloat = 16
+    var cellWidth: CGFloat = 8
+    var cellHeight: CGFloat = 16
+
+    /// Store the raw (un-aligned) cell dimensions from FontManager so they
+    /// can be re-aligned when the screen scale changes.
+    var rawCellWidth: CGFloat = 8
+    var rawCellHeight: CGFloat = 16
 
     /// Public read-only cell height for scroll calculations.
     var currentCellHeight: CGFloat { cellHeight }
 
     /// Font size used for glyph rasterization, synced from FontManager.
-    private var rasterFontSize: CGFloat = 14.0
+    var rasterFontSize: CGFloat = 14.0
 
     /// Font name used for glyph rasterization, synced from FontManager.
-    private var rasterFontName: String = "SF Mono"
+    var rasterFontName: String = "SF Mono"
 
     /// Cached CTFont variants for glyph miss rasterization.
     /// Rebuilt only when font name/size/scale changes.
-    private var cachedRasterFontName: String = ""
-    private var cachedRasterFontSize: CGFloat = 0
-    private var cachedRasterScale: CGFloat = 0
-    private var cachedRasterRegularFont: CTFont?
-    private var cachedRasterBoldFont: CTFont?
-    private var cachedRasterItalicFont: CTFont?
-    private var cachedRasterBoldItalicFont: CTFont?
+    var cachedRasterFontName: String = ""
+    var cachedRasterFontSize: CGFloat = 0
+    var cachedRasterScale: CGFloat = 0
+    var cachedRasterRegularFont: CTFont?
+    var cachedRasterBoldFont: CTFont?
+    var cachedRasterItalicFont: CTFont?
+    var cachedRasterBoldItalicFont: CTFont?
 
     /// Screen scale factor for Retina rendering (e.g., 2.0 on Retina displays).
     /// Glyphs are rasterized at this multiple of point dimensions for crisp text.
-    private var screenScale: CGFloat = 1.0
+    var screenScale: CGFloat = 1.0
 
     /// Whether a new snapshot has been applied and the buffer is dirty.
-    private var isDirty: Bool = true
+    var isDirty: Bool = true
 
     /// Most recently received snapshot for reapplying transient overlays.
-    private var latestSnapshot: GridSnapshot?
+    var latestSnapshot: GridSnapshot?
 
     // MARK: - Cursor State (from last snapshot)
 
     /// Cursor row from the most recent grid snapshot.
-    private var cursorRow: Int = 0
+    var cursorRow: Int = 0
 
     /// Cursor column from the most recent grid snapshot.
-    private var cursorCol: Int = 0
+    var cursorCol: Int = 0
 
     /// Whether the cursor should be visible.
-    private var cursorVisible: Bool = true
+    var cursorVisible: Bool = true
 
     /// Cursor display style from the most recent grid snapshot.
-    private var cursorStyle: CursorStyle = .block
+    var cursorStyle: CursorStyle = .block
 
     /// Whether cursor blink animation is active.
     var cursorBlinkEnabled: Bool = true
@@ -146,35 +152,35 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     var onGridSizeChange: ((Int, Int) -> Void)?
 
     /// Weak reference to the configured MTKView for frame rate and pause control.
-    private weak var configuredMTKView: MTKView?
+    weak var configuredMTKView: MTKView?
 
     /// True when frame pacing should follow the active screen's native refresh
     /// rate rather than a fixed value.
-    private var usesNativeRefreshRate: Bool = false
+    var usesNativeRefreshRate: Bool = false
 
     // MARK: - In-Flight Buffering (B.8.7)
 
     /// Semaphore with value 2 to match the double-buffered CellBuffer.
     /// Ensures we never overwrite a cell buffer still in GPU use.
-    private let inflightSemaphore = DispatchSemaphore(value: 2)
+    let inflightSemaphore = DispatchSemaphore(value: 2)
 
     /// Latest render-ready snapshot waiting to be uploaded to the next safe
     /// writable cell buffer. Applied from the draw loop.
-    private var pendingRenderSnapshot: GridSnapshot?
+    var pendingRenderSnapshot: GridSnapshot?
 
     /// When multiple snapshots are coalesced before a draw, per-snapshot dirty
     /// ranges are no longer reliable. Force a full upload for the next apply.
-    private var forceFullUploadForPendingSnapshot: Bool = false
+    var forceFullUploadForPendingSnapshot: Bool = false
 
     // MARK: - Timing
 
     /// Current viewport size in pixels.
-    private var viewportSize: CGSize = .zero
+    var viewportSize: CGSize = .zero
 
     // MARK: - C.2 CRT Effect
 
     /// Runtime CRT effect configuration (default disabled).
-    private var crtConfiguration: CRTEffectConfiguration = {
+    var crtConfiguration: CRTEffectConfiguration = {
         var config = CRTEffectConfiguration.default
         config.isEnabled = CRTEffect.loadEnabledFromDefaults()
         return config
@@ -183,34 +189,34 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     // MARK: - Gradient Background Effect
 
     /// Runtime gradient background configuration (default disabled).
-    private var gradientConfiguration: GradientBackgroundConfiguration = GradientBackgroundConfiguration.load()
+    var gradientConfiguration: GradientBackgroundConfiguration = GradientBackgroundConfiguration.load()
 
     // MARK: - Scanner (Knight Rider) Effect
 
     /// Runtime scanner effect configuration (default disabled).
-    private var scannerConfiguration: ScannerEffectConfiguration = ScannerEffectConfiguration.load()
+    var scannerConfiguration: ScannerEffectConfiguration = ScannerEffectConfiguration.load()
 
     /// Whether this renderer is attached to a local terminal session.
     /// Scanner effect is only active for local sessions.
     var isLocalSession: Bool = false
 
     /// Previous frame color texture for phosphor afterglow sampling.
-    private var previousFrameTexture: MTLTexture?
+    var previousFrameTexture: MTLTexture?
 
     /// Offscreen scene texture used as post-processing input.
-    private var postProcessTexture: MTLTexture?
+    var postProcessTexture: MTLTexture?
 
     /// Black fallback texture used before a previous frame exists.
-    private var crtFallbackTexture: MTLTexture?
+    var crtFallbackTexture: MTLTexture?
 
     /// True after at least one full frame has been copied into `previousFrameTexture`.
-    private var hasCapturedPreviousFrame: Bool = false
+    var hasCapturedPreviousFrame: Bool = false
 
     /// Previous frame time for frame-delta aware afterglow blending.
-    private var previousUniformTime: Float = 0
+    var previousUniformTime: Float = 0
 
     /// In-flight task for applying font changes. New font updates cancel older ones.
-    private var fontChangeTask: Task<Void, Never>?
+    var fontChangeTask: Task<Void, Never>?
 
     // MARK: - Initialization (B.8.1, B.8.2)
 
@@ -327,7 +333,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
 
     /// Fetches actual cell dimensions from the FontManager actor and
     /// pre-populates the glyph cache with ASCII characters.
-    private func initializeFontMetricsAndPrepopulate() async {
+    func initializeFontMetricsAndPrepopulate() async {
         let dims = await fontManager.currentCellDimensions()
         let fontSize = await fontManager.effectiveFontSize
         let fontName = await fontManager.fontName
@@ -376,7 +382,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     ///
     /// - Parameter key: The glyph key (codepoint + style).
     /// - Returns: An AtlasEntry describing the glyph's location in the atlas, or nil.
-    private func rasterizeAndUpload(key: GlyphKey) -> AtlasEntry? {
+    func rasterizeAndUpload(key: GlyphKey) -> AtlasEntry? {
         // Scale cell dimensions for Retina-quality rasterization.
         let scale = screenScale
         let cw = Int(ceil(cellWidth * scale))
@@ -431,7 +437,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         return entry
     }
 
-    private func rebuildRasterFontCacheIfNeeded(scale: CGFloat) {
+    func rebuildRasterFontCacheIfNeeded(scale: CGFloat) {
         let clampedScale = max(scale, 1.0)
         let scaledFontSize = rasterFontSize * clampedScale
         let isCacheValid =
@@ -588,7 +594,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         isDirty = true
     }
 
-    private func applyPendingSnapshotIfNeeded() {
+    func applyPendingSnapshotIfNeeded() {
         guard let snapshot = pendingRenderSnapshot else { return }
         pendingRenderSnapshot = nil
         let shouldForceFullUpload = forceFullUploadForPendingSnapshot
@@ -616,7 +622,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         cellBuffer.swapBuffers()
     }
 
-    private func resolveGlyphIndex(for cell: CellInstance) -> UInt32 {
+    func resolveGlyphIndex(for cell: CellInstance) -> UInt32 {
         let attributes = CellAttributes(rawValue: cell.attributes)
         let bold = attributes.contains(.bold)
         let italic = attributes.contains(.italic)
@@ -646,7 +652,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     ///   atlasY = float((glyphIndex >> 16) & 0xFFFF)
     ///
     /// Layout: [y:16][x:16] — upper 16 bits = Y pixel position, lower 16 bits = X pixel position.
-    private func packAtlasEntry(_ entry: AtlasEntry) -> UInt32 {
+    func packAtlasEntry(_ entry: AtlasEntry) -> UInt32 {
         let x = UInt32(entry.x) & 0xFFFF
         let y = UInt32(entry.y) & 0xFFFF
         return (y << 16) | x
@@ -850,7 +856,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         isDirty = false
     }
 
-    private func encodeTerminalScenePass(
+    func encodeTerminalScenePass(
         _ renderEncoder: MTLRenderCommandEncoder,
         drawableSize: CGSize
     ) -> Int {
@@ -1014,7 +1020,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         }
     }
 
-    private func currentScreenMaximumFPS() -> Int {
+    func currentScreenMaximumFPS() -> Int {
         if let screenFPS = configuredMTKView?.window?.screen?.maximumFramesPerSecond {
             return screenFPS
         }
@@ -1065,7 +1071,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         }
     }
 
-    private func reloadFontStateFromManager() async {
+    func reloadFontStateFromManager() async {
         let dims = await fontManager.currentCellDimensions()
         let fontSize = await fontManager.effectiveFontSize
         let fontName = await fontManager.fontName
@@ -1113,15 +1119,10 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
 
     // MARK: - Pixel Alignment Helpers
 
-    /// Store the raw (un-aligned) cell dimensions from FontManager so they
-    /// can be re-aligned when the screen scale changes.
-    private var rawCellWidth: CGFloat = 8
-    private var rawCellHeight: CGFloat = 16
-
     /// Re-apply pixel alignment to cellWidth/cellHeight using the current
     /// screenScale. Called when the scale factor changes (e.g., window moved
     /// to a different display).
-    private func reapplyPixelAlignment() {
+    func reapplyPixelAlignment() {
         let scale = max(screenScale, 1.0)
         cellWidth = round(rawCellWidth * scale) / scale
         cellHeight = ceil(rawCellHeight * scale) / scale
@@ -1129,7 +1130,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
 
     /// Recalculate grid dimensions using the current viewport and cell sizes.
     /// Useful after cell dimensions change asynchronously (e.g., font load).
-    private func recalculateGridDimensions() {
+    func recalculateGridDimensions() {
         let scale = max(screenScale, 1.0)
         let logicalWidth: CGFloat
         let logicalHeight: CGFloat
@@ -1324,7 +1325,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         gradientConfiguration
     }
 
-    private func ensurePostProcessTextures(for drawableSize: CGSize) {
+    func ensurePostProcessTextures(for drawableSize: CGSize) {
         let width = max(1, Int(drawableSize.width))
         let height = max(1, Int(drawableSize.height))
 
@@ -1342,7 +1343,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         }
     }
 
-    private func makeCRTFrameTexture(width: Int, height: Int) -> MTLTexture? {
+    func makeCRTFrameTexture(width: Int, height: Int) -> MTLTexture? {
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .bgra8Unorm,
             width: width,
@@ -1355,7 +1356,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         return device.makeTexture(descriptor: descriptor)
     }
 
-    private func makePostProcessTexture(width: Int, height: Int) -> MTLTexture? {
+    func makePostProcessTexture(width: Int, height: Int) -> MTLTexture? {
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .bgra8Unorm,
             width: width,
@@ -1368,7 +1369,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         return device.makeTexture(descriptor: descriptor)
     }
 
-    private func makeSceneRenderPassDescriptor(
+    func makeSceneRenderPassDescriptor(
         texture: MTLTexture,
         clearColor: MTLClearColor
     ) -> MTLRenderPassDescriptor {
@@ -1380,7 +1381,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         return descriptor
     }
 
-    private func makeCRTFallbackTexture() -> MTLTexture? {
+    func makeCRTFallbackTexture() -> MTLTexture? {
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .bgra8Unorm,
             width: 1,
