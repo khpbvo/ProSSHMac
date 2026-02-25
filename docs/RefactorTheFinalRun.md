@@ -387,15 +387,17 @@ The class mixes four distinct concerns in its private methods:
 **Files to create:** `ProSSHMac/Services/SSHBinaryReader.swift`
 
 **Steps:**
-- [ ] Create `Services/SSHBinaryReader.swift`. Header:
+- [x] Create `Services/SSHBinaryReader.swift`. Header:
   `// Extracted from CertificateAuthorityService.swift`.
-- [ ] Move `SSHBinaryReader` struct. Change `private struct` → `struct` (internal).
-- [ ] Move `CertificateRole` enum with it (they're coupled — `CertificateRole` is only
+- [x] Move `SSHBinaryReader` struct. Change `private struct` → `struct` (internal).
+- [x] Move `CertificateRole` enum with it (they're coupled — `CertificateRole` is only
   used by parsing). Change `private enum` → `enum` (internal).
-- [ ] Move `ParsedPublicKey` and `ParsedExternalCertificate` structs (used only by
+- [x] Move `ParsedPublicKey` and `ParsedExternalCertificate` structs (used only by
   parsing methods). Change `private struct` → `struct` (internal).
-- [ ] Build.
-- [ ] Commit: `refactor(RefactorFR Phase 16): extract SSHBinaryReader + supporting types`
+- [x] Build.
+- [x] Commit: `refactor(RefactorFR Phase 16): extract SSHBinaryReader + supporting types`
+
+**Result (2026-02-25):** BUILD SUCCEEDED. CertificateAuthorityService.swift: 987→870L. Commit `6f83002`.
 
 ### Phase 17 — Extract `CertificateAuthorityService+BinaryEncoding.swift`
 
