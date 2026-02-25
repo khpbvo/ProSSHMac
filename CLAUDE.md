@@ -23,11 +23,10 @@ The long-term memory for this project lives in `docs/featurelist.md`.
 ```
 Active doc    : docs/RefactorTheFinalRun.md
 Active branch : refactor/final-run
-Current phase : Phase 19 — NOT STARTED (Extract CertificateAuthorityService+KRL.swift & slim)
-Phase status  : NOT STARTED
-Last commit   : 828c8de "refactor(RefactorFR Phase 18): extract CertificateAuthorityService+CertificateParsing"
-Immediate action: Begin Phase 19 — read docs/RefactorTheFinalRun.md Phase 19 plan and execute
-                  (Extract KRL helpers + final slim of CertificateAuthorityService.swift).
+Current phase : Phase 19 — COMPLETE (All 20 phases done — RefactorTheFinalRun COMPLETE)
+Phase status  : COMPLETE
+Last commit   : 6a02e6c "refactor(RefactorFR Phase 19): extract CertificateAuthorityService+KRL — service slim complete"
+Immediate action: All RefactorTheFinalRun phases complete. Consider merging refactor/final-run → master.
 ```
 
 This is the **current working refactoring document**. Four god files remain after all

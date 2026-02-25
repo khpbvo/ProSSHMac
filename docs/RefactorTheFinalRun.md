@@ -454,21 +454,25 @@ The class mixes four distinct concerns in its private methods:
 **Files to create:** `ProSSHMac/Services/CertificateAuthorityService+KRL.swift`
 
 **Steps:**
-- [ ] Create the file. Header: `// Extracted from CertificateAuthorityService.swift`.
-- [ ] Move into `extension CertificateAuthorityService`:
+- [x] Create the file. Header: `// Extracted from CertificateAuthorityService.swift`.
+- [x] Move into `extension CertificateAuthorityService`:
   - `generateKRL(request:authorities:certificates:)`
   - `authorizedRepresentation(for:)`
   - `sanitizeFileComponent(_:)`
   - `csvSafe(_:)`
-- [ ] Change `private func` → `func` on each.
-- [ ] Verify `CertificateAuthorityService.swift` now contains only:
+- [x] Change `private func` → `func` on each.
+- [x] Verify `CertificateAuthorityService.swift` now contains only:
   request structs, error enum, stored properties, `init`, and the five
   core public business methods (`loadAuthorities`, `createAuthority`,
   `loadCertificates`, `signUserCertificate`, `signHostCertificate`,
   `signCertificate` private, `importExternalCertificate`, `deleteAuthorities`).
-- [ ] Remove `// swiftlint:disable file_length` if main file is under 400 lines.
-- [ ] Run full test suite.
-- [ ] Commit: `refactor(RefactorFR Phase 19): extract CertificateAuthorityService+KRL — service slim complete`
+- [x] Remove `// swiftlint:disable file_length` if main file is under 400 lines.
+  **NOTE:** 422L — above threshold; disable retained.
+- [x] Run full test suite.
+- [x] Commit: `refactor(RefactorFR Phase 19): extract CertificateAuthorityService+KRL — service slim complete`
+
+**Result (2026-02-25):** BUILD SUCCEEDED. Tests: 209 run, 2 pre-existing failures, 0 new.
+CertificateAuthorityService.swift: 577→422L. Commit `6a02e6c`. CertificateAuthorityService decomposition COMPLETE.
 
 ---
 
