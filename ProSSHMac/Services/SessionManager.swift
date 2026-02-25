@@ -31,7 +31,7 @@ final class SessionManager: ObservableObject {
     @Published var isPlaybackRunningBySessionID: [UUID: Bool] = [:]
     @Published var latestRecordingURLBySessionID: [UUID: URL] = [:]
     @Published var workingDirectoryBySessionID: [UUID: String] = [:]
-    @Published private(set) var bytesReceivedBySessionID: [UUID: Int64] = [:]
+    @Published var bytesReceivedBySessionID: [UUID: Int64] = [:]
     @Published var bytesSentBySessionID: [UUID: Int64] = [:]
     @Published var latestCompletedCommandBlockBySessionID: [UUID: CommandBlock] = [:]
     @Published var commandCompletionNonceBySessionID: [UUID: Int] = [:]
@@ -43,7 +43,6 @@ final class SessionManager: ObservableObject {
     private let totpStore: TOTPStore?
     let terminalHistoryIndex = TerminalHistoryIndex()
     var shellChannels: [UUID: any SSHShellChannel] = [:]
-    private var parserReaderTasks: [UUID: Task<Void, Never>] = [:]
     var engines: [UUID: TerminalEngine] = [:]
     var hostBySessionID: [UUID: Host] = [:]
     var lastActivityBySessionID: [UUID: Date] = [:]
@@ -55,6 +54,7 @@ final class SessionManager: ObservableObject {
     let recordingCoordinator: SessionRecordingCoordinator
     let sftpCoordinator: SessionSFTPCoordinator
     let aiToolCoordinator: SessionAIToolCoordinator
+    let shellIOCoordinator: SessionShellIOCoordinator
     var latestPublishedCommandBlockIDBySessionID: [UUID: UUID] = [:]
 
     /// Runtime throughput policy. When enabled, expensive non-render work is throttled:
@@ -95,6 +95,8 @@ final class SessionManager: ObservableObject {
         self.sftpCoordinator = sftpCoord
         let aiToolCoord = SessionAIToolCoordinator()
         self.aiToolCoordinator = aiToolCoord
+        let shellIOCoord = SessionShellIOCoordinator()
+        self.shellIOCoordinator = shellIOCoord
 
         Task { @MainActor [weak self] in
             await self?.refreshKnownHosts()
@@ -107,6 +109,7 @@ final class SessionManager: ObservableObject {
         recordCoord.manager = self
         sftpCoord.manager = self
         aiToolCoord.manager = self
+        shellIOCoord.manager = self
     }
 
     nonisolated deinit {}
@@ -193,7 +196,7 @@ final class SessionManager: ObservableObject {
             session.state = .connected
             replaceSession(session)
 
-            startParserReader(for: sessionID, rawOutput: channel.rawOutput)
+            shellIOCoordinator.startParserReader(for: sessionID, rawOutput: channel.rawOutput)
 
             if let cwd = workingDirectory ?? ProcessInfo.processInfo.environment["HOME"] {
                 workingDirectoryBySessionID[sessionID] = cwd
@@ -550,61 +553,11 @@ final class SessionManager: ObservableObject {
     }
 
     func sendShellInput(sessionID: UUID, input: String, suppressEcho: Bool = false) async {
-        guard sessions.contains(where: { $0.id == sessionID && $0.state == .connected }) else {
-            await renderingCoordinator.appendShellLine("Session is not connected.", to: sessionID)
-            return
-        }
-
-        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            return
-        }
-
-        guard let shell = shellChannels[sessionID] else {
-            await renderingCoordinator.appendShellLine("Shell channel is not available.", to: sessionID)
-            return
-        }
-
-        do {
-            let payload = trimmed + "\n"
-            try await shell.send(payload)
-            lastActivityBySessionID[sessionID] = .now
-            bytesSentBySessionID[sessionID, default: 0] += Int64(payload.utf8.count)
-            recordingCoordinator.recordInput(sessionID: sessionID, text: payload)
-            await terminalHistoryIndex.recordCommandInput(
-                sessionID: sessionID,
-                command: trimmed,
-                at: .now,
-                source: .userInput
-            )
-        } catch {
-            await renderingCoordinator.appendShellLine("Error: \(error.localizedDescription)", to: sessionID)
-        }
+        await shellIOCoordinator.sendShellInput(sessionID: sessionID, input: input, suppressEcho: suppressEcho)
     }
 
     func sendRawShellInput(sessionID: UUID, input: String) async {
-        guard sessions.contains(where: { $0.id == sessionID && $0.state == .connected }) else {
-            await renderingCoordinator.appendShellLine("Session is not connected.", to: sessionID)
-            return
-        }
-
-        guard let shell = shellChannels[sessionID] else {
-            await renderingCoordinator.appendShellLine("Shell channel is not available.", to: sessionID)
-            return
-        }
-
-        do {
-            try await shell.send(input)
-            bytesSentBySessionID[sessionID, default: 0] += Int64(input.utf8.count)
-            recordingCoordinator.recordInput(sessionID: sessionID, text: input)
-            await terminalHistoryIndex.recordRawInput(
-                sessionID: sessionID,
-                input: input,
-                at: .now
-            )
-        } catch {
-            await renderingCoordinator.appendShellLine("Error: \(error.localizedDescription)", to: sessionID)
-        }
+        await shellIOCoordinator.sendRawShellInput(sessionID: sessionID, input: input)
     }
 
     // MARK: - F.6 PTY Resize (delegates to renderingCoordinator)
@@ -795,7 +748,7 @@ final class SessionManager: ObservableObject {
             // Non-fatal: subsequent resize events will retry synchronization.
         }
 
-        startParserReader(for: session.id, rawOutput: channel.rawOutput)
+        shellIOCoordinator.startParserReader(for: session.id, rawOutput: channel.rawOutput)
     }
 
     private func configureHistoryTracking(for session: Session, engine: TerminalEngine,
@@ -816,81 +769,6 @@ final class SessionManager: ObservableObject {
                 await self?.publishCommandCompletion(completedBlock)
             }
         }
-    }
-
-    private func startParserReader(for sessionID: UUID, rawOutput: AsyncStream<Data>) {
-        parserReaderTasks[sessionID]?.cancel()
-        guard let engine = engines[sessionID] else {
-            return
-        }
-
-        parserReaderTasks[sessionID] = Task.detached(priority: .userInitiated) { [weak self] in
-            for await chunk in rawOutput {
-                if Task.isCancelled {
-                    break
-                }
-                await engine.feed(chunk)
-                await self?.recordParsedChunk(sessionID: sessionID, chunk: chunk)
-
-                // When the terminal is in synchronized output mode (DECSET 2026),
-                // the application has signaled that a batch update is in progress.
-                // Skip snapshot generation to prevent rendering intermediate/partial
-                // states that cause visual artifacts (garbled characters, partial
-                // overwrites). The snapshot will be taken when sync mode ends.
-                //
-                // However, if sync mode toggled off *and back on* within this
-                // single chunk, we must publish the intermediate visible frame
-                // captured when sync re-enables — otherwise that frame is lost
-                // and stale content ("ghost characters") persists on screen.
-                if let syncExitSnap = await engine.consumeSyncExitSnapshot() {
-                    await self?.renderingCoordinator.publishSyncExitSnapshot(
-                        sessionID: sessionID,
-                        engine: engine,
-                        snapshotOverride: syncExitSnap
-                    )
-                }
-
-                let inSyncMode = await engine.synchronizedOutput
-                if inSyncMode { continue }
-
-                // Auto-reset scroll offset when new output arrives.
-                await self?.renderingCoordinator.scheduleParsedChunkPublish(
-                    sessionID: sessionID,
-                    engine: engine
-                )
-            }
-
-            await self?.renderingCoordinator.flushPendingSnapshotPublishIfNeeded(
-                for: sessionID,
-                engine: engine
-            )
-
-            // Stream ended — force-exit alternate buffer if the program
-            // crashed or exited without sending ESC[?1049l. This prevents
-            // alternate screen content from leaking into the primary buffer.
-            if await engine.usingAlternateBuffer {
-                await engine.disableAlternateBuffer()
-                await self?.renderingCoordinator.publishGridState(for: sessionID, engine: engine)
-            }
-
-            // Detect disconnection.
-            if !Task.isCancelled {
-                await self?.handleShellStreamEndedInternal(sessionID: sessionID)
-            }
-        }
-    }
-
-    private func recordParsedChunk(sessionID: UUID, chunk: Data) async {
-        lastActivityBySessionID[sessionID] = .now
-        bytesReceivedBySessionID[sessionID, default: 0] += Int64(chunk.count)
-        await terminalHistoryIndex.recordOutputChunk(
-            sessionID: sessionID,
-            data: chunk,
-            at: .now
-        )
-
-        // Capture output directly as bytes to avoid a per-chunk UTF-8 decode.
-        recordingCoordinator.recordIfActive(sessionID: sessionID, chunk: chunk, throughputModeEnabled: throughputModeEnabled)
     }
 
     func handleShellStreamEndedInternal(sessionID: UUID) async {
@@ -980,8 +858,7 @@ final class SessionManager: ObservableObject {
     }
 
     private func removeSessionArtifacts(sessionID: UUID) {
-        parserReaderTasks[sessionID]?.cancel()
-        parserReaderTasks.removeValue(forKey: sessionID)
+        shellIOCoordinator.cancelParserTask(for: sessionID)
         renderingCoordinator.cleanupSession(sessionID)
         shellChannels.removeValue(forKey: sessionID)
         engines.removeValue(forKey: sessionID)
