@@ -406,8 +406,8 @@ The class mixes four distinct concerns in its private methods:
 **Files to create:** `ProSSHMac/Services/CertificateAuthorityService+BinaryEncoding.swift`
 
 **Steps:**
-- [ ] Create the file. Header: `// Extracted from CertificateAuthorityService.swift`.
-- [ ] Move into `extension CertificateAuthorityService`:
+- [x] Create the file. Header: `// Extracted from CertificateAuthorityService.swift`.
+- [x] Move into `extension CertificateAuthorityService`:
   - `sshString(from:)` — text overload
   - `sshString(from:)` — data overload
   - `u32(_:)`
@@ -417,9 +417,11 @@ The class mixes four distinct concerns in its private methods:
   - `fingerprintSHA256(for:)`
   - `randomBytes(count:)`
   - `readFirstSSHString(from:)`
-- [ ] Change `private func` → `func` (internal) on each.
-- [ ] Build.
-- [ ] Commit: `refactor(RefactorFR Phase 17): extract CertificateAuthorityService+BinaryEncoding`
+- [x] Change `private func` → `func` (internal) on each.
+- [x] Build.
+- [x] Commit: `refactor(RefactorFR Phase 17): extract CertificateAuthorityService+BinaryEncoding`
+
+**Result (2026-02-25):** BUILD SUCCEEDED. CertificateAuthorityService.swift: 870→796L. Commit `82cc151`.
 
 ### Phase 18 — Extract `CertificateAuthorityService+CertificateParsing.swift`
 
