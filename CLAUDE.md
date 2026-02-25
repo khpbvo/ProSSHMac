@@ -22,11 +22,11 @@ The long-term memory for this project lives in `docs/featurelist.md`.
 
 ```
 Active doc    : docs/RefactorTheFinalRun.md
-Active branch : refactor/final-run  (create from master before starting)
-Current phase : Phase 0 — NOT STARTED
-Phase status  : NOT STARTED
-Immediate action: Create branch refactor/final-run, then execute Phase 0 (add
-                  swiftlint:disable to OpenAIResponsesService.swift, establish baseline).
+Active branch : refactor/final-run
+Current phase : Phase 19 — COMPLETE (All 20 phases done — RefactorTheFinalRun COMPLETE)
+Phase status  : COMPLETE
+Last commit   : 6a02e6c "refactor(RefactorFR Phase 19): extract CertificateAuthorityService+KRL — service slim complete"
+Immediate action: All RefactorTheFinalRun phases complete. Consider merging refactor/final-run → master.
 ```
 
 This is the **current working refactoring document**. Four god files remain after all

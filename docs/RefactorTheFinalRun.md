@@ -46,12 +46,12 @@ remain.
 | 933–1227 | `StreamingResponseAccumulator` private struct — assembles a complete `OpenAIResponsesResponse` from incremental SSE events |
 | 1228–1305 | Codable payload structs: `CreateRequestPayload`, `CreateInputMessage`, `CreateFunctionCallOutput`, `OpenAIErrorEnvelope` |
 
-### Phase 0 — Baseline
+### Phase 0 — Baseline — **COMPLETE** (2026-02-25, commit `99ef976`)
 
-- [ ] Create branch `refactor/final-run` from master.
-- [ ] Add `// swiftlint:disable file_length` as line 1 of `OpenAIResponsesService.swift`.
-- [ ] Run build. Record warning count as baseline.
-- [ ] Commit: `docs: begin RefactorTheFinalRun — Phase 0 swiftlint disable on OpenAIResponsesService`
+- [x] Create branch `refactor/final-run` from master.
+- [x] Add `// swiftlint:disable file_length` as line 1 of `OpenAIResponsesService.swift`.
+- [x] Run build. Record warning count as baseline. (BUILD SUCCEEDED, 0 warnings)
+- [x] Commit: `docs: begin RefactorTheFinalRun — Phase 0 swiftlint disable on OpenAIResponsesService`
 
 ### Phase 1 — Extract `OpenAIResponsesTypes.swift`
 
@@ -61,9 +61,9 @@ file so that the service class file only contains the class itself.
 **Files to create:** `ProSSHMac/Services/OpenAIResponsesTypes.swift`
 
 **Steps:**
-- [ ] Read `OpenAIResponsesService.swift` lines 1–265 in full before touching anything.
-- [ ] Create `Services/OpenAIResponsesTypes.swift`. Header: `// Extracted from OpenAIResponsesService.swift`.
-- [ ] Move into it (in order):
+- [x] Read `OpenAIResponsesService.swift` lines 1–265 in full before touching anything.
+- [x] Create `Services/OpenAIResponsesTypes.swift`. Header: `// Extracted from OpenAIResponsesService.swift`.
+- [x] Move into it (in order):
   - `OpenAIResponsesServicing` protocol + default extension
   - `OpenAIHTTPSessioning` protocol + `OpenAIStreamingUnsupportedError` + default extension
   - `extension URLSession: OpenAIHTTPSessioning`
@@ -75,9 +75,13 @@ file so that the service class file only contains the class itself.
   - `OpenAIResponsesRequest` struct
   - `OpenAIResponsesResponse` struct (with nested types)
   - `OpenAIResponsesStreamEvent` enum
-- [ ] Delete the moved declarations from `OpenAIResponsesService.swift`.
-- [ ] Build. Fix any access-level errors (widen `private` → `internal` if needed).
-- [ ] Commit: `refactor(RefactorFR Phase 1): extract OpenAIResponsesTypes.swift`
+- [x] Delete the moved declarations from `OpenAIResponsesService.swift`.
+- [x] Build. Fix any access-level errors (widen `private` → `internal` if needed).
+- [x] Commit: `refactor(RefactorFR Phase 1): extract OpenAIResponsesTypes.swift`
+
+**COMPLETE** (2026-02-25, commit `6559ce6`). Correction: `OpenAIStreamingUnsupportedError` was also
+referenced in `OpenAIResponsesService` line 242 (`catch is OpenAIStreamingUnsupportedError`), so it was
+widened from `private` → `internal`. Service file: 1,305 → 1,043 lines. Types file: 265 lines.
 
 ### Phase 2 — Extract `OpenAIResponsesPayloadTypes.swift`
 
@@ -86,19 +90,23 @@ file so that the service class file only contains the class itself.
 **Files to create:** `ProSSHMac/Services/OpenAIResponsesPayloadTypes.swift`
 
 **Steps:**
-- [ ] Read the bottom of `OpenAIResponsesService.swift` (lines 1228–1305).
-- [ ] Create `Services/OpenAIResponsesPayloadTypes.swift`. Header: `// Extracted from OpenAIResponsesService.swift`.
-- [ ] Move into it:
+- [x] Read the bottom of `OpenAIResponsesService.swift` (lines 1228–1305).
+- [x] Create `Services/OpenAIResponsesPayloadTypes.swift`. Header: `// Extracted from OpenAIResponsesService.swift`.
+- [x] Move into it:
   - `CreateRequestPayload` struct
+  - `CreateInputItem` enum (also present — plan sketch missed it)
   - `CreateInputMessage` struct
   - `CreateFunctionCallOutput` struct
   - `OpenAIErrorEnvelope` struct + nested `APIError`
-- [ ] Change `private struct` → `struct` (internal) so they compile cross-file.
-- [ ] The `fileprivate static func decodeJSONValue` on `OpenAIResponsesService` is
+- [x] Change `private struct` → `struct` (internal) so they compile cross-file.
+- [x] The `fileprivate static func decodeJSONValue` on `OpenAIResponsesService` is
   used by `StreamingResponseAccumulator` — change `fileprivate` → `internal` now
   (it will stay on the service class; the accumulator will call it after extraction).
-- [ ] Build. Fix any remaining access issues.
-- [ ] Commit: `refactor(RefactorFR Phase 2): extract OpenAIResponsesPayloadTypes.swift`
+- [x] Build. Fix any remaining access issues.
+- [x] Commit: `refactor(RefactorFR Phase 2): extract OpenAIResponsesPayloadTypes.swift`
+
+**COMPLETE** (2026-02-25, commit `5e90cd9`). Correction: plan sketch missed `CreateInputItem` enum —
+also moved to payload types file. Service file: 1,043 → 964 lines. Payload types file: 81 lines.
 
 ### Phase 3 — Extract `OpenAIResponsesStreamAccumulator.swift`
 
@@ -107,14 +115,17 @@ file so that the service class file only contains the class itself.
 **Files to create:** `ProSSHMac/Services/OpenAIResponsesStreamAccumulator.swift`
 
 **Steps:**
-- [ ] Read `StreamingResponseAccumulator` fully (lines ~933–1227).
-- [ ] Create `Services/OpenAIResponsesStreamAccumulator.swift`. Header: `// Extracted from OpenAIResponsesService.swift`.
-- [ ] Move the entire `StreamingResponseAccumulator` struct. Change `private struct` →
+- [x] Read `StreamingResponseAccumulator` fully (lines ~933–1227).
+- [x] Create `Services/OpenAIResponsesStreamAccumulator.swift`. Header: `// Extracted from OpenAIResponsesService.swift`.
+- [x] Move the entire `StreamingResponseAccumulator` struct. Change `private struct` →
   `struct` (internal).
-- [ ] Update any call in `OpenAIResponsesService` that referenced the type as `private`
+- [x] Update any call in `OpenAIResponsesService` that referenced the type as `private`
   — no changes needed (struct was already `private` in same file; now just `internal`).
-- [ ] Build. Verify zero concurrency warnings with `-strict-concurrency=complete`.
-- [ ] Commit: `refactor(RefactorFR Phase 3): extract OpenAIResponsesStreamAccumulator.swift`
+- [x] Build. Verify zero concurrency warnings with `-strict-concurrency=complete`.
+- [x] Commit: `refactor(RefactorFR Phase 3): extract OpenAIResponsesStreamAccumulator.swift`
+
+**COMPLETE** (2026-02-25, commit `6b0c8a2`). Service file: 964 → 669 lines. Accumulator file: 297 lines.
+No access-level corrections needed beyond `private struct` → `struct`.
 
 ### Phase 4 — Extract `OpenAIResponsesService+Streaming.swift`
 
@@ -123,10 +134,10 @@ file so that the service class file only contains the class itself.
 **Files to create:** `ProSSHMac/Services/OpenAIResponsesService+Streaming.swift`
 
 **Steps:**
-- [ ] Read `performStreamingRequest`, `consumeStreamPayload`, SSE event routing helpers,
+- [x] Read `performStreamingRequest`, `consumeStreamPayload`, SSE event routing helpers,
   and the byte-loop in `createResponseStreaming` fully before moving anything.
-- [ ] Create `Services/OpenAIResponsesService+Streaming.swift`. Header: `// Extracted from OpenAIResponsesService.swift`.
-- [ ] Move into an `extension OpenAIResponsesService`:
+- [x] Create `Services/OpenAIResponsesService+Streaming.swift`. Header: `// Extracted from OpenAIResponsesService.swift`.
+- [x] Move into an `extension OpenAIResponsesService`:
   - `createResponseStreaming(_:onEvent:)` (the public method — remove from class body)
   - `performStreamingRequest(apiKey:request:onEvent:traceID:)`
   - `consumeStreamPayload(_:eventName:onEvent:accumulator:)`
@@ -134,10 +145,15 @@ file so that the service class file only contains the class itself.
   - `streamErrorMessage(from:)` static helper
   - `stringField(in:key:)` static helper
   - `reasoningSummaryText(from:)` static helper
-- [ ] Leave `createResponse`, `performRequest`, `createPayload`, retry helpers, and
+- [x] Leave `createResponse`, `performRequest`, `createPayload`, retry helpers, and
   logging utilities in the main class body.
-- [ ] Build. Verify `-strict-concurrency=complete` is clean.
-- [ ] Commit: `refactor(RefactorFR Phase 4): extract OpenAIResponsesService+Streaming.swift`
+- [x] Build. Verify `-strict-concurrency=complete` is clean.
+- [x] Commit: `refactor(RefactorFR Phase 4): extract OpenAIResponsesService+Streaming.swift`
+
+**COMPLETE** (2026-02-25, commit `b07c3cf`). Correction: extension file also needs `import os.log`
+(uses `Logger` privacy interpolation). Widened `private` → internal on all class-body members called
+from the extension: stored properties (`apiKeyProvider`, `session`, `endpointURL`), `logger`, 7 instance/
+static methods, 7 static utility functions. Service file: 669 → 260 lines. Streaming file: 415 lines.
 
 ### Phase 5 — Slim & cleanup
 
@@ -145,10 +161,14 @@ file so that the service class file only contains the class itself.
 Remove `// swiftlint:disable file_length` once it's under 400 lines.
 
 **Steps:**
-- [ ] Verify current line count of `OpenAIResponsesService.swift`.
-- [ ] Remove `// swiftlint:disable file_length` if file is below 400 lines.
-- [ ] Run full test suite. Record any new failures vs. baseline.
-- [ ] Commit: `refactor(RefactorFR Phase 5): slim OpenAIResponsesService — cleanup complete`
+- [x] Verify current line count of `OpenAIResponsesService.swift`.
+- [x] Remove `// swiftlint:disable file_length` if file is below 400 lines.
+- [x] Run full test suite. Record any new failures vs. baseline.
+- [x] Commit: `refactor(RefactorFR Phase 5): slim OpenAIResponsesService — cleanup complete`
+
+**COMPLETE** (2026-02-25, commit `fa6348c`). File is 259 lines. Removed `// swiftlint:disable file_length`.
+Tests: 209 tests, 2 failures — both pre-existing (Base32Tests.testDecodeEmpty, ColorRenderValidationTest
+color rendering). No new failures introduced. OpenAIResponsesService decomposition fully complete.
 
 ---
 
@@ -175,18 +195,21 @@ The file is still 1,196 lines because the following concerns were NOT extracted:
 **Files to create:** `ProSSHMac/Services/SessionSFTPCoordinator.swift`
 
 **Steps:**
-- [ ] Read the entire SessionManager to locate all SFTP methods before moving anything.
+- [x] Read the entire SessionManager to locate all SFTP methods before moving anything.
   Look for: `listDirectory`, `uploadFile`, `downloadFile`, `deleteRemoteFile`,
   `createRemoteDirectory`, `renameRemoteFile`, any `sftp`-prefixed helpers.
-- [ ] Create `Services/SessionSFTPCoordinator.swift` using the same weak-reference
+- [x] Create `Services/SessionSFTPCoordinator.swift` using the same weak-reference
   coordinator pattern (`weak var manager: SessionManager?`). Header:
   `// Extracted from SessionManager.swift`.
-- [ ] Move each SFTP method; replace in `SessionManager` with one-line forwarding
+- [x] Move each SFTP method; replace in `SessionManager` with one-line forwarding
   wrappers that delegate to `sftpCoordinator`.
-- [ ] Add `let sftpCoordinator: SessionSFTPCoordinator` to `SessionManager` stored
+- [x] Add `let sftpCoordinator: SessionSFTPCoordinator` to `SessionManager` stored
   properties. Wire `sftpCoordinator.manager = self` in `init`.
-- [ ] Build. Fix any missing-symbol errors.
-- [ ] Commit: `refactor(RefactorFR Phase 6): extract SessionSFTPCoordinator`
+- [x] Build. Fix any missing-symbol errors.
+- [x] Commit: `refactor(RefactorFR Phase 6): extract SessionSFTPCoordinator`
+
+**Result:** 3 SFTP methods extracted (lines 652–671). SessionManager: 1,196 → 1,191 lines.
+Commit: `8b18935`. BUILD SUCCEEDED. (2026-02-25)
 
 ### Phase 7 — Extract `SessionAIToolCoordinator.swift`
 
@@ -195,18 +218,26 @@ The file is still 1,196 lines because the following concerns were NOT extracted:
 **Files to create:** `ProSSHMac/Services/SessionAIToolCoordinator.swift`
 
 **Steps:**
-- [ ] Read `executeCommandAndWait` and any supporting marker/polling helpers fully.
-- [ ] Create `Services/SessionAIToolCoordinator.swift`. Header:
+- [x] Read `executeCommandAndWait` and any supporting marker/polling helpers fully.
+- [x] Create `Services/SessionAIToolCoordinator.swift`. Header:
   `// Extracted from SessionManager.swift`.
-- [ ] Move: `executeCommandAndWait`, any marker-injection helpers, and
+- [x] Move: `executeCommandAndWait`, any marker-injection helpers, and
   command-block publishing methods (`publishCommandBlock`, etc.).
-- [ ] Keep `@Published var latestCompletedCommandBlockBySessionID` and
+- [x] Keep `@Published var latestCompletedCommandBlockBySessionID` and
   `commandCompletionNonceBySessionID` on `SessionManager` (SwiftUI observes them);
   coordinator writes via `manager?.`.
-- [ ] Add `let aiToolCoordinator: SessionAIToolCoordinator` to `SessionManager`.
+- [x] Add `let aiToolCoordinator: SessionAIToolCoordinator` to `SessionManager`.
   Wire in `init`.
-- [ ] Build. Fix access issues.
-- [ ] Commit: `refactor(RefactorFR Phase 7): extract SessionAIToolCoordinator`
+- [x] Build. Fix access issues.
+- [x] Commit: `refactor(RefactorFR Phase 7): extract SessionAIToolCoordinator`
+
+**Result:** Extracted `executeCommandAndWait` (50 lines), `parseWrappedCommandOutput` (16 lines),
+`publishCommandCompletion` (9 lines). Widened `private(set)` → `var` on `bytesSentBySessionID`,
+`latestCompletedCommandBlockBySessionID`, `commandCompletionNonceBySessionID`; widened
+`private var latestPublishedCommandBlockIDBySessionID` → `var`. `publishCommandCompletion`
+kept as a one-line forwarding wrapper on SessionManager (called by TerminalRenderingCoordinator
+via `manager.publishCommandCompletion`). SessionManager: 1,191 → 1,128 lines.
+Commit: `b037ee1`. BUILD SUCCEEDED. (2026-02-25)
 
 ### Phase 8 — Extract `SessionShellIOCoordinator.swift`
 
@@ -215,16 +246,23 @@ The file is still 1,196 lines because the following concerns were NOT extracted:
 **Files to create:** `ProSSHMac/Services/SessionShellIOCoordinator.swift`
 
 **Steps:**
-- [ ] Locate all shell I/O methods: `sendInput`, `sendData`, `resizePTY`,
+- [x] Locate all shell I/O methods: `sendInput`, `sendData`, `resizePTY`,
   `startReadingFromChannel`, and related Task-spawning helpers.
-- [ ] Create `Services/SessionShellIOCoordinator.swift`. Header:
+- [x] Create `Services/SessionShellIOCoordinator.swift`. Header:
   `// Extracted from SessionManager.swift`.
-- [ ] Move methods. Keep `@Published var shellBuffers` on `SessionManager`;
+- [x] Move methods. Keep `@Published var shellBuffers` on `SessionManager`;
   coordinator writes via `manager?.shellBuffers[id] = ...`.
-- [ ] Add `let shellIOCoordinator: SessionShellIOCoordinator` to `SessionManager`.
+- [x] Add `let shellIOCoordinator: SessionShellIOCoordinator` to `SessionManager`.
   Wire in `init`.
-- [ ] Build.
-- [ ] Commit: `refactor(RefactorFR Phase 8): extract SessionShellIOCoordinator`
+- [x] Build.
+- [x] Commit: `refactor(RefactorFR Phase 8): extract SessionShellIOCoordinator`
+
+**Result:** Extracted `sendShellInput` (32L), `sendRawShellInput` (24L), `startParserReader`
+(61L), `recordParsedChunk` (12L). Moved `parserReaderTasks` dict to coordinator; SessionManager
+calls `shellIOCoordinator.cancelParserTask(for:)` from `removeSessionArtifacts`. Widened
+`bytesReceivedBySessionID` from `@Published private(set)` → `@Published var`. `handleShellStreamEndedInternal`
+kept on SessionManager (called by both coordinator and `SessionKeepaliveCoordinator`). SessionManager:
+1,128 → 1,005 lines. Commit: `b6fdf69`. BUILD SUCCEEDED. (2026-02-25)
 
 ### Phase 9 — Slim `SessionManager.swift` & cleanup
 
@@ -233,10 +271,17 @@ lifecycle (`connect`, `disconnect`, `openLocalSession`, `closeSession`), and kno
 verification. Target: under 400 lines.
 
 **Steps:**
-- [ ] Verify remaining line count. Extract any remaining stray logic if still over 400L.
-- [ ] Remove `// swiftlint:disable file_length` once under 400 lines.
-- [ ] Run full test suite.
-- [ ] Commit: `refactor(RefactorFR Phase 9): slim SessionManager — lifecycle only`
+- [x] Verify remaining line count. Extract any remaining stray logic if still over 400L.
+- [x] Remove `// swiftlint:disable file_length` once under 400 lines.
+- [x] Run full test suite.
+- [x] Commit: `refactor(RefactorFR Phase 9): slim SessionManager — lifecycle only`
+
+**Result (2026-02-25):** Extracted 6 read-only query/history methods into
+`SessionManager+Queries.swift` (`activeSession`, `mostRelevantSession`, `totalTraffic`,
+`recentCommandBlocks`, `searchCommandHistory`, `commandOutput`). File: 1,005 → 969 lines.
+400-line target not achievable without a future `SessionConnectionCoordinator` extraction
+(out of scope). `// swiftlint:disable` retained. Build: SUCCEEDED. Tests: 2 pre-existing
+failures, zero new. Commit: `eeb2ba3`.
 
 ---
 
@@ -257,44 +302,56 @@ Each is already self-contained. This is a straightforward split.
 
 ### Phase 10 — Baseline
 
-- [ ] Add `// swiftlint:disable file_length` as line 1.
-- [ ] Run build. Confirm no new failures.
-- [ ] Commit: `docs: Phase 10 swiftlint disable on SSHConfigParser.swift`
+- [x] Add `// swiftlint:disable file_length` as line 1.
+- [x] Run build. Confirm no new failures.
+- [x] Commit: `docs: Phase 10 swiftlint disable on SSHConfigParser.swift`
+
+**Result (2026-02-25):** Added `// swiftlint:disable file_length`. Build: SUCCEEDED. Commit: `0a7ac88`.
 
 ### Phase 11 — Extract `SSHConfigTokenExpander.swift`
 
-- [ ] Create `Services/SSHConfigTokenExpander.swift`. Header:
+- [x] Create `Services/SSHConfigTokenExpander.swift`. Header:
   `// Extracted from SSHConfigParser.swift`.
-- [ ] Move `SSHConfigTokenExpander` struct and its nested `Context` struct.
-- [ ] Build.
-- [ ] Commit: `refactor(RefactorFR Phase 11): extract SSHConfigTokenExpander`
+- [x] Move `SSHConfigTokenExpander` struct and its nested `Context` struct.
+- [x] Build.
+- [x] Commit: `refactor(RefactorFR Phase 11): extract SSHConfigTokenExpander`
+
+**Result (2026-02-25):** Extracted `SSHConfigTokenExpander` + `Context`. Build: SUCCEEDED. Commit: `42e30d2`.
 
 ### Phase 12 — Extract `SSHConfigMapper.swift`
 
-- [ ] Create `Services/SSHConfigMapper.swift`. Header:
+- [x] Create `Services/SSHConfigMapper.swift`. Header:
   `// Extracted from SSHConfigParser.swift`.
-- [ ] Move `SSHConfigMapper` struct (including all private helpers and nested types).
-- [ ] Build.
-- [ ] Commit: `refactor(RefactorFR Phase 12): extract SSHConfigMapper`
+- [x] Move `SSHConfigMapper` struct (including all private helpers and nested types).
+- [x] Build.
+- [x] Commit: `refactor(RefactorFR Phase 12): extract SSHConfigMapper`
+
+**Result (2026-02-25):** Extracted `SSHConfigMapper` (~440L, 8 private helpers, `ResolutionContext`, `MappingResult`). Build: SUCCEEDED. Commit: `2c450df`.
 
 ### Phase 13 — Extract `SSHConfigExporter.swift`
 
-- [ ] Create `Services/SSHConfigExporter.swift`. Header:
+- [x] Create `Services/SSHConfigExporter.swift`. Header:
   `// Extracted from SSHConfigParser.swift`.
-- [ ] Move `SSHConfigExporter` struct and its nested `ExportOptions`.
-- [ ] Build.
-- [ ] Commit: `refactor(RefactorFR Phase 13): extract SSHConfigExporter`
+- [x] Move `SSHConfigExporter` struct and its nested `ExportOptions`.
+- [x] Build.
+- [x] Commit: `refactor(RefactorFR Phase 13): extract SSHConfigExporter`
+
+**Result (2026-02-25):** Extracted `SSHConfigExporter` + `ExportOptions` (~128L). Build: SUCCEEDED. Commit: `5aece8a`.
 
 ### Phase 14 — Extract `SSHConfigImportService.swift` & slim
 
-- [ ] Create `Services/SSHConfigImportService.swift`. Header:
+- [x] Create `Services/SSHConfigImportService.swift`. Header:
   `// Extracted from SSHConfigParser.swift`.
-- [ ] Move `SSHConfigImportService` struct + its `ImportPreview` nested type
+- [x] Move `SSHConfigImportService` struct + its `ImportPreview` nested type
   + the `extension SSHConfigImportService` (`findDuplicates`).
-- [ ] Remove `// swiftlint:disable file_length` from `SSHConfigParser.swift`
+- [x] Remove `// swiftlint:disable file_length` from `SSHConfigParser.swift`
   (only `SSHConfigParser` + supporting value types will remain, well under 400L).
-- [ ] Build. Run full test suite.
-- [ ] Commit: `refactor(RefactorFR Phase 14): extract SSHConfigImportService — SSHConfigParser slim complete`
+- [x] Build. Run full test suite.
+- [x] Commit: `refactor(RefactorFR Phase 14): extract SSHConfigImportService — SSHConfigParser slim complete`
+
+**Result (2026-02-25):** Extracted `SSHConfigImportService` + `ImportPreview` + `findDuplicates` extension (~109L).
+Also cleaned orphaned token expander doc comment. `// swiftlint:disable` removed.
+`SSHConfigParser.swift`: 1,018 → 275 lines. Build: SUCCEEDED. Tests: 2 pre-existing failures, zero new. Commit: `e341205`.
 
 ---
 
@@ -317,9 +374,11 @@ The class mixes four distinct concerns in its private methods:
 
 ### Phase 15 — Baseline
 
-- [ ] Add `// swiftlint:disable file_length` as line 1.
-- [ ] Run build. Confirm no new failures.
-- [ ] Commit: `docs: Phase 15 swiftlint disable on CertificateAuthorityService.swift`
+- [x] Add `// swiftlint:disable file_length` as line 1.
+- [x] Run build. Confirm no new failures.
+- [x] Commit: `docs: Phase 15 swiftlint disable on CertificateAuthorityService.swift`
+
+**Result (2026-02-25):** BUILD SUCCEEDED. Commit `17503da`.
 
 ### Phase 16 — Extract `SSHBinaryReader.swift`
 
@@ -328,15 +387,17 @@ The class mixes four distinct concerns in its private methods:
 **Files to create:** `ProSSHMac/Services/SSHBinaryReader.swift`
 
 **Steps:**
-- [ ] Create `Services/SSHBinaryReader.swift`. Header:
+- [x] Create `Services/SSHBinaryReader.swift`. Header:
   `// Extracted from CertificateAuthorityService.swift`.
-- [ ] Move `SSHBinaryReader` struct. Change `private struct` → `struct` (internal).
-- [ ] Move `CertificateRole` enum with it (they're coupled — `CertificateRole` is only
+- [x] Move `SSHBinaryReader` struct. Change `private struct` → `struct` (internal).
+- [x] Move `CertificateRole` enum with it (they're coupled — `CertificateRole` is only
   used by parsing). Change `private enum` → `enum` (internal).
-- [ ] Move `ParsedPublicKey` and `ParsedExternalCertificate` structs (used only by
+- [x] Move `ParsedPublicKey` and `ParsedExternalCertificate` structs (used only by
   parsing methods). Change `private struct` → `struct` (internal).
-- [ ] Build.
-- [ ] Commit: `refactor(RefactorFR Phase 16): extract SSHBinaryReader + supporting types`
+- [x] Build.
+- [x] Commit: `refactor(RefactorFR Phase 16): extract SSHBinaryReader + supporting types`
+
+**Result (2026-02-25):** BUILD SUCCEEDED. CertificateAuthorityService.swift: 987→870L. Commit `6f83002`.
 
 ### Phase 17 — Extract `CertificateAuthorityService+BinaryEncoding.swift`
 
@@ -345,8 +406,8 @@ The class mixes four distinct concerns in its private methods:
 **Files to create:** `ProSSHMac/Services/CertificateAuthorityService+BinaryEncoding.swift`
 
 **Steps:**
-- [ ] Create the file. Header: `// Extracted from CertificateAuthorityService.swift`.
-- [ ] Move into `extension CertificateAuthorityService`:
+- [x] Create the file. Header: `// Extracted from CertificateAuthorityService.swift`.
+- [x] Move into `extension CertificateAuthorityService`:
   - `sshString(from:)` — text overload
   - `sshString(from:)` — data overload
   - `u32(_:)`
@@ -356,9 +417,11 @@ The class mixes four distinct concerns in its private methods:
   - `fingerprintSHA256(for:)`
   - `randomBytes(count:)`
   - `readFirstSSHString(from:)`
-- [ ] Change `private func` → `func` (internal) on each.
-- [ ] Build.
-- [ ] Commit: `refactor(RefactorFR Phase 17): extract CertificateAuthorityService+BinaryEncoding`
+- [x] Change `private func` → `func` (internal) on each.
+- [x] Build.
+- [x] Commit: `refactor(RefactorFR Phase 17): extract CertificateAuthorityService+BinaryEncoding`
+
+**Result (2026-02-25):** BUILD SUCCEEDED. CertificateAuthorityService.swift: 870→796L. Commit `82cc151`.
 
 ### Phase 18 — Extract `CertificateAuthorityService+CertificateParsing.swift`
 
@@ -367,8 +430,8 @@ The class mixes four distinct concerns in its private methods:
 **Files to create:** `ProSSHMac/Services/CertificateAuthorityService+CertificateParsing.swift`
 
 **Steps:**
-- [ ] Create the file. Header: `// Extracted from CertificateAuthorityService.swift`.
-- [ ] Move into `extension CertificateAuthorityService`:
+- [x] Create the file. Header: `// Extracted from CertificateAuthorityService.swift`.
+- [x] Move into `extension CertificateAuthorityService`:
   - `parseAuthorizedCertificate(_:)`
   - `parseAuthorizedPublicKey(_:)`
   - `skipCertificateSubjectKeyData(certificateKeyType:reader:)`
@@ -378,9 +441,11 @@ The class mixes four distinct concerns in its private methods:
   - `parseSignatureAlgorithm(_:)`
   - `baseKeyType(fromCertificateKeyType:)`
   - `certificateKeyType(for:)`
-- [ ] Change `private func` → `func` on each.
-- [ ] Build. Verify `-strict-concurrency=complete` is clean.
-- [ ] Commit: `refactor(RefactorFR Phase 18): extract CertificateAuthorityService+CertificateParsing`
+- [x] Change `private func` → `func` on each.
+- [x] Build. Verify `-strict-concurrency=complete` is clean.
+- [x] Commit: `refactor(RefactorFR Phase 18): extract CertificateAuthorityService+CertificateParsing`
+
+**Result (2026-02-25):** BUILD SUCCEEDED. CertificateAuthorityService.swift: 796→577L. Commit `828c8de`.
 
 ### Phase 19 — Extract `CertificateAuthorityService+KRL.swift` & slim
 
@@ -389,27 +454,47 @@ The class mixes four distinct concerns in its private methods:
 **Files to create:** `ProSSHMac/Services/CertificateAuthorityService+KRL.swift`
 
 **Steps:**
-- [ ] Create the file. Header: `// Extracted from CertificateAuthorityService.swift`.
-- [ ] Move into `extension CertificateAuthorityService`:
+- [x] Create the file. Header: `// Extracted from CertificateAuthorityService.swift`.
+- [x] Move into `extension CertificateAuthorityService`:
   - `generateKRL(request:authorities:certificates:)`
   - `authorizedRepresentation(for:)`
   - `sanitizeFileComponent(_:)`
   - `csvSafe(_:)`
-- [ ] Change `private func` → `func` on each.
-- [ ] Verify `CertificateAuthorityService.swift` now contains only:
+- [x] Change `private func` → `func` on each.
+- [x] Verify `CertificateAuthorityService.swift` now contains only:
   request structs, error enum, stored properties, `init`, and the five
   core public business methods (`loadAuthorities`, `createAuthority`,
   `loadCertificates`, `signUserCertificate`, `signHostCertificate`,
   `signCertificate` private, `importExternalCertificate`, `deleteAuthorities`).
-- [ ] Remove `// swiftlint:disable file_length` if main file is under 400 lines.
-- [ ] Run full test suite.
-- [ ] Commit: `refactor(RefactorFR Phase 19): extract CertificateAuthorityService+KRL — service slim complete`
+- [x] Remove `// swiftlint:disable file_length` if main file is under 400 lines.
+  **NOTE:** 422L — above threshold; disable retained.
+- [x] Run full test suite.
+- [x] Commit: `refactor(RefactorFR Phase 19): extract CertificateAuthorityService+KRL — service slim complete`
+
+**Result (2026-02-25):** BUILD SUCCEEDED. Tests: 209 run, 2 pre-existing failures, 0 new.
+CertificateAuthorityService.swift: 577→422L. Commit `6a02e6c`. CertificateAuthorityService decomposition COMPLETE.
 
 ---
 
 ## Refactor Log
 
-*(Add dated entries here after each phase completes.)*
+- **2026-02-25 — Phases 10–14 COMPLETE** (commits `0a7ac88`–`e341205`): Decomposed
+  `SSHConfigParser.swift` (1,018 → 275 lines) by extracting all four non-parser types into
+  separate files: `SSHConfigTokenExpander.swift` (~59L, token expander + Context),
+  `SSHConfigMapper.swift` (~440L, full mapping struct with 8 private helpers),
+  `SSHConfigExporter.swift` (~128L, exporter + ExportOptions),
+  `SSHConfigImportService.swift` (~109L, orchestrator + ImportPreview + findDuplicates extension).
+  `// swiftlint:disable file_length` removed from SSHConfigParser.swift (275L < 400L).
+  Build: SUCCEEDED after each phase. Tests: 2 pre-existing failures, zero new across all phases.
+
+- **2026-02-25 — Phase 9 COMPLETE** (commit `eeb2ba3`): Extracted 6 read-only query/history
+  methods from `SessionManager.swift` into `SessionManager+Queries.swift` (`activeSession`,
+  `mostRelevantSession`, `totalTraffic`, `recentCommandBlocks`, `searchCommandHistory`,
+  `commandOutput`). File: 1,005 → 969 lines. 400-line target not achievable without a future
+  `SessionConnectionCoordinator` extraction. Build: SUCCEEDED. Tests: 2 pre-existing failures,
+  zero new.
+
+- **2026-02-25 — Phase 0 COMPLETE** (commit `99ef976`): Created branch `refactor/final-run` from master. Added `// swiftlint:disable file_length` as line 1 of `OpenAIResponsesService.swift`. Build baseline: BUILD SUCCEEDED, 0 warnings. Phase 1 is NOT STARTED.
 
 ---
 
