@@ -23,11 +23,11 @@ The long-term memory for this project lives in `docs/featurelist.md`.
 ```
 Active doc    : docs/RefactorTheFinalRun.md
 Active branch : refactor/final-run
-Current phase : Phase 5 — NOT STARTED
+Current phase : Phase 6 — NOT STARTED (File 2: SessionManager.swift)
 Phase status  : NOT STARTED
-Last commit   : b07c3cf "refactor(RefactorFR Phase 4): extract OpenAIResponsesService+Streaming.swift"
-Immediate action: Execute Phase 5 — slim & cleanup: verify OpenAIResponsesService.swift line count,
-                  remove swiftlint:disable file_length if below 400 lines, run tests.
+Last commit   : fa6348c "refactor(RefactorFR Phase 5): slim OpenAIResponsesService — cleanup complete"
+Immediate action: Begin File 2 — read docs/RefactorTheFinalRun.md Phase 6 plan and execute
+                  (SessionManager.swift decomposition, 1,196 lines).
 ```
 
 This is the **current working refactoring document**. Four god files remain after all

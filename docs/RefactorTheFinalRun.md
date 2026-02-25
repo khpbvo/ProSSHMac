@@ -161,10 +161,14 @@ static methods, 7 static utility functions. Service file: 669 → 260 lines. Str
 Remove `// swiftlint:disable file_length` once it's under 400 lines.
 
 **Steps:**
-- [ ] Verify current line count of `OpenAIResponsesService.swift`.
-- [ ] Remove `// swiftlint:disable file_length` if file is below 400 lines.
-- [ ] Run full test suite. Record any new failures vs. baseline.
-- [ ] Commit: `refactor(RefactorFR Phase 5): slim OpenAIResponsesService — cleanup complete`
+- [x] Verify current line count of `OpenAIResponsesService.swift`.
+- [x] Remove `// swiftlint:disable file_length` if file is below 400 lines.
+- [x] Run full test suite. Record any new failures vs. baseline.
+- [x] Commit: `refactor(RefactorFR Phase 5): slim OpenAIResponsesService — cleanup complete`
+
+**COMPLETE** (2026-02-25, commit `fa6348c`). File is 259 lines. Removed `// swiftlint:disable file_length`.
+Tests: 209 tests, 2 failures — both pre-existing (Base32Tests.testDecodeEmpty, ColorRenderValidationTest
+color rendering). No new failures introduced. OpenAIResponsesService decomposition fully complete.
 
 ---
 
