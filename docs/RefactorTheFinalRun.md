@@ -90,19 +90,23 @@ widened from `private` → `internal`. Service file: 1,305 → 1,043 lines. Type
 **Files to create:** `ProSSHMac/Services/OpenAIResponsesPayloadTypes.swift`
 
 **Steps:**
-- [ ] Read the bottom of `OpenAIResponsesService.swift` (lines 1228–1305).
-- [ ] Create `Services/OpenAIResponsesPayloadTypes.swift`. Header: `// Extracted from OpenAIResponsesService.swift`.
-- [ ] Move into it:
+- [x] Read the bottom of `OpenAIResponsesService.swift` (lines 1228–1305).
+- [x] Create `Services/OpenAIResponsesPayloadTypes.swift`. Header: `// Extracted from OpenAIResponsesService.swift`.
+- [x] Move into it:
   - `CreateRequestPayload` struct
+  - `CreateInputItem` enum (also present — plan sketch missed it)
   - `CreateInputMessage` struct
   - `CreateFunctionCallOutput` struct
   - `OpenAIErrorEnvelope` struct + nested `APIError`
-- [ ] Change `private struct` → `struct` (internal) so they compile cross-file.
-- [ ] The `fileprivate static func decodeJSONValue` on `OpenAIResponsesService` is
+- [x] Change `private struct` → `struct` (internal) so they compile cross-file.
+- [x] The `fileprivate static func decodeJSONValue` on `OpenAIResponsesService` is
   used by `StreamingResponseAccumulator` — change `fileprivate` → `internal` now
   (it will stay on the service class; the accumulator will call it after extraction).
-- [ ] Build. Fix any remaining access issues.
-- [ ] Commit: `refactor(RefactorFR Phase 2): extract OpenAIResponsesPayloadTypes.swift`
+- [x] Build. Fix any remaining access issues.
+- [x] Commit: `refactor(RefactorFR Phase 2): extract OpenAIResponsesPayloadTypes.swift`
+
+**COMPLETE** (2026-02-25, commit `5e90cd9`). Correction: plan sketch missed `CreateInputItem` enum —
+also moved to payload types file. Service file: 1,043 → 964 lines. Payload types file: 81 lines.
 
 ### Phase 3 — Extract `OpenAIResponsesStreamAccumulator.swift`
 

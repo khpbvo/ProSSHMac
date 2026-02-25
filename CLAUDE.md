@@ -23,12 +23,11 @@ The long-term memory for this project lives in `docs/featurelist.md`.
 ```
 Active doc    : docs/RefactorTheFinalRun.md
 Active branch : refactor/final-run
-Current phase : Phase 2 — NOT STARTED
+Current phase : Phase 3 — NOT STARTED
 Phase status  : NOT STARTED
-Last commit   : 6559ce6 "refactor(RefactorFR Phase 1): extract OpenAIResponsesTypes.swift"
-Immediate action: Execute Phase 2 — create OpenAIResponsesPayloadTypes.swift (move
-                  CreateRequestPayload, CreateInputMessage, CreateFunctionCallOutput,
-                  OpenAIErrorEnvelope from bottom of OpenAIResponsesService.swift).
+Last commit   : 5e90cd9 "refactor(RefactorFR Phase 2): extract OpenAIResponsesPayloadTypes.swift"
+Immediate action: Execute Phase 3 — create OpenAIResponsesStreamAccumulator.swift (move
+                  StreamingResponseAccumulator private struct out of OpenAIResponsesService.swift).
 ```
 
 This is the **current working refactoring document**. Four god files remain after all
