@@ -118,7 +118,11 @@ struct TerminalAIAssistantPane: View {
     }
 
     private var reasoningStreamPanel: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let summaryText = viewModel.formattedReasoningSummary
+        let detailText = viewModel.formattedReasoningDetails
+        let hasContent = !summaryText.isEmpty || !detailText.isEmpty
+
+        return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Image(systemName: "brain")
                     .font(.caption)
@@ -138,25 +142,30 @@ struct TerminalAIAssistantPane: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 8) {
-                        if viewModel.reasoningPanelText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        if !hasContent {
                             Text("Reasoning summaries will appear here while the assistant is working.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         } else {
-                            Text(AIAssistantRenderer.markdownText(viewModel.reasoningPanelText))
-                                .font(.system(size: 13))
-                                .lineSpacing(2)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .textSelection(.enabled)
+                            if !summaryText.isEmpty {
+                                reasoningSection(title: "Summary", text: summaryText)
+                            }
+                            if !detailText.isEmpty {
+                                reasoningSection(title: "Thinking", text: detailText)
+                            }
                         }
                         Color.clear
                             .frame(height: 1)
                             .id(reasoningBottomID)
                     }
                 }
-                .onChange(of: viewModel.reasoningPanelText) { _, _ in
+                .onChange(of: viewModel.formattedReasoningSummary) { _, _ in
+                    withAnimation(.linear(duration: 0.08)) {
+                        proxy.scrollTo(reasoningBottomID, anchor: .bottom)
+                    }
+                }
+                .onChange(of: viewModel.formattedReasoningDetails) { _, _ in
                     withAnimation(.linear(duration: 0.08)) {
                         proxy.scrollTo(reasoningBottomID, anchor: .bottom)
                     }
@@ -168,7 +177,7 @@ struct TerminalAIAssistantPane: View {
                 }
             }
         }
-        .frame(height: 150)
+        .frame(height: 170)
         .padding(10)
         .background(
             RoundedRectangle(cornerRadius: 12)
@@ -179,6 +188,23 @@ struct TerminalAIAssistantPane: View {
                 .strokeBorder(colorScheme == .dark ? Color.orange.opacity(0.4) : Color.orange.opacity(0.45), lineWidth: 1)
         )
         .padding(.horizontal, 12)
+    }
+
+    private func reasoningSection(title: String, text: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+                .tracking(0.4)
+            Text(AIAssistantRenderer.markdownText(text))
+                .font(.system(size: 13))
+                .lineSpacing(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var visibleMessages: [TerminalAIAssistantMessage] {
@@ -816,19 +842,15 @@ private enum AIAssistantRenderer {
         guard !trimmed.isEmpty else { return "" }
 
         // Respect already-structured markdown.
-        if trimmed.contains("```")
-            || trimmed.contains("\n\n")
-            || trimmed.contains("\n#")
-            || trimmed.contains("\n- ")
-            || trimmed.contains("\n* ")
-            || trimmed.contains("\n1. ")
-            || trimmed.contains("\n2. ")
-            || trimmed.contains("\n3. ") {
+        if trimmed.contains("```") || hasStructuredMarkdown(trimmed) {
             return trimmed
         }
 
         let spaced = normalizeInlineSpacing(trimmed)
         let listified = bulletizeCapabilityListIfNeeded(spaced)
+        if hasStructuredMarkdown(listified) {
+            return listified
+        }
         guard listified.count >= 120 else { return listified }
 
         var sentences = splitSentences(from: listified)
@@ -851,7 +873,7 @@ private enum AIAssistantRenderer {
     }
 
     private static func splitSentences(from text: String) -> [String] {
-        let pattern = #"(?<=[.!?])\s*(?=[A-Z0-9\"'`(])"#
+        let pattern = #"(?:(?<=[.!?])|(?<=\)))\s*(?=[A-Z0-9\"'`(])"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
 
         let nsText = text as NSString
@@ -897,7 +919,7 @@ private enum AIAssistantRenderer {
             options: .regularExpression
         )
         result = applyRegexReplacement(
-            pattern: #"(?<=[\.\!\?;:,])(?=[A-Z0-9\"'`(])"#,
+            pattern: #"(?<=[\.\!\?;:,\)])(?=[A-Z0-9\"'`(])"#,
             replacement: " ",
             to: result
         )
@@ -917,13 +939,25 @@ private enum AIAssistantRenderer {
         }
         let lead = String(text[..<colonIndex]).trimmingCharacters(in: .whitespacesAndNewlines)
         let remainder = String(text[text.index(after: colonIndex)...])
-        let clauses = remainder.split(
-            whereSeparator: { $0 == "," || $0 == ";" || $0 == "." }
+        let sentenceBounded = applyRegexReplacement(
+            pattern: #"(?:(?<=[.!?])|(?<=\)))\s*(?=[A-Z0-9\"'`(])"#,
+            replacement: "\n",
+            to: remainder
         )
-            .map { fragment in
-                cleanListItem(String(fragment))
-            }
+        let semicolonSplit = sentenceBounded.split(
+            whereSeparator: { $0 == "\n" || $0 == ";" }
+        )
+        var clauses = semicolonSplit
+            .map { fragment in cleanListItem(String(fragment)) }
             .filter { !$0.isEmpty }
+
+        if clauses.count < 3 {
+            clauses = sentenceBounded.split(
+                whereSeparator: { $0 == "\n" || $0 == ";" || $0 == "," }
+            )
+            .map { fragment in cleanListItem(String(fragment)) }
+            .filter { !$0.isEmpty }
+        }
 
         guard clauses.count >= 3 else {
             return text
@@ -935,7 +969,7 @@ private enum AIAssistantRenderer {
 
     private static func cleanListItem(_ raw: String) -> String {
         var value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        let prefixes = ["and ", "or ", "then "]
+        let prefixes = ["and ", "or ", "then ", "also "]
         for prefix in prefixes {
             if value.lowercased().hasPrefix(prefix) {
                 value = String(value.dropFirst(prefix.count))
@@ -953,6 +987,15 @@ private enum AIAssistantRenderer {
         }
         let range = NSRange(location: 0, length: (text as NSString).length)
         return regex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: replacement)
+    }
+
+    private static func hasStructuredMarkdown(_ text: String) -> Bool {
+        text.contains("\n#")
+            || text.contains("\n- ")
+            || text.contains("\n* ")
+            || text.contains("\n1. ")
+            || text.contains("\n2. ")
+            || text.contains("\n3. ")
     }
 
     private static func applyRegex(_ pattern: String, color: NSColor, to attributed: NSMutableAttributedString) {

@@ -54,15 +54,23 @@ final class TerminalAIAssistantViewModel: ObservableObject {
     private var activePatchApprovalOperation: PatchOperation?
     private var activePatchApprovalFingerprint: String?
 
+    var formattedReasoningSummary: String {
+        Self.makeReadableText(reasoningSummary)
+    }
+
+    var formattedReasoningDetails: String {
+        Self.makeReadableText(reasoningDetails)
+    }
+
     var reasoningPanelText: String {
         var sections: [String] = []
-        let summaryText = reasoningSummary.trimmingCharacters(in: .whitespacesAndNewlines)
-        let detailText = reasoningDetails.trimmingCharacters(in: .whitespacesAndNewlines)
+        let summaryText = formattedReasoningSummary
+        let detailText = formattedReasoningDetails
         if !summaryText.isEmpty {
-            sections.append("### Summary\n\(summaryText)")
+            sections.append("Summary\n\(summaryText)")
         }
         if !detailText.isEmpty {
-            sections.append("### Thinking\n\(detailText)")
+            sections.append("Thinking\n\(detailText)")
         }
         return sections.joined(separator: "\n\n")
     }
@@ -385,14 +393,14 @@ final class TerminalAIAssistantViewModel: ObservableObject {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }
         guard !trimmed.contains("```") else { return trimmed }
-        guard !trimmed.contains("\n\n") else { return trimmed }
         let spaced = Self.normalizeInlineSpacing(trimmed)
         let listified = Self.bulletizeCapabilityListIfNeeded(spaced)
+        guard !Self.hasStructuredMarkdown(listified) else { return listified }
         return Self.reflowDenseParagraphs(listified)
     }
 
     private static func reflowDenseParagraphs(_ text: String) -> String {
-        let pattern = #"(?<=[.!?])\s*(?=[A-Z0-9\"'`(])"#
+        let pattern = #"(?:(?<=[.!?])|(?<=\)))\s*(?=[A-Z0-9\"'`(])"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else {
             return text
         }
@@ -439,7 +447,7 @@ final class TerminalAIAssistantViewModel: ObservableObject {
             options: .regularExpression
         )
         result = applyRegex(
-            pattern: #"(?<=[\.\!\?;:,])(?=[A-Z0-9\"'`(])"#,
+            pattern: #"(?<=[\.\!\?;:,\)])(?=[A-Z0-9\"'`(])"#,
             replacement: " ",
             to: result
         )
@@ -459,13 +467,25 @@ final class TerminalAIAssistantViewModel: ObservableObject {
         }
         let lead = String(text[..<colonIndex]).trimmingCharacters(in: .whitespacesAndNewlines)
         let remainder = String(text[text.index(after: colonIndex)...])
-        let clauses = remainder.split(
-            whereSeparator: { $0 == "," || $0 == ";" || $0 == "." }
+        let sentenceBounded = applyRegex(
+            pattern: #"(?:(?<=[.!?])|(?<=\)))\s*(?=[A-Z0-9\"'`(])"#,
+            replacement: "\n",
+            to: remainder
         )
-            .map { fragment in
-                cleanListItem(String(fragment))
-            }
+        let semicolonSplit = sentenceBounded.split(
+            whereSeparator: { $0 == "\n" || $0 == ";" }
+        )
+        var clauses = semicolonSplit
+            .map { fragment in cleanListItem(String(fragment)) }
             .filter { !$0.isEmpty }
+
+        if clauses.count < 3 {
+            clauses = sentenceBounded.split(
+                whereSeparator: { $0 == "\n" || $0 == ";" || $0 == "," }
+            )
+            .map { fragment in cleanListItem(String(fragment)) }
+            .filter { !$0.isEmpty }
+        }
 
         guard clauses.count >= 3 else {
             return text
@@ -477,7 +497,7 @@ final class TerminalAIAssistantViewModel: ObservableObject {
 
     private static func cleanListItem(_ raw: String) -> String {
         var value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        let prefixes = ["and ", "or ", "then "]
+        let prefixes = ["and ", "or ", "then ", "also "]
         for prefix in prefixes {
             if value.lowercased().hasPrefix(prefix) {
                 value = String(value.dropFirst(prefix.count))
@@ -495,5 +515,22 @@ final class TerminalAIAssistantViewModel: ObservableObject {
         }
         let range = NSRange(location: 0, length: (text as NSString).length)
         return regex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: replacement)
+    }
+
+    private static func hasStructuredMarkdown(_ text: String) -> Bool {
+        text.contains("\n#")
+            || text.contains("\n- ")
+            || text.contains("\n* ")
+            || text.contains("\n1. ")
+            || text.contains("\n2. ")
+            || text.contains("\n3. ")
+    }
+
+    private static func makeReadableText(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        guard !hasStructuredMarkdown(trimmed) else { return trimmed }
+        let spaced = normalizeInlineSpacing(trimmed)
+        return reflowDenseParagraphs(spaced)
     }
 }

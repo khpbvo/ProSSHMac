@@ -114,7 +114,7 @@ final class TerminalAIAssistantViewModelTests: XCTestCase {
         XCTAssertEqual(assistantMessage?.content, "Done.")
         XCTAssertFalse(viewModel.isReasoningStreaming)
         XCTAssertTrue(viewModel.reasoningPanelText.contains("Checking logs... done."))
-        XCTAssertTrue(viewModel.reasoningPanelText.contains("### Summary"))
+        XCTAssertTrue(viewModel.reasoningPanelText.contains("Summary\nChecking logs... done."))
     }
 
     func testSubmitPromptCapturesLateReasoningInFixedPanel() async throws {
@@ -204,6 +204,36 @@ final class TerminalAIAssistantViewModelTests: XCTestCase {
         let assistantText = viewModel.messages[1].content
         XCTAssertTrue(assistantText.contains("\n- "))
         XCTAssertFalse(assistantText.contains(".Provide"))
+    }
+
+    func testSubmitPromptFormatsCapabilityRunOnWithToolNamesIntoBulletList() async throws {
+        let sessionID = UUID()
+        let rawReply = "Sure, here is a concise list of abilities:Execute shell commands and return output directly (execute_and_wait).Run interactive commands (execute_command) and inspect live screen (get_current_screen).View command history (get_recent_commands) and fetch command output (get_command_output).Search files (search_filesystem) and content (search_file_contents)."
+        let service = MockOpenAIAgentService(
+            nextReply: OpenAIAgentReply(
+                text: rawReply,
+                responseID: "resp_fmt_tools",
+                toolCallsExecuted: 0
+            )
+        )
+        let viewModel = TerminalAIAssistantViewModel(
+            agentService: service,
+            streamChunkDelayNanoseconds: 0
+        )
+
+        viewModel.draftPrompt = "List your abilities"
+        viewModel.submitPrompt(for: sessionID)
+
+        try await waitUntil(timeout: 1.5) {
+            !viewModel.isSending
+        }
+
+        let assistantText = viewModel.messages[1].content
+        let lowered = assistantText.lowercased()
+        XCTAssertTrue(assistantText.contains("\n- "))
+        XCTAssertTrue(lowered.contains("execute_and_wait"))
+        XCTAssertTrue(lowered.contains("execute_command"))
+        XCTAssertFalse(assistantText.contains(":Execute"))
     }
 
     private func waitUntil(

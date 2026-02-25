@@ -46,6 +46,7 @@ enum AIToolDefinitions {
 
         FORMAT:
         - Use readable markdown with short paragraphs, bullet points, and code blocks.
+        - If the user asks for a list (abilities, steps, options, checks), respond as a markdown bullet or numbered list, not a single dense paragraph.
         - Add a brief heading when it improves scanning.
         - Show relevant command output in fenced code blocks.
         - Be concise but thorough.
