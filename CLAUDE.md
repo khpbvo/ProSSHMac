@@ -23,11 +23,11 @@ The long-term memory for this project lives in `docs/featurelist.md`.
 ```
 Active doc    : docs/RefactorTheFinalRun.md
 Active branch : refactor/final-run
-Current phase : Phase 9 — NOT STARTED (File 2: SessionManager.swift)
+Current phase : Phase 10 — NOT STARTED (File 3: SSHConfigParser.swift)
 Phase status  : NOT STARTED
-Last commit   : b6fdf69 "refactor(RefactorFR Phase 8): extract SessionShellIOCoordinator"
-Immediate action: Begin Phase 9 — read docs/RefactorTheFinalRun.md Phase 9 plan and execute
-                  (slim SessionManager to lifecycle-only, target <400 lines, currently 1,005 lines).
+Last commit   : eeb2ba3 "refactor(RefactorFR Phase 9): extract SessionManager+Queries — slim to lifecycle only"
+Immediate action: Begin Phase 10 — read docs/RefactorTheFinalRun.md Phase 10 plan and execute
+                  (SSHConfigParser.swift baseline: add swiftlint:disable, currently 1,018 lines).
 ```
 
 This is the **current working refactoring document**. Four god files remain after all
