@@ -374,9 +374,11 @@ The class mixes four distinct concerns in its private methods:
 
 ### Phase 15 — Baseline
 
-- [ ] Add `// swiftlint:disable file_length` as line 1.
-- [ ] Run build. Confirm no new failures.
-- [ ] Commit: `docs: Phase 15 swiftlint disable on CertificateAuthorityService.swift`
+- [x] Add `// swiftlint:disable file_length` as line 1.
+- [x] Run build. Confirm no new failures.
+- [x] Commit: `docs: Phase 15 swiftlint disable on CertificateAuthorityService.swift`
+
+**Result (2026-02-25):** BUILD SUCCEEDED. Commit `17503da`.
 
 ### Phase 16 — Extract `SSHBinaryReader.swift`
 

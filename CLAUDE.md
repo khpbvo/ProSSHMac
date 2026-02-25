@@ -23,11 +23,11 @@ The long-term memory for this project lives in `docs/featurelist.md`.
 ```
 Active doc    : docs/RefactorTheFinalRun.md
 Active branch : refactor/final-run
-Current phase : Phase 15 — NOT STARTED (File 4: CertificateAuthorityService.swift)
+Current phase : Phase 16 — NOT STARTED (Extract SSHBinaryReader.swift)
 Phase status  : NOT STARTED
-Last commit   : e341205 "refactor(RefactorFR Phase 14): extract SSHConfigImportService — SSHConfigParser slim complete"
-Immediate action: Begin Phase 15 — read docs/RefactorTheFinalRun.md Phase 15 plan and execute
-                  (CertificateAuthorityService.swift baseline: add swiftlint:disable, currently 985 lines).
+Last commit   : 17503da "docs: Phase 15 swiftlint disable on CertificateAuthorityService.swift"
+Immediate action: Begin Phase 16 — read docs/RefactorTheFinalRun.md Phase 16 plan and execute
+                  (Extract SSHBinaryReader + supporting private structs/enums from CertificateAuthorityService.swift).
 ```
 
 This is the **current working refactoring document**. Four god files remain after all
