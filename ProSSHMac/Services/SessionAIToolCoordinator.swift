@@ -47,6 +47,21 @@ import Foundation
 
         let deadline = Date().addingTimeInterval(timeoutSeconds)
         while Date() < deadline {
+            if let visibleLines = manager.shellBuffers[sessionID], !visibleLines.isEmpty {
+                let screenText = visibleLines.joined(separator: "\n")
+                if screenText.contains(marker) {
+                    let parsed = parseWrappedCommandOutput(screenText, marker: marker)
+                    if parsed.exitCode != nil {
+                        return CommandExecutionResult(
+                            output: parsed.output,
+                            exitCode: parsed.exitCode,
+                            timedOut: false,
+                            blockID: nil
+                        )
+                    }
+                }
+            }
+
             if let liveOutput = await manager.terminalHistoryIndex.activeCommandRawOutput(sessionID: sessionID),
                liveOutput.contains(marker) {
                 let parsed = parseWrappedCommandOutput(liveOutput, marker: marker)
