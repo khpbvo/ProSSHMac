@@ -115,14 +115,17 @@ also moved to payload types file. Service file: 1,043 → 964 lines. Payload typ
 **Files to create:** `ProSSHMac/Services/OpenAIResponsesStreamAccumulator.swift`
 
 **Steps:**
-- [ ] Read `StreamingResponseAccumulator` fully (lines ~933–1227).
-- [ ] Create `Services/OpenAIResponsesStreamAccumulator.swift`. Header: `// Extracted from OpenAIResponsesService.swift`.
-- [ ] Move the entire `StreamingResponseAccumulator` struct. Change `private struct` →
+- [x] Read `StreamingResponseAccumulator` fully (lines ~933–1227).
+- [x] Create `Services/OpenAIResponsesStreamAccumulator.swift`. Header: `// Extracted from OpenAIResponsesService.swift`.
+- [x] Move the entire `StreamingResponseAccumulator` struct. Change `private struct` →
   `struct` (internal).
-- [ ] Update any call in `OpenAIResponsesService` that referenced the type as `private`
+- [x] Update any call in `OpenAIResponsesService` that referenced the type as `private`
   — no changes needed (struct was already `private` in same file; now just `internal`).
-- [ ] Build. Verify zero concurrency warnings with `-strict-concurrency=complete`.
-- [ ] Commit: `refactor(RefactorFR Phase 3): extract OpenAIResponsesStreamAccumulator.swift`
+- [x] Build. Verify zero concurrency warnings with `-strict-concurrency=complete`.
+- [x] Commit: `refactor(RefactorFR Phase 3): extract OpenAIResponsesStreamAccumulator.swift`
+
+**COMPLETE** (2026-02-25, commit `6b0c8a2`). Service file: 964 → 669 lines. Accumulator file: 297 lines.
+No access-level corrections needed beyond `private struct` → `struct`.
 
 ### Phase 4 — Extract `OpenAIResponsesService+Streaming.swift`
 
