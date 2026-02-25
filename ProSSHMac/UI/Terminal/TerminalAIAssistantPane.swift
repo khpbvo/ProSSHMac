@@ -5,6 +5,7 @@ struct TerminalAIAssistantPane: View {
     @Environment(\.colorScheme) private var colorScheme
     @ObservedObject var viewModel: TerminalAIAssistantViewModel
     @State private var composerHeight: CGFloat = 38
+    private let reasoningBottomID = "reasoning-stream-bottom"
     var session: Session?
     var onClose: () -> Void
     var onSend: (UUID) -> Void
@@ -60,17 +61,27 @@ struct TerminalAIAssistantPane: View {
     }
 
     private var messagesView: some View {
+        VStack(spacing: 8) {
+            reasoningStreamPanel
+            conversationMessagesView
+        }
+        .padding(.top, 8)
+    }
+
+    private var conversationMessagesView: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
-                    if viewModel.messages.isEmpty {
+                    if visibleMessages.isEmpty {
                         emptyState
                     } else {
-                        ForEach(viewModel.messages) { message in
+                        ForEach(visibleMessages) { message in
                             switch message.kind {
                             case .text:
                                 AIAssistantMessageCard(message: message)
                                     .id(message.id)
+                            case .reasoning:
+                                EmptyView()
                             case let .patchApproval(op, path, diffPreview, _, state):
                                 PatchApprovalCardView(
                                     operation: op, path: path, diffPreview: diffPreview, state: state,
@@ -91,18 +102,91 @@ struct TerminalAIAssistantPane: View {
                 }
                 .padding(12)
             }
-            .onChange(of: viewModel.messages.count) { _, _ in
-                guard let lastID = viewModel.messages.last?.id else { return }
+            .onChange(of: visibleMessages.count) { _, _ in
+                guard let lastID = visibleMessages.last?.id else { return }
                 withAnimation(.easeOut(duration: 0.15)) {
                     proxy.scrollTo(lastID, anchor: .bottom)
                 }
             }
-            .onChange(of: viewModel.messages.last?.content) { _, _ in
-                guard let last = viewModel.messages.last, last.isStreaming else { return }
+            .onChange(of: visibleMessages.last?.content) { _, _ in
+                guard let last = visibleMessages.last, last.isStreaming else { return }
                 withAnimation(.linear(duration: 0.06)) {
                     proxy.scrollTo(last.id, anchor: .bottom)
                 }
             }
+        }
+    }
+
+    private var reasoningStreamPanel: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "brain")
+                    .font(.caption)
+                Text("Reasoning Stream")
+                    .font(.caption.weight(.semibold))
+                if viewModel.isReasoningStreaming {
+                    ProgressView()
+                        .controlSize(.mini)
+                }
+                Spacer(minLength: 0)
+                Text(viewModel.isReasoningStreaming ? "Live" : "Idle")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .foregroundStyle(.secondary)
+
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        if viewModel.reasoningPanelText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            Text("Reasoning summaries will appear here while the assistant is working.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        } else {
+                            Text(AIAssistantRenderer.markdownText(viewModel.reasoningPanelText))
+                                .font(.system(size: 13))
+                                .lineSpacing(2)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .textSelection(.enabled)
+                        }
+                        Color.clear
+                            .frame(height: 1)
+                            .id(reasoningBottomID)
+                    }
+                }
+                .onChange(of: viewModel.reasoningPanelText) { _, _ in
+                    withAnimation(.linear(duration: 0.08)) {
+                        proxy.scrollTo(reasoningBottomID, anchor: .bottom)
+                    }
+                }
+                .onChange(of: viewModel.isReasoningStreaming) { _, _ in
+                    withAnimation(.linear(duration: 0.08)) {
+                        proxy.scrollTo(reasoningBottomID, anchor: .bottom)
+                    }
+                }
+            }
+        }
+        .frame(height: 150)
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(colorScheme == .dark ? Color.orange.opacity(0.14) : Color.orange.opacity(0.10))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(colorScheme == .dark ? Color.orange.opacity(0.4) : Color.orange.opacity(0.45), lineWidth: 1)
+        )
+        .padding(.horizontal, 12)
+    }
+
+    private var visibleMessages: [TerminalAIAssistantMessage] {
+        viewModel.messages.filter { message in
+            if case .reasoning = message.kind {
+                return false
+            }
+            return true
         }
     }
 
@@ -272,6 +356,45 @@ private struct AIAssistantMessageCard: View {
         case .assistant, .system:
             return colorScheme == .dark ? Color.white.opacity(0.05) : Color.white.opacity(0.72)
         }
+    }
+}
+
+private struct AIAssistantReasoningBubble: View {
+    @Environment(\.colorScheme) private var colorScheme
+    let message: TerminalAIAssistantMessage
+    let title: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "brain")
+                    .font(.caption)
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                if message.isStreaming {
+                    ProgressView()
+                        .controlSize(.mini)
+                }
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(.secondary)
+
+            Text(AIAssistantRenderer.markdownText(message.content))
+                .font(.system(size: 13))
+                .lineSpacing(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(colorScheme == .dark ? Color.orange.opacity(0.14) : Color.orange.opacity(0.10))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(colorScheme == .dark ? Color.orange.opacity(0.4) : Color.orange.opacity(0.45), lineWidth: 1)
+        )
     }
 }
 
@@ -704,13 +827,15 @@ private enum AIAssistantRenderer {
             return trimmed
         }
 
-        guard trimmed.count >= 180 else { return trimmed }
+        let spaced = normalizeInlineSpacing(trimmed)
+        let listified = bulletizeCapabilityListIfNeeded(spaced)
+        guard listified.count >= 120 else { return listified }
 
-        var sentences = splitSentences(from: trimmed)
+        var sentences = splitSentences(from: listified)
         if sentences.count < 2 {
-            sentences = splitSemicolonClauses(from: trimmed)
+            sentences = splitSemicolonClauses(from: listified)
         }
-        guard sentences.count >= 2 else { return trimmed }
+        guard sentences.count >= 2 else { return listified }
 
         var paragraphs: [String] = []
         paragraphs.reserveCapacity((sentences.count + 1) / 2)
@@ -726,7 +851,7 @@ private enum AIAssistantRenderer {
     }
 
     private static func splitSentences(from text: String) -> [String] {
-        let pattern = #"(?<=[.!?])\s*(?=[A-Z0-9\"'`])"#
+        let pattern = #"(?<=[.!?])\s*(?=[A-Z0-9\"'`(])"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
 
         let nsText = text as NSString
@@ -763,6 +888,71 @@ private enum AIAssistantRenderer {
             .map { clause in
                 clause.hasSuffix(".") ? clause : clause + "."
             }
+    }
+
+    private static func normalizeInlineSpacing(_ text: String) -> String {
+        var result = text.replacingOccurrences(
+            of: #"[ \t]+"#,
+            with: " ",
+            options: .regularExpression
+        )
+        result = applyRegexReplacement(
+            pattern: #"(?<=[\.\!\?;:,])(?=[A-Z0-9\"'`(])"#,
+            replacement: " ",
+            to: result
+        )
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func bulletizeCapabilityListIfNeeded(_ text: String) -> String {
+        let lowered = text.lowercased()
+        guard lowered.contains("i can")
+            || lowered.contains("abilities")
+            || lowered.contains("capabilities") else {
+            return text
+        }
+
+        guard let colonIndex = text.firstIndex(of: ":") else {
+            return text
+        }
+        let lead = String(text[..<colonIndex]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let remainder = String(text[text.index(after: colonIndex)...])
+        let clauses = remainder.split(
+            whereSeparator: { $0 == "," || $0 == ";" || $0 == "." }
+        )
+            .map { fragment in
+                cleanListItem(String(fragment))
+            }
+            .filter { !$0.isEmpty }
+
+        guard clauses.count >= 3 else {
+            return text
+        }
+
+        let bullets = clauses.map { "- \($0)" }.joined(separator: "\n")
+        return "\(lead):\n\n\(bullets)"
+    }
+
+    private static func cleanListItem(_ raw: String) -> String {
+        var value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prefixes = ["and ", "or ", "then "]
+        for prefix in prefixes {
+            if value.lowercased().hasPrefix(prefix) {
+                value = String(value.dropFirst(prefix.count))
+            }
+        }
+        while let last = value.last, [".", ",", ";", ":"].contains(String(last)) {
+            value.removeLast()
+        }
+        return value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func applyRegexReplacement(pattern: String, replacement: String, to text: String) -> String {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            return text
+        }
+        let range = NSRange(location: 0, length: (text as NSString).length)
+        return regex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: replacement)
     }
 
     private static func applyRegex(_ pattern: String, color: NSColor, to attributed: NSMutableAttributedString) {

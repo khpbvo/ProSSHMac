@@ -82,6 +82,130 @@ final class TerminalAIAssistantViewModelTests: XCTestCase {
         XCTAssertTrue(assistantText.contains("\n\n"))
     }
 
+    func testSubmitPromptStreamsReasoningBubbleMessages() async throws {
+        let sessionID = UUID()
+        let service = MockOpenAIAgentService(
+            nextReply: OpenAIAgentReply(
+                text: "Done.",
+                responseID: "resp_stream",
+                toolCallsExecuted: 0
+            )
+        )
+        service.streamEvents = [
+            .reasoningSummaryDelta("Checking logs... "),
+            .reasoningSummaryDone("Checking logs... done."),
+            .assistantTextDelta("Done."),
+            .assistantTextDone("Done."),
+        ]
+        let viewModel = TerminalAIAssistantViewModel(
+            agentService: service,
+            streamChunkDelayNanoseconds: 0
+        )
+
+        viewModel.draftPrompt = "Investigate"
+        viewModel.submitPrompt(for: sessionID)
+
+        try await waitUntil(timeout: 1.5) {
+            !viewModel.isSending
+        }
+
+        XCTAssertEqual(viewModel.messages.count, 2)
+        let assistantMessage = viewModel.messages.first(where: { $0.role == .assistant && $0.kind == .text })
+        XCTAssertEqual(assistantMessage?.content, "Done.")
+        XCTAssertFalse(viewModel.isReasoningStreaming)
+        XCTAssertTrue(viewModel.reasoningPanelText.contains("Checking logs... done."))
+        XCTAssertTrue(viewModel.reasoningPanelText.contains("### Summary"))
+    }
+
+    func testSubmitPromptCapturesLateReasoningInFixedPanel() async throws {
+        let sessionID = UUID()
+        let service = MockOpenAIAgentService(
+            nextReply: OpenAIAgentReply(
+                text: "Final answer.",
+                responseID: "resp_late_reasoning",
+                toolCallsExecuted: 0
+            )
+        )
+        service.streamEvents = [
+            .assistantTextDelta("Final "),
+            .assistantTextDone("Final answer."),
+            .reasoningSummaryDone("Thinking done."),
+        ]
+        let viewModel = TerminalAIAssistantViewModel(
+            agentService: service,
+            streamChunkDelayNanoseconds: 0
+        )
+
+        viewModel.draftPrompt = "Test order"
+        viewModel.submitPrompt(for: sessionID)
+
+        try await waitUntil(timeout: 1.5) {
+            !viewModel.isSending
+        }
+
+        XCTAssertEqual(viewModel.messages.count, 2)
+        XCTAssertEqual(viewModel.messages[1].content, "Final answer.")
+        XCTAssertFalse(viewModel.isReasoningStreaming)
+        XCTAssertTrue(viewModel.reasoningPanelText.contains("Thinking done."))
+    }
+
+    func testSubmitPromptKeepsStreamedAssistantTextWhenFinalReplyTextEmpty() async throws {
+        let sessionID = UUID()
+        let service = MockOpenAIAgentService(
+            nextReply: OpenAIAgentReply(
+                text: "",
+                responseID: "resp_stream_empty_final",
+                toolCallsExecuted: 0
+            )
+        )
+        service.streamEvents = [
+            .assistantTextDelta("Hello from stream"),
+        ]
+        let viewModel = TerminalAIAssistantViewModel(
+            agentService: service,
+            streamChunkDelayNanoseconds: 0
+        )
+
+        viewModel.draftPrompt = "Say hello"
+        viewModel.submitPrompt(for: sessionID)
+
+        try await waitUntil(timeout: 1.5) {
+            !viewModel.isSending
+        }
+
+        XCTAssertEqual(viewModel.messages.count, 2)
+        XCTAssertEqual(viewModel.messages[1].role, .assistant)
+        XCTAssertEqual(viewModel.messages[1].content, "Hello from stream")
+        XCTAssertFalse(viewModel.messages[1].isStreaming)
+    }
+
+    func testSubmitPromptFormatsDenseCapabilitySentenceIntoReadableList() async throws {
+        let sessionID = UUID()
+        let rawReply = "I can:Run commands and inspect output.Provide summaries and explain failures.Search files and inspect results."
+        let service = MockOpenAIAgentService(
+            nextReply: OpenAIAgentReply(
+                text: rawReply,
+                responseID: "resp_fmt",
+                toolCallsExecuted: 0
+            )
+        )
+        let viewModel = TerminalAIAssistantViewModel(
+            agentService: service,
+            streamChunkDelayNanoseconds: 0
+        )
+
+        viewModel.draftPrompt = "What can you do?"
+        viewModel.submitPrompt(for: sessionID)
+
+        try await waitUntil(timeout: 1.5) {
+            !viewModel.isSending
+        }
+
+        let assistantText = viewModel.messages[1].content
+        XCTAssertTrue(assistantText.contains("\n- "))
+        XCTAssertFalse(assistantText.contains(".Provide"))
+    }
+
     private func waitUntil(
         timeout: TimeInterval,
         condition: @escaping @MainActor () -> Bool
@@ -102,6 +226,7 @@ private final class MockOpenAIAgentService: OpenAIAgentServicing {
     var toolDefinitions: [OpenAIResponsesToolDefinition] = []
     var nextReply: OpenAIAgentReply
     var replyDelayNanoseconds: UInt64
+    var streamEvents: [OpenAIAgentStreamEvent] = []
     private(set) var capturedPrompts: [String] = []
     private(set) var clearedSessionIDs: [UUID] = []
 
@@ -124,6 +249,23 @@ private final class MockOpenAIAgentService: OpenAIAgentServicing {
             try? await Task.sleep(nanoseconds: replyDelayNanoseconds)
         }
         capturedPrompts.append(prompt)
+        return nextReply
+    }
+
+    func generateReply(
+        sessionID: UUID,
+        prompt: String,
+        streamHandler: (@Sendable (OpenAIAgentStreamEvent) -> Void)?
+    ) async throws -> OpenAIAgentReply {
+        if replyDelayNanoseconds > 0 {
+            try? await Task.sleep(nanoseconds: replyDelayNanoseconds)
+        }
+        capturedPrompts.append(prompt)
+        if let streamHandler {
+            for event in streamEvents {
+                streamHandler(event)
+            }
+        }
         return nextReply
     }
 }

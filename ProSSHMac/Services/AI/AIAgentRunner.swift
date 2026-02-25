@@ -13,7 +13,8 @@ import os.log
 
     func run(
         sessionID: UUID,
-        prompt: String
+        prompt: String,
+        streamHandler: (@Sendable (OpenAIAgentStreamEvent) -> Void)? = nil
     ) async throws -> OpenAIAgentReply {
         guard let service else {
             throw OpenAIAgentServiceError.sessionNotFound
@@ -71,7 +72,8 @@ import os.log
             let response = try await createResponseWithRecovery(
                 request: request,
                 previousResponseID: &previousResponseID,
-                traceID: traceID
+                traceID: traceID,
+                streamHandler: streamHandler
             )
             let responseMs = AIToolDefinitions.elapsedMillis(since: iterationStart)
 
@@ -124,7 +126,8 @@ import os.log
     private func createResponseWithRecovery(
         request: OpenAIResponsesRequest,
         previousResponseID: inout String?,
-        traceID: String
+        traceID: String,
+        streamHandler: (@Sendable (OpenAIAgentStreamEvent) -> Void)?
     ) async throws -> OpenAIResponsesResponse {
         guard let service else {
             throw OpenAIAgentServiceError.sessionNotFound
@@ -133,7 +136,9 @@ import os.log
         let timeoutSeconds = service.requestTimeoutSeconds
         do {
             return try await runWithTimeout(timeoutSeconds: timeoutSeconds) {
-                try await responsesService.createResponse(request)
+                try await responsesService.createResponseStreaming(request) { streamEvent in
+                    Self.forward(streamEvent: streamEvent, to: streamHandler)
+                }
             }
         } catch let error as OpenAIResponsesServiceError {
             guard case let .httpError(statusCode, message) = error,
@@ -157,8 +162,31 @@ import os.log
                 toolOutputs: request.toolOutputs
             )
             return try await runWithTimeout(timeoutSeconds: timeoutSeconds) {
-                try await responsesService.createResponse(retryRequest)
+                try await responsesService.createResponseStreaming(retryRequest) { streamEvent in
+                    Self.forward(streamEvent: streamEvent, to: streamHandler)
+                }
             }
+        }
+    }
+
+    nonisolated private static func forward(
+        streamEvent: OpenAIResponsesStreamEvent,
+        to streamHandler: (@Sendable (OpenAIAgentStreamEvent) -> Void)?
+    ) {
+        guard let streamHandler else { return }
+        switch streamEvent {
+        case let .outputTextDelta(delta):
+            streamHandler(.assistantTextDelta(delta))
+        case let .outputTextDone(text):
+            streamHandler(.assistantTextDone(text))
+        case let .reasoningTextDelta(delta):
+            streamHandler(.reasoningTextDelta(delta))
+        case let .reasoningTextDone(text):
+            streamHandler(.reasoningTextDone(text))
+        case let .reasoningSummaryTextDelta(delta):
+            streamHandler(.reasoningSummaryDelta(delta))
+        case let .reasoningSummaryTextDone(text):
+            streamHandler(.reasoningSummaryDone(text))
         }
     }
 

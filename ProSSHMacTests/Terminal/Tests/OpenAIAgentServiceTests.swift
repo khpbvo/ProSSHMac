@@ -500,6 +500,39 @@ final class OpenAIAgentServiceTests: XCTestCase {
         XCTAssertFalse(toolOutput.contains("local sessions only"))
     }
 
+    func testGenerateReplyForwardsStreamingAssistantAndReasoningEvents() async throws {
+        let sessionProvider = MockAgentSessionProvider()
+        let responses = MockOpenAIResponsesService()
+        responses.enqueueResponse(
+            makeTextResponse(id: "resp_stream", text: "Final answer")
+        )
+        responses.enqueueStreamEvents([
+            .reasoningSummaryTextDelta("Planning... "),
+            .reasoningSummaryTextDone("Planning... done."),
+            .outputTextDelta("Final "),
+            .outputTextDone("Final answer"),
+        ])
+
+        let service = OpenAIAgentService(
+            responsesService: responses,
+            sessionProvider: sessionProvider
+        )
+
+        var streamed: [OpenAIAgentStreamEvent] = []
+        let reply = try await service.generateReply(
+            sessionID: sessionProvider.sessionID,
+            prompt: "status",
+            streamHandler: { streamed.append($0) }
+        )
+
+        XCTAssertEqual(reply.text, "Final answer")
+        XCTAssertEqual(streamed.count, 4)
+        XCTAssertEqual(streamed[0], .reasoningSummaryDelta("Planning... "))
+        XCTAssertEqual(streamed[1], .reasoningSummaryDone("Planning... done."))
+        XCTAssertEqual(streamed[2], .assistantTextDelta("Final "))
+        XCTAssertEqual(streamed[3], .assistantTextDone("Final answer"))
+    }
+
     private func makeTextResponse(id: String, text: String) -> OpenAIResponsesResponse {
         OpenAIResponsesResponse(
             id: id,
@@ -701,6 +734,7 @@ private final class MockOpenAIResponsesService: OpenAIResponsesServicing {
 
     private(set) var capturedRequests: [OpenAIResponsesRequest] = []
     private var events: [Event] = []
+    private var streamEventsByCall: [[OpenAIResponsesStreamEvent]] = []
 
     func enqueueResponse(_ response: OpenAIResponsesResponse) {
         events.append(.response(response))
@@ -710,8 +744,32 @@ private final class MockOpenAIResponsesService: OpenAIResponsesServicing {
         events.append(.failure(error))
     }
 
+    func enqueueStreamEvents(_ events: [OpenAIResponsesStreamEvent]) {
+        streamEventsByCall.append(events)
+    }
+
     func createResponse(_ request: OpenAIResponsesRequest) async throws -> OpenAIResponsesResponse {
         capturedRequests.append(request)
+        guard !streamEventsByCall.isEmpty else {
+            return try popNextResponseEvent()
+        }
+        _ = streamEventsByCall.removeFirst()
+        return try popNextResponseEvent()
+    }
+
+    func createResponseStreaming(
+        _ request: OpenAIResponsesRequest,
+        onEvent: @escaping @Sendable (OpenAIResponsesStreamEvent) -> Void
+    ) async throws -> OpenAIResponsesResponse {
+        capturedRequests.append(request)
+        let streamEvents = streamEventsByCall.isEmpty ? [] : streamEventsByCall.removeFirst()
+        for event in streamEvents {
+            onEvent(event)
+        }
+        return try popNextResponseEvent()
+    }
+
+    private func popNextResponseEvent() throws -> OpenAIResponsesResponse {
         guard !events.isEmpty else {
             XCTFail("No mocked response event enqueued")
             throw OpenAIResponsesServiceError.invalidResponse

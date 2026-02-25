@@ -8,12 +8,37 @@ protocol OpenAIAgentServicing {
         sessionID: UUID,
         prompt: String
     ) async throws -> OpenAIAgentReply
+    func generateReply(
+        sessionID: UUID,
+        prompt: String,
+        streamHandler: (@Sendable (OpenAIAgentStreamEvent) -> Void)?
+    ) async throws -> OpenAIAgentReply
+}
+
+extension OpenAIAgentServicing {
+    func generateReply(
+        sessionID: UUID,
+        prompt: String,
+        streamHandler: (@Sendable (OpenAIAgentStreamEvent) -> Void)?
+    ) async throws -> OpenAIAgentReply {
+        _ = streamHandler
+        return try await generateReply(sessionID: sessionID, prompt: prompt)
+    }
 }
 
 struct OpenAIAgentReply: Sendable, Equatable {
     var text: String
     var responseID: String
     var toolCallsExecuted: Int
+}
+
+enum OpenAIAgentStreamEvent: Sendable, Equatable {
+    case assistantTextDelta(String)
+    case assistantTextDone(String)
+    case reasoningTextDelta(String)
+    case reasoningTextDone(String)
+    case reasoningSummaryDelta(String)
+    case reasoningSummaryDone(String)
 }
 
 enum OpenAIAgentServiceError: LocalizedError, Equatable {
@@ -125,7 +150,23 @@ final class OpenAIAgentService: OpenAIAgentServicing {
         sessionID: UUID,
         prompt: String
     ) async throws -> OpenAIAgentReply {
-        return try await agentRunner.run(sessionID: sessionID, prompt: prompt)
+        return try await generateReply(
+            sessionID: sessionID,
+            prompt: prompt,
+            streamHandler: nil
+        )
+    }
+
+    func generateReply(
+        sessionID: UUID,
+        prompt: String,
+        streamHandler: (@Sendable (OpenAIAgentStreamEvent) -> Void)?
+    ) async throws -> OpenAIAgentReply {
+        return try await agentRunner.run(
+            sessionID: sessionID,
+            prompt: prompt,
+            streamHandler: streamHandler
+        )
     }
 
 }
