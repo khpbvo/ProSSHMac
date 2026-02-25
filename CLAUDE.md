@@ -378,7 +378,7 @@ All paths below are relative to the repo root. Source files live under `ProSSHMa
   processing effects, and diagnostics into separate files. All phase builds succeeded. No public
   API changes. `// swiftlint:disable file_length` removed (main file 331L < 400L). Tests:
   2 pre-existing failures (within ≤23 baseline). Commits: f2828c8 (P0), c96f7b2 (P1),
-  a6e3184 (P2), 8b0759f (P3), e04596a (P4), 697f559 (P5), f913b5a (P6), 2d431d3 (P7), P8.
+  a6e3184 (P2), 8b0759f (P3), e04596a (P4), 697f559 (P5), f913b5a (P6), 2d431d3 (P7), b4c0944 (P8).
 
 ### Refactor Log (strict concurrency refactor — most recent first)
 
