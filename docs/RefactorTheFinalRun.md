@@ -430,8 +430,8 @@ The class mixes four distinct concerns in its private methods:
 **Files to create:** `ProSSHMac/Services/CertificateAuthorityService+CertificateParsing.swift`
 
 **Steps:**
-- [ ] Create the file. Header: `// Extracted from CertificateAuthorityService.swift`.
-- [ ] Move into `extension CertificateAuthorityService`:
+- [x] Create the file. Header: `// Extracted from CertificateAuthorityService.swift`.
+- [x] Move into `extension CertificateAuthorityService`:
   - `parseAuthorizedCertificate(_:)`
   - `parseAuthorizedPublicKey(_:)`
   - `skipCertificateSubjectKeyData(certificateKeyType:reader:)`
@@ -441,9 +441,11 @@ The class mixes four distinct concerns in its private methods:
   - `parseSignatureAlgorithm(_:)`
   - `baseKeyType(fromCertificateKeyType:)`
   - `certificateKeyType(for:)`
-- [ ] Change `private func` → `func` on each.
-- [ ] Build. Verify `-strict-concurrency=complete` is clean.
-- [ ] Commit: `refactor(RefactorFR Phase 18): extract CertificateAuthorityService+CertificateParsing`
+- [x] Change `private func` → `func` on each.
+- [x] Build. Verify `-strict-concurrency=complete` is clean.
+- [x] Commit: `refactor(RefactorFR Phase 18): extract CertificateAuthorityService+CertificateParsing`
+
+**Result (2026-02-25):** BUILD SUCCEEDED. CertificateAuthorityService.swift: 796→577L. Commit `828c8de`.
 
 ### Phase 19 — Extract `CertificateAuthorityService+KRL.swift` & slim
 
