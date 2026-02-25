@@ -32,9 +32,9 @@ final class SessionManager: ObservableObject {
     @Published var latestRecordingURLBySessionID: [UUID: URL] = [:]
     @Published var workingDirectoryBySessionID: [UUID: String] = [:]
     @Published private(set) var bytesReceivedBySessionID: [UUID: Int64] = [:]
-    @Published private(set) var bytesSentBySessionID: [UUID: Int64] = [:]
-    @Published private(set) var latestCompletedCommandBlockBySessionID: [UUID: CommandBlock] = [:]
-    @Published private(set) var commandCompletionNonceBySessionID: [UUID: Int] = [:]
+    @Published var bytesSentBySessionID: [UUID: Int64] = [:]
+    @Published var latestCompletedCommandBlockBySessionID: [UUID: CommandBlock] = [:]
+    @Published var commandCompletionNonceBySessionID: [UUID: Int] = [:]
 
     let transport: any SSHTransporting
     private let knownHostsStore: any KnownHostsStoreProtocol
@@ -54,7 +54,8 @@ final class SessionManager: ObservableObject {
     let renderingCoordinator: TerminalRenderingCoordinator
     let recordingCoordinator: SessionRecordingCoordinator
     let sftpCoordinator: SessionSFTPCoordinator
-    private var latestPublishedCommandBlockIDBySessionID: [UUID: UUID] = [:]
+    let aiToolCoordinator: SessionAIToolCoordinator
+    var latestPublishedCommandBlockIDBySessionID: [UUID: UUID] = [:]
 
     /// Runtime throughput policy. When enabled, expensive non-render work is throttled:
     /// - Snapshot publish interval relaxed from 8ms to 16ms (~60fps → ~30fps)
@@ -92,6 +93,8 @@ final class SessionManager: ObservableObject {
         self.recordingCoordinator = recordCoord
         let sftpCoord = SessionSFTPCoordinator()
         self.sftpCoordinator = sftpCoord
+        let aiToolCoord = SessionAIToolCoordinator()
+        self.aiToolCoordinator = aiToolCoord
 
         Task { @MainActor [weak self] in
             await self?.refreshKnownHosts()
@@ -103,6 +106,7 @@ final class SessionManager: ObservableObject {
         renderCoord.manager = self
         recordCoord.manager = self
         sftpCoord.manager = self
+        aiToolCoord.manager = self
     }
 
     nonisolated deinit {}
@@ -706,67 +710,7 @@ final class SessionManager: ObservableObject {
         command: String,
         timeoutSeconds: TimeInterval = 30
     ) async -> CommandExecutionResult {
-        let marker = "__PROSSH_CMD_WAIT_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))__"
-        let wrappedCommand = "{ \(command); __prossh_s=$?; printf '\\n\(marker):%s\\n' \"$__prossh_s\"; }"
-
-        guard sessions.contains(where: { $0.id == sessionID && $0.state == .connected }),
-              let shell = shellChannels[sessionID] else {
-            return CommandExecutionResult(output: "Session is not connected.", exitCode: nil, timedOut: false, blockID: nil)
-        }
-
-        do {
-            let payload = wrappedCommand + "\n"
-            try await shell.send(payload)
-            lastActivityBySessionID[sessionID] = .now
-            bytesSentBySessionID[sessionID, default: 0] += Int64(payload.utf8.count)
-            recordingCoordinator.recordInput(sessionID: sessionID, text: payload)
-            await terminalHistoryIndex.recordCommandInput(
-                sessionID: sessionID,
-                command: wrappedCommand,
-                at: .now,
-                source: .userInput
-            )
-        } catch {
-            return CommandExecutionResult(output: "Error sending command: \(error.localizedDescription)", exitCode: nil, timedOut: false, blockID: nil)
-        }
-
-        let deadline = Date().addingTimeInterval(timeoutSeconds)
-        while Date() < deadline {
-            let blocks = await terminalHistoryIndex.searchCommands(
-                sessionID: sessionID,
-                query: marker,
-                limit: 8
-            )
-            if let block = blocks.first(where: { $0.output.contains(marker) }) {
-                let parsed = parseWrappedCommandOutput(block.output, marker: marker)
-                return CommandExecutionResult(
-                    output: parsed.output,
-                    exitCode: parsed.exitCode,
-                    timedOut: false,
-                    blockID: block.id
-                )
-            }
-            try? await Task.sleep(nanoseconds: 150_000_000)
-        }
-
-        return CommandExecutionResult(output: "", exitCode: nil, timedOut: true, blockID: nil)
-    }
-
-    private func parseWrappedCommandOutput(_ output: String, marker: String) -> (output: String, exitCode: Int?) {
-        let normalized = output
-            .replacingOccurrences(of: "\r\n", with: "\n")
-            .replacingOccurrences(of: "\r", with: "\n")
-        let markerPrefix = "\(marker):"
-        guard let markerRange = normalized.range(of: markerPrefix, options: .backwards) else {
-            return (normalized.trimmingCharacters(in: .whitespacesAndNewlines), nil)
-        }
-        let statusStart = markerRange.upperBound
-        let statusSlice = normalized[statusStart...]
-        let statusValue = statusSlice.prefix { $0.isNumber || $0 == "-" }
-        let exitCode = Int(statusValue)
-        let cleanOutput = normalized[..<markerRange.lowerBound]
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return (String(cleanOutput), exitCode)
+        await aiToolCoordinator.executeCommandAndWait(sessionID: sessionID, command: command, timeoutSeconds: timeoutSeconds)
     }
 
     func trustKnownHost(challenge: KnownHostVerificationChallenge) async throws {
@@ -1056,14 +1000,7 @@ final class SessionManager: ObservableObject {
     }
 
     func publishCommandCompletion(_ block: CommandBlock) {
-        let sessionID = block.sessionID
-        if latestPublishedCommandBlockIDBySessionID[sessionID] == block.id {
-            return
-        }
-
-        latestPublishedCommandBlockIDBySessionID[sessionID] = block.id
-        latestCompletedCommandBlockBySessionID[sessionID] = block
-        commandCompletionNonceBySessionID[sessionID, default: 0] += 1
+        aiToolCoordinator.publishCommandCompletion(block)
     }
 
     private func evaluateKnownHost(
