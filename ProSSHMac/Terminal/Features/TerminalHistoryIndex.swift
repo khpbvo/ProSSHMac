@@ -260,6 +260,11 @@ actor TerminalHistoryIndex {
         return state.blocks.first(where: { $0.id == blockID })?.output
     }
 
+    func activeCommandRawOutput(sessionID: UUID) -> String? {
+        guard let active = sessionStates[sessionID]?.activeCommand else { return nil }
+        return active.rawOutput
+    }
+
     // MARK: - Internals
 
     private func startCommand(

@@ -13,8 +13,12 @@ import Foundation
         command: String,
         timeoutSeconds: TimeInterval = 30
     ) async -> CommandExecutionResult {
-        let marker = "__PROSSH_CMD_WAIT_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))__"
-        let wrappedCommand = "{ \(command); __prossh_s=$?; printf '\\n\(marker):%s\\n' \"$__prossh_s\"; }"
+        let markerToken = UUID().uuidString
+            .replacingOccurrences(of: "-", with: "")
+            .prefix(10)
+            .uppercased()
+        let marker = "__PSW_\(markerToken)__"
+        let wrappedCommand = "{ \(command); __ps=$?; printf '\\n\\033[8m\(marker):%s\\033[0m\\n' \"$__ps\"; }"
 
         guard let manager else {
             return CommandExecutionResult(output: "Session is not connected.", exitCode: nil, timedOut: false, blockID: nil)
@@ -43,6 +47,19 @@ import Foundation
 
         let deadline = Date().addingTimeInterval(timeoutSeconds)
         while Date() < deadline {
+            if let liveOutput = await manager.terminalHistoryIndex.activeCommandRawOutput(sessionID: sessionID),
+               liveOutput.contains(marker) {
+                let parsed = parseWrappedCommandOutput(liveOutput, marker: marker)
+                if parsed.exitCode != nil {
+                    return CommandExecutionResult(
+                        output: parsed.output,
+                        exitCode: parsed.exitCode,
+                        timedOut: false,
+                        blockID: nil
+                    )
+                }
+            }
+
             let blocks = await manager.terminalHistoryIndex.searchCommands(
                 sessionID: sessionID,
                 query: marker,
@@ -50,12 +67,14 @@ import Foundation
             )
             if let block = blocks.first(where: { $0.output.contains(marker) }) {
                 let parsed = parseWrappedCommandOutput(block.output, marker: marker)
-                return CommandExecutionResult(
-                    output: parsed.output,
-                    exitCode: parsed.exitCode,
-                    timedOut: false,
-                    blockID: block.id
-                )
+                if parsed.exitCode != nil {
+                    return CommandExecutionResult(
+                        output: parsed.output,
+                        exitCode: parsed.exitCode,
+                        timedOut: false,
+                        blockID: block.id
+                    )
+                }
             }
             try? await Task.sleep(nanoseconds: 150_000_000)
         }
