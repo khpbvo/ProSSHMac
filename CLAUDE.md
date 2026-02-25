@@ -23,11 +23,11 @@ The long-term memory for this project lives in `docs/featurelist.md`.
 ```
 Active doc    : docs/RefactorTheFinalRun.md
 Active branch : refactor/final-run
-Current phase : Phase 7 — NOT STARTED (File 2: SessionManager.swift)
+Current phase : Phase 8 — NOT STARTED (File 2: SessionManager.swift)
 Phase status  : NOT STARTED
-Last commit   : 8b18935 "refactor(RefactorFR Phase 6): extract SessionSFTPCoordinator"
-Immediate action: Begin Phase 7 — read docs/RefactorTheFinalRun.md Phase 7 plan and execute
-                  (SessionAIToolCoordinator extraction from SessionManager.swift, 1,191 lines).
+Last commit   : b037ee1 "refactor(RefactorFR Phase 7): extract SessionAIToolCoordinator"
+Immediate action: Begin Phase 8 — read docs/RefactorTheFinalRun.md Phase 8 plan and execute
+                  (SessionShellIOCoordinator extraction from SessionManager.swift, 1,128 lines).
 ```
 
 This is the **current working refactoring document**. Four god files remain after all

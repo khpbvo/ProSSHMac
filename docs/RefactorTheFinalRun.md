@@ -218,18 +218,26 @@ Commit: `8b18935`. BUILD SUCCEEDED. (2026-02-25)
 **Files to create:** `ProSSHMac/Services/SessionAIToolCoordinator.swift`
 
 **Steps:**
-- [ ] Read `executeCommandAndWait` and any supporting marker/polling helpers fully.
-- [ ] Create `Services/SessionAIToolCoordinator.swift`. Header:
+- [x] Read `executeCommandAndWait` and any supporting marker/polling helpers fully.
+- [x] Create `Services/SessionAIToolCoordinator.swift`. Header:
   `// Extracted from SessionManager.swift`.
-- [ ] Move: `executeCommandAndWait`, any marker-injection helpers, and
+- [x] Move: `executeCommandAndWait`, any marker-injection helpers, and
   command-block publishing methods (`publishCommandBlock`, etc.).
-- [ ] Keep `@Published var latestCompletedCommandBlockBySessionID` and
+- [x] Keep `@Published var latestCompletedCommandBlockBySessionID` and
   `commandCompletionNonceBySessionID` on `SessionManager` (SwiftUI observes them);
   coordinator writes via `manager?.`.
-- [ ] Add `let aiToolCoordinator: SessionAIToolCoordinator` to `SessionManager`.
+- [x] Add `let aiToolCoordinator: SessionAIToolCoordinator` to `SessionManager`.
   Wire in `init`.
-- [ ] Build. Fix access issues.
-- [ ] Commit: `refactor(RefactorFR Phase 7): extract SessionAIToolCoordinator`
+- [x] Build. Fix access issues.
+- [x] Commit: `refactor(RefactorFR Phase 7): extract SessionAIToolCoordinator`
+
+**Result:** Extracted `executeCommandAndWait` (50 lines), `parseWrappedCommandOutput` (16 lines),
+`publishCommandCompletion` (9 lines). Widened `private(set)` → `var` on `bytesSentBySessionID`,
+`latestCompletedCommandBlockBySessionID`, `commandCompletionNonceBySessionID`; widened
+`private var latestPublishedCommandBlockIDBySessionID` → `var`. `publishCommandCompletion`
+kept as a one-line forwarding wrapper on SessionManager (called by TerminalRenderingCoordinator
+via `manager.publishCommandCompletion`). SessionManager: 1,191 → 1,128 lines.
+Commit: `b037ee1`. BUILD SUCCEEDED. (2026-02-25)
 
 ### Phase 8 — Extract `SessionShellIOCoordinator.swift`
 
