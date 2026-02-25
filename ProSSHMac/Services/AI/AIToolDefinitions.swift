@@ -53,57 +53,80 @@ enum AIToolDefinitions {
 
         ## File Editing with apply_patch
 
-        When you need to create, modify, or delete files, use the `apply_patch` tool
-        instead of `execute_command` with echo/cat/sed. It is safer and more reliable.
-        NEVER write patch content to a file using shell commands — this embeds the raw
-        markers literally into the file and corrupts it.
+        Use `apply_patch` to create, modify, or delete files. It is safer and more
+        reliable than shell redirection or sed/awk. NEVER write file content with
+        echo, cat heredocs, or sed — use apply_patch instead.
 
         RULE 1 — Always read before updating:
-        Before calling apply_patch with operation="update", you MUST first call
-        read_file_chunk (or execute_and_wait with cat) to read the current file.
-        Never guess at line numbers or existing content — a wrong line number causes
-        the diff to fail or apply to the wrong location.
+        Before calling apply_patch with operation="update", read the current file
+        with read_file_chunk. Copy context lines EXACTLY as they appear — the
+        patcher matches by text content, not by line numbers.
 
-        RULE 2 — Create the file before patching it:
-        If the file does not yet exist, use operation="create" with the full content in
-        the diff field. Never shell-create a file and then immediately patch it.
+        RULE 2 — Create before patching:
+        If the file does not yet exist, use operation="create". Never shell-create
+        a file and then immediately patch it.
 
-        Diff format — wrap every patch in *** Begin Patch / *** End Patch markers:
+        The `diff` field uses V4A format. Do NOT include *** Begin Patch,
+        *** End Patch, or *** Update File: markers — those are expressed by the
+        `operation` and `path` fields of the tool call. Only the change body goes
+        in `diff`.
 
-        Updating an existing file (read it first, then build the diff):
-          *** Begin Patch
-          *** Update File: /absolute/path/to/file.py
-          @@ -5,4 +5,4 @@
-           # context line above change
-          -from pathlib of Path
-          +from pathlib import Path
-           # context line below change
-          *** End Patch
+        ── CREATE (operation="create") ────────────────────────────────────────────
+        Prefix every line of the new file with +. Nothing else.
 
-        Creating a new file (use + lines for every line of content):
-          *** Begin Patch
-          *** Add File: /absolute/path/to/newfile.txt
-          +First line of the new file
-          +Second line of the new file
-          +Third line
-          *** End Patch
+          diff field:
+            +#!/usr/bin/env python3
+            +
+            +def greet(name):
+            +    return f"Hello, {name}!"
+            +
+            +if __name__ == "__main__":
+            +    print(greet("world"))
 
-        IMPORTANT — markers are NOT written to the file:
-        The *** Begin Patch, *** End Patch, *** Add File:, and *** Update File: lines
-        are control directives consumed by the patcher. They never appear in the output
-        file. After a successful create or update, do NOT follow up with another patch
-        to remove them — they are already gone.
+        ── UPDATE (operation="update") ────────────────────────────────────────────
+        Rules:
+          • Space-prefix ( ) context lines — include 2–3 above AND below each change.
+          • Prefix lines to remove with -.
+          • Prefix lines to add with +.
+          • The patcher locates the change by matching context, NOT by line numbers.
+          • Use @@ <anchor> to jump to the right region when the same context
+            appears more than once. The text after @@ must be the EXACT content
+            of a real line in the file (copied verbatim from read_file_chunk).
+          • Do NOT use numeric hunk specs like @@ -5,4 +5,4 @@ — V4A ignores them.
 
-        Diff format rules:
-        - Wrap the diff in *** Begin Patch / *** End Patch
-        - Start with *** Update File: <path> or *** Add File: <path>
-        - For updates: include @@ -OLD_START,OLD_COUNT +NEW_START,OLD_COUNT @@
-        - Include 2-3 context lines (space-prefixed) around each change
-        - Removal lines prefixed with exactly one -
-        - Addition lines prefixed with exactly one +
-        - Line numbers in @@ must match what you read — always verify
+        Example — simple change, no anchor needed (read the file first):
 
-        For deleting files: operation="delete", path only, no diff needed.
+          diff field:
+             import os
+             import sys
+            -HOST = "localhost"
+            +HOST = "0.0.0.0"
+             PORT = 8080
+
+        Example — anchor to a specific function when context is ambiguous:
+
+          diff field:
+            @@ def process_payment(order):
+             try:
+            -    charge = stripe.charge(order.total)
+            +    charge = stripe.charge(order.total, currency="usd")
+             except stripe.CardError as e:
+                 log_error(e)
+
+        Example — two separate changes in one diff (bridge them with context):
+
+          diff field:
+             # section one
+            -debug = False
+            +debug = True
+             log_level = "info"
+             # section two
+            -timeout = 30
+            +timeout = 60
+             retries = 3
+
+        ── DELETE (operation="delete") ────────────────────────────────────────────
+        No diff field needed. The file is removed entirely.
         """
     }
 

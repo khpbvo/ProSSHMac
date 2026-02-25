@@ -92,9 +92,13 @@ struct PatchResult: Sendable {
 struct LocalWorkspacePatcher: Sendable {
 
     private let workspaceRoot: URL
+    private let patcher: UnifiedDiffPatcher
 
-    init(workspaceRoot: URL) {
+    init(workspaceRoot: URL, fuzzLines: Int = 3) {
         self.workspaceRoot = workspaceRoot.standardizedFileURL
+        var p = UnifiedDiffPatcher()
+        p.fuzzLines = fuzzLines
+        self.patcher = p
     }
 
     /// Apply a patch operation to the local filesystem.
@@ -123,13 +127,11 @@ struct LocalWorkspacePatcher: Sendable {
 
         let diff = operation.diff ?? ""
         let content: String
-        // V4A create diffs have all lines prefixed with "+".
-        // If the first non-empty line starts with "+", run through the V4A parser.
-        // Otherwise treat the diff as raw file content (AI sometimes sends plain text).
-        let firstContent = diff.components(separatedBy: "\n").first { !$0.isEmpty }
-        if firstContent?.hasPrefix("+") == true {
-            content = try applyDiff(input: "", diff: diff, mode: .create)
+        if diff.contains("@@") {
+            // Has unified diff format — apply in create mode.
+            content = try patcher.apply(diff: diff, to: "", mode: .create)
         } else {
+            // Plain text — write directly (AI sometimes sends raw content).
             content = diff
         }
 
@@ -155,7 +157,11 @@ struct LocalWorkspacePatcher: Sendable {
         let original = try String(contentsOf: target, encoding: .utf8)
         let diff = operation.diff ?? ""
 
-        let patched = try applyDiff(input: original, diff: diff)
+        guard diff.contains("@@") else {
+            throw PatchToolError.invalidDiff("Update requires a unified diff with @@ hunk headers")
+        }
+
+        let patched = try patcher.apply(diff: diff, to: original, mode: .patch)
 
         // Calculate change stats.
         let originalLines = original.components(separatedBy: "\n")
@@ -405,26 +411,20 @@ enum ApplyPatchToolDefinition {
         OpenAIResponsesToolDefinition(
             name: "apply_patch",
             description: """
-                Create, modify, or delete files using V4A diff format. Three operations:
-
-                "create" — new file. The diff field contains every line prefixed with +.
-                  Example diff: "+line one\\n+line two\\n+line three"
-
-                "update" — modify an existing file. ALWAYS call read_file_chunk first.
-                  The diff field uses V4A context format (NOT unified @@ -N,M +N,M @@ headers):
-                  - Space-prefix ( ) unchanged context lines — include 2–3 above and below each change.
-                  - Prefix removed lines with -.
-                  - Prefix added lines with +.
-                  - Optionally start a section with "@@ <anchor>" where <anchor> is the verbatim
-                    text of a real line in the file, to jump to the right region when the same
-                    context appears more than once.
-                  - The patcher matches by context text, not line numbers — never use @@ -N,M specs.
-                  Example diff: "@@ def foo():\\n return old_val\\n-    return old_val\\n+    return new_val\\n"
-
-                "delete" — remove a file. No diff field needed.
-
-                Safer than execute_command because paths are sandboxed, context lines verify
-                the right location, and writes are atomic.
+                Apply structured file patches using unified diff format. Supports three operations:
+                - "create": Create a new file. The diff should contain only addition lines (prefixed with +), \
+                or just the raw file content.
+                - "update": Modify an existing file using a unified diff. The diff MUST include @@ hunk headers \
+                and context lines for verification. Use `read_file_chunk` first to get current file contents.
+                - "delete": Remove a file. No diff needed.
+                
+                This is safer than execute_command for file modifications because:
+                1. Paths are validated against the workspace boundary
+                2. Context lines verify you're editing the right content
+                3. Changes are atomic (write-to-temp then rename)
+                4. The operation is structured and auditable
+                
+                For updates, ALWAYS read the file first with read_file_chunk to get accurate context lines.
                 """,
             parameters: .object([
                 "type": .string("object"),
