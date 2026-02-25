@@ -134,10 +134,10 @@ No access-level corrections needed beyond `private struct` → `struct`.
 **Files to create:** `ProSSHMac/Services/OpenAIResponsesService+Streaming.swift`
 
 **Steps:**
-- [ ] Read `performStreamingRequest`, `consumeStreamPayload`, SSE event routing helpers,
+- [x] Read `performStreamingRequest`, `consumeStreamPayload`, SSE event routing helpers,
   and the byte-loop in `createResponseStreaming` fully before moving anything.
-- [ ] Create `Services/OpenAIResponsesService+Streaming.swift`. Header: `// Extracted from OpenAIResponsesService.swift`.
-- [ ] Move into an `extension OpenAIResponsesService`:
+- [x] Create `Services/OpenAIResponsesService+Streaming.swift`. Header: `// Extracted from OpenAIResponsesService.swift`.
+- [x] Move into an `extension OpenAIResponsesService`:
   - `createResponseStreaming(_:onEvent:)` (the public method — remove from class body)
   - `performStreamingRequest(apiKey:request:onEvent:traceID:)`
   - `consumeStreamPayload(_:eventName:onEvent:accumulator:)`
@@ -145,10 +145,15 @@ No access-level corrections needed beyond `private struct` → `struct`.
   - `streamErrorMessage(from:)` static helper
   - `stringField(in:key:)` static helper
   - `reasoningSummaryText(from:)` static helper
-- [ ] Leave `createResponse`, `performRequest`, `createPayload`, retry helpers, and
+- [x] Leave `createResponse`, `performRequest`, `createPayload`, retry helpers, and
   logging utilities in the main class body.
-- [ ] Build. Verify `-strict-concurrency=complete` is clean.
-- [ ] Commit: `refactor(RefactorFR Phase 4): extract OpenAIResponsesService+Streaming.swift`
+- [x] Build. Verify `-strict-concurrency=complete` is clean.
+- [x] Commit: `refactor(RefactorFR Phase 4): extract OpenAIResponsesService+Streaming.swift`
+
+**COMPLETE** (2026-02-25, commit `b07c3cf`). Correction: extension file also needs `import os.log`
+(uses `Logger` privacy interpolation). Widened `private` → internal on all class-body members called
+from the extension: stored properties (`apiKeyProvider`, `session`, `endpointURL`), `logger`, 7 instance/
+static methods, 7 static utility functions. Service file: 669 → 260 lines. Streaming file: 415 lines.
 
 ### Phase 5 — Slim & cleanup
 
