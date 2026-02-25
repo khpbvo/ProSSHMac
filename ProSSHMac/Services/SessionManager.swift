@@ -53,6 +53,7 @@ final class SessionManager: ObservableObject {
     let keepaliveCoordinator: SessionKeepaliveCoordinator
     let renderingCoordinator: TerminalRenderingCoordinator
     let recordingCoordinator: SessionRecordingCoordinator
+    let sftpCoordinator: SessionSFTPCoordinator
     private var latestPublishedCommandBlockIDBySessionID: [UUID: UUID] = [:]
 
     /// Runtime throughput policy. When enabled, expensive non-render work is throttled:
@@ -89,6 +90,8 @@ final class SessionManager: ObservableObject {
         self.renderingCoordinator = renderCoord
         let recordCoord = SessionRecordingCoordinator()
         self.recordingCoordinator = recordCoord
+        let sftpCoord = SessionSFTPCoordinator()
+        self.sftpCoordinator = sftpCoord
 
         Task { @MainActor [weak self] in
             await self?.refreshKnownHosts()
@@ -99,6 +102,7 @@ final class SessionManager: ObservableObject {
         keepaliveCoordinator.manager = self
         renderCoord.manager = self
         recordCoord.manager = self
+        sftpCoord.manager = self
     }
 
     nonisolated deinit {}
@@ -650,24 +654,15 @@ final class SessionManager: ObservableObject {
     }
 
     func listRemoteDirectory(sessionID: UUID, path: String) async throws -> [SFTPDirectoryEntry] {
-        guard sessions.contains(where: { $0.id == sessionID && $0.state == .connected }) else {
-            throw SSHTransportError.sessionNotFound
-        }
-        return try await transport.listDirectory(sessionID: sessionID, path: path)
+        try await sftpCoordinator.listRemoteDirectory(sessionID: sessionID, path: path)
     }
 
     func uploadFile(sessionID: UUID, localPath: String, remotePath: String) async throws -> SFTPTransferResult {
-        guard sessions.contains(where: { $0.id == sessionID && $0.state == .connected }) else {
-            throw SSHTransportError.sessionNotFound
-        }
-        return try await transport.uploadFile(sessionID: sessionID, localPath: localPath, remotePath: remotePath)
+        try await sftpCoordinator.uploadFile(sessionID: sessionID, localPath: localPath, remotePath: remotePath)
     }
 
     func downloadFile(sessionID: UUID, remotePath: String, localPath: String) async throws -> SFTPTransferResult {
-        guard sessions.contains(where: { $0.id == sessionID && $0.state == .connected }) else {
-            throw SSHTransportError.sessionNotFound
-        }
-        return try await transport.downloadFile(sessionID: sessionID, remotePath: remotePath, localPath: localPath)
+        try await sftpCoordinator.downloadFile(sessionID: sessionID, remotePath: remotePath, localPath: localPath)
     }
 
     func activeSession(for hostID: UUID) -> Session? {
