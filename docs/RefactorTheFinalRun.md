@@ -61,9 +61,9 @@ file so that the service class file only contains the class itself.
 **Files to create:** `ProSSHMac/Services/OpenAIResponsesTypes.swift`
 
 **Steps:**
-- [ ] Read `OpenAIResponsesService.swift` lines 1–265 in full before touching anything.
-- [ ] Create `Services/OpenAIResponsesTypes.swift`. Header: `// Extracted from OpenAIResponsesService.swift`.
-- [ ] Move into it (in order):
+- [x] Read `OpenAIResponsesService.swift` lines 1–265 in full before touching anything.
+- [x] Create `Services/OpenAIResponsesTypes.swift`. Header: `// Extracted from OpenAIResponsesService.swift`.
+- [x] Move into it (in order):
   - `OpenAIResponsesServicing` protocol + default extension
   - `OpenAIHTTPSessioning` protocol + `OpenAIStreamingUnsupportedError` + default extension
   - `extension URLSession: OpenAIHTTPSessioning`
@@ -75,9 +75,13 @@ file so that the service class file only contains the class itself.
   - `OpenAIResponsesRequest` struct
   - `OpenAIResponsesResponse` struct (with nested types)
   - `OpenAIResponsesStreamEvent` enum
-- [ ] Delete the moved declarations from `OpenAIResponsesService.swift`.
-- [ ] Build. Fix any access-level errors (widen `private` → `internal` if needed).
-- [ ] Commit: `refactor(RefactorFR Phase 1): extract OpenAIResponsesTypes.swift`
+- [x] Delete the moved declarations from `OpenAIResponsesService.swift`.
+- [x] Build. Fix any access-level errors (widen `private` → `internal` if needed).
+- [x] Commit: `refactor(RefactorFR Phase 1): extract OpenAIResponsesTypes.swift`
+
+**COMPLETE** (2026-02-25, commit `6559ce6`). Correction: `OpenAIStreamingUnsupportedError` was also
+referenced in `OpenAIResponsesService` line 242 (`catch is OpenAIStreamingUnsupportedError`), so it was
+widened from `private` → `internal`. Service file: 1,305 → 1,043 lines. Types file: 265 lines.
 
 ### Phase 2 — Extract `OpenAIResponsesPayloadTypes.swift`
 
