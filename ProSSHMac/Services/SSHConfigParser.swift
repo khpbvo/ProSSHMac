@@ -1,3 +1,4 @@
+// swiftlint:disable file_length
 // SSHConfigParser.swift
 // SSH config import/export for ProSSHMac
 //
