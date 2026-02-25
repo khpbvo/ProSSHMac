@@ -246,16 +246,23 @@ Commit: `b037ee1`. BUILD SUCCEEDED. (2026-02-25)
 **Files to create:** `ProSSHMac/Services/SessionShellIOCoordinator.swift`
 
 **Steps:**
-- [ ] Locate all shell I/O methods: `sendInput`, `sendData`, `resizePTY`,
+- [x] Locate all shell I/O methods: `sendInput`, `sendData`, `resizePTY`,
   `startReadingFromChannel`, and related Task-spawning helpers.
-- [ ] Create `Services/SessionShellIOCoordinator.swift`. Header:
+- [x] Create `Services/SessionShellIOCoordinator.swift`. Header:
   `// Extracted from SessionManager.swift`.
-- [ ] Move methods. Keep `@Published var shellBuffers` on `SessionManager`;
+- [x] Move methods. Keep `@Published var shellBuffers` on `SessionManager`;
   coordinator writes via `manager?.shellBuffers[id] = ...`.
-- [ ] Add `let shellIOCoordinator: SessionShellIOCoordinator` to `SessionManager`.
+- [x] Add `let shellIOCoordinator: SessionShellIOCoordinator` to `SessionManager`.
   Wire in `init`.
-- [ ] Build.
-- [ ] Commit: `refactor(RefactorFR Phase 8): extract SessionShellIOCoordinator`
+- [x] Build.
+- [x] Commit: `refactor(RefactorFR Phase 8): extract SessionShellIOCoordinator`
+
+**Result:** Extracted `sendShellInput` (32L), `sendRawShellInput` (24L), `startParserReader`
+(61L), `recordParsedChunk` (12L). Moved `parserReaderTasks` dict to coordinator; SessionManager
+calls `shellIOCoordinator.cancelParserTask(for:)` from `removeSessionArtifacts`. Widened
+`bytesReceivedBySessionID` from `@Published private(set)` → `@Published var`. `handleShellStreamEndedInternal`
+kept on SessionManager (called by both coordinator and `SessionKeepaliveCoordinator`). SessionManager:
+1,128 → 1,005 lines. Commit: `b6fdf69`. BUILD SUCCEEDED. (2026-02-25)
 
 ### Phase 9 — Slim `SessionManager.swift` & cleanup
 
