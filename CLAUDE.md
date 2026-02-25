@@ -22,11 +22,12 @@ The long-term memory for this project lives in `docs/featurelist.md`.
 
 ```
 Active doc    : docs/RefactorTheFinalRun.md
-Active branch : refactor/final-run  (create from master before starting)
-Current phase : Phase 0 — NOT STARTED
+Active branch : refactor/final-run
+Current phase : Phase 1 — NOT STARTED
 Phase status  : NOT STARTED
-Immediate action: Create branch refactor/final-run, then execute Phase 0 (add
-                  swiftlint:disable to OpenAIResponsesService.swift, establish baseline).
+Last commit   : 99ef976 "docs: begin RefactorTheFinalRun — Phase 0 swiftlint disable on OpenAIResponsesService"
+Immediate action: Execute Phase 1 — create OpenAIResponsesTypes.swift (move protocols,
+                  error type, and all public value types out of OpenAIResponsesService.swift).
 ```
 
 This is the **current working refactoring document**. Four god files remain after all

@@ -46,12 +46,12 @@ remain.
 | 933–1227 | `StreamingResponseAccumulator` private struct — assembles a complete `OpenAIResponsesResponse` from incremental SSE events |
 | 1228–1305 | Codable payload structs: `CreateRequestPayload`, `CreateInputMessage`, `CreateFunctionCallOutput`, `OpenAIErrorEnvelope` |
 
-### Phase 0 — Baseline
+### Phase 0 — Baseline — **COMPLETE** (2026-02-25, commit `99ef976`)
 
-- [ ] Create branch `refactor/final-run` from master.
-- [ ] Add `// swiftlint:disable file_length` as line 1 of `OpenAIResponsesService.swift`.
-- [ ] Run build. Record warning count as baseline.
-- [ ] Commit: `docs: begin RefactorTheFinalRun — Phase 0 swiftlint disable on OpenAIResponsesService`
+- [x] Create branch `refactor/final-run` from master.
+- [x] Add `// swiftlint:disable file_length` as line 1 of `OpenAIResponsesService.swift`.
+- [x] Run build. Record warning count as baseline. (BUILD SUCCEEDED, 0 warnings)
+- [x] Commit: `docs: begin RefactorTheFinalRun — Phase 0 swiftlint disable on OpenAIResponsesService`
 
 ### Phase 1 — Extract `OpenAIResponsesTypes.swift`
 
@@ -409,7 +409,7 @@ The class mixes four distinct concerns in its private methods:
 
 ## Refactor Log
 
-*(Add dated entries here after each phase completes.)*
+- **2026-02-25 — Phase 0 COMPLETE** (commit `99ef976`): Created branch `refactor/final-run` from master. Added `// swiftlint:disable file_length` as line 1 of `OpenAIResponsesService.swift`. Build baseline: BUILD SUCCEEDED, 0 warnings. Phase 1 is NOT STARTED.
 
 ---
 
