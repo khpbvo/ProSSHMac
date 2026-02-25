@@ -302,44 +302,56 @@ Each is already self-contained. This is a straightforward split.
 
 ### Phase 10 — Baseline
 
-- [ ] Add `// swiftlint:disable file_length` as line 1.
-- [ ] Run build. Confirm no new failures.
-- [ ] Commit: `docs: Phase 10 swiftlint disable on SSHConfigParser.swift`
+- [x] Add `// swiftlint:disable file_length` as line 1.
+- [x] Run build. Confirm no new failures.
+- [x] Commit: `docs: Phase 10 swiftlint disable on SSHConfigParser.swift`
+
+**Result (2026-02-25):** Added `// swiftlint:disable file_length`. Build: SUCCEEDED. Commit: `0a7ac88`.
 
 ### Phase 11 — Extract `SSHConfigTokenExpander.swift`
 
-- [ ] Create `Services/SSHConfigTokenExpander.swift`. Header:
+- [x] Create `Services/SSHConfigTokenExpander.swift`. Header:
   `// Extracted from SSHConfigParser.swift`.
-- [ ] Move `SSHConfigTokenExpander` struct and its nested `Context` struct.
-- [ ] Build.
-- [ ] Commit: `refactor(RefactorFR Phase 11): extract SSHConfigTokenExpander`
+- [x] Move `SSHConfigTokenExpander` struct and its nested `Context` struct.
+- [x] Build.
+- [x] Commit: `refactor(RefactorFR Phase 11): extract SSHConfigTokenExpander`
+
+**Result (2026-02-25):** Extracted `SSHConfigTokenExpander` + `Context`. Build: SUCCEEDED. Commit: `42e30d2`.
 
 ### Phase 12 — Extract `SSHConfigMapper.swift`
 
-- [ ] Create `Services/SSHConfigMapper.swift`. Header:
+- [x] Create `Services/SSHConfigMapper.swift`. Header:
   `// Extracted from SSHConfigParser.swift`.
-- [ ] Move `SSHConfigMapper` struct (including all private helpers and nested types).
-- [ ] Build.
-- [ ] Commit: `refactor(RefactorFR Phase 12): extract SSHConfigMapper`
+- [x] Move `SSHConfigMapper` struct (including all private helpers and nested types).
+- [x] Build.
+- [x] Commit: `refactor(RefactorFR Phase 12): extract SSHConfigMapper`
+
+**Result (2026-02-25):** Extracted `SSHConfigMapper` (~440L, 8 private helpers, `ResolutionContext`, `MappingResult`). Build: SUCCEEDED. Commit: `2c450df`.
 
 ### Phase 13 — Extract `SSHConfigExporter.swift`
 
-- [ ] Create `Services/SSHConfigExporter.swift`. Header:
+- [x] Create `Services/SSHConfigExporter.swift`. Header:
   `// Extracted from SSHConfigParser.swift`.
-- [ ] Move `SSHConfigExporter` struct and its nested `ExportOptions`.
-- [ ] Build.
-- [ ] Commit: `refactor(RefactorFR Phase 13): extract SSHConfigExporter`
+- [x] Move `SSHConfigExporter` struct and its nested `ExportOptions`.
+- [x] Build.
+- [x] Commit: `refactor(RefactorFR Phase 13): extract SSHConfigExporter`
+
+**Result (2026-02-25):** Extracted `SSHConfigExporter` + `ExportOptions` (~128L). Build: SUCCEEDED. Commit: `5aece8a`.
 
 ### Phase 14 — Extract `SSHConfigImportService.swift` & slim
 
-- [ ] Create `Services/SSHConfigImportService.swift`. Header:
+- [x] Create `Services/SSHConfigImportService.swift`. Header:
   `// Extracted from SSHConfigParser.swift`.
-- [ ] Move `SSHConfigImportService` struct + its `ImportPreview` nested type
+- [x] Move `SSHConfigImportService` struct + its `ImportPreview` nested type
   + the `extension SSHConfigImportService` (`findDuplicates`).
-- [ ] Remove `// swiftlint:disable file_length` from `SSHConfigParser.swift`
+- [x] Remove `// swiftlint:disable file_length` from `SSHConfigParser.swift`
   (only `SSHConfigParser` + supporting value types will remain, well under 400L).
-- [ ] Build. Run full test suite.
-- [ ] Commit: `refactor(RefactorFR Phase 14): extract SSHConfigImportService — SSHConfigParser slim complete`
+- [x] Build. Run full test suite.
+- [x] Commit: `refactor(RefactorFR Phase 14): extract SSHConfigImportService — SSHConfigParser slim complete`
+
+**Result (2026-02-25):** Extracted `SSHConfigImportService` + `ImportPreview` + `findDuplicates` extension (~109L).
+Also cleaned orphaned token expander doc comment. `// swiftlint:disable` removed.
+`SSHConfigParser.swift`: 1,018 → 275 lines. Build: SUCCEEDED. Tests: 2 pre-existing failures, zero new. Commit: `e341205`.
 
 ---
 
@@ -453,6 +465,15 @@ The class mixes four distinct concerns in its private methods:
 ---
 
 ## Refactor Log
+
+- **2026-02-25 — Phases 10–14 COMPLETE** (commits `0a7ac88`–`e341205`): Decomposed
+  `SSHConfigParser.swift` (1,018 → 275 lines) by extracting all four non-parser types into
+  separate files: `SSHConfigTokenExpander.swift` (~59L, token expander + Context),
+  `SSHConfigMapper.swift` (~440L, full mapping struct with 8 private helpers),
+  `SSHConfigExporter.swift` (~128L, exporter + ExportOptions),
+  `SSHConfigImportService.swift` (~109L, orchestrator + ImportPreview + findDuplicates extension).
+  `// swiftlint:disable file_length` removed from SSHConfigParser.swift (275L < 400L).
+  Build: SUCCEEDED after each phase. Tests: 2 pre-existing failures, zero new across all phases.
 
 - **2026-02-25 — Phase 9 COMPLETE** (commit `eeb2ba3`): Extracted 6 read-only query/history
   methods from `SessionManager.swift` into `SessionManager+Queries.swift` (`activeSession`,
