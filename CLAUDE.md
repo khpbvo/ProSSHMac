@@ -288,7 +288,11 @@ All paths below are relative to the repo root. Source files live under `ProSSHMa
 | `ProSSHMac/Services/SessionManager.swift` | Session lifecycle, shell I/O, SFTP, grid snapshots, history | **1,177 lines** — Phase 5 COMPLETE; 4 coordinators extracted |
 | `ProSSHMac/Services/SSH/LibSSHTransport.swift` | LibSSH transport actor, connect/auth/shell/SFTP/forward logic | ~797 lines — Phase 1 COMPLETE |
 | `ProSSHMac/Services/OpenAIAgentService.swift` | Thin orchestrator: protocols, error types, coordinator wiring | **~108 lines — Phase 6 COMPLETE** |
-| `ProSSHMac/Services/AI/AIToolHandler.swift` | Tool dispatch + 11 tool implementations (local + remote) | ~1,406 lines |
+| `ProSSHMac/Services/AI/AIToolHandler.swift` | Tool dispatch switch + 11 tool case handlers (`executeSingleToolCall`) | ~503 lines |
+| `ProSSHMac/Services/AI/AIToolHandler+ArgumentParsing.swift` | 6 static argument parsing helpers | ~117 lines |
+| `ProSSHMac/Services/AI/AIToolHandler+RemoteExecution.swift` | Remote execution, output parsing, command building | ~421 lines |
+| `ProSSHMac/Services/AI/AIToolHandler+LocalFilesystem.swift` | 7 nonisolated static local filesystem methods | ~339 lines |
+| `ProSSHMac/Services/AI/AIToolHandler+OutputHelpers.swift` | Output formatting helpers (commandBlockSummary, etc.) | ~123 lines |
 | `ProSSHMac/Services/AI/AIToolDefinitions.swift` | Developer prompt, 11 tool schemas, static helpers | ~373 lines |
 | `ProSSHMac/Services/AI/AIAgentRunner.swift` | Agent iteration loop, response recovery, timeout | ~187 lines |
 | `ProSSHMac/Services/AI/AIConversationContext.swift` | previousResponseID store keyed by session UUID | ~21 lines |
