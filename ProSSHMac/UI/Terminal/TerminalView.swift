@@ -485,6 +485,7 @@ struct TerminalView: View {
             viewModel: terminalAIAssistantViewModel,
             session: selectedSession?.state == .connected ? selectedSession : nil,
             onClose: {
+                terminalAIAssistantViewModel.clearConversation(sessionID: selectedSession?.id)
                 showAIAssistant = false
             },
             onSend: { sessionID in

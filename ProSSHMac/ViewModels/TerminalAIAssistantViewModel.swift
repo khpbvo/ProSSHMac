@@ -50,6 +50,7 @@ final class TerminalAIAssistantViewModel: ObservableObject {
     private let maxChunkSize: Int
 
     private var activePatchApprovalContinuation: CheckedContinuation<(Bool, Bool), Never>?
+    private var activeAgentTask: Task<Void, Never>?
 
     var formattedReasoningSummary: String {
         reasoningSummary.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -97,6 +98,9 @@ final class TerminalAIAssistantViewModel: ObservableObject {
     nonisolated deinit {}
 
     func clearConversation(sessionID: UUID?) {
+        activeAgentTask?.cancel()
+        activeAgentTask = nil
+        isSending = false
         denyPatch()
         clearReasoningPanel()
         messages = []
@@ -184,7 +188,7 @@ final class TerminalAIAssistantViewModel: ObservableObject {
             }
             return false
         })
-        Task { @MainActor [weak self] in
+        activeAgentTask = Task { @MainActor [weak self] in
             guard let self else { return }
             let assistantID = UUID()
             self.messages.append(
@@ -206,6 +210,7 @@ final class TerminalAIAssistantViewModel: ObservableObject {
                         }
                     }
                 )
+                guard !Task.isCancelled else { return }
                 await Task.yield()
                 let normalizedReply = self.normalizeAssistantReply(reply.text)
                 let hasReplyText = !normalizedReply.isEmpty
@@ -229,6 +234,7 @@ final class TerminalAIAssistantViewModel: ObservableObject {
                 }
                 self.finishReasoningStreams()
             } catch {
+                guard !Task.isCancelled else { return }
                 self.finishReasoningStreams()
                 self.updateAssistantMessage(
                     id: assistantID,
@@ -238,6 +244,7 @@ final class TerminalAIAssistantViewModel: ObservableObject {
                 self.lastError = error.localizedDescription
             }
             self.isSending = false
+            self.activeAgentTask = nil
         }
     }
 
