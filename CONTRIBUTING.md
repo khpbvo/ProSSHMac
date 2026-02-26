@@ -278,6 +278,33 @@ To open a PR you must:
 
 No exceptions. A checked plan file is the contract. If you can't check every box, keep working.
 
+## Versioning
+
+ProSSHMac uses [SemVer](https://semver.org/): `MAJOR.MINOR.PATCH`.
+
+| Version range | Meaning |
+|---|---|
+| `0.x.x` | Pre-1.0 — core is stable but the feature set is still growing. UX and APIs may change. |
+| `1.0.0` | First stable, feature-complete release. |
+| `1.x.0` | New features, backwards compatible. |
+| `1.x.y` | Bug fixes only. |
+
+**Current version: `0.9.0`** (build 1) — first public open-source release.
+
+### Road to 1.0
+
+`1.0.0` ships when all of the following are true:
+
+- [ ] Known critical and high-severity bugs from `docs/bugs.md` are resolved
+- [ ] At least one additional AI provider works (Anthropic Claude or Ollama)
+- [ ] Multi-session AI orchestration or inline image protocol (Kitty) is shipped
+
+### Version bumps are the maintainer's job
+
+Contributors do not bump version numbers. Do not change `MARKETING_VERSION` or `CURRENT_PROJECT_VERSION` in `project.pbxproj` as part of a feature PR — the maintainer handles this at release time.
+
+**How versions are stored:** `MARKETING_VERSION` (`CFBundleShortVersionString`) and `CURRENT_PROJECT_VERSION` (`CFBundleVersion`) are set directly in `ProSSHMac.xcodeproj/project.pbxproj`. The build number is a monotonically increasing integer that must increment with every release build submitted for notarization.
+
 ## License
 
 MIT. Do whatever you want with it. Just build something cool.
