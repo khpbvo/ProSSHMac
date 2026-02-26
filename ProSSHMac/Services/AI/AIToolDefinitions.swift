@@ -116,11 +116,21 @@ enum AIToolDefinitions {
           • Use @@ <anchor> when a change location is ambiguous or when inserting
             lines without any removed (-) line. The anchor must match a real line.
 
-        Example — simple replacement:
+        Example — adjacent replacements (no @@ needed between consecutive changes):
 
           diff field:
             -debug = False
             +debug = True
+            -timeout = 30
+            +timeout = 60
+
+        Example — non-adjacent replacements (use @@ anchor before each change):
+
+          diff field:
+            @@ debug = False
+            -debug = False
+            +debug = True
+            @@ timeout = 30
             -timeout = 30
             +timeout = 60
 

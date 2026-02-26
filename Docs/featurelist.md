@@ -51,6 +51,10 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 - Task alignment (2026-02-25, V4A apply_patch instruction correctness):
   - Starting Point: agent/tool instructions still told the model to include unchanged context lines (2-3 above/below), which mismatched expected V4A usage and caused repeated patch retries.
   - End Point: apply_patch instructions now enforce V4A changed-line blocks (`-`/`+`) with optional `@@ <anchor>` for placement/disambiguation, explicitly banning unified numeric hunks and unchanged context-line requirements.
+- Task alignment (2026-02-26, remote apply_patch format mismatch fix):
+  - Starting Point: `RemotePatchCommandBuilder.buildUpdateCommand()` piped V4A diffs directly to `patch(1)` via heredoc. `patch(1)` requires standard unified diff format (`@@ -l,s +l,s @@`) but V4A uses bare `@@` or `@@ <anchor>` blocks with no line-count info — causing "Only garbage was found in the patch input" on every remote update. The heredoc delivery and PTY transport worked correctly; only the format was wrong.
+  - End Point: Remote update and create operations now use applyDiff-in-Swift + `buildWriteCommand` (base64 heredoc). `buildWriteCommand` creates parent dirs with `mkdir -p` so both create and update work. Remote delete still uses the direct `rm` shell command. `patch(1)` is no longer used for any remote operation.
+  - Follow-up (2026-02-26): Fixed heredoc terminator collision with `executeCommandAndWait` wrapper. The wrapper appends `; __ps=$?; printf...` to the command's last line, but when the last line is a heredoc terminator, bash never sees it as the end of the heredoc. Fix: wrap all heredoc blocks in subshells `(...)` so the terminator stays on its own line and `)` becomes the safe append target.
 
 ## Loop Log
 

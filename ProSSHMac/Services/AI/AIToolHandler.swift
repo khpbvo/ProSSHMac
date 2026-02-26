@@ -472,11 +472,84 @@ import os.log
                 let patcher = LocalWorkspacePatcher(workspaceRoot: URL(fileURLWithPath: workingDir))
                 result = try patcher.apply(operation)
             } else {
-                let command = RemotePatchCommandBuilder.buildCommand(for: operation)
-                let execution = await provider.executeCommandAndWait(
-                    sessionID: sessionID, command: command, timeoutSeconds: 15
-                )
-                result = RemotePatchCommandBuilder.parseResult(execution.output, operation: operation)
+                if operation.type == .update, let diff = operation.diff {
+                    // Remote update: read the file → apply V4A diff in Swift → write back.
+                    // This bypasses patch(1), which cannot parse V4A-format diffs
+                    // (V4A uses "@@ anchor" blocks without line-count headers that patch(1) requires).
+                    let readCmd = Self.buildRemoteReadFileChunkCommand(
+                        path: path, startLine: 1, endLine: 50_000
+                    )
+                    let readResult = await provider.executeCommandAndWait(
+                        sessionID: sessionID, command: readCmd, timeoutSeconds: 10
+                    )
+                    let originalContent = readResult.output
+                    do {
+                        let patched = try applyDiff(input: originalContent, diff: diff)
+                        let writeCmd = RemotePatchCommandBuilder.buildWriteCommand(
+                            path: path, content: patched
+                        )
+                        let writeResult = await provider.executeCommandAndWait(
+                            sessionID: sessionID, command: writeCmd, timeoutSeconds: 15
+                        )
+                        let origLines = originalContent.components(separatedBy: "\n")
+                        let patchedLines = patched.components(separatedBy: "\n")
+                        let linesChanged = abs(patchedLines.count - origLines.count) +
+                            zip(origLines, patchedLines).filter { $0.0 != $0.1 }.count
+                        let succeeded = writeResult.exitCode == 0
+                        result = PatchResult(
+                            success: succeeded,
+                            output: succeeded
+                                ? "Updated \(path) (\(linesChanged) lines changed)"
+                                : "Write failed: \(writeResult.output.trimmingCharacters(in: .whitespacesAndNewlines))",
+                            linesChanged: linesChanged,
+                            warnings: patched == originalContent
+                                ? ["Patch applied but file content is unchanged"] : []
+                        )
+                    } catch {
+                        result = PatchResult(
+                            success: false,
+                            output: "Diff application failed: \(error.localizedDescription)",
+                            linesChanged: 0,
+                            warnings: []
+                        )
+                    }
+                } else if operation.type == .create, let diff = operation.diff {
+                    // Remote create: apply V4A diff to get content, write via base64.
+                    // buildCreateCommand writes raw diff with + prefixes when no @@ is present,
+                    // so we use applyDiff + buildWriteCommand for correctness.
+                    do {
+                        let content = try applyDiff(input: "", diff: diff, mode: .create)
+                        let writeCmd = RemotePatchCommandBuilder.buildWriteCommand(
+                            path: path, content: content
+                        )
+                        let writeResult = await provider.executeCommandAndWait(
+                            sessionID: sessionID, command: writeCmd, timeoutSeconds: 15
+                        )
+                        let lineCount = content.components(separatedBy: "\n").count
+                        let succeeded = writeResult.exitCode == 0
+                        result = PatchResult(
+                            success: succeeded,
+                            output: succeeded
+                                ? "Created \(path) (\(lineCount) lines)"
+                                : "Create failed: \(writeResult.output.trimmingCharacters(in: .whitespacesAndNewlines))",
+                            linesChanged: lineCount,
+                            warnings: []
+                        )
+                    } catch {
+                        result = PatchResult(
+                            success: false,
+                            output: "Diff application failed: \(error.localizedDescription)",
+                            linesChanged: 0,
+                            warnings: []
+                        )
+                    }
+                } else {
+                    let command = RemotePatchCommandBuilder.buildCommand(for: operation)
+                    let execution = await provider.executeCommandAndWait(
+                        sessionID: sessionID, command: command, timeoutSeconds: 15
+                    )
+                    result = RemotePatchCommandBuilder.parseResult(execution.output, operation: operation)
+                }
             }
 
             Self.logger.info(

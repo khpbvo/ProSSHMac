@@ -281,10 +281,10 @@ struct RemotePatchCommandBuilder: Sendable {
 
         return """
         __prossh_dir="$(dirname \(path))"; \
-        mkdir -p "$__prossh_dir" && \
-        cat > \(path) << '\(marker)'
+        mkdir -p "$__prossh_dir" && (cat > \(path) << '\(marker)'
         \(content)
         \(marker)
+        )
         """
     }
 
@@ -300,10 +300,10 @@ struct RemotePatchCommandBuilder: Sendable {
         if [ ! -f \(path) ]; then \
         printf '__PROSSH_PATCH_ERROR__: file not found: %s\\n' \(path); \
         elif command -v patch >/dev/null 2>&1; then \
-        patch --no-backup-if-mismatch \(path) << '\(marker)'
+        (patch --no-backup-if-mismatch \(path) << '\(marker)'
         \(diff)
         \(marker)
-        else \
+        ); else \
         printf '__PROSSH_PATCH_ERROR__: patch utility not found\\n'; \
         fi
         """
@@ -316,6 +316,28 @@ struct RemotePatchCommandBuilder: Sendable {
         return """
         if [ -f \(path) ]; then rm \(path) && echo 'Deleted'; \
         else printf '__PROSSH_PATCH_ERROR__: file not found: %s\\n' \(path); fi
+        """
+    }
+
+    // MARK: - Write (used by remote read-apply-write path)
+
+    /// Build a command to write content to a remote file using base64 encoding.
+    ///
+    /// Base64 avoids heredoc escaping issues with special characters, preserves
+    /// exact byte content, and works on all modern Ubuntu/Linux servers
+    /// (base64 is part of coreutils). The heredoc delimiter only contains
+    /// safe characters so it can never appear in the base64 payload.
+    static func buildWriteCommand(path: String, content: String) -> String {
+        let escapedPath = shellEscaped(path)
+        let b64 = Data(content.utf8).base64EncodedString(options: .lineLength76Characters)
+        let marker = "__PROSSH_WRITE_EOF_\(UUID().uuidString.prefix(8))__"
+        // Wrap the heredoc in a subshell so the terminator stays on its own line
+        // when executeCommandAndWait appends "; __ps=$?; ..." to the last line.
+        return """
+        mkdir -p "$(dirname \(escapedPath))" && (base64 -d > \(escapedPath) << '\(marker)'
+        \(b64)
+        \(marker)
+        )
         """
     }
 
