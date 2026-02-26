@@ -491,6 +491,13 @@ import os.log
                 "warnings": .array(result.warnings.map { .string($0) }),
             ]))
 
+        case "send_input":
+            return try await executeSendInput(
+                sessionID: sessionID,
+                arguments: arguments,
+                provider: provider
+            )
+
         default:
             return AIToolDefinitions.jsonString(from: .object([
                 "ok": .bool(false),

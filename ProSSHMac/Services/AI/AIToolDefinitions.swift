@@ -16,12 +16,28 @@ enum AIToolDefinitions {
         - Search and read files on the local or remote filesystem.
         - Run multi-step workflows: execute a command, inspect the result, decide next steps, repeat.
         - Access structured command blocks with UUIDs, exit codes, and timestamps.
+        - Send raw input to a running process — answer prompts, send control signals, navigate interactive CLIs (send_input).
 
         COMMAND EXECUTION:
         - For one-shot commands (ls, grep, git, make, curl, cat via pipe, etc.), use execute_and_wait — it runs the command AND returns the output and exit code in one step.
         - For interactive or long-running commands (vim, nano, top, tail -f, ssh, htop), use execute_command (fire-and-forget), then get_current_screen to see the result.
+        - To interact with a running process — answer a y/n prompt, type into a REPL, press Tab for completion, send Ctrl+C to interrupt — use send_input. It writes directly to whatever is currently running, with no newline injected unless you include "enter" in the keys array.
         - Always check the exit_code after execute_and_wait: 0 means success, non-zero means failure. Investigate failures by reading the output.
         - You can chain multiple commands to accomplish complex tasks. Do not stop after one command if the task requires more.
+
+        INTERACTIVE INPUT (send_input):
+        - Use send_input whenever a running program is waiting for input and execute_command would send a new shell command instead.
+        - Common patterns:
+          • Confirm a prompt:    send_input(keys: ["y", "enter"])
+          • Interrupt a process: send_input(keys: ["ctrl_c"])
+          • EOF / exit REPL:     send_input(keys: ["ctrl_d"])
+          • Tab completion:      send_input(keys: ["tab"])
+          • Arrow key navigation: send_input(keys: ["up"]) / send_input(keys: ["down"])
+          • Suspend to bg:       send_input(keys: ["ctrl_z"])
+          • Type then submit:    send_input(keys: ["some text", "enter"])
+        - Named keys: enter, tab, shift_tab, escape, ctrl_c, ctrl_d, ctrl_z, ctrl_a, ctrl_e, ctrl_k, ctrl_u, ctrl_r, ctrl_w, ctrl_l, ctrl_x, ctrl_o, up, down, right, left, backspace, delete, home, end, page_up, page_down, f1–f12.
+        - Anything that is not a named key is sent verbatim as UTF-8 text.
+        - After send_input, use get_current_screen to observe the program's response.
 
         TERMINAL CONTEXT:
         - The terminal has shell integration that tracks command blocks with IDs and exit codes.
@@ -359,6 +375,7 @@ enum AIToolDefinitions {
                 strict: true
             ),
         ] + (patchToolEnabled ? [ApplyPatchToolDefinition.definition()] : [])
+          + [SendInputToolDefinition.definition()]
     }
 
     // MARK: - Direct Action Tool Filtering
@@ -369,7 +386,7 @@ enum AIToolDefinitions {
         let allowedNames: Set<String> = [
             "execute_command", "execute_and_wait", "get_current_screen",
             "get_session_info", "get_recent_commands", "get_command_output",
-            "apply_patch",
+            "apply_patch", "send_input",
         ]
         let filtered = tools.filter { allowedNames.contains($0.name) }
         return filtered.isEmpty ? tools : filtered

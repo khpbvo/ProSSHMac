@@ -42,6 +42,9 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 - Task alignment (2026-02-25, patch modal blank preview regression):
   - Starting Point: after width-layout changes, some approvals rendered a black empty preview panel (no visible lines), especially when diff payloads were empty or when unbounded width layout inside horizontal scrolling produced non-rendering content.
   - End Point: preview content uses bounded width layout (`VStack` + viewport `minWidth` only), and empty/whitespace diffs now render an explicit "No diff preview is available" message instead of a blank black panel.
+- Task alignment (2026-02-26, send_input AI tool):
+  - Starting Point: AI copilot had no way to send raw input to a running process — could not answer y/n prompts, send Ctrl+C, or navigate interactive CLIs like Cisco IOS or Python REPL.
+  - End Point: new `send_input` tool added. Accepts an array of tokens (named special keys or literal strings), resolves them to ANSI/control byte sequences, and writes directly via `sendRawShellInput`. Supports 32 named keys (enter, tab, escape, ctrl_c–ctrl_l, ctrl_r/u/w/x/o, arrow keys, backspace, delete, home, end, page_up/down, f1–f12). Tool registered in `AIToolDefinitions`, dispatched in `AIToolHandler`, protocol updated in `OpenAIAgentSessionProviding`, implemented in new `AIToolHandler+InteractiveInput.swift`.
 - Task alignment (2026-02-25, V4A apply_patch instruction correctness):
   - Starting Point: agent/tool instructions still told the model to include unchanged context lines (2-3 above/below), which mismatched expected V4A usage and caused repeated patch retries.
   - End Point: apply_patch instructions now enforce V4A changed-line blocks (`-`/`+`) with optional `@@ <anchor>` for placement/disambiguation, explicitly banning unified numeric hunks and unchanged context-line requirements.

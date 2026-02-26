@@ -76,6 +76,7 @@ protocol OpenAIAgentSessionProviding: AnyObject {
     func searchCommandHistory(sessionID: UUID, query: String, limit: Int) async -> [CommandBlock]
     func commandOutput(sessionID: UUID, blockID: UUID) async -> String?
     func sendShellInput(sessionID: UUID, input: String, suppressEcho: Bool) async
+    func sendRawShellInput(sessionID: UUID, input: String) async
     func executeCommandAndWait(sessionID: UUID, command: String, timeoutSeconds: TimeInterval) async -> CommandExecutionResult
 }
 
