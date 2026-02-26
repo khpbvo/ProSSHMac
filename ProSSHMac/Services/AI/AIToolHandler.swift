@@ -114,7 +114,7 @@ import os.log
             ]))
 
         case "get_current_screen":
-            let limit = Self.clamp(Self.optionalInt(key: "max_lines", in: arguments) ?? 100, min: 10, max: 300)
+            let limit = Self.clamp(Self.optionalInt(key: "max_lines", in: arguments) ?? 200, min: 10, max: 800)
             let allLines = provider.shellBuffers[sessionID] ?? []
             let lines = Array(allLines.suffix(limit))
             return AIToolDefinitions.jsonString(from: .object([
@@ -247,7 +247,7 @@ import os.log
                     toolName: toolCall.name
                 ),
                 min: 1,
-                max: 200
+                max: 500
             )
 
             let result: OpenAIJSONValue
@@ -299,7 +299,7 @@ import os.log
                 }
 
                 let startLine = Self.clamp(Int(startNum.rounded()), min: 1, max: 2_000_000_000)
-                let lineCount = Self.clamp(Int(countNum.rounded()), min: 1, max: 200)
+                let lineCount = Self.clamp(Int(countNum.rounded()), min: 1, max: 500)
 
                 let result: OpenAIJSONValue
                 if session.isLocal {
@@ -342,7 +342,7 @@ import os.log
                     "ok": .bool(false),
                     "status": .string("read_window_required"),
                     "message": .string(message),
-                    "hint": .string("Use read_file_chunk with line_count <= 200 and iterate by start_line."),
+                    "hint": .string("Use read_file_chunk with line_count <= 500 and iterate by start_line."),
                 ]))
             }
 
@@ -374,7 +374,7 @@ import os.log
                     "ok": .bool(false),
                     "status": .string("read_window_required"),
                     "message": .string(message),
-                    "hint": .string("Use read_file_chunk with line_count <= 200."),
+                    "hint": .string("Use read_file_chunk with line_count <= 500."),
                 ]))
             }
 

@@ -618,8 +618,16 @@ final class SessionManager: ObservableObject {
         try await sftpCoordinator.uploadFile(sessionID: sessionID, localPath: localPath, remotePath: remotePath)
     }
 
+    func uploadFile(sessionID: UUID, localPath: String, remotePath: String, progressHandler: (@Sendable (Int64, Int64) -> Void)?) async throws -> SFTPTransferResult {
+        try await sftpCoordinator.uploadFile(sessionID: sessionID, localPath: localPath, remotePath: remotePath, progressHandler: progressHandler)
+    }
+
     func downloadFile(sessionID: UUID, remotePath: String, localPath: String) async throws -> SFTPTransferResult {
         try await sftpCoordinator.downloadFile(sessionID: sessionID, remotePath: remotePath, localPath: localPath)
+    }
+
+    func downloadFile(sessionID: UUID, remotePath: String, localPath: String, progressHandler: (@Sendable (Int64, Int64) -> Void)?) async throws -> SFTPTransferResult {
+        try await sftpCoordinator.downloadFile(sessionID: sessionID, remotePath: remotePath, localPath: localPath, progressHandler: progressHandler)
     }
 
     func executeCommandAndWait(

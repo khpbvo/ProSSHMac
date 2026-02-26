@@ -222,6 +222,18 @@ final class TransferManager: ObservableObject {
             let transfer = transfers[index]
             activeTransferID = transfer.id
             do {
+                let transferID = transfer.id
+                let progressHandler: @Sendable (Int64, Int64) -> Void = { [weak self] bytes, total in
+                    Task { @MainActor [weak self] in
+                        guard let self,
+                              let idx = self.transfers.firstIndex(where: { $0.id == transferID }) else { return }
+                        self.transfers[idx].bytesTransferred = bytes
+                        if total > 0 {
+                            self.transfers[idx].totalBytes = total
+                        }
+                        self.transfers[idx].updatedAt = .now
+                    }
+                }
                 let transferTask: Task<SFTPTransferResult, Error>
                 switch transfer.direction {
                 case .download:
@@ -229,7 +241,8 @@ final class TransferManager: ObservableObject {
                         try await sessionManager.downloadFile(
                             sessionID: transfer.sessionID,
                             remotePath: transfer.sourcePath,
-                            localPath: transfer.destinationPath
+                            localPath: transfer.destinationPath,
+                            progressHandler: progressHandler
                         )
                     }
                 case .upload:
@@ -237,7 +250,8 @@ final class TransferManager: ObservableObject {
                         try await sessionManager.uploadFile(
                             sessionID: transfer.sessionID,
                             localPath: transfer.sourcePath,
-                            remotePath: transfer.destinationPath
+                            remotePath: transfer.destinationPath,
+                            progressHandler: progressHandler
                         )
                     }
                 }

@@ -222,7 +222,7 @@ enum AIToolDefinitions {
                     "properties": .object([
                         "max_lines": .object([
                             "type": .string("integer"),
-                            "description": .string("Maximum lines to return (10-300)."),
+                            "description": .string("Maximum lines to return (10-800)."),
                         ]),
                     ]),
                     "required": .array([.string("max_lines")]),
@@ -280,7 +280,7 @@ enum AIToolDefinitions {
             ),
             OpenAIResponsesToolDefinition(
                 name: "read_file_chunk",
-                description: "Read a window of lines from a text file. Returns content, lines_returned, has_more flag, and next_start_line for pagination. Max 200 lines per call. Use read_files for batch reading multiple files.",
+                description: "Read a window of lines from a text file. Returns content, lines_returned, has_more flag, and next_start_line for pagination. Max 500 lines per call. Use read_files for batch reading multiple files.",
                 parameters: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -294,7 +294,7 @@ enum AIToolDefinitions {
                         ]),
                         "line_count": .object([
                             "type": .string("integer"),
-                            "description": .string("Number of lines to read (1-200)."),
+                            "description": .string("Number of lines to read (1-500)."),
                         ]),
                     ]),
                     "required": .array([.string("path"), .string("start_line"), .string("line_count")]),
@@ -324,7 +324,7 @@ enum AIToolDefinitions {
                                     ]),
                                     "line_count": .object([
                                         "type": .string("integer"),
-                                        "description": .string("Number of lines to read (1-200)."),
+                                        "description": .string("Number of lines to read (1-500)."),
                                     ]),
                                 ]),
                                 "required": .array([.string("path"), .string("start_line"), .string("line_count")]),

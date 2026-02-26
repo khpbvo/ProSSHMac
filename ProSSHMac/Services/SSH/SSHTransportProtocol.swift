@@ -21,7 +21,9 @@ protocol SSHTransporting: Sendable {
     func openShell(sessionID: UUID, pty: PTYConfiguration, enableAgentForwarding: Bool) async throws -> any SSHShellChannel
     func listDirectory(sessionID: UUID, path: String) async throws -> [SFTPDirectoryEntry]
     func uploadFile(sessionID: UUID, localPath: String, remotePath: String) async throws -> SFTPTransferResult
+    func uploadFile(sessionID: UUID, localPath: String, remotePath: String, progressHandler: (@Sendable (Int64, Int64) -> Void)?) async throws -> SFTPTransferResult
     func downloadFile(sessionID: UUID, remotePath: String, localPath: String) async throws -> SFTPTransferResult
+    func downloadFile(sessionID: UUID, remotePath: String, localPath: String, progressHandler: (@Sendable (Int64, Int64) -> Void)?) async throws -> SFTPTransferResult
     func openForwardChannel(sessionID: UUID, remoteHost: String, remotePort: UInt16, sourceHost: String, sourcePort: UInt16) async throws -> any SSHForwardChannel
     func sendKeepalive(sessionID: UUID) async -> Bool
     func disconnect(sessionID: UUID) async
@@ -38,5 +40,13 @@ extension SSHTransporting {
 
     func openShell(sessionID: UUID, pty: PTYConfiguration) async throws -> any SSHShellChannel {
         try await openShell(sessionID: sessionID, pty: pty, enableAgentForwarding: false)
+    }
+
+    func uploadFile(sessionID: UUID, localPath: String, remotePath: String, progressHandler: (@Sendable (Int64, Int64) -> Void)?) async throws -> SFTPTransferResult {
+        try await uploadFile(sessionID: sessionID, localPath: localPath, remotePath: remotePath)
+    }
+
+    func downloadFile(sessionID: UUID, remotePath: String, localPath: String, progressHandler: (@Sendable (Int64, Int64) -> Void)?) async throws -> SFTPTransferResult {
+        try await downloadFile(sessionID: sessionID, remotePath: remotePath, localPath: localPath)
     }
 }
