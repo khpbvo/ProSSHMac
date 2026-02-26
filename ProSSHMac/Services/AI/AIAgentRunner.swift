@@ -50,9 +50,19 @@ import os.log
         var previousResponseID = service.persistConversationContext
             ? service.conversationContext.responseID(for: sessionID)
             : nil
+
+        let screenLines = service.sessionProvider.shellBuffers[sessionID] ?? []
+        let screenSnapshot = screenLines.suffix(20).joined(separator: "\n")
+        let userMessageText: String
+        if !screenSnapshot.isEmpty {
+            userMessageText = "[Current terminal screen — use this to identify the environment, OS, device type, and current path/mode before acting]\n```\n\(screenSnapshot)\n```\n\n\(trimmedPrompt)"
+        } else {
+            userMessageText = trimmedPrompt
+        }
+
         var pendingMessages: [OpenAIResponsesMessage] = [
             .init(role: .developer, text: AIToolDefinitions.developerPrompt()),
-            .init(role: .user, text: trimmedPrompt),
+            .init(role: .user, text: userMessageText),
         ]
         var pendingToolOutputs: [OpenAIResponsesToolOutput] = []
         var totalToolCalls = 0
