@@ -29,12 +29,70 @@ For any significant feature or refactor, a phased implementation plan is created
 ### The Development Cycle
 
 ```
-1. Branch from main
-2. Create your implementation plan in docs/YourFeature.md (or claim an existing one)
-3. Execute phase by phase
-4. Update CLAUDE.md and featurelist.md after each phase
-5. PR when the entire feature is complete — every checkbox in docs/YourFeature.md must be checked
+1. Read CLAUDE.md and docs/featurelist.md in full
+2. Explore the codebase — find every file the feature touches
+3. Write docs/YourFeature.md — extensive phased checklist
+4. ── HARD STOP ── Open a draft PR with only the plan file, wait for maintainer approval
+5. Branch from main
+6. Execute phase by phase
+7. Update CLAUDE.md and docs/featurelist.md after each phase
+8. ── HARD STOP ── Every checkbox in docs/YourFeature.md must be checked before opening a real PR
 ```
+
+## Designing a Feature (Required First Step)
+
+Before a single line of code is written, every feature must go through a design step that produces a `docs/YourFeature.md` plan file. No plan file = no implementation = no PR.
+
+This step is **mandatory** whether you are a human contributor or an AI coding assistant (Claude Code, Cursor, Codex, etc.). The instructions below are written to be followed directly by an AI session — point it at this file and it knows exactly what to do.
+
+### The Design Process
+
+**Step 1 — Read the project memory**
+
+Read these two files in full. Do not skip or skim. Do not start exploring or planning until both are fully read.
+
+```
+CLAUDE.md           ← architecture, conventions, current state, key files
+docs/featurelist.md ← history, what exists, what was decided and why
+```
+
+**Step 2 — Explore the codebase**
+
+Search and read the files that are relevant to the feature. You are looking for:
+
+- Which existing files and types will this feature touch or extend?
+- What patterns, protocols, and actor boundaries already exist that you must follow?
+- Does `docs/bugs.md` or `docs/FutureFeatures.md` mention constraints or prior art for this area?
+- Are there related coordinators, view models, or services that this feature integrates with?
+
+Do not begin writing the plan until you have read enough actual code to know where every new file goes, what it extends, and what it must not break. Plans written from guesses produce code that doesn't compile.
+
+**Step 3 — Write the plan**
+
+Create `docs/YourFeature.md`. The plan must satisfy all of the following:
+
+- **Phased** — each phase is a self-contained chunk of work completable in one focused session
+- **Granular** — every step is a concrete, verifiable action. Not "implement X", but "add method `foo()` to `Bar.swift` that does Y and returns Z"
+- **Extensive** — if you think you have enough steps, add more. Every file to be created or modified gets its own step. Sub-steps (`3a`, `3b`) for anything with multiple parts.
+- **Checkboxable** — every step uses `- [ ]` syntax so completion state is unambiguous
+
+Every phase must end with these two steps:
+```
+- [ ] Update CLAUDE.md if any architecture, file locations, or conventions changed
+- [ ] Update docs/featurelist.md with a dated loop-log entry
+```
+
+**Step 4 — Stop. Open a draft PR with only the plan file.**
+
+Do not branch. Do not write any implementation code. Commit `docs/YourFeature.md` to a new branch and open a **draft PR** with that single file. The PR description should summarise:
+
+- What the feature does
+- What files it will touch
+- Any architectural decisions made and why
+
+Then wait. The maintainer will review the plan and either approve it or request changes. Only after the draft PR receives explicit approval do you close it, branch properly, and begin Phase 1.
+
+This gate exists so the maintainer can catch design mistakes before they become code debt — and so that any AI session that produced the plan can be held accountable to it.
 
 ## Writing Implementation Plans
 
