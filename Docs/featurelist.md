@@ -1,6 +1,6 @@
 # ProSSHMac AI + File Browser Expansion Checklist
 
-Last verified against repo: 2026-02-25
+Last verified against repo: 2026-02-27
 Required assistant model for this work: `gpt-5.1-codex-max`
 
 ## Goal
@@ -58,6 +58,10 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 
 ## Loop Log
 
+- 2026-02-27: RemotePatchingFix Phase 5 (read_file_chunk contamination fix) — Rewrote `readRemoteFileChunk` in `AIToolHandler+RemoteExecution.swift` to use the same base64 read path that `apply_patch` uses (`RemotePatchCommandBuilder.buildReadCommand` → `provider.executeCommandAndWait` → `RemotePatchCommandBuilder.decodeBase64FileOutput`), then extracts the requested line range in Swift. This replaces the sed-based `buildRemoteReadFileChunkCommand` + `executeRemoteToolCommand` path that ran through `CommandBlock.output` and got shell prompt / command-echo contamination mixed into the content. The contaminated content caused the AI agent to think patches failed (content mismatch) and spiral into broken retry attempts. Falls back to the old sed path if base64 decode fails (e.g., file not found, binary). Returns the same JSON shape for API compatibility. Added `testBase64ReadLineExtraction` to `RemotePatchCommandBuilderTests` verifying the full decode + line slicing pipeline with contaminated input. Build succeeds; all 14 `RemotePatchCommandBuilderTests` pass.
+- 2026-02-27: RemotePatchingFix Phase 4 (dead code cleanup) — Deleted `buildUpdateCommand` and its MARK header from `ApplyPatchTool.swift`; replaced the unreachable `.update` case in `buildCommand(for:)` with `preconditionFailure` documenting that updates go through the read-apply-write path in `AIToolHandler`. Updated `buildCommand(for:)` docstring to note it handles only `.create` and `.delete`. Simplified `parseResult` to delete-only: removed `patch(1)` success/failure pattern checks (`FAILED`, `reject`), Hunk/offset warning, and fuzz warning; the method now only checks for `__PROSSH_PATCH_ERROR__` and returns success otherwise. Deleted both `ApplyPatchTool.swift.bak` copies (source tree + DMG artifact). In `ApplyPatchTests.swift`: removed `testUpdateCommandUsesPatch`, `testParseFuzzyWarning`, and `testParseRejectedHunk` (all tested deleted dead code); updated `testParseSuccessResult` to use a `.delete` operation with empty output (what `rm` produces); added `testRemoteUpdateUsesReadThenWrite` as an architectural documentation test asserting that both `buildReadCommand` and `buildWriteCommand` use base64 encoding and neither references `patch(1)`. Build and all targeted patch tests pass.
+- 2026-02-27: RemotePatchingFix Phase 3 — Wired `buildReadCommand`/`decodeBase64FileOutput` into the live remote update path in `AIToolHandler.swift`. Replaced `Self.buildRemoteReadFileChunkCommand(path:startLine:endLine:)` (sed-based, contaminated output) with `RemotePatchCommandBuilder.buildReadCommand(path:)` + `if let originalContent = RemotePatchCommandBuilder.decodeBase64FileOutput(readResult.output)` guard. A nil decode (file not found or binary) now returns a descriptive `PatchResult(success: false, ...)` instead of crashing the diff pipeline. Replaced `testUpdateWithPromptPrefixProducesCorruptOutput` (documents Bug 1 as expected failure) with `testUpdateSucceedsWithBase64ReadSimulation` (regression test: contaminated terminal output → decode → applyDiff → correct result). Also fixed two pre-existing bugs exposed when the Phase 3 crash fix landed: (1) `V4AParserState` (a `private final class`) was missing `nonisolated deinit` — under `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`, its dealloc went through `swift_task_deinitOnExecutorImpl` and aborted in XCTest callbacks; added `nonisolated deinit {}` matching the pattern already used in `PaneManager`/`SessionTabManager`. (2) `testUpdateAnchorNotFound` used a delete line (`-line1`) that accidentally matched the input's first line, so `findContext` never returned -1 and the test never threw; fixed the diff to use a context line absent from the file. (3) `testFullLifecycle` in `PatchRoundTripTests` used unified diff format for create/update, but `LocalWorkspacePatcher` uses V4A format; fixed both diffs to V4A (create: `+`-prefixed lines; update: `@@ <anchor>` with `-`/`+` lines). All 58 patch-related tests now pass.
+- 2026-02-27: RemotePatchingFix Phase 2 — Added `RemotePatchCommandBuilder.buildReadCommand(path:)` and `RemotePatchCommandBuilder.decodeBase64FileOutput(_:)` to `ApplyPatchTool.swift`. `buildReadCommand` emits `base64 <escaped-path>` — the read-side pair of `buildWriteCommand`. `decodeBase64FileOutput` filters output lines to keep only valid base64 chars (`[A-Za-z0-9+/=]`), joins and decodes them, returning the UTF-8 content or nil on failure — making the read immune to shell prompt / command-echo contamination. Added 8 new tests to `RemotePatchCommandBuilderTests` covering: base64 command generation, space-path escaping, clean round-trip, prompt-prefix contamination, prompt-suffix contamination, trailing-newline preservation, nil for empty output, nil for non-base64 output. All 15 `RemotePatchCommandBuilderTests` pass. No production calling code changed in this phase.
 - 2026-02-26: Fixed SFTP transfer progress reporting. Uploads/downloads previously showed "Zero KB" until completion because the C layer updated progress pointers in-place but Swift only read them after the blocking call returned. Added `progressHandler` callback to `uploadFile`/`downloadFile` throughout the stack (SSHTransporting protocol, LibSSHTransport, SessionSFTPCoordinator, SessionManager). LibSSHTransport now allocates heap pointers shared with a detached polling task (250ms interval) that reports intermediate progress to TransferManager, which updates `transfers[index].bytesTransferred` in real time.
 - 2026-02-26: Added SUDO / ELEVATED PRIVILEGES section to the AI developer prompt. Agent now runs sudo commands directly via `execute_command` (fire-and-forget), checks the screen for a password prompt, and asks the user to type their password in the terminal instead of avoiding sudo or rewriting the approach. Password stays in the PTY and is never sent to the AI provider.
 - 2026-02-26: Fixed AI sidebar Clear and X buttons. Clear now cancels the running agent task (`activeAgentTask.cancel()`), resets `isSending`, and clears conversation context — previously it only cleared UI messages while the agent kept running. X close button now calls `clearConversation()` before hiding the sidebar — previously it only toggled `showAIAssistant = false` without stopping or clearing anything.
@@ -450,6 +454,30 @@ helpers, `ResolutionContext`, `MappingResult`) into `SSHConfigMapper.swift` (~44
 `SSHConfigImportService.swift` (~109L); removed orphaned token-expander doc comment and
 `// swiftlint:disable file_length` (275L < 400L). Build: SUCCEEDED after each phase.
 Tests: 2 pre-existing failures, zero new. Commit: `e341205`.
+
+---
+
+### 2026-02-27 — RemotePatchingFix Phase 1 COMPLETE
+
+Created `ProSSHMacTests/Terminal/Tests/ApplyDiffTests.swift` — 11 direct unit tests for
+`applyDiff()` (the V4A parser in `apply_diff.swift`). Three test classes:
+- `ApplyDiffCreateTests` (3 tests): basic plus-line creation, empty diff, missing-plus throw
+- `ApplyDiffUpdateTests` (7 tests): anchor match, bare anchor, anchor-not-found throw,
+  multiple anchors, trailing-newline preservation, no-trailing-newline preservation, fuzzy
+  stripped anchor match
+- `ApplyDiffContaminationTests` (1 test): documents Bug 1 — shell-prompt prefix in
+  contaminated `sed` output is silently carried through into the patched result; asserts
+  the buggy behaviour so Phase 3 can flip the assertion
+
+Fixed `testUpdateWithoutHunkHeadersThrows` in `ApplyPatchTests.swift`: was asserting
+`PatchToolError.invalidDiff` but `LocalWorkspacePatcher.updateFile` calls `applyDiff()`
+directly without wrapping V4A errors, so the actual error is `V4ADiffError.invalidLine`.
+
+Also fixed pre-existing conformance gap in `OpenAIAgentServiceTests.swift`:
+`MockAgentSessionProvider` was missing `sendRawShellInput(sessionID:input:)` added to
+`OpenAIAgentSessionProviding` in a recent commit. Added the stub so the test bundle compiles.
+
+All 11 `ApplyDiffTests` passed. All 9 `LocalWorkspacePatcherTests` passed. Branch: `fix/remote-patching`.
 
 ---
 
