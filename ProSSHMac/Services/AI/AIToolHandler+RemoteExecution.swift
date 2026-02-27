@@ -95,16 +95,10 @@ extension AIToolHandler {
         startLine: Int,
         lineCount: Int
     ) async -> OpenAIJSONValue {
-        let endLine = startLine + lineCount - 1
-        let command = Self.buildRemoteReadFileChunkCommand(
-            path: path,
-            startLine: startLine,
-            endLine: endLine
-        )
-        let execution = await executeRemoteToolCommand(
-            provider: provider,
-            sessionID: sessionID,
-            commandBody: command
+        // Use the same base64 read that apply_patch uses — immune to prompt contamination.
+        let readCmd = RemotePatchCommandBuilder.buildReadCommand(path: path)
+        let execution = await provider.executeCommandAndWait(
+            sessionID: sessionID, command: readCmd, timeoutSeconds: 15
         )
 
         if execution.timedOut {
@@ -113,19 +107,49 @@ extension AIToolHandler {
                 "error": .string("Remote file read timed out."),
             ])
         }
-        if execution.exitCode == 127 {
-            return .object([
-                "ok": .bool(false),
-                "error": .string("Remote shell is missing required utility: sed."),
-            ])
+
+        guard let fullContent = RemotePatchCommandBuilder.decodeBase64FileOutput(
+            execution.output
+        ) else {
+            // Base64 decode failed — file might not exist or is binary.
+            // Fall back to sed-based read which handles not-found/not-regular tokens.
+            let endLine = startLine + lineCount - 1
+            let command = Self.buildRemoteReadFileChunkCommand(
+                path: path, startLine: startLine, endLine: endLine
+            )
+            let fallback = await executeRemoteToolCommand(
+                provider: provider, sessionID: sessionID, commandBody: command
+            )
+            if fallback.timedOut {
+                return .object([
+                    "ok": .bool(false),
+                    "error": .string("Remote file read timed out."),
+                ])
+            }
+            return Self.parseReadFileChunkOutput(
+                fallback.output, path: path, startLine: startLine,
+                lineCount: lineCount, source: "remote_command"
+            )
         }
-        return Self.parseReadFileChunkOutput(
-            execution.output,
-            path: path,
-            startLine: startLine,
-            lineCount: lineCount,
-            source: "remote_command"
-        )
+
+        // Extract the requested line range from the decoded content.
+        let allLines = fullContent.components(separatedBy: "\n")
+        let zeroStart = max(0, startLine - 1)   // startLine is 1-based
+        let zeroEnd = min(allLines.count, zeroStart + lineCount)
+        let slicedLines = zeroStart < allLines.count
+            ? Array(allLines[zeroStart..<zeroEnd]) : []
+        let content = slicedLines.joined(separator: "\n")
+        let hasMore = zeroEnd < allLines.count
+        let nextStart: OpenAIJSONValue = hasMore
+            ? .number(Double(zeroEnd + 1)) : .null
+
+        return .object([
+            "ok": .bool(true),
+            "content": .string(content),
+            "lines_returned": .number(Double(slicedLines.count)),
+            "has_more": .bool(hasMore),
+            "next_start_line": nextStart,
+        ])
     }
 
     func executeRemoteToolCommand(

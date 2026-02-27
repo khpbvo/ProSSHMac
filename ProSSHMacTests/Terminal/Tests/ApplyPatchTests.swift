@@ -623,9 +623,11 @@ final class LocalWorkspacePatcherTests: XCTestCase {
             diff: "just raw text, no diff format"
         )
 
+        // LocalWorkspacePatcher.updateFile calls applyDiff() directly and does not wrap
+        // V4ADiffError in PatchToolError. The error for a non-diff string is V4ADiffError.invalidLine.
         XCTAssertThrowsError(try patcher.apply(op)) { error in
-            if case .invalidDiff = error as? PatchToolError { } else {
-                XCTFail("Expected invalidDiff, got \(error)")
+            if case .invalidLine = error as? V4ADiffError { } else {
+                XCTFail("Expected V4ADiffError.invalidLine, got \(type(of: error)): \(error)")
             }
         }
     }
@@ -644,18 +646,6 @@ final class RemotePatchCommandBuilderTests: XCTestCase {
         XCTAssertTrue(command.contains("hello"))
     }
 
-    func testUpdateCommandUsesPatch() {
-        let op = PatchOperation(
-            type: .update,
-            path: "/etc/config.cfg",
-            diff: "@@ -1 +1 @@\n-old\n+new"
-        )
-        let command = RemotePatchCommandBuilder.buildCommand(for: op)
-
-        XCTAssertTrue(command.contains("patch"))
-        XCTAssertTrue(command.contains("command -v patch"))
-    }
-
     func testDeleteCommandUsesRm() {
         let op = PatchOperation(type: .delete, path: "/tmp/removeme.txt", diff: nil)
         let command = RemotePatchCommandBuilder.buildCommand(for: op)
@@ -665,12 +655,11 @@ final class RemotePatchCommandBuilderTests: XCTestCase {
     }
 
     func testParseSuccessResult() {
-        let op = PatchOperation(type: .update, path: "file.txt", diff: nil)
-        let output = "patching file file.txt"
-
-        let result = RemotePatchCommandBuilder.parseResult(output, operation: op)
-
+        let op = PatchOperation(type: .delete, path: "file.txt", diff: nil)
+        // rm produces no output on success; parseResult should still return success
+        let result = RemotePatchCommandBuilder.parseResult("", operation: op)
         XCTAssertTrue(result.success)
+        XCTAssertTrue(result.output.contains("file.txt"))
     }
 
     func testParseErrorResult() {
@@ -683,23 +672,94 @@ final class RemotePatchCommandBuilderTests: XCTestCase {
         XCTAssertTrue(result.output.contains("file not found"))
     }
 
-    func testParseFuzzyWarning() {
-        let op = PatchOperation(type: .update, path: "file.txt", diff: nil)
-        let output = "patching file file.txt\nHunk #1 succeeded at 15 with fuzz 2."
-
-        let result = RemotePatchCommandBuilder.parseResult(output, operation: op)
-
-        XCTAssertTrue(result.success)
-        XCTAssertFalse(result.warnings.isEmpty)
+    func testRemoteUpdateUsesReadThenWrite() {
+        // Architectural assertion: the remote update pattern is base64-read → applyDiff → base64-write.
+        // buildUpdateCommand (patch(1)-based) is intentionally absent.
+        let path = "/etc/app.conf"
+        let readCmd = RemotePatchCommandBuilder.buildReadCommand(path: path)
+        let writeCmd = RemotePatchCommandBuilder.buildWriteCommand(path: path, content: "value=1\n")
+        XCTAssertTrue(readCmd.contains("base64"), "Read uses base64 encoding")
+        XCTAssertTrue(writeCmd.contains("base64"), "Write uses base64 encoding")
+        XCTAssertFalse(readCmd.contains("patch"), "Remote update does not use patch(1)")
+        XCTAssertFalse(writeCmd.contains("patch"), "Remote update does not use patch(1)")
     }
 
-    func testParseRejectedHunk() {
-        let op = PatchOperation(type: .update, path: "file.txt", diff: nil)
-        let output = "patching file file.txt\nHunk #1 FAILED at 10.\n1 out of 1 hunk FAILED"
+    func testReadCommandUsesBase64() {
+        let command = RemotePatchCommandBuilder.buildReadCommand(path: "/etc/nginx.conf")
+        XCTAssertTrue(command.contains("base64"), "Read command should use base64")
+        XCTAssertTrue(command.contains("nginx.conf"))
+    }
 
-        let result = RemotePatchCommandBuilder.parseResult(output, operation: op)
+    func testReadCommandEscapesSpaces() {
+        let command = RemotePatchCommandBuilder.buildReadCommand(path: "/etc/my config/file.conf")
+        // shellEscaped wraps in single quotes so spaces inside the path are safe
+        XCTAssertTrue(command.contains("'"), "Path with spaces should be single-quoted")
+        XCTAssertTrue(command.contains("my config"))
+    }
 
-        XCTAssertFalse(result.success)
+    func testDecodeBase64OutputClean() throws {
+        let original = "line one\nline two\nline three\n"
+        let b64 = Data(original.utf8).base64EncodedString()
+        let decoded = RemotePatchCommandBuilder.decodeBase64FileOutput(b64)
+        XCTAssertEqual(decoded, original)
+    }
+
+    func testDecodeBase64OutputWithPromptPrefix() {
+        let original = "server {\n    listen 80;\n}\n"
+        let b64 = Data(original.utf8).base64EncodedString()
+        // Simulate terminal output: prompt line + echoed command + base64 content
+        let contaminated = "user@host:~$ base64 /etc/nginx.conf\n" + b64
+        let decoded = RemotePatchCommandBuilder.decodeBase64FileOutput(contaminated)
+        XCTAssertEqual(decoded, original,
+            "Prompt prefix should be filtered out; content should decode correctly")
+    }
+
+    func testDecodeBase64OutputWithPromptSuffix() {
+        let original = "alpha\nbeta\ngamma\n"
+        let b64 = Data(original.utf8).base64EncodedString()
+        // Simulate exit-code marker appended after base64 output
+        let contaminated = b64 + "\nuser@host:~$ "
+        let decoded = RemotePatchCommandBuilder.decodeBase64FileOutput(contaminated)
+        XCTAssertEqual(decoded, original,
+            "Prompt suffix should be filtered out; content should decode correctly")
+    }
+
+    func testDecodeBase64OutputPreservesTrailingNewline() {
+        let original = "key=value\n"   // ends with newline, as most Unix text files do
+        let b64 = Data(original.utf8).base64EncodedString()
+        let decoded = RemotePatchCommandBuilder.decodeBase64FileOutput(b64)
+        XCTAssertEqual(decoded, original)
+        XCTAssertTrue(decoded?.hasSuffix("\n") == true,
+            "Trailing newline must survive the base64 round-trip")
+    }
+
+    func testDecodeBase64OutputReturnsNilForEmptyOutput() {
+        XCTAssertNil(RemotePatchCommandBuilder.decodeBase64FileOutput(""))
+    }
+
+    func testDecodeBase64OutputReturnsNilForNonBase64() {
+        // Plain text with spaces and punctuation — no valid base64 lines after filter
+        let plainText = "not base64 at all! just a shell error message"
+        XCTAssertNil(RemotePatchCommandBuilder.decodeBase64FileOutput(plainText))
+    }
+
+    func testBase64ReadLineExtraction() {
+        // Simulates the base64 read → decode → line slicing that readRemoteFileChunk now uses.
+        let original = "line one\nline two\nline three\nline four\nline five\n"
+        let b64 = Data(original.utf8).base64EncodedString()
+        let contaminated = "user@host:~$ base64 'file.txt'\n" + b64 + "\nuser@host:~$ "
+
+        guard let decoded = RemotePatchCommandBuilder.decodeBase64FileOutput(contaminated) else {
+            XCTFail("Base64 decode should succeed"); return
+        }
+        XCTAssertEqual(decoded, original)
+
+        // Extract lines 2–3 (1-based startLine=2, lineCount=2)
+        let allLines = decoded.components(separatedBy: "\n")
+        let zeroStart = max(0, 2 - 1)
+        let zeroEnd = min(allLines.count, zeroStart + 2)
+        let sliced = Array(allLines[zeroStart..<zeroEnd])
+        XCTAssertEqual(sliced, ["line two", "line three"])
     }
 }
 
@@ -723,12 +783,11 @@ final class PatchRoundTripTests: XCTestCase {
     func testFullLifecycle() throws {
         let workspace = LocalWorkspacePatcher(workspaceRoot: tempDir)
 
-        // Step 1: Create
+        // Step 1: Create — V4A create mode: each line prefixed with "+"
         let createOp = PatchOperation(
             type: .create,
             path: "lifecycle.txt",
             diff: """
-            @@ -0,0 +1,4 @@
             +# Configuration
             +setting_a = true
             +setting_b = false
@@ -738,17 +797,14 @@ final class PatchRoundTripTests: XCTestCase {
         let createResult = try workspace.apply(createOp)
         XCTAssertTrue(createResult.success)
 
-        // Step 2: Update (change setting_b to true)
+        // Step 2: Update — V4A update mode: @@ <anchor> then -/+ lines
         let updateOp = PatchOperation(
             type: .update,
             path: "lifecycle.txt",
             diff: """
-            @@ -1,4 +1,4 @@
-             # Configuration
-             setting_a = true
+            @@ setting_a = true
             -setting_b = false
             +setting_b = true
-             setting_c = 42
             """
         )
         let updateResult = try workspace.apply(updateOp)
