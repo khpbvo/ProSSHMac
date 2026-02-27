@@ -240,20 +240,19 @@ struct LocalWorkspacePatcher: Sendable {
 
 /// Applies patch operations on remote hosts via SSH shell commands.
 ///
-/// Uses heredoc + patch(1) for updates, cat heredoc for creates, and rm for
-/// deletes. Falls back to printf-based approach if patch(1) isn't available.
+/// Uses cat heredoc for creates and rm for deletes. Updates go through the
+/// read-apply-write path in AIToolHandler (base64 read → applyDiff → base64 write).
 struct RemotePatchCommandBuilder: Sendable {
 
     /// Build a shell command to apply a patch operation on a remote host.
-    ///
-    /// Returns a self-contained shell command string that can be sent via
-    /// `sendShellInput()` or `executeCommandAndWait()`.
+    /// Only used for `.create` (cat heredoc) and `.delete` (rm) operations.
+    /// `.update` operations go through the read-apply-write path in AIToolHandler.
     static func buildCommand(for operation: PatchOperation) -> String {
         switch operation.type {
         case .create:
             return buildCreateCommand(operation)
         case .update:
-            return buildUpdateCommand(operation)
+            preconditionFailure("update operations use the read-apply-write path in AIToolHandler; buildCommand should not be called for updates")
         case .delete:
             return buildDeleteCommand(operation)
         }
@@ -285,27 +284,6 @@ struct RemotePatchCommandBuilder: Sendable {
         \(content)
         \(marker)
         )
-        """
-    }
-
-    // MARK: - Update
-
-    private static func buildUpdateCommand(_ operation: PatchOperation) -> String {
-        let path = shellEscaped(operation.path)
-        let diff = operation.diff ?? ""
-        let marker = "__PROSSH_DIFF_EOF_\(UUID().uuidString.prefix(8))__"
-
-        // Try patch(1) first; if not available, the command reports an error.
-        return """
-        if [ ! -f \(path) ]; then \
-        printf '__PROSSH_PATCH_ERROR__: file not found: %s\\n' \(path); \
-        elif command -v patch >/dev/null 2>&1; then \
-        (patch --no-backup-if-mismatch \(path) << '\(marker)'
-        \(diff)
-        \(marker)
-        ); else \
-        printf '__PROSSH_PATCH_ERROR__: patch utility not found\\n'; \
-        fi
         """
     }
 
@@ -341,6 +319,41 @@ struct RemotePatchCommandBuilder: Sendable {
         """
     }
 
+    // MARK: - Read (base64, contamination-safe)
+
+    /// Build a shell command to read a remote file using base64 encoding.
+    ///
+    /// Base64 output consists only of [A-Za-z0-9+/=] characters, making it immune
+    /// to shell prompt / command-echo contamination when the output is captured via
+    /// the terminal screen buffer. Pair with decodeBase64FileOutput(_:) to recover
+    /// the original file content. This is the read-side pair of buildWriteCommand.
+    static func buildReadCommand(path: String) -> String {
+        let escapedPath = shellEscaped(path)
+        return "base64 \(escapedPath)"
+    }
+
+    /// Extract and decode base64-encoded file content from contaminated command output.
+    ///
+    /// Filters rawOutput to keep only lines that consist entirely of valid base64
+    /// characters ([A-Za-z0-9+/=]), joins them, base64-decodes the result, and
+    /// returns the UTF-8 string. Returns nil if decoding fails (e.g., no valid
+    /// base64 lines found, or binary file). Shell prompt lines, echoed commands,
+    /// and exit-code markers are all automatically excluded by the character filter.
+    static func decodeBase64FileOutput(_ rawOutput: String) -> String? {
+        let b64Lines = rawOutput.components(separatedBy: "\n").filter { line in
+            !line.isEmpty && line.allSatisfy {
+                $0.isLetter || $0.isNumber || $0 == "+" || $0 == "/" || $0 == "="
+            }
+        }
+        let joined = b64Lines.joined()
+        guard !joined.isEmpty,
+              let data = Data(base64Encoded: joined, options: .ignoreUnknownCharacters),
+              let content = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+        return content
+    }
+
     // MARK: - Helpers
 
     private static func shellEscaped(_ value: String) -> String {
@@ -349,6 +362,7 @@ struct RemotePatchCommandBuilder: Sendable {
     }
 
     /// Parse remote command output for patch errors.
+    /// Only called for .delete operations; create/update go through buildWriteCommand.
     static func parseResult(_ output: String, operation: PatchOperation) -> PatchResult {
         let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -365,22 +379,11 @@ struct RemotePatchCommandBuilder: Sendable {
             )
         }
 
-        // patch(1) outputs "patching file <path>" on success.
-        let success = !trimmed.contains("FAILED") && !trimmed.contains("reject")
-
-        var warnings: [String] = []
-        if trimmed.contains("Hunk") && trimmed.contains("offset") {
-            warnings.append("Patch applied with offset — context didn't match exactly")
-        }
-        if trimmed.contains("fuzz") {
-            warnings.append("Patch applied with fuzz factor — some context lines were fuzzy-matched")
-        }
-
         return PatchResult(
-            success: success,
-            output: success ? "\(operation.type.rawValue.capitalized) \(operation.path)" : trimmed,
-            linesChanged: 0, // Can't easily determine from remote output
-            warnings: warnings
+            success: true,
+            output: "\(operation.type.rawValue.capitalized) \(operation.path)",
+            linesChanged: 0,
+            warnings: []
         )
     }
 }

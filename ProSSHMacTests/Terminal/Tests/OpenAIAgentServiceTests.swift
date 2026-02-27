@@ -637,6 +637,11 @@ private final class MockAgentSessionProvider: OpenAIAgentSessionProviding {
         commandOutputByBlockID[blockID]
     }
 
+    func sendRawShellInput(sessionID: UUID, input: String) async {
+        sentCommands.append(input)
+        sentCommandsSuppressEcho.append(false)
+    }
+
     func sendShellInput(sessionID: UUID, input: String, suppressEcho: Bool) async {
         sentCommands.append(input)
         sentCommandsSuppressEcho.append(suppressEcho)

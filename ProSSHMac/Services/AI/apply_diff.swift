@@ -113,6 +113,11 @@ private final class V4AParserState {
         self.index = index
         self.fuzz = fuzz
     }
+
+    // nonisolated deinit prevents SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor from
+    // routing deallocation through swift_task_deinitOnExecutorImpl, which crashes
+    // when the dealloc happens outside a task context (e.g., in XCTest callbacks).
+    nonisolated deinit {}
 }
 
 // MARK: - Constants
