@@ -21,6 +21,7 @@ extension MetalTerminalRenderer {
         let renderSnapshot: GridSnapshot
         if selectionRenderer.needsProjection() {
             renderSnapshot = selectionRenderer.applySelection(to: snapshot)
+            forceFullUploadForPendingSnapshot = true
         } else {
             renderSnapshot = snapshot
         }
