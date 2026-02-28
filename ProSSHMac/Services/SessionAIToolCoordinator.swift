@@ -18,7 +18,7 @@ import Foundation
             .prefix(10)
             .uppercased()
         let marker = "__PSW_\(markerToken)__"
-        let wrappedCommand = "{ \(command); __ps=$?; printf '\\n\\033[8m\(marker):%s\\033[0m\\n' \"$__ps\"; }"
+        let wrappedCommand = "{ \(command); __ps=$?; printf '\\n\(marker):%s\\n' \"$__ps\"; }"
 
         guard let manager else {
             return CommandExecutionResult(output: "Session is not connected.", exitCode: nil, timedOut: false, blockID: nil)
@@ -92,6 +92,12 @@ import Foundation
                 }
             }
             try? await Task.sleep(nanoseconds: 150_000_000)
+        }
+
+        // Defense-in-depth: reset terminal SGR attributes on timeout to prevent
+        // stuck hidden/color state from a command that failed to complete its reset.
+        if let shell = manager.shellChannels[sessionID] {
+            try? await shell.send("\u{1B}[0m\n")
         }
 
         return CommandExecutionResult(output: "", exitCode: nil, timedOut: true, blockID: nil)
