@@ -500,6 +500,108 @@ final class OpenAIAgentServiceTests: XCTestCase {
         XCTAssertFalse(toolOutput.contains("local sessions only"))
     }
 
+    func testApplyPatchRemoteUpdateQueuesInteractiveSudoWhenPasswordRequired() async throws {
+        let sessionProvider = MockAgentSessionProvider(isLocal: false)
+        let original = "PermitRootLogin no\n"
+        let base64Original = Data(original.utf8).base64EncodedString()
+
+        sessionProvider.simulatedExecuteAndWaitResultsQueue = [
+            CommandExecutionResult(output: base64Original, exitCode: 0, timedOut: false, blockID: nil),
+            CommandExecutionResult(
+                output: "base64: /etc/ssh/sshd_config: Permission denied",
+                exitCode: 1,
+                timedOut: false,
+                blockID: nil
+            ),
+            CommandExecutionResult(
+                output: "sudo: a password is required",
+                exitCode: 1,
+                timedOut: false,
+                blockID: nil
+            ),
+        ]
+
+        let responses = MockOpenAIResponsesService()
+        responses.enqueueResponse(
+            makeFunctionCallResponse(
+                id: "resp_1",
+                callID: "call_patch",
+                toolName: "apply_patch",
+                arguments: #"{"operation":"update","path":"/etc/ssh/sshd_config","diff":"-PermitRootLogin no\n+PermitRootLogin prohibit-password"}"#
+            )
+        )
+        responses.enqueueResponse(
+            makeTextResponse(id: "resp_2", text: "Awaiting sudo auth.")
+        )
+
+        let service = OpenAIAgentService(
+            responsesService: responses,
+            sessionProvider: sessionProvider
+        )
+
+        _ = try await service.generateReply(
+            sessionID: sessionProvider.sessionID,
+            prompt: "patch sshd config"
+        )
+
+        let toolOutput = responses.capturedRequests[1].toolOutputs.first?.output ?? ""
+        XCTAssertTrue(toolOutput.contains(#""status":"sudo_password_required""#))
+        XCTAssertTrue(toolOutput.contains("Sudo password required"))
+        XCTAssertTrue(sessionProvider.sentCommands.contains("sudo -n true"))
+        XCTAssertTrue(sessionProvider.sentCommands.contains { $0.contains("sudo tee '/etc/ssh/sshd_config' > /dev/null") })
+        XCTAssertTrue(sessionProvider.sentCommandsSuppressEcho.contains(false))
+    }
+
+    func testApplyPatchRemoteUpdateRetriesWithSudoNWhenCredentialsCached() async throws {
+        let sessionProvider = MockAgentSessionProvider(isLocal: false)
+        let original = "PermitRootLogin no\n"
+        let base64Original = Data(original.utf8).base64EncodedString()
+
+        sessionProvider.simulatedExecuteAndWaitResultsQueue = [
+            CommandExecutionResult(output: base64Original, exitCode: 0, timedOut: false, blockID: nil),
+            CommandExecutionResult(
+                output: "base64: /etc/ssh/sshd_config: Permission denied",
+                exitCode: 1,
+                timedOut: false,
+                blockID: nil
+            ),
+            CommandExecutionResult(output: "", exitCode: 0, timedOut: false, blockID: nil), // sudo -n true
+            CommandExecutionResult(output: "", exitCode: 0, timedOut: false, blockID: nil), // sudo write
+        ]
+
+        let responses = MockOpenAIResponsesService()
+        responses.enqueueResponse(
+            makeFunctionCallResponse(
+                id: "resp_1",
+                callID: "call_patch",
+                toolName: "apply_patch",
+                arguments: #"{"operation":"update","path":"/etc/ssh/sshd_config","diff":"-PermitRootLogin no\n+PermitRootLogin prohibit-password"}"#
+            )
+        )
+        responses.enqueueResponse(
+            makeTextResponse(id: "resp_2", text: "Patched.")
+        )
+
+        let service = OpenAIAgentService(
+            responsesService: responses,
+            sessionProvider: sessionProvider
+        )
+
+        _ = try await service.generateReply(
+            sessionID: sessionProvider.sessionID,
+            prompt: "patch sshd config"
+        )
+
+        let toolOutput = responses.capturedRequests[1].toolOutputs.first?.output ?? ""
+        XCTAssertTrue(toolOutput.contains(#""ok":true"#))
+        XCTAssertTrue(toolOutput.contains("using sudo"))
+        XCTAssertFalse(toolOutput.contains("sudo_password_required"))
+        XCTAssertTrue(sessionProvider.sentCommands.contains("sudo -n true"))
+        XCTAssertTrue(sessionProvider.sentCommands.contains { $0.contains("sudo -n tee '/etc/ssh/sshd_config' > /dev/null") })
+        XCTAssertFalse(sessionProvider.sentCommands.contains("sudo -v"))
+        XCTAssertFalse(sessionProvider.sentCommandsSuppressEcho.contains(false))
+    }
+
     func testGenerateReplyForwardsStreamingAssistantAndReasoningEvents() async throws {
         let sessionProvider = MockAgentSessionProvider()
         let responses = MockOpenAIResponsesService()
@@ -594,6 +696,7 @@ private final class MockAgentSessionProvider: OpenAIAgentSessionProviding {
     var simulatedExecuteAndWaitOutput: String = ""
     var simulatedExecuteAndWaitExitCode: Int? = 0
     var simulatedExecuteAndWaitTimedOut: Bool = false
+    var simulatedExecuteAndWaitResultsQueue: [CommandExecutionResult] = []
 
     init(isLocal: Bool = true) {
         let session = Session(
@@ -689,6 +792,10 @@ private final class MockAgentSessionProvider: OpenAIAgentSessionProviding {
     ) async -> CommandExecutionResult {
         sentCommands.append(command)
         sentCommandsSuppressEcho.append(true)
+
+        if !simulatedExecuteAndWaitResultsQueue.isEmpty {
+            return simulatedExecuteAndWaitResultsQueue.removeFirst()
+        }
 
         if simulatedExecuteAndWaitTimedOut {
             return CommandExecutionResult(output: "", exitCode: nil, timedOut: true, blockID: nil)

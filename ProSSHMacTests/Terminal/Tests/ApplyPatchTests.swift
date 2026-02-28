@@ -690,6 +690,37 @@ final class RemotePatchCommandBuilderTests: XCTestCase {
         XCTAssertTrue(command.contains("nginx.conf"))
     }
 
+    func testReadCommandWithSudoNUsesNonInteractiveSudo() {
+        let command = RemotePatchCommandBuilder.buildReadCommand(
+            path: "/etc/nginx.conf",
+            useSudo: true,
+            nonInteractiveSudo: true
+        )
+        XCTAssertTrue(command.contains("sudo -n base64"))
+    }
+
+    func testWriteCommandWithSudoUsesTeeAndSudoMkdir() {
+        let command = RemotePatchCommandBuilder.buildWriteCommand(
+            path: "/etc/nginx.conf",
+            content: "worker_processes auto;\n",
+            useSudo: true
+        )
+        XCTAssertTrue(command.contains("sudo mkdir -p"))
+        XCTAssertTrue(command.contains("sudo tee '/etc/nginx.conf' > /dev/null"))
+    }
+
+    func testDeleteCommandWithSudoUsesSudoRm() {
+        let command = RemotePatchCommandBuilder.buildDeleteCommand(
+            path: "/etc/nginx.conf",
+            useSudo: true
+        )
+        XCTAssertTrue(command.contains("sudo rm"))
+    }
+
+    func testSudoPrimingCommandIsSudoV() {
+        XCTAssertEqual(RemotePatchCommandBuilder.buildSudoPrimingCommand(), "sudo -v")
+    }
+
     func testReadCommandEscapesSpaces() {
         let command = RemotePatchCommandBuilder.buildReadCommand(path: "/etc/my config/file.conf")
         // shellEscaped wraps in single quotes so spaces inside the path are safe

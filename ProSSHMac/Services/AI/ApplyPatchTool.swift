@@ -290,10 +290,25 @@ struct RemotePatchCommandBuilder: Sendable {
     // MARK: - Delete
 
     private static func buildDeleteCommand(_ operation: PatchOperation) -> String {
-        let path = shellEscaped(operation.path)
+        buildDeleteCommand(path: operation.path)
+    }
+
+    static func buildDeleteCommand(
+        path: String,
+        useSudo: Bool = false,
+        nonInteractiveSudo: Bool = false
+    ) -> String {
+        let escapedPath = shellEscaped(path)
+        let sudoPrefix: String
+        if useSudo {
+            sudoPrefix = nonInteractiveSudo ? "sudo -n" : "sudo"
+        } else {
+            sudoPrefix = ""
+        }
+        let rmCommand = useSudo ? "\(sudoPrefix) rm" : "rm"
         return """
-        if [ -f \(path) ]; then rm \(path) && echo 'Deleted'; \
-        else printf '__PROSSH_PATCH_ERROR__: file not found: %s\\n' \(path); fi
+        if [ -f \(escapedPath) ]; then \(rmCommand) \(escapedPath) && echo 'Deleted'; \
+        else printf '__PROSSH_PATCH_ERROR__: file not found: %s\\n' \(escapedPath); fi
         """
     }
 
@@ -305,14 +320,37 @@ struct RemotePatchCommandBuilder: Sendable {
     /// exact byte content, and works on all modern Ubuntu/Linux servers
     /// (base64 is part of coreutils). The heredoc delimiter only contains
     /// safe characters so it can never appear in the base64 payload.
-    static func buildWriteCommand(path: String, content: String) -> String {
+    static func buildWriteCommand(
+        path: String,
+        content: String,
+        useSudo: Bool = false,
+        nonInteractiveSudo: Bool = false
+    ) -> String {
         let escapedPath = shellEscaped(path)
         let b64 = Data(content.utf8).base64EncodedString(options: .lineLength76Characters)
         let marker = "__PROSSH_WRITE_EOF_\(UUID().uuidString.prefix(8))__"
+        let dirCommand: String
+        let teeCommand: String
+        if useSudo {
+            let sudoPrefix = nonInteractiveSudo ? "sudo -n" : "sudo"
+            dirCommand = "\(sudoPrefix) mkdir -p \"$(dirname \(escapedPath))\""
+            teeCommand = "\(sudoPrefix) tee \(escapedPath) > /dev/null"
+        } else {
+            dirCommand = "mkdir -p \"$(dirname \(escapedPath))\""
+            teeCommand = "> \(escapedPath)"
+        }
         // Wrap the heredoc in a subshell so the terminator stays on its own line
         // when executeCommandAndWait appends "; __ps=$?; ..." to the last line.
+        if useSudo {
+            return """
+            \(dirCommand) && (base64 -d << '\(marker)' | \(teeCommand)
+            \(b64)
+            \(marker)
+            )
+            """
+        }
         return """
-        mkdir -p "$(dirname \(escapedPath))" && (base64 -d > \(escapedPath) << '\(marker)'
+        \(dirCommand) && (base64 -d \(teeCommand) << '\(marker)'
         \(b64)
         \(marker)
         )
@@ -327,9 +365,23 @@ struct RemotePatchCommandBuilder: Sendable {
     /// to shell prompt / command-echo contamination when the output is captured via
     /// the terminal screen buffer. Pair with decodeBase64FileOutput(_:) to recover
     /// the original file content. This is the read-side pair of buildWriteCommand.
-    static func buildReadCommand(path: String) -> String {
+    static func buildReadCommand(
+        path: String,
+        useSudo: Bool = false,
+        nonInteractiveSudo: Bool = false
+    ) -> String {
         let escapedPath = shellEscaped(path)
+        if useSudo {
+            let sudoPrefix = nonInteractiveSudo ? "sudo -n" : "sudo"
+            return "\(sudoPrefix) base64 \(escapedPath)"
+        }
         return "base64 \(escapedPath)"
+    }
+
+    /// Build a command that prompts for sudo credentials and refreshes the sudo timestamp.
+    /// Use when an operation needs elevation but non-interactive sudo is not yet available.
+    static func buildSudoPrimingCommand() -> String {
+        "sudo -v"
     }
 
     /// Extract and decode base64-encoded file content from contaminated command output.
@@ -449,6 +501,10 @@ enum ApplyPatchToolDefinition {
 
                 Safer than execute_command because paths are sandboxed, anchors disambiguate
                 the right location, and writes are atomic.
+
+                For protected remote files, the tool may return status="sudo_password_required"
+                after queueing a sudo command in the terminal. In that case, ask the user
+                to type their sudo password directly in the terminal and confirm before retrying.
 
                 IMPORTANT: Try to make small, targeted patches that change only what is
                 necessary. Avoid rewriting large sections of a file unless the task

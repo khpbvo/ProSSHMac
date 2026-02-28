@@ -465,7 +465,13 @@ import os.log
             }
 
             // Execute
-            let result: PatchResult
+            var patchStatus: String?
+            var result = PatchResult(
+                success: false,
+                output: "Patch failed.",
+                linesChanged: 0,
+                warnings: []
+            )
             if session.isLocal {
                 let workingDir = provider.workingDirectoryBySessionID[sessionID]
                     ?? FileManager.default.currentDirectoryPath
@@ -474,37 +480,198 @@ import os.log
             } else {
                 if operation.type == .update, let diff = operation.diff {
                     // Remote update: read the file → apply V4A diff in Swift → write back.
-                    // This bypasses patch(1), which cannot parse V4A-format diffs
-                    // (V4A uses "@@ anchor" blocks without line-count headers that patch(1) requires).
-                    // Base64 read: immune to shell-prompt / command-echo contamination
-                    // and preserves trailing newlines (no trimmingCharacters applied).
+                    // If the target path is protected, fall back to sudo-aware read/write flow.
+                    var originalContent: String?
+                    var readUsedSudo = false
+
                     let readCmd = RemotePatchCommandBuilder.buildReadCommand(path: path)
                     let readResult = await provider.executeCommandAndWait(
                         sessionID: sessionID, command: readCmd, timeoutSeconds: 10
                     )
-                    if let originalContent = RemotePatchCommandBuilder.decodeBase64FileOutput(readResult.output) {
+                    originalContent = RemotePatchCommandBuilder.decodeBase64FileOutput(readResult.output)
+
+                    if originalContent == nil {
+                        let readOutput = Self.trimmedPatchOutput(readResult.output)
+                        if Self.isPermissionDeniedPatchOutput(readOutput) {
+                            if await canUseSudoWithoutPassword(provider: provider, sessionID: sessionID) {
+                                let sudoReadCmd = RemotePatchCommandBuilder.buildReadCommand(
+                                    path: path,
+                                    useSudo: true,
+                                    nonInteractiveSudo: true
+                                )
+                                let sudoReadResult = await provider.executeCommandAndWait(
+                                    sessionID: sessionID,
+                                    command: sudoReadCmd,
+                                    timeoutSeconds: 10
+                                )
+                                originalContent = RemotePatchCommandBuilder.decodeBase64FileOutput(
+                                    sudoReadResult.output
+                                )
+                                readUsedSudo = originalContent != nil
+                                if originalContent == nil {
+                                    result = PatchResult(
+                                        success: false,
+                                        output: Self.buildPatchFailureMessage(
+                                            prefix: "Sudo read failed",
+                                            rawOutput: sudoReadResult.output
+                                        ),
+                                        linesChanged: 0,
+                                        warnings: []
+                                    )
+                                }
+                            } else {
+                                await provider.sendShellInput(
+                                    sessionID: sessionID,
+                                    input: RemotePatchCommandBuilder.buildSudoPrimingCommand(),
+                                    suppressEcho: false
+                                )
+                                patchStatus = "sudo_password_required"
+                                result = PatchResult(
+                                    success: false,
+                                    output: """
+                                    Sudo password required to read \(path). \
+                                    The terminal is now prompting for sudo authentication. \
+                                    Ask the user to type their password in the terminal and press Enter, \
+                                    then continue once they confirm.
+                                    """,
+                                    linesChanged: 0,
+                                    warnings: []
+                                )
+                            }
+                        } else {
+                            result = PatchResult(
+                                success: false,
+                                output: "Failed to read remote file '\(path)': could not decode base64 output. " +
+                                    "Verify the file exists and is a text file.",
+                                linesChanged: 0,
+                                warnings: []
+                            )
+                        }
+                    }
+
+                    if let originalContent {
                         do {
                             let patched = try applyDiff(input: originalContent, diff: diff)
-                            let writeCmd = RemotePatchCommandBuilder.buildWriteCommand(
-                                path: path, content: patched
-                            )
-                            let writeResult = await provider.executeCommandAndWait(
-                                sessionID: sessionID, command: writeCmd, timeoutSeconds: 15
-                            )
                             let origLines = originalContent.components(separatedBy: "\n")
                             let patchedLines = patched.components(separatedBy: "\n")
                             let linesChanged = abs(patchedLines.count - origLines.count) +
                                 zip(origLines, patchedLines).filter { $0.0 != $0.1 }.count
-                            let succeeded = writeResult.exitCode == 0
-                            result = PatchResult(
-                                success: succeeded,
-                                output: succeeded
-                                    ? "Updated \(path) (\(linesChanged) lines changed)"
-                                    : "Write failed: \(writeResult.output.trimmingCharacters(in: .whitespacesAndNewlines))",
-                                linesChanged: linesChanged,
-                                warnings: patched == originalContent
-                                    ? ["Patch applied but file content is unchanged"] : []
+                            let warnings = patched == originalContent
+                                ? ["Patch applied but file content is unchanged"] : []
+
+                            let initialWriteCmd = RemotePatchCommandBuilder.buildWriteCommand(
+                                path: path,
+                                content: patched,
+                                useSudo: readUsedSudo,
+                                nonInteractiveSudo: readUsedSudo
                             )
+                            let initialWriteResult = await provider.executeCommandAndWait(
+                                sessionID: sessionID,
+                                command: initialWriteCmd,
+                                timeoutSeconds: 20
+                            )
+
+                            if initialWriteResult.exitCode == 0 {
+                                result = PatchResult(
+                                    success: true,
+                                    output: readUsedSudo
+                                        ? "Updated \(path) (\(linesChanged) lines changed, using sudo)"
+                                        : "Updated \(path) (\(linesChanged) lines changed)",
+                                    linesChanged: linesChanged,
+                                    warnings: warnings
+                                )
+                            } else {
+                                let initialWriteOutput = Self.trimmedPatchOutput(initialWriteResult.output)
+                                if !readUsedSudo && Self.isPermissionDeniedPatchOutput(initialWriteOutput) {
+                                    if await canUseSudoWithoutPassword(provider: provider, sessionID: sessionID) {
+                                        let sudoWriteCmd = RemotePatchCommandBuilder.buildWriteCommand(
+                                            path: path,
+                                            content: patched,
+                                            useSudo: true,
+                                            nonInteractiveSudo: true
+                                        )
+                                        let sudoWriteResult = await provider.executeCommandAndWait(
+                                            sessionID: sessionID,
+                                            command: sudoWriteCmd,
+                                            timeoutSeconds: 20
+                                        )
+                                        if sudoWriteResult.exitCode == 0 {
+                                            result = PatchResult(
+                                                success: true,
+                                                output: "Updated \(path) (\(linesChanged) lines changed, using sudo)",
+                                                linesChanged: linesChanged,
+                                                warnings: warnings
+                                            )
+                                        } else {
+                                            result = PatchResult(
+                                                success: false,
+                                                output: Self.buildPatchFailureMessage(
+                                                    prefix: "Sudo write failed",
+                                                    rawOutput: sudoWriteResult.output
+                                                ),
+                                                linesChanged: linesChanged,
+                                                warnings: warnings
+                                            )
+                                        }
+                                    } else {
+                                        let sudoInteractiveWrite = RemotePatchCommandBuilder.buildWriteCommand(
+                                            path: path,
+                                            content: patched,
+                                            useSudo: true
+                                        )
+                                        await provider.sendShellInput(
+                                            sessionID: sessionID,
+                                            input: sudoInteractiveWrite,
+                                            suppressEcho: false
+                                        )
+                                        patchStatus = "sudo_password_required"
+                                        result = PatchResult(
+                                            success: false,
+                                            output: """
+                                            Sudo password required to update \(path). \
+                                            I started the sudo patch command in the terminal. \
+                                            Ask the user to type their password there and press Enter, \
+                                            then continue once they confirm.
+                                            """,
+                                            linesChanged: linesChanged,
+                                            warnings: warnings
+                                        )
+                                    }
+                                } else if readUsedSudo && Self.isSudoPasswordRequiredOutput(initialWriteOutput) {
+                                    let sudoInteractiveWrite = RemotePatchCommandBuilder.buildWriteCommand(
+                                        path: path,
+                                        content: patched,
+                                        useSudo: true
+                                    )
+                                    await provider.sendShellInput(
+                                        sessionID: sessionID,
+                                        input: sudoInteractiveWrite,
+                                        suppressEcho: false
+                                    )
+                                    patchStatus = "sudo_password_required"
+                                    result = PatchResult(
+                                        success: false,
+                                        output: """
+                                        Sudo password required to update \(path). \
+                                        I started the sudo patch command in the terminal. \
+                                        Ask the user to type their password there and press Enter, \
+                                        then continue once they confirm.
+                                        """,
+                                        linesChanged: linesChanged,
+                                        warnings: warnings
+                                    )
+                                } else {
+                                    result = PatchResult(
+                                        success: false,
+                                        output: Self.buildPatchFailureMessage(
+                                            prefix: readUsedSudo ? "Sudo write failed" : "Write failed",
+                                            rawOutput: initialWriteResult.output
+                                        ),
+                                        linesChanged: linesChanged,
+                                        warnings: warnings
+                                    )
+                                }
+                            }
                         } catch {
                             result = PatchResult(
                                 success: false,
@@ -513,37 +680,94 @@ import os.log
                                 warnings: []
                             )
                         }
-                    } else {
-                        result = PatchResult(
-                            success: false,
-                            output: "Failed to read remote file '\(path)': could not decode base64 output. " +
-                                "Verify the file exists and is a text file.",
-                            linesChanged: 0,
-                            warnings: []
-                        )
                     }
                 } else if operation.type == .create, let diff = operation.diff {
-                    // Remote create: apply V4A diff to get content, write via base64.
-                    // buildCreateCommand writes raw diff with + prefixes when no @@ is present,
-                    // so we use applyDiff + buildWriteCommand for correctness.
+                    // Remote create: apply V4A diff to content, then write via base64.
                     do {
                         let content = try applyDiff(input: "", diff: diff, mode: .create)
+                        let lineCount = content.components(separatedBy: "\n").count
                         let writeCmd = RemotePatchCommandBuilder.buildWriteCommand(
                             path: path, content: content
                         )
                         let writeResult = await provider.executeCommandAndWait(
-                            sessionID: sessionID, command: writeCmd, timeoutSeconds: 15
+                            sessionID: sessionID, command: writeCmd, timeoutSeconds: 20
                         )
-                        let lineCount = content.components(separatedBy: "\n").count
-                        let succeeded = writeResult.exitCode == 0
-                        result = PatchResult(
-                            success: succeeded,
-                            output: succeeded
-                                ? "Created \(path) (\(lineCount) lines)"
-                                : "Create failed: \(writeResult.output.trimmingCharacters(in: .whitespacesAndNewlines))",
-                            linesChanged: lineCount,
-                            warnings: []
-                        )
+
+                        if writeResult.exitCode == 0 {
+                            result = PatchResult(
+                                success: true,
+                                output: "Created \(path) (\(lineCount) lines)",
+                                linesChanged: lineCount,
+                                warnings: []
+                            )
+                        } else if Self.isPermissionDeniedPatchOutput(
+                            Self.trimmedPatchOutput(writeResult.output)
+                        ) {
+                            if await canUseSudoWithoutPassword(provider: provider, sessionID: sessionID) {
+                                let sudoWriteCmd = RemotePatchCommandBuilder.buildWriteCommand(
+                                    path: path,
+                                    content: content,
+                                    useSudo: true,
+                                    nonInteractiveSudo: true
+                                )
+                                let sudoWriteResult = await provider.executeCommandAndWait(
+                                    sessionID: sessionID,
+                                    command: sudoWriteCmd,
+                                    timeoutSeconds: 20
+                                )
+                                if sudoWriteResult.exitCode == 0 {
+                                    result = PatchResult(
+                                        success: true,
+                                        output: "Created \(path) (\(lineCount) lines, using sudo)",
+                                        linesChanged: lineCount,
+                                        warnings: []
+                                    )
+                                } else {
+                                    result = PatchResult(
+                                        success: false,
+                                        output: Self.buildPatchFailureMessage(
+                                            prefix: "Sudo create failed",
+                                            rawOutput: sudoWriteResult.output
+                                        ),
+                                        linesChanged: lineCount,
+                                        warnings: []
+                                    )
+                                }
+                            } else {
+                                let sudoInteractiveWrite = RemotePatchCommandBuilder.buildWriteCommand(
+                                    path: path,
+                                    content: content,
+                                    useSudo: true
+                                )
+                                await provider.sendShellInput(
+                                    sessionID: sessionID,
+                                    input: sudoInteractiveWrite,
+                                    suppressEcho: false
+                                )
+                                patchStatus = "sudo_password_required"
+                                result = PatchResult(
+                                    success: false,
+                                    output: """
+                                    Sudo password required to create \(path). \
+                                    I started the sudo patch command in the terminal. \
+                                    Ask the user to type their password there and press Enter, \
+                                    then continue once they confirm.
+                                    """,
+                                    linesChanged: lineCount,
+                                    warnings: []
+                                )
+                            }
+                        } else {
+                            result = PatchResult(
+                                success: false,
+                                output: Self.buildPatchFailureMessage(
+                                    prefix: "Create failed",
+                                    rawOutput: writeResult.output
+                                ),
+                                linesChanged: lineCount,
+                                warnings: []
+                            )
+                        }
                     } catch {
                         result = PatchResult(
                             success: false,
@@ -553,11 +777,86 @@ import os.log
                         )
                     }
                 } else {
-                    let command = RemotePatchCommandBuilder.buildCommand(for: operation)
-                    let execution = await provider.executeCommandAndWait(
-                        sessionID: sessionID, command: command, timeoutSeconds: 15
+                    // Remote delete path.
+                    let deleteCmd = RemotePatchCommandBuilder.buildDeleteCommand(path: path)
+                    let deleteResult = await provider.executeCommandAndWait(
+                        sessionID: sessionID, command: deleteCmd, timeoutSeconds: 15
                     )
-                    result = RemotePatchCommandBuilder.parseResult(execution.output, operation: operation)
+
+                    if deleteResult.exitCode == 0 {
+                        result = RemotePatchCommandBuilder.parseResult(deleteResult.output, operation: operation)
+                    } else if Self.isPermissionDeniedPatchOutput(
+                        Self.trimmedPatchOutput(deleteResult.output)
+                    ) {
+                        if await canUseSudoWithoutPassword(provider: provider, sessionID: sessionID) {
+                            let sudoDeleteCmd = RemotePatchCommandBuilder.buildDeleteCommand(
+                                path: path,
+                                useSudo: true,
+                                nonInteractiveSudo: true
+                            )
+                            let sudoDeleteResult = await provider.executeCommandAndWait(
+                                sessionID: sessionID,
+                                command: sudoDeleteCmd,
+                                timeoutSeconds: 15
+                            )
+                            if sudoDeleteResult.exitCode == 0 {
+                                result = PatchResult(
+                                    success: true,
+                                    output: "Deleted \(path) (using sudo)",
+                                    linesChanged: 0,
+                                    warnings: []
+                                )
+                            } else {
+                                result = PatchResult(
+                                    success: false,
+                                    output: Self.buildPatchFailureMessage(
+                                        prefix: "Sudo delete failed",
+                                        rawOutput: sudoDeleteResult.output
+                                    ),
+                                    linesChanged: 0,
+                                    warnings: []
+                                )
+                            }
+                        } else {
+                            let sudoInteractiveDelete = RemotePatchCommandBuilder.buildDeleteCommand(
+                                path: path,
+                                useSudo: true
+                            )
+                            await provider.sendShellInput(
+                                sessionID: sessionID,
+                                input: sudoInteractiveDelete,
+                                suppressEcho: false
+                            )
+                            patchStatus = "sudo_password_required"
+                            result = PatchResult(
+                                success: false,
+                                output: """
+                                Sudo password required to delete \(path). \
+                                I started the sudo delete command in the terminal. \
+                                Ask the user to type their password there and press Enter, \
+                                then continue once they confirm.
+                                """,
+                                linesChanged: 0,
+                                warnings: []
+                            )
+                        }
+                    } else {
+                        let parsed = RemotePatchCommandBuilder.parseResult(
+                            deleteResult.output,
+                            operation: operation
+                        )
+                        result = parsed.success
+                            ? PatchResult(
+                                success: false,
+                                output: Self.buildPatchFailureMessage(
+                                    prefix: "Delete failed",
+                                    rawOutput: deleteResult.output
+                                ),
+                                linesChanged: 0,
+                                warnings: []
+                            )
+                            : parsed
+                    }
                 }
             }
 
@@ -566,12 +865,16 @@ import os.log
             )
             service?.patchResultCallback?(operation, result)
 
-            return AIToolDefinitions.jsonString(from: .object([
+            var payload: [String: OpenAIJSONValue] = [
                 "ok": .bool(result.success),
                 "output": .string(result.output),
                 "lines_changed": .number(Double(result.linesChanged)),
                 "warnings": .array(result.warnings.map { .string($0) }),
-            ]))
+            ]
+            if let patchStatus {
+                payload["status"] = .string(patchStatus)
+            }
+            return AIToolDefinitions.jsonString(from: .object(payload))
 
         case "send_input":
             return try await executeSendInput(
@@ -587,6 +890,46 @@ import os.log
                 "tool": .string(toolCall.name),
             ]))
         }
+    }
+
+    private static func trimmedPatchOutput(_ output: String) -> String {
+        output.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func isPermissionDeniedPatchOutput(_ output: String) -> Bool {
+        let lower = output.lowercased()
+        return lower.contains("permission denied") ||
+            lower.contains("operation not permitted") ||
+            lower.contains("read-only file system") ||
+            lower.contains("access denied") ||
+            lower.contains("eacces")
+    }
+
+    private static func isSudoPasswordRequiredOutput(_ output: String) -> Bool {
+        let lower = output.lowercased()
+        return lower.contains("a password is required") ||
+            lower.contains("password is required") ||
+            lower.contains("sudo password")
+    }
+
+    private static func buildPatchFailureMessage(prefix: String, rawOutput: String) -> String {
+        let trimmed = trimmedPatchOutput(rawOutput)
+        if trimmed.isEmpty {
+            return "\(prefix): command returned no output"
+        }
+        return "\(prefix): \(trimmed)"
+    }
+
+    private func canUseSudoWithoutPassword(
+        provider: any OpenAIAgentSessionProviding,
+        sessionID: UUID
+    ) async -> Bool {
+        let sudoCheck = await provider.executeCommandAndWait(
+            sessionID: sessionID,
+            command: "sudo -n true",
+            timeoutSeconds: 5
+        )
+        return !sudoCheck.timedOut && sudoCheck.exitCode == 0
     }
 
 }

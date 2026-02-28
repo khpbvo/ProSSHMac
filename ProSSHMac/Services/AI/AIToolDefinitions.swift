@@ -69,6 +69,10 @@ enum AIToolDefinitions {
           verify the command executed, then continue with the task.
         - The password is entered directly into the terminal PTY — it is never sent to
           the AI provider and you cannot see it. This is safe by design.
+        - The apply_patch tool may return status="sudo_password_required" after it
+          starts a sudo patch command in the terminal. In that case, tell the user
+          to type their sudo password directly in the terminal, then STOP and wait
+          for confirmation before running more tools.
 
         SAFETY:
         - Never run destructive commands (rm -rf /, mkfs, dd if=/dev/zero, DROP TABLE, etc.) without explicit user confirmation.
