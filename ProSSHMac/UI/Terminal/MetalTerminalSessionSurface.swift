@@ -237,6 +237,20 @@ final class MetalTerminalSurfaceModel: ObservableObject {
 
     func handleDrag(point: CGPoint, phase: TerminalPointerPhase) {
         guard let renderer else { return }
+
+        // Always handle terminal phases that don't need a grid cell
+        switch phase {
+        case .ended:
+            dragStart = nil
+            return
+        case .cancelled:
+            dragStart = nil
+            renderer.clearSelection()
+            return
+        case .began, .changed:
+            break
+        }
+
         guard let cell = renderer.gridCell(at: point) else { return }
 
         switch phase {
@@ -246,11 +260,8 @@ final class MetalTerminalSurfaceModel: ObservableObject {
         case .changed:
             guard let start = dragStart else { return }
             renderer.setSelection(start: start, end: cell, type: .character)
-        case .ended:
-            dragStart = nil
-        case .cancelled:
-            dragStart = nil
-            renderer.clearSelection()
+        case .ended, .cancelled:
+            break // handled above
         }
     }
 
