@@ -53,6 +53,14 @@ struct MetalTerminalSessionSurface: View {
                     model.setRendererPaused(false)
                     model.updateFPS(isFocused: isFocused)
                     selectionCoordinator?.register(sessionID: sessionID, model: model)
+                    // Safety net: re-apply snapshot after a short delay to catch
+                    // any race where the initial apply happens before the atlas
+                    // rebuild completes. If the display is already correct this
+                    // is a harmless no-op (same snapshot, same atlas).
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(150))
+                        model.apply(snapshot: snapshotProvider())
+                    }
                 }
                 .onDisappear {
                     model.setRendererPaused(true)

@@ -47,6 +47,13 @@ extension MetalTerminalRenderer {
 
         // Force grid recalculation with the new cell dimensions.
         recalculateGridDimensions()
+        // Re-apply the latest snapshot so the cell buffer gets updated glyph
+        // atlas indices that match the rebuilt atlas. Without this, the old
+        // (now-invalid) glyph positions remain in the cell buffer and the
+        // terminal appears blank until the next external snapshot arrives.
+        if let latestSnapshot {
+            updateSnapshot(latestSnapshot)
+        }
         isDirty = true
     }
 
