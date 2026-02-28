@@ -20,7 +20,6 @@ enum ShellIntegrationScripts: Sendable {
 
     /// Returns a compact single-line version of the integration script for SSH injection.
     /// Prefixed with a space (suppresses bash history when HISTCONTROL=ignorespace).
-    /// Followed by `; clear` to hide the injection from the user.
     /// Returns `nil` for types that don't use script injection.
     static nonisolated func sshInjectionScript(for type: ShellIntegrationType) -> String? {
         switch type {
@@ -125,23 +124,22 @@ enum ShellIntegrationScripts: Sendable {
 
     // MARK: - Compact single-line scripts (for SSH raw injection)
     // Leading space suppresses bash history (HISTCONTROL=ignorespace).
-    // Trailing `; clear` hides the injection from the terminal.
 
     // swiftlint:disable line_length
     private nonisolated static var sshZshScript: String {
-        #" if [[ -z "$__PROSSH_SHELL_INTEGRATION" ]]; then export __PROSSH_SHELL_INTEGRATION=1; autoload -Uz add-zsh-hook; __prossh_precmd() { local ec=$?; printf '\e]133;D;%d\e\\' "$ec"; printf '\e]133;A\e\\'; }; __prossh_preexec() { printf '\e]133;C\e\\'; }; add-zsh-hook precmd __prossh_precmd; add-zsh-hook preexec __prossh_preexec; printf '\e]133;A\e\\'; fi; clear"#
+        #" if [[ -z "$__PROSSH_SHELL_INTEGRATION" ]]; then export __PROSSH_SHELL_INTEGRATION=1; autoload -Uz add-zsh-hook; __prossh_precmd() { local ec=$?; printf '\e]133;D;%d\e\\' "$ec"; printf '\e]133;A\e\\'; }; __prossh_preexec() { printf '\e]133;C\e\\'; }; add-zsh-hook precmd __prossh_precmd; add-zsh-hook preexec __prossh_preexec; printf '\e]133;A\e\\'; fi"#
     }
 
     private nonisolated static var sshBashScript: String {
-        #" if [ -z "$__PROSSH_SHELL_INTEGRATION" ]; then export __PROSSH_SHELL_INTEGRATION=1; __prossh_prompt_cmd() { local ec=$?; printf '\e]133;D;%d\e\\' "$ec"; printf '\e]133;A\e\\'; }; PROMPT_COMMAND="__prossh_prompt_cmd${PROMPT_COMMAND:+;$PROMPT_COMMAND}"; __prossh_debug_trap() { if [[ "$BASH_COMMAND" != "$PROMPT_COMMAND"* ]]; then printf '\e]133;C\e\\'; fi; return 0; }; trap '__prossh_debug_trap' DEBUG; printf '\e]133;A\e\\'; fi; clear"#
+        #" if [ -z "$__PROSSH_SHELL_INTEGRATION" ]; then export __PROSSH_SHELL_INTEGRATION=1; __prossh_prompt_cmd() { local ec=$?; printf '\e]133;D;%d\e\\' "$ec"; printf '\e]133;A\e\\'; }; PROMPT_COMMAND="__prossh_prompt_cmd${PROMPT_COMMAND:+;$PROMPT_COMMAND}"; __prossh_debug_trap() { if [[ "$BASH_COMMAND" != "$PROMPT_COMMAND"* ]]; then printf '\e]133;C\e\\'; fi; return 0; }; trap '__prossh_debug_trap' DEBUG; printf '\e]133;A\e\\'; fi"#
     }
 
     private nonisolated static var sshFishScript: String {
-        #" if not set -q __PROSSH_SHELL_INTEGRATION; set -gx __PROSSH_SHELL_INTEGRATION 1; function __prossh_prompt --on-event fish_prompt; set -l ec $status; printf '\e]133;D;%d\e\\' $ec; printf '\e]133;A\e\\'; end; function __prossh_preexec --on-event fish_preexec; printf '\e]133;C\e\\'; end; printf '\e]133;A\e\\'; end; clear"#
+        #" if not set -q __PROSSH_SHELL_INTEGRATION; set -gx __PROSSH_SHELL_INTEGRATION 1; function __prossh_prompt --on-event fish_prompt; set -l ec $status; printf '\e]133;D;%d\e\\' $ec; printf '\e]133;A\e\\'; end; function __prossh_preexec --on-event fish_preexec; printf '\e]133;C\e\\'; end; printf '\e]133;A\e\\'; end"#
     }
 
     private nonisolated static var sshPosixShScript: String {
-        #" if [ -z "$__PROSSH_SHELL_INTEGRATION" ]; then __PROSSH_SHELL_INTEGRATION=1; export __PROSSH_SHELL_INTEGRATION; PS1="$(printf '\033]133;A\033\\')${PS1}$(printf '\033]133;B\033\\')"; export PS1; fi; clear"#
+        #" if [ -z "$__PROSSH_SHELL_INTEGRATION" ]; then __PROSSH_SHELL_INTEGRATION=1; export __PROSSH_SHELL_INTEGRATION; PS1="$(printf '\033]133;A\033\\')${PS1}$(printf '\033]133;B\033\\')"; export PS1; fi"#
     }
     // swiftlint:enable line_length
 }
