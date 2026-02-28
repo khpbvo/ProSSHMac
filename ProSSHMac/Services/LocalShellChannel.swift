@@ -18,6 +18,7 @@ actor LocalShellChannel: SSHShellChannel {
 
     private let masterFD: Int32
     private let childPID: pid_t
+    private let slaveDevicePath: String
     private var rawContinuation: AsyncStream<Data>.Continuation
     private var readerTask: Task<Void, Never>?
     private var isClosed = false
@@ -90,7 +91,14 @@ actor LocalShellChannel: SSHShellChannel {
             throw LocalShellError.ptyAllocationFailed
         }
 
+        let slaveDevicePath = slaveName.withUnsafeBufferPointer {
+            String(decoding: $0.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }, as: UTF8.self)
+        }
+
         if pid == 0 {
+            // Keep child in its own foreground process group for job control.
+            _ = setpgid(0, 0)
+            _ = tcsetpgrp(STDIN_FILENO, getpid())
             _ = chdir(cwd)
 
             for (key, value) in childEnv {
@@ -135,6 +143,7 @@ actor LocalShellChannel: SSHShellChannel {
         let channel = LocalShellChannel(
             masterFD: master,
             childPID: pid,
+            slaveDevicePath: slaveDevicePath,
             rawContinuation: rawCont,
             rawOutput: rawStream
         )
@@ -153,11 +162,13 @@ actor LocalShellChannel: SSHShellChannel {
     private init(
         masterFD: Int32,
         childPID: pid_t,
+        slaveDevicePath: String,
         rawContinuation: AsyncStream<Data>.Continuation,
         rawOutput: AsyncStream<Data>
     ) {
         self.masterFD = masterFD
         self.childPID = childPID
+        self.slaveDevicePath = slaveDevicePath
         self.rawContinuation = rawContinuation
         self.rawOutput = rawOutput
     }
@@ -168,6 +179,55 @@ actor LocalShellChannel: SSHShellChannel {
         guard !isClosed else { return }
         let data = Array(input.utf8)
         guard !data.isEmpty else { return }
+
+        // Robust local signal delivery for Ctrl-C / Ctrl-Z / Ctrl-\.
+        // In some local PTY states the line discipline may echo "^C"
+        // without delivering SIGINT to the foreground job, so we
+        // explicitly request signal delivery as a fallback.
+        let isSignalChar = data.count == 1
+            && (data[0] == 0x03 || data[0] == 0x1A || data[0] == 0x1C)
+        var savedTermios: Darwin.termios?
+        var termiosFD: Int32 = -1
+
+        if isSignalChar {
+            termiosFD = open(slaveDevicePath, O_RDWR | O_NOCTTY)
+            if termiosFD >= 0 {
+                var tio = Darwin.termios()
+                if tcgetattr(termiosFD, &tio) == 0 {
+                    savedTermios = tio
+                    tio.c_lflag |= tcflag_t(ISIG)
+                    withUnsafeMutablePointer(to: &tio.c_cc) { ccPtr in
+                        let cc = UnsafeMutableRawPointer(ccPtr).assumingMemoryBound(to: cc_t.self)
+                        cc[Int(VINTR)] = 0x03  // Ctrl-C  -> SIGINT
+                        cc[Int(VQUIT)] = 0x1C  // Ctrl-\  -> SIGQUIT
+                        cc[Int(VSUSP)] = 0x1A  // Ctrl-Z  -> SIGTSTP
+                    }
+                    _ = tcsetattr(termiosFD, TCSANOW, &tio)
+                }
+            }
+
+            let sig: Int32
+            switch data[0] {
+            case 0x03: sig = SIGINT
+            case 0x1A: sig = SIGTSTP
+            case 0x1C: sig = SIGQUIT
+            default:   sig = 0
+            }
+            if sig != 0 {
+                var delivered = false
+                if termiosFD >= 0 {
+                    var sigValue = sig
+                    delivered = ioctl(termiosFD, TIOCSIG, &sigValue) == 0
+                }
+                if !delivered {
+                    var sigValue = sig
+                    delivered = ioctl(masterFD, TIOCSIG, &sigValue) == 0
+                }
+                if !delivered {
+                    _ = sendSignalToForegroundGroup(sig)
+                }
+            }
+        }
 
         var offset = 0
         while offset < data.count {
@@ -195,6 +255,63 @@ actor LocalShellChannel: SSHShellChannel {
             }
             throw LocalShellError.writeFailed(err)
         }
+
+        if var restore = savedTermios, termiosFD >= 0 {
+            _ = tcsetattr(termiosFD, TCSANOW, &restore)
+        }
+        if termiosFD >= 0 {
+            Darwin.close(termiosFD)
+        }
+    }
+
+    @discardableResult
+    private func sendSignalToForegroundGroup(_ sig: Int32) -> Bool {
+        var targetedGroups = Set<pid_t>()
+        var delivered = false
+
+        func signalProcessGroup(_ pgrp: pid_t) {
+            guard pgrp > 0, !targetedGroups.contains(pgrp) else { return }
+            if kill(-pgrp, sig) == 0 {
+                delivered = true
+            }
+            targetedGroups.insert(pgrp)
+        }
+
+        // 1) Foreground group reported by master side.
+        signalProcessGroup(tcgetpgrp(masterFD))
+
+        // 2) Foreground group reported by slave side.
+        let slaveFD = open(slaveDevicePath, O_RDONLY | O_NOCTTY)
+        if slaveFD >= 0 {
+            signalProcessGroup(tcgetpgrp(slaveFD))
+            Darwin.close(slaveFD)
+        }
+
+        // 3) Shell process group as baseline.
+        signalProcessGroup(getpgid(childPID))
+
+        // 4) Child jobs and their process groups.
+        var childPIDs = [pid_t](repeating: 0, count: 128)
+        let bufSize = Int32(childPIDs.count * MemoryLayout<pid_t>.stride)
+        let filled = proc_listchildpids(childPID, &childPIDs, bufSize)
+        if filled > 0 {
+            let count = Int(filled) / MemoryLayout<pid_t>.stride
+            for i in 0..<count {
+                let pid = childPIDs[i]
+                guard pid > 0 else { continue }
+                if kill(pid, sig) == 0 {
+                    delivered = true
+                }
+                signalProcessGroup(getpgid(pid))
+            }
+        }
+
+        // 5) Last resort: direct shell signal.
+        if kill(childPID, sig) == 0 {
+            delivered = true
+        }
+
+        return delivered
     }
 
     func resizePTY(columns: Int, rows: Int) async throws {
@@ -475,10 +592,11 @@ actor LocalShellChannel: SSHShellChannel {
             let zshrc = """
 # ProSSH shell overlay -- sources real .zshrc then sets custom prompt.
 export REAL_ZDOTDIR="$HOME"
-[[ -f "\(userRC)" ]] && ZDOTDIR="$HOME" source "\(userRC)"
+\(safeZshSourceLine(path: userRC))
 \(pathFunction)
 setopt prompt_subst
 PROMPT='\(promptStr)'
+\(zshCompletionFallback)
 """
             // Append shell integration script if configured for zsh
             if shellIntegration.type == .zsh, let integrationScript = ShellIntegrationScripts.script(for: .zsh) {
@@ -492,7 +610,7 @@ PROMPT='\(promptStr)'
             let userEnv = (home as NSString).appendingPathComponent(".zshenv")
             let zshenv = """
 # ProSSH shell overlay -- sources real .zshenv.
-[[ -f "\(userEnv)" ]] && ZDOTDIR="$HOME" source "\(userEnv)"
+\(safeZshSourceLine(path: userEnv))
 """
             try? zshenv.write(toFile: envPath, atomically: true, encoding: .utf8)
 
@@ -500,7 +618,7 @@ PROMPT='\(promptStr)'
             let userProfile = (home as NSString).appendingPathComponent(".zprofile")
             let zprofile = """
 # ProSSH shell overlay -- sources real .zprofile.
-[[ -f "\(userProfile)" ]] && ZDOTDIR="$HOME" source "\(userProfile)"
+\(safeZshSourceLine(path: userProfile))
 """
             try? zprofile.write(toFile: profilePath, atomically: true, encoding: .utf8)
 
@@ -515,7 +633,7 @@ PROMPT='\(promptStr)'
 
             let bashrc = """
 # ProSSH shell overlay -- sources real .bashrc then sets custom prompt.
-[[ -f "\(userRC)" ]] && source "\(userRC)"
+\(safeBashSourceLine(path: userRC))
 \(pathFunction)
 PS1='\(promptStr)'
 """
@@ -544,6 +662,29 @@ PS1='\(promptStr)'
             user: String(cString: pw.pointee.pw_name),
             shell: String(cString: pw.pointee.pw_shell)
         )
+    }
+
+    nonisolated static func safeZshSourceLine(path: String) -> String {
+        let escaped = path.replacingOccurrences(of: "\"", with: "\\\"")
+        return "if [[ -r \"\(escaped)\" ]]; then ZDOTDIR=\"$HOME\" source \"\(escaped)\" 2>/dev/null; fi"
+    }
+
+    nonisolated static func safeBashSourceLine(path: String) -> String {
+        let escaped = path.replacingOccurrences(of: "\"", with: "\\\"")
+        return "if [[ -r \"\(escaped)\" ]]; then source \"\(escaped)\" 2>/dev/null; fi"
+    }
+
+    nonisolated static var zshCompletionFallback: String {
+        """
+        # Fallback completion when sandbox restrictions block user dotfiles.
+        if [[ -o interactive ]]; then
+          if ! typeset -f _main_complete >/dev/null 2>&1; then
+            autoload -Uz compinit
+            compinit -u -d "${TMPDIR:-/tmp}/.zcompdump-prossh-${UID}" >/dev/null 2>&1
+          fi
+          bindkey '^I' expand-or-complete >/dev/null 2>&1
+        fi
+        """
     }
 }
 

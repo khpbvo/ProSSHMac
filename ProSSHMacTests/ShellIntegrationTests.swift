@@ -141,6 +141,31 @@ final class ShellIntegrationTests: XCTestCase {
         XCTAssertNil(ShellIntegrationScripts.script(for: .custom))
     }
 
+    // MARK: - Local Shell Overlay Safety Tests
+
+    func testLocalShellSafeZshSourceLineGuardsUnreadableDotfiles() {
+        let line = LocalShellChannel.safeZshSourceLine(path: "/Users/test/.zshrc")
+        XCTAssertTrue(line.contains("if [[ -r "))
+        XCTAssertTrue(line.contains("ZDOTDIR=\"$HOME\" source"))
+        XCTAssertTrue(line.contains("2>/dev/null"))
+        XCTAssertFalse(line.contains("[[ -f "))
+    }
+
+    func testLocalShellSafeBashSourceLineGuardsUnreadableDotfiles() {
+        let line = LocalShellChannel.safeBashSourceLine(path: "/Users/test/.bashrc")
+        XCTAssertTrue(line.contains("if [[ -r "))
+        XCTAssertTrue(line.contains("source"))
+        XCTAssertTrue(line.contains("2>/dev/null"))
+        XCTAssertFalse(line.contains("[[ -f "))
+    }
+
+    func testLocalShellZshCompletionFallbackIncludesTabBinding() {
+        let fallback = LocalShellChannel.zshCompletionFallback
+        XCTAssertTrue(fallback.contains("compinit -u"))
+        XCTAssertTrue(fallback.contains("bindkey '^I' expand-or-complete"))
+        XCTAssertTrue(fallback.contains("_main_complete"))
+    }
+
     // MARK: - Vendor Prompt Regex Tests
 
     func testCiscoIOSPromptRegex() throws {
