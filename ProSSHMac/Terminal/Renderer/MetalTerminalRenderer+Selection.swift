@@ -69,10 +69,21 @@ extension MetalTerminalRenderer {
             let right = (row == expanded.end.row) ? expanded.end.col : (cols - 1)
 
             var lineChars: [Character] = []
+            var skipNext = false
             for col in left...right {
                 let idx = row * cols + col
                 guard idx >= 0 && idx < snapshot.cells.count else { continue }
-                let codepoint = snapshot.cells[idx].glyphIndex
+
+                if skipNext {
+                    skipNext = false
+                    continue
+                }
+
+                let cell = snapshot.cells[idx]
+                let isWide = (cell.attributes & CellAttributes.wideChar.rawValue) != 0
+                if isWide { skipNext = true }
+
+                let codepoint = cell.glyphIndex
                 if codepoint == 0 {
                     lineChars.append(" ")
                 } else if let scalar = Unicode.Scalar(codepoint) {

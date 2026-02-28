@@ -175,6 +175,7 @@ All paths below are relative to the repo root. Source files live under `ProSSHMa
 - **SwiftUI state mutations during `updateNSView`** cause warnings and bugs. All NSView bridge callbacks use `DispatchQueue.main.async` or `Task { @MainActor in await Task.yield() }` deferral.
 - **SourceKit diagnostics** often show false "Cannot find type" errors because SourceKit can't resolve types across files. The build itself succeeds — always verify with `xcodebuild build`.
 - **Bugs doc**: `docs/bugs.md` contains a comprehensive 68-bug audit organized by subsystem/severity. Check it before working on a subsystem.
+- **Terminal selection**: `selectedText()` in `MetalTerminalRenderer+Selection.swift` skips wide-char continuation cells (cells following a `CellAttributes.wideChar` cell) to avoid spurious spaces in copied text. Click-to-deselect is handled in `TerminalSurfaceView.swift`'s `onTap` callback. `handleDrag` in `MetalTerminalSessionSurface.swift` processes `.ended`/`.cancelled` phases before the `gridCell(at:)` guard to prevent stale `dragStart`.
 - **Test quarantines**: Previously quarantined tests (`PaneManagerTests`, `testClearConversation`) have been fixed via `nonisolated deinit`. `SessionTabManager` and `V4AParserState` (in `apply_diff.swift`) also use `nonisolated deinit`. No active quarantines remain.
 
 ---
