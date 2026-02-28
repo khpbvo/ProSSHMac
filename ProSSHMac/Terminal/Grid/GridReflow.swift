@@ -107,7 +107,15 @@ nonisolated enum GridReflow {
 
         // Step 3: Split back into scrollback and screen
         let totalRows = newPhysicalRows.count
-        let screenStart = max(0, totalRows - newRows)
+        // Anchor the screen so the cursor stays visible.
+        // The cursor should sit at the bottom of the new screen when it
+        // was near the bottom, but if it was near the top (e.g. fresh
+        // session with only a few output lines), we must not push it into
+        // the scrollback.  The formula clamps screenStart so that
+        //   screenStart <= cursorNewRow  (cursor stays on-screen)
+        // while still ensuring we never go below the minimum needed to
+        // fit newRows rows inside the combined buffer.
+        let screenStart = max(0, min(cursorNewRow - (newRows - 1), totalRows - newRows))
 
         // Adjust cursor row relative to the screen start
         cursorNewRow = cursorNewRow - screenStart
@@ -122,10 +130,15 @@ nonisolated enum GridReflow {
             ))
         }
 
-        // Build new screen buffer
+        // Build new screen buffer (exactly newRows rows).
+        // When screenStart is clamped low (cursor near top), totalRows may
+        // exceed screenStart + newRows; only take up to newRows rows so the
+        // grid stays the correct height.  Any trailing rows that are dropped
+        // here will always be empty blank rows below the cursor.
         var newScreen = [[TerminalCell]]()
         newScreen.reserveCapacity(newRows)
-        for i in screenStart..<totalRows {
+        let screenEnd = min(screenStart + newRows, totalRows)
+        for i in screenStart..<screenEnd {
             newScreen.append(newPhysicalRows[i])
         }
 
@@ -397,8 +410,11 @@ nonisolated enum GridReflow {
                 cursorCol: cursorCol
             )
         } else {
-            // Screen got shorter — push excess top lines to scrollback
-            let rowsToRemove = oldRows - newRows
+            // Screen got shorter — push excess top lines to scrollback.
+            // Only push rows that are above the cursor's pinned position so
+            // the cursor is never displaced into the scrollback buffer.
+            let maxRowsToRemove = oldRows - newRows
+            let rowsToRemove = max(0, min(cursorRow - (newRows - 1), maxRowsToRemove))
 
             var newScrollbackLines = [ScrollbackLine]()
             for i in 0..<scrollback.count {
@@ -415,9 +431,17 @@ nonisolated enum GridReflow {
                 ))
             }
 
+            // Take exactly newRows rows starting at rowsToRemove.
+            // Any rows beyond rowsToRemove + newRows are empty trailing
+            // rows below the cursor and can be safely dropped.
             var newScreen = [[TerminalCell]]()
-            for i in rowsToRemove..<oldRows {
+            let screenEnd = min(rowsToRemove + newRows, oldRows)
+            for i in rowsToRemove..<screenEnd {
                 newScreen.append(screenRows[i])
+            }
+            let blankRow = [TerminalCell](repeating: .blank, count: newColumns)
+            while newScreen.count < newRows {
+                newScreen.append(blankRow)
             }
 
             return ReflowResult(

@@ -594,6 +594,31 @@ Build: SUCCEEDED. Committed as `5e90cd9`.
 
 ---
 
+### 2026-02-28 — Fix: Terminal black screen on session open (viewport positioning bug)
+
+**Problem**: Every new session (local and SSH) opened to a black terminal. The prompt and any server MOTD
+were only visible after scrolling up. Root cause: `GridReflow` used
+`screenStart = max(0, totalRows - newRows)` which always anchors the visible screen to the BOTTOM of the
+combined (scrollback + screen) buffer. On session start the engine is created at the default PTY size (120×40),
+but the Metal view often reports a slightly shorter actual height (e.g. 37 rows). The first resize (40→37)
+called `GridReflow.reflow`/`adjustRowCount`, which computed `screenStart = 3`, pushing the top 3 rows
+(containing the prompt at row 0) into the scrollback buffer. The cursor was clamped to row 0 of an otherwise
+empty visible grid — black screen with cursor at top. Scrolling up revealed the displaced content.
+
+**Fix** (`ProSSHMac/Terminal/Grid/GridReflow.swift`):
+- `reflow`: changed `screenStart = max(0, totalRows - newRows)` to
+  `screenStart = max(0, min(cursorNewRow - (newRows - 1), totalRows - newRows))`.
+  This pins the cursor at the bottom of the new screen without pushing it into scrollback when it is near
+  the top. Screen building loop now takes exactly `newRows` rows (`screenEnd = min(screenStart + newRows, totalRows)`),
+  safely dropping empty trailing rows below the cursor.
+- `adjustRowCount` (screen-got-shorter branch): same cursor-aware formula for `rowsToRemove`
+  (`max(0, min(cursorRow - (newRows - 1), maxRowsToRemove))`), screen loop limited to `newRows` rows,
+  padding with blank rows if needed.
+
+Build: SUCCEEDED.
+
+---
+
 ### 2026-02-25 — RefactorTheFinalRun Phase 1 COMPLETE
 
 Extracted all protocols, error type, and value types from `OpenAIResponsesService.swift` into new
