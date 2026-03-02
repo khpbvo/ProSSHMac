@@ -17,7 +17,8 @@ actor LocalShellChannel: SSHShellChannel {
         columns: Int = 80,
         rows: Int = 24,
         shellPath: String? = nil,
-        workingDirectory: String? = nil
+        workingDirectory: String? = nil,
+        shellIntegration: ShellIntegrationConfig = .init()
     ) async throws -> LocalShellChannel {
         let info = LocalShellBootstrap.resolveUserInfo()
         let resolvedShell = shellPath ?? info.shell
@@ -26,7 +27,7 @@ actor LocalShellChannel: SSHShellChannel {
             throw LocalShellError.shellNotFound(resolvedShell)
         }
 
-        let env = LocalShellBootstrap.buildEnvironment(shellPath: resolvedShell)
+        let env = LocalShellBootstrap.buildEnvironment(shellPath: resolvedShell, shellIntegration: shellIntegration)
         let cwd = workingDirectory ?? info.home
 
         let process = try await LocalPTYProcess.spawn(
