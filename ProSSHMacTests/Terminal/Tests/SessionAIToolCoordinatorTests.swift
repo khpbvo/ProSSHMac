@@ -128,6 +128,10 @@ private actor SpyShellChannel: SSHShellChannel {
         sentPayloads.append(input)
     }
 
+    func send(bytes: [UInt8]) async throws {
+        sentPayloads.append(String(decoding: bytes, as: UTF8.self))
+    }
+
     func resizePTY(columns: Int, rows: Int) async throws {}
 
     func close() async {

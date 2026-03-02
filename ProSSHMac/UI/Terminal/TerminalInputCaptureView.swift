@@ -13,19 +13,23 @@ struct SafeTerminalRenderedLine: Identifiable {
 struct DirectTerminalInputCaptureView: NSViewRepresentable {
     let isEnabled: Bool
     let sessionID: UUID
+    let isLocalSession: Bool
     let activationNonce: Int
     let keyEncoderOptions: () -> KeyEncoderOptions
     var onCommandShortcut: ((HardwareKeyCommandAction) -> Void)?
     let onSendSequence: (UUID, String) -> Void
+    var onSendBytes: ((UUID, [UInt8], String) -> Void)?
 
     func makeNSView(context: Context) -> DirectTerminalInputNSView {
         let view = DirectTerminalInputNSView(frame: .zero)
         view.isEnabled = isEnabled
         view.sessionID = sessionID
+        view.isLocalSession = isLocalSession
         view.activationNonce = activationNonce
         view.keyEncoderOptions = keyEncoderOptions
         view.onCommandShortcut = onCommandShortcut
         view.onSendSequence = onSendSequence
+        view.onSendBytes = onSendBytes
         view.armForKeyboardInputIfNeeded()
         return view
     }
@@ -33,10 +37,12 @@ struct DirectTerminalInputCaptureView: NSViewRepresentable {
     func updateNSView(_ nsView: DirectTerminalInputNSView, context: Context) {
         nsView.isEnabled = isEnabled
         nsView.sessionID = sessionID
+        nsView.isLocalSession = isLocalSession
         nsView.activationNonce = activationNonce
         nsView.keyEncoderOptions = keyEncoderOptions
         nsView.onCommandShortcut = onCommandShortcut
         nsView.onSendSequence = onSendSequence
+        nsView.onSendBytes = onSendBytes
         nsView.armForKeyboardInputIfNeeded()
     }
 }
@@ -52,6 +58,7 @@ final class DirectTerminalInputNSView: NSView {
         }
     }
     var sessionID: UUID?
+    var isLocalSession = false
     var activationNonce: Int = 0 {
         didSet {
             if activationNonce != oldValue {
@@ -62,6 +69,7 @@ final class DirectTerminalInputNSView: NSView {
     var keyEncoderOptions: (() -> KeyEncoderOptions)?
     var onCommandShortcut: ((HardwareKeyCommandAction) -> Void)?
     var onSendSequence: ((UUID, String) -> Void)?
+    var onSendBytes: ((UUID, [UInt8], String) -> Void)?
     private var windowDidBecomeKeyObserver: NSObjectProtocol?
     private var appDidBecomeActiveObserver: NSObjectProtocol?
     private var keyEventMonitor: Any?
@@ -111,30 +119,47 @@ final class DirectTerminalInputNSView: NSView {
         keyEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
             guard self.shouldMonitorKeyDownEvent(event) else { return event }
-            guard let sessionID = self.sessionID,
-                  let sequence = self.encodeEvent(event) else {
-                return event
-            }
-            self.onSendSequence?(sessionID, sequence)
+            guard self.dispatchEncodedEvent(event) else { return event }
             return nil // consume the event
         }
     }
 
-    private func shouldMonitorKeyDownEvent(_ event: NSEvent) -> Bool {
-        guard isEnabled else { return false }
-        guard sessionID != nil else { return false }
+    func shouldMonitorKeyDownEvent(_ event: NSEvent) -> Bool {
         // Rely on terminal activation state instead of exact event.window
         // matching. SwiftUI/AppKit can route keyDown through wrapper views
         // where event.window identity checks are too strict.
-        if window?.isKeyWindow == false { return false }
-        if isTextInputFocusedInWindow() { return false }
-
-        // Preserve AppKit/SwiftUI Command shortcuts.
+        let keyWindowActive = window?.isKeyWindow ?? true
+        let textInputFocused = isTextInputFocusedInWindow()
         let commandHeld = event.modifierFlags.intersection([.command]).contains(.command)
-        guard !commandHeld else { return false }
+        let encodable = encodeEventBytes(event) != nil
 
-        // Only consume events we can encode for terminal delivery.
-        return encodeEvent(event) != nil
+        return Self.shouldCaptureLocalKeyEvent(
+            isEnabled: isEnabled,
+            hasSessionID: sessionID != nil,
+            isLocalSession: isLocalSession,
+            keyWindowActive: keyWindowActive,
+            textInputFocused: textInputFocused,
+            commandHeld: commandHeld,
+            isEncodable: encodable
+        )
+    }
+
+    static func shouldCaptureLocalKeyEvent(
+        isEnabled: Bool,
+        hasSessionID: Bool,
+        isLocalSession: Bool,
+        keyWindowActive: Bool,
+        textInputFocused: Bool,
+        commandHeld: Bool,
+        isEncodable: Bool
+    ) -> Bool {
+        guard isEnabled else { return false }
+        guard hasSessionID else { return false }
+        guard isLocalSession else { return false }
+        guard keyWindowActive else { return false }
+        guard !textInputFocused else { return false }
+        guard !commandHeld else { return false }
+        return isEncodable
     }
 
     func armForKeyboardInputIfNeeded() {
@@ -166,6 +191,9 @@ final class DirectTerminalInputNSView: NSView {
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if isLocalSession {
+            return super.performKeyEquivalent(with: event)
+        }
         if isTextInputFocusedInWindow() {
             return super.performKeyEquivalent(with: event)
         }
@@ -175,8 +203,7 @@ final class DirectTerminalInputNSView: NSView {
         // Intercept Tab / Shift-Tab before NSWindow uses them for focus
         // navigation.  Tab must reach the shell for tab-completion to work.
         if event.keyCode == 48 /* Tab */ {
-            if isEnabled, let sessionID, let sequence = encodeEvent(event) {
-                onSendSequence?(sessionID, sequence)
+            if dispatchEncodedEvent(event) {
                 return true
             }
         }
@@ -184,17 +211,18 @@ final class DirectTerminalInputNSView: NSView {
     }
 
     override func keyDown(with event: NSEvent) {
+        if isLocalSession {
+            super.keyDown(with: event)
+            return
+        }
         if isTextInputFocusedInWindow() {
             super.keyDown(with: event)
             return
         }
-        guard isEnabled,
-              let sessionID,
-              let sequence = encodeEvent(event) else {
+        guard dispatchEncodedEvent(event) else {
             super.keyDown(with: event)
             return
         }
-        onSendSequence?(sessionID, sequence)
     }
 
     @objc func copy(_ sender: Any?) {
@@ -218,7 +246,37 @@ final class DirectTerminalInputNSView: NSView {
 
     // MARK: - Unified Encoding
 
-    private func encodeEvent(_ event: NSEvent) -> String? {
+    private func dispatchEncodedEvent(_ event: NSEvent) -> Bool {
+        guard isEnabled, let sessionID else { return false }
+        guard let bytes = encodeEventBytes(event) else { return false }
+
+        if isLocalSession {
+            guard let onSendBytes else { return false }
+            onSendBytes(sessionID, bytes, localInputEventType(for: event))
+            return true
+        }
+
+        guard let sequence = String(bytes: bytes, encoding: .utf8) else {
+            return false
+        }
+        onSendSequence?(sessionID, sequence)
+        return true
+    }
+
+    private func localInputEventType(for event: NSEvent) -> String {
+        let modifiers = mapModifiers(event.modifierFlags)
+        if let label = specialKeyLabel(for: event.keyCode) {
+            return label
+        }
+        if modifiers.contains(.ctrl) { return "ctrl_character" }
+        if modifiers.contains(.alt) { return "alt_character" }
+        if let characters = event.characters, !characters.isEmpty {
+            return characters.count == 1 ? "character" : "text_sequence"
+        }
+        return "unknown"
+    }
+
+    private func encodeEventBytes(_ event: NSEvent) -> [UInt8]? {
         let flags = event.modifierFlags.intersection([.shift, .control, .option, .command])
 
         // Command-modified keys are handled by SwiftUI shortcut layer.
@@ -230,10 +288,7 @@ final class DirectTerminalInputNSView: NSView {
 
         // 1. Special keys (arrows, Tab, Enter, Esc, F-keys, editing keys, Backspace, Delete).
         if let keyEvent = specialKeyEvent(keyCode: event.keyCode, modifiers: modifiers) {
-            if let bytes = encoder.encode(keyEvent) {
-                return String(bytes: bytes, encoding: .utf8) ?? String(bytes.map { Character(UnicodeScalar($0)) })
-            }
-            return nil
+            return encoder.encode(keyEvent)
         }
 
         // 2. Ctrl+character — encode via KeyEncoder for proper control bytes.
@@ -243,13 +298,10 @@ final class DirectTerminalInputNSView: NSView {
             if let scalar = ch.unicodeScalars.first,
                scalar.isASCII,
                (scalar.value < 0x20 || scalar.value == 0x7F) {
-                return String(ch)
+                return [UInt8(scalar.value)]
             }
             let keyEvent = KeyEvent(key: .character(ch), modifiers: modifiers)
-            if let bytes = encoder.encode(keyEvent) {
-                return String(bytes: bytes, encoding: .utf8) ?? String(bytes.map { Character(UnicodeScalar($0)) })
-            }
-            return nil
+            return encoder.encode(keyEvent)
         }
 
         // 3. Alt/Option+character — ESC prefix + base character.
@@ -257,15 +309,12 @@ final class DirectTerminalInputNSView: NSView {
            let raw = event.charactersIgnoringModifiers, !raw.isEmpty {
             let ch = raw.first!
             let keyEvent = KeyEvent(key: .character(ch), modifiers: modifiers)
-            if let bytes = encoder.encode(keyEvent) {
-                return String(bytes: bytes, encoding: .utf8) ?? String(bytes.map { Character(UnicodeScalar($0)) })
-            }
-            return nil
+            return encoder.encode(keyEvent)
         }
 
         // 4. Regular characters (includes Shift effect: Shift+1→"!").
         if let characters = event.characters, !characters.isEmpty {
-            return characters
+            return Array(characters.utf8)
         }
 
         return nil
@@ -305,6 +354,38 @@ final class DirectTerminalInputNSView: NSView {
         default: return nil
         }
         return KeyEvent(key: key, modifiers: modifiers)
+    }
+
+    private func specialKeyLabel(for keyCode: UInt16) -> String? {
+        switch keyCode {
+        case 126: return "arrow_up"
+        case 125: return "arrow_down"
+        case 124: return "arrow_right"
+        case 123: return "arrow_left"
+        case 36, 76: return "enter"
+        case 48: return "tab"
+        case 53: return "escape"
+        case 51: return "backspace"
+        case 117: return "delete"
+        case 115: return "home"
+        case 119: return "end"
+        case 116: return "page_up"
+        case 121: return "page_down"
+        case 114: return "insert"
+        case 122: return "function_f1"
+        case 120: return "function_f2"
+        case 99:  return "function_f3"
+        case 118: return "function_f4"
+        case 96:  return "function_f5"
+        case 97:  return "function_f6"
+        case 98:  return "function_f7"
+        case 100: return "function_f8"
+        case 101: return "function_f9"
+        case 109: return "function_f10"
+        case 103: return "function_f11"
+        case 111: return "function_f12"
+        default: return nil
+        }
     }
 
     // MARK: - Modifier Mapping

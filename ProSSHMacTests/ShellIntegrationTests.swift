@@ -179,6 +179,172 @@ final class ShellIntegrationTests: XCTestCase {
         XCTAssertEqual(arguments, ["-elvish"])
     }
 
+    func testLocalShellTabCompletionCompletesPartialToken() async throws {
+        let harness = try await LocalShellTestHarness.spawn()
+        defer {
+            Task { await harness.close() }
+        }
+
+        let unique = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        let readyMarker = "__PROSSH_READY_\(unique)__"
+        let setupMarker = "__PROSSH_SETUP_\(unique)__"
+        let fileName = "prossh_tab_\(unique)_target"
+        let partial = "prossh_tab_\(unique)_ta"
+        let contentMarker = "TAB_COMPLETION_OK_\(unique)"
+        let testDir = "/tmp/prossh-local-input-v2-\(unique)"
+
+        try await harness.send("echo \(readyMarker)\n")
+        let readySeen = await harness.waitFor(readyMarker, timeout: .seconds(10))
+        XCTAssertTrue(readySeen, "Timed out waiting for local shell readiness.")
+
+        try await harness.send("mkdir -p \(testDir) && cd \(testDir) && printf '%s\\n' '\(contentMarker)' > \(fileName)\n")
+        try await harness.send("echo \(setupMarker)\n")
+        let setupSeen = await harness.waitFor(setupMarker, timeout: .seconds(10))
+        XCTAssertTrue(setupSeen, "Timed out waiting for local shell setup completion.")
+
+        await harness.clearOutput()
+        try await harness.send("cat \(partial)\t\n")
+
+        let completed = await harness.waitFor(contentMarker, timeout: .seconds(6))
+        if !completed {
+            let outputTail = await harness.snapshot().suffix(800)
+            XCTFail("Expected Tab completion to resolve '\(partial)' to '\(fileName)'. Output tail:\n\(outputTail)")
+        }
+    }
+
+    func testLocalShellCtrlCInterruptsForegroundCommand() async throws {
+        let harness = try await LocalShellTestHarness.spawn()
+        defer {
+            Task { await harness.close() }
+        }
+
+        let unique = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        let readyMarker = "__PROSSH_READY_\(unique)__"
+        let markerValue = "SIGINT_OK_\(unique)"
+
+        try await harness.send("echo \(readyMarker)\n")
+        let readySeen = await harness.waitFor(readyMarker, timeout: .seconds(10))
+        XCTAssertTrue(readySeen, "Timed out waiting for local shell readiness.")
+
+        try await harness.send("__prossh_sigint_marker='\(markerValue)'\n")
+        await harness.clearOutput()
+
+        try await harness.send("sleep 10\n")
+        try await Task.sleep(for: .milliseconds(350))
+        try await harness.send(bytes: [0x03]) // Ctrl+C
+        try await harness.send("echo $__prossh_sigint_marker\n")
+
+        let interrupted = await harness.waitFor(markerValue, timeout: .seconds(2))
+        if !interrupted {
+            let outputTail = await harness.snapshot().suffix(800)
+            XCTFail("Expected Ctrl+C to interrupt foreground sleep quickly. Output tail:\n\(outputTail)")
+        }
+    }
+
+    func testLocalShellBackspaceEditsInputLine() async throws {
+        let harness = try await LocalShellTestHarness.spawn()
+        defer {
+            Task { await harness.close() }
+        }
+
+        let unique = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        let readyMarker = "__PROSSH_READY_\(unique)__"
+        let marker = "BACKSPACE_OK_\(unique)"
+
+        try await harness.send("echo \(readyMarker)\n")
+        let readySeen = await harness.waitFor(readyMarker, timeout: .seconds(10))
+        XCTAssertTrue(readySeen, "Timed out waiting for local shell readiness.")
+
+        await harness.clearOutput()
+        try await harness.send("echo \(marker)X")
+        try await harness.send(bytes: [0x7F]) // Backspace removes trailing typo.
+        try await harness.send("\n")
+
+        let sawEditedOutput = await harness.waitFor(marker, timeout: .seconds(3))
+        if !sawEditedOutput {
+            let outputTail = await harness.snapshot().suffix(800)
+            XCTFail("Expected Backspace-edited line to print '\(marker)'. Output tail:\n\(outputTail)")
+        }
+    }
+
+    func testLocalShellArrowKeysEditInPlace() async throws {
+        let harness = try await LocalShellTestHarness.spawn()
+        defer {
+            Task { await harness.close() }
+        }
+
+        let unique = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        let readyMarker = "__PROSSH_READY_\(unique)__"
+        let marker = "ABCD_\(unique)"
+
+        try await harness.send("echo \(readyMarker)\n")
+        let readySeen = await harness.waitFor(readyMarker, timeout: .seconds(10))
+        XCTAssertTrue(readySeen, "Timed out waiting for local shell readiness.")
+
+        await harness.clearOutput()
+        try await harness.send("echo ACD")
+        try await harness.send(bytes: [0x1B, 0x5B, 0x44, 0x1B, 0x5B, 0x44]) // Left, Left
+        try await harness.send("B")
+        try await harness.send(bytes: [0x1B, 0x5B, 0x43, 0x1B, 0x5B, 0x43]) // Right, Right
+        try await harness.send("_\(unique)\n")
+
+        let sawEditedOutput = await harness.waitFor(marker, timeout: .seconds(3))
+        if !sawEditedOutput {
+            let outputTail = await harness.snapshot().suffix(800)
+            XCTFail("Expected arrow-key edited line to print '\(marker)'. Output tail:\n\(outputTail)")
+        }
+    }
+
+    func testLocalShellEnterSubmitsCurrentLine() async throws {
+        let harness = try await LocalShellTestHarness.spawn()
+        defer {
+            Task { await harness.close() }
+        }
+
+        let unique = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        let readyMarker = "__PROSSH_READY_\(unique)__"
+        let marker = "ENTER_OK_\(unique)"
+
+        try await harness.send("echo \(readyMarker)\n")
+        let readySeen = await harness.waitFor(readyMarker, timeout: .seconds(10))
+        XCTAssertTrue(readySeen, "Timed out waiting for local shell readiness.")
+
+        await harness.clearOutput()
+        try await harness.send("echo \(marker)\n")
+
+        let sawOutput = await harness.waitFor(marker, timeout: .seconds(3))
+        if !sawOutput {
+            let outputTail = await harness.snapshot().suffix(800)
+            XCTFail("Expected Enter to submit current command line. Output tail:\n\(outputTail)")
+        }
+    }
+
+    func testLocalShellEscapeIsDeliveredToForegroundRead() async throws {
+        let harness = try await LocalShellTestHarness.spawn()
+        defer {
+            Task { await harness.close() }
+        }
+
+        let unique = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        let readyMarker = "__PROSSH_READY_\(unique)__"
+        let marker = "ESC_OK_\(unique)"
+
+        try await harness.send("echo \(readyMarker)\n")
+        let readySeen = await harness.waitFor(readyMarker, timeout: .seconds(10))
+        XCTAssertTrue(readySeen, "Timed out waiting for local shell readiness.")
+
+        await harness.clearOutput()
+        try await harness.send("read -rk1 ch; if [[ \"$ch\" == $'\\\\e' ]]; then echo \(marker); else echo ESC_FAIL_\(unique); fi\n")
+        try await Task.sleep(for: .milliseconds(150))
+        try await harness.send(bytes: [0x1B]) // Escape
+
+        let sawEscape = await harness.waitFor(marker, timeout: .seconds(3))
+        if !sawEscape {
+            let outputTail = await harness.snapshot().suffix(800)
+            XCTFail("Expected ESC byte delivery to foreground read command. Output tail:\n\(outputTail)")
+        }
+    }
+
     // MARK: - Vendor Prompt Regex Tests
 
     func testCiscoIOSPromptRegex() throws {
@@ -357,5 +523,96 @@ final class ShellIntegrationTests: XCTestCase {
         for type in nonVendorTypes {
             XCTAssertNil(ShellIntegrationScripts.vendorPromptPattern(for: type), "Unexpected pattern for \(type)")
         }
+    }
+}
+
+private final class LocalShellTestHarness {
+    private let channel: LocalShellChannel
+    private let outputBuffer = LocalShellOutputBuffer()
+    private let readerTask: Task<Void, Never>
+
+    private init(channel: LocalShellChannel) {
+        self.channel = channel
+        self.readerTask = Task.detached { [outputBuffer, rawOutput = channel.rawOutput] in
+            for await chunk in rawOutput {
+                await outputBuffer.append(chunk)
+            }
+        }
+    }
+
+    static func spawn() async throws -> LocalShellTestHarness {
+        let shellPath: String?
+        if FileManager.default.isExecutableFile(atPath: "/bin/zsh") {
+            shellPath = "/bin/zsh"
+        } else {
+            shellPath = nil
+        }
+
+        let channel = try await LocalShellChannel.spawn(
+            columns: 120,
+            rows: 40,
+            shellPath: shellPath,
+            workingDirectory: "/tmp"
+        )
+        return LocalShellTestHarness(channel: channel)
+    }
+
+    func send(_ input: String) async throws {
+        try await channel.send(input)
+    }
+
+    func send(bytes: [UInt8]) async throws {
+        try await channel.send(bytes: bytes)
+    }
+
+    func waitFor(_ text: String, timeout: Duration) async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now + timeout
+
+        while clock.now < deadline {
+            if await outputBuffer.contains(text) {
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(40))
+        }
+
+        return await outputBuffer.contains(text)
+    }
+
+    func snapshot() async -> String {
+        await outputBuffer.snapshot()
+    }
+
+    func clearOutput() async {
+        await outputBuffer.clear()
+    }
+
+    func close() async {
+        readerTask.cancel()
+        await channel.close()
+    }
+}
+
+private actor LocalShellOutputBuffer {
+    private var text = ""
+    private let maxBufferCount = 200_000
+
+    func append(_ data: Data) {
+        text += String(decoding: data, as: UTF8.self)
+        if text.count > maxBufferCount {
+            text.removeFirst(text.count - maxBufferCount)
+        }
+    }
+
+    func contains(_ needle: String) -> Bool {
+        text.contains(needle)
+    }
+
+    func snapshot() -> String {
+        text
+    }
+
+    func clear() {
+        text = ""
     }
 }

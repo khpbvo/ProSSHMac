@@ -65,22 +65,25 @@ nonisolated actor LibSSHShellChannel: SSHShellChannel {
     }
 
     func send(_ input: String) async throws {
+        try await send(bytes: Array(input.utf8))
+    }
+
+    func send(bytes: [UInt8]) async throws {
         if isClosed {
             return
         }
 
-        let payload = Array(input.utf8)
-        if payload.isEmpty {
+        if bytes.isEmpty {
             return
         }
 
         var errorBuffer = [CChar](repeating: 0, count: 512)
-        let writeResult = payload.withUnsafeBytes { bytes in
-            let ptr = bytes.baseAddress?.assumingMemoryBound(to: CChar.self)
+        let writeResult = bytes.withUnsafeBytes { payload in
+            let ptr = payload.baseAddress?.assumingMemoryBound(to: CChar.self)
             return prossh_libssh_channel_write(
                 handle,
                 ptr,
-                bytes.count,
+                payload.count,
                 &errorBuffer,
                 errorBuffer.count
             )

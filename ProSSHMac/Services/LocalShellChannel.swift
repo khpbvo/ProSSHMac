@@ -18,7 +18,6 @@ actor LocalShellChannel: SSHShellChannel {
 
     private let masterFD: Int32
     private let childPID: pid_t
-    private let slaveDevicePath: String
     private var rawContinuation: AsyncStream<Data>.Continuation
     private var readerTask: Task<Void, Never>?
     private var isClosed = false
@@ -41,7 +40,6 @@ actor LocalShellChannel: SSHShellChannel {
 
         // Create PTY pair
         var master: Int32 = -1
-        var slaveName = [CChar](repeating: 0, count: 128)
         var size = winsize(
             ws_row: UInt16(rows),
             ws_col: UInt16(columns),
@@ -62,14 +60,10 @@ actor LocalShellChannel: SSHShellChannel {
 
         let childArguments = shellLaunchArguments(shellPath: resolvedShell)
 
-        let pid = forkpty(&master, &slaveName, nil, &size)
+        let pid = forkpty(&master, nil, nil, &size)
         guard pid >= 0 else {
             Darwin.close(master)
             throw LocalShellError.ptyAllocationFailed
-        }
-
-        let slaveDevicePath = slaveName.withUnsafeBufferPointer {
-            String(decoding: $0.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }, as: UTF8.self)
         }
 
         if pid == 0 {
@@ -118,7 +112,6 @@ actor LocalShellChannel: SSHShellChannel {
         let channel = LocalShellChannel(
             masterFD: master,
             childPID: pid,
-            slaveDevicePath: slaveDevicePath,
             rawContinuation: rawCont,
             rawOutput: rawStream
         )
@@ -137,13 +130,11 @@ actor LocalShellChannel: SSHShellChannel {
     private init(
         masterFD: Int32,
         childPID: pid_t,
-        slaveDevicePath: String,
         rawContinuation: AsyncStream<Data>.Continuation,
         rawOutput: AsyncStream<Data>
     ) {
         self.masterFD = masterFD
         self.childPID = childPID
-        self.slaveDevicePath = slaveDevicePath
         self.rawContinuation = rawContinuation
         self.rawOutput = rawOutput
     }
@@ -151,19 +142,22 @@ actor LocalShellChannel: SSHShellChannel {
     // MARK: - SSHShellChannel methods
 
     func send(_ input: String) async throws {
+        try await send(bytes: Array(input.utf8))
+    }
+
+    func send(bytes: [UInt8]) async throws {
         guard !isClosed else { return }
-        let data = Array(input.utf8)
-        guard !data.isEmpty else { return }
+        guard !bytes.isEmpty else { return }
 
         // Write raw bytes to the PTY master — the kernel line discipline
         // handles everything (signal delivery when ISIG is set, echo when
         // ECHO is set, etc.).  This matches how LibSSHShellChannel.send()
         // works and how every standard terminal emulator passes input.
         var offset = 0
-        while offset < data.count {
-            let written = data.withUnsafeBufferPointer { buffer -> Int in
+        while offset < bytes.count {
+            let written = bytes.withUnsafeBufferPointer { buffer -> Int in
                 guard let ptr = buffer.baseAddress else { return -1 }
-                return Darwin.write(masterFD, ptr + offset, data.count - offset)
+                return Darwin.write(masterFD, ptr + offset, bytes.count - offset)
             }
 
             if written > 0 {
@@ -185,56 +179,6 @@ actor LocalShellChannel: SSHShellChannel {
             }
             throw LocalShellError.writeFailed(err)
         }
-    }
-
-    @discardableResult
-    private func sendSignalToForegroundGroup(_ sig: Int32) -> Bool {
-        var targetedGroups = Set<pid_t>()
-        var delivered = false
-
-        func signalProcessGroup(_ pgrp: pid_t) {
-            guard pgrp > 0, !targetedGroups.contains(pgrp) else { return }
-            if kill(-pgrp, sig) == 0 {
-                delivered = true
-            }
-            targetedGroups.insert(pgrp)
-        }
-
-        // 1) Foreground group reported by master side.
-        signalProcessGroup(tcgetpgrp(masterFD))
-
-        // 2) Foreground group reported by slave side.
-        let slaveFD = open(slaveDevicePath, O_RDONLY | O_NOCTTY)
-        if slaveFD >= 0 {
-            signalProcessGroup(tcgetpgrp(slaveFD))
-            Darwin.close(slaveFD)
-        }
-
-        // 3) Shell process group as baseline.
-        signalProcessGroup(getpgid(childPID))
-
-        // 4) Child jobs and their process groups.
-        var childPIDs = [pid_t](repeating: 0, count: 128)
-        let bufSize = Int32(childPIDs.count * MemoryLayout<pid_t>.stride)
-        let filled = proc_listchildpids(childPID, &childPIDs, bufSize)
-        if filled > 0 {
-            let count = Int(filled) / MemoryLayout<pid_t>.stride
-            for i in 0..<count {
-                let pid = childPIDs[i]
-                guard pid > 0 else { continue }
-                if kill(pid, sig) == 0 {
-                    delivered = true
-                }
-                signalProcessGroup(getpgid(pid))
-            }
-        }
-
-        // 5) Last resort: direct shell signal.
-        if kill(childPID, sig) == 0 {
-            delivered = true
-        }
-
-        return delivered
     }
 
     func resizePTY(columns: Int, rows: Int) async throws {

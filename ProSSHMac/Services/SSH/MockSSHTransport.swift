@@ -331,10 +331,15 @@ actor MockSSHShellChannel: SSHShellChannel {
     }
 
     func send(_ input: String) async throws {
+        try await send(bytes: Array(input.utf8))
+    }
+
+    func send(bytes: [UInt8]) async throws {
         if isClosed {
             return
         }
 
+        let input = String(decoding: bytes, as: UTF8.self)
         let normalized = input.trimmingCharacters(in: .whitespacesAndNewlines)
         if normalized.isEmpty {
             yield(prompt)

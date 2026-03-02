@@ -1,9 +1,20 @@
 // Extracted from SessionManager.swift
 import Foundation
+import os.log
+
+enum RawShellInputSource: String {
+    case hardwareKeyCapture = "hardware_key_capture"
+    case stringBridge = "string_bridge"
+    case programmatic = "programmatic"
+}
 
 @MainActor final class SessionShellIOCoordinator {
+    private static let logger = Logger(subsystem: "com.prossh", category: "Terminal.LocalInput")
+
     weak var manager: SessionManager?
     var parserReaderTasks: [UUID: Task<Void, Never>] = [:]
+    private var localInputFailureLogByKey: [String: Date] = [:]
+    private let localInputFailureDedupWindow: TimeInterval = 1.5
 
     init() {}
 
@@ -49,29 +60,111 @@ import Foundation
     }
 
     func sendRawShellInput(sessionID: UUID, input: String) async {
+        await sendRawShellInputBytes(
+            sessionID: sessionID,
+            bytes: Array(input.utf8),
+            recordingText: input,
+            source: .stringBridge,
+            eventType: "string_payload"
+        )
+    }
+
+    func sendRawShellInputBytes(
+        sessionID: UUID,
+        bytes: [UInt8],
+        recordingText: String? = nil,
+        source: RawShellInputSource = .programmatic,
+        eventType: String = "unknown"
+    ) async {
         guard let manager else { return }
-        guard manager.sessions.contains(where: { $0.id == sessionID && $0.state == .connected }) else {
+        let session = manager.sessions.first(where: { $0.id == sessionID })
+        let isLocalSession = session?.isLocal ?? false
+
+        guard session?.state == .connected else {
             await manager.renderingCoordinator.appendShellLine("Session is not connected.", to: sessionID)
+            logLocalInputFailureIfNeeded(
+                sessionID: sessionID,
+                isLocalSession: isLocalSession,
+                source: source,
+                eventType: eventType,
+                byteCount: bytes.count,
+                errorCode: LocalInputSendFailure.disconnected.rawValue,
+                reason: "session_not_connected"
+            )
             return
         }
 
         guard let shell = manager.shellChannels[sessionID] else {
             await manager.renderingCoordinator.appendShellLine("Shell channel is not available.", to: sessionID)
+            logLocalInputFailureIfNeeded(
+                sessionID: sessionID,
+                isLocalSession: isLocalSession,
+                source: source,
+                eventType: eventType,
+                byteCount: bytes.count,
+                errorCode: LocalInputSendFailure.missingShellChannel.rawValue,
+                reason: "shell_channel_unavailable"
+            )
             return
         }
 
         do {
-            try await shell.send(input)
-            manager.bytesSentBySessionID[sessionID, default: 0] += Int64(input.utf8.count)
-            manager.recordingCoordinator.recordInput(sessionID: sessionID, text: input)
+            try await shell.send(bytes: bytes)
+            manager.bytesSentBySessionID[sessionID, default: 0] += Int64(bytes.count)
+            let rawText = recordingText ?? String(decoding: bytes, as: UTF8.self)
+            manager.recordingCoordinator.recordInput(sessionID: sessionID, text: rawText)
             await manager.terminalHistoryIndex.recordRawInput(
                 sessionID: sessionID,
-                input: input,
+                input: rawText,
                 at: .now
             )
         } catch {
+            let nsError = error as NSError
+            logLocalInputFailureIfNeeded(
+                sessionID: sessionID,
+                isLocalSession: isLocalSession,
+                source: source,
+                eventType: eventType,
+                byteCount: bytes.count,
+                errorCode: nsError.code,
+                reason: nsError.domain
+            )
             await manager.renderingCoordinator.appendShellLine("Error: \(error.localizedDescription)", to: sessionID)
         }
+    }
+
+    private func logLocalInputFailureIfNeeded(
+        sessionID: UUID,
+        isLocalSession: Bool,
+        source: RawShellInputSource,
+        eventType: String,
+        byteCount: Int,
+        errorCode: Int,
+        reason: String
+    ) {
+        guard isLocalSession else { return }
+
+        let now = Date()
+        let dedupKey = "\(sessionID.uuidString)|\(source.rawValue)|\(eventType)|\(errorCode)|\(reason)"
+        if let lastLoggedAt = localInputFailureLogByKey[dedupKey],
+           now.timeIntervalSince(lastLoggedAt) < localInputFailureDedupWindow {
+            return
+        }
+        localInputFailureLogByKey[dedupKey] = now
+
+        if localInputFailureLogByKey.count > 256 {
+            let expiry = now.addingTimeInterval(-localInputFailureDedupWindow * 4)
+            localInputFailureLogByKey = localInputFailureLogByKey.filter { $0.value >= expiry }
+        }
+
+        let sessionLabel = shortSessionID(sessionID)
+        Self.logger.error(
+            "local_input_send result=error session=\(sessionLabel, privacy: .public) local=true source=\(source.rawValue, privacy: .public) event=\(eventType, privacy: .public) byte_count=\(byteCount) error_code=\(errorCode) reason=\(reason, privacy: .public)"
+        )
+    }
+
+    private func shortSessionID(_ sessionID: UUID) -> String {
+        String(sessionID.uuidString.prefix(8)).lowercased()
     }
 
     func startParserReader(for sessionID: UUID, rawOutput: AsyncStream<Data>) {
@@ -132,4 +225,9 @@ import Foundation
         )
         manager.recordingCoordinator.recordIfActive(sessionID: sessionID, chunk: chunk, throughputModeEnabled: manager.throughputModeEnabled)
     }
+}
+
+private enum LocalInputSendFailure: Int {
+    case disconnected = -1001
+    case missingShellChannel = -1002
 }

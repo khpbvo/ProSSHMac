@@ -560,6 +560,20 @@ final class SessionManager: ObservableObject {
         await shellIOCoordinator.sendRawShellInput(sessionID: sessionID, input: input)
     }
 
+    func sendRawShellInputBytes(
+        sessionID: UUID,
+        bytes: [UInt8],
+        source: RawShellInputSource = .programmatic,
+        eventType: String = "unknown"
+    ) async {
+        await shellIOCoordinator.sendRawShellInputBytes(
+            sessionID: sessionID,
+            bytes: bytes,
+            source: source,
+            eventType: eventType
+        )
+    }
+
     // MARK: - F.6 PTY Resize (delegates to renderingCoordinator)
 
     func resizeTerminal(sessionID: UUID, columns: Int, rows: Int) async {

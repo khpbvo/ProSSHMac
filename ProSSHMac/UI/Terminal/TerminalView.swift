@@ -567,6 +567,7 @@ struct TerminalView: View {
         DirectTerminalInputCaptureView(
             isEnabled: shouldEnableDirectTerminalInput(for: session),
             sessionID: session.id,
+            isLocalSession: session.isLocal,
             activationNonce: directInputActivationNonce,
             keyEncoderOptions: { hardwareKeyEncoderOptions() },
             onCommandShortcut: { action in
@@ -574,6 +575,16 @@ struct TerminalView: View {
             },
             onSendSequence: { sessionID, sequence in
                 handleDirectTerminalInput(sequence, sessionID: sessionID)
+            },
+            onSendBytes: { sessionID, bytes, eventType in
+                Task {
+                    await sessionManager.sendRawShellInputBytes(
+                        sessionID: sessionID,
+                        bytes: bytes,
+                        source: .hardwareKeyCapture,
+                        eventType: eventType
+                    )
+                }
             }
         )
     }

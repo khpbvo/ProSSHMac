@@ -134,6 +134,7 @@ struct ExternalTerminalWindowView: View {
                 DirectTerminalInputCaptureView(
                     isEnabled: session.state == .connected,
                     sessionID: session.id,
+                    isLocalSession: session.isLocal,
                     activationNonce: directInputActivationNonce,
                     keyEncoderOptions: { keyEncoderOptions(for: session.id) },
                     onCommandShortcut: { action in
@@ -142,6 +143,16 @@ struct ExternalTerminalWindowView: View {
                     onSendSequence: { sessionID, sequence in
                         Task {
                             await sessionManager.sendRawShellInput(sessionID: sessionID, input: sequence)
+                        }
+                    },
+                    onSendBytes: { sessionID, bytes, eventType in
+                        Task {
+                            await sessionManager.sendRawShellInputBytes(
+                                sessionID: sessionID,
+                                bytes: bytes,
+                                source: .hardwareKeyCapture,
+                                eventType: eventType
+                            )
                         }
                     }
                 )

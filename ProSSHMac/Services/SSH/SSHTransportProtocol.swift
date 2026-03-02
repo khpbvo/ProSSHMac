@@ -4,6 +4,7 @@ import Foundation
 protocol SSHShellChannel: AnyObject, Sendable {
     var rawOutput: AsyncStream<Data> { get }
     func send(_ input: String) async throws
+    func send(bytes: [UInt8]) async throws
     func resizePTY(columns: Int, rows: Int) async throws
     func close() async
 }
