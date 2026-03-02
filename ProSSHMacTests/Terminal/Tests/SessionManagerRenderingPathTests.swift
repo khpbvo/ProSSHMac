@@ -63,6 +63,36 @@ final class SessionManagerRenderingPathTests: XCTestCase {
     }
 
     @MainActor
+    func testLocalSessionStreamsProgressiveCommandOutput() async throws {
+        let manager = SessionManager(
+            transport: MockSSHTransport(),
+            knownHostsStore: InMemoryKnownHostsStore()
+        )
+
+        let session = try await manager.openLocalSession(
+            shellPath: "/bin/zsh",
+            workingDirectory: "/tmp"
+        )
+        defer {
+            Task { await manager.closeSession(sessionID: session.id) }
+        }
+
+        let marker = "PROSSH_LOCAL_STREAM_DONE_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
+        await manager.sendShellInput(
+            sessionID: session.id,
+            input: "for i in 1 2 3; do echo PROSSH_LOCAL_STREAM_$i; sleep 0.15; done; echo \(marker)"
+        )
+
+        let sawOutput = await waitForShellBufferContains(
+            manager: manager,
+            sessionID: session.id,
+            text: marker,
+            timeout: .seconds(8)
+        )
+        XCTAssertTrue(sawOutput, "Expected progressive local command output to appear in shell buffer.")
+    }
+
+    @MainActor
     private func waitForNonceIncrement(
         manager: SessionManager,
         sessionID: UUID,
@@ -75,6 +105,26 @@ final class SessionManagerRenderingPathTests: XCTestCase {
             await Task.yield()
             try? await Task.sleep(for: .milliseconds(10))
         }
+    }
+
+    @MainActor
+    private func waitForShellBufferContains(
+        manager: SessionManager,
+        sessionID: UUID,
+        text: String,
+        timeout: Duration
+    ) async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now + timeout
+
+        while clock.now < deadline {
+            if manager.shellBuffers[sessionID, default: []].joined(separator: "\n").contains(text) {
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(40))
+        }
+
+        return manager.shellBuffers[sessionID, default: []].joined(separator: "\n").contains(text)
     }
 }
 

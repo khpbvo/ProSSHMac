@@ -55,10 +55,19 @@ final class DirectTerminalInputNSView: NSView {
             if !isEnabled, window.firstResponder === self {
                 window.makeFirstResponder(nil)
             }
+            refreshLocalKeyEventMonitor()
         }
     }
-    var sessionID: UUID?
-    var isLocalSession = false
+    var sessionID: UUID? {
+        didSet {
+            refreshLocalKeyEventMonitor()
+        }
+    }
+    var isLocalSession = false {
+        didSet {
+            refreshLocalKeyEventMonitor()
+        }
+    }
     var activationNonce: Int = 0 {
         didSet {
             if activationNonce != oldValue {
@@ -72,7 +81,7 @@ final class DirectTerminalInputNSView: NSView {
     var onSendBytes: ((UUID, [UInt8], String) -> Void)?
     private var windowDidBecomeKeyObserver: NSObjectProtocol?
     private var appDidBecomeActiveObserver: NSObjectProtocol?
-    private var keyEventMonitor: Any?
+    private var localKeyEventMonitor: Any?
 
     override var acceptsFirstResponder: Bool {
         isEnabled
@@ -85,14 +94,14 @@ final class DirectTerminalInputNSView: NSView {
     deinit {
         MainActor.assumeIsolated {
             removeActivationObservers()
-            removeKeyEventMonitor()
+            removeLocalKeyEventMonitor()
         }
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         removeActivationObservers()
-        removeKeyEventMonitor()
+        removeLocalKeyEventMonitor()
 
         guard let window else { return }
         windowDidBecomeKeyObserver = NotificationCenter.default.addObserver(
@@ -114,34 +123,7 @@ final class DirectTerminalInputNSView: NSView {
             }
         }
 
-        // Intercept terminal-bound keyDown events before SwiftUI/AppKit
-        // consume them for focus navigation or default controls.
-        keyEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self else { return event }
-            guard self.shouldMonitorKeyDownEvent(event) else { return event }
-            guard self.dispatchEncodedEvent(event) else { return event }
-            return nil // consume the event
-        }
-    }
-
-    func shouldMonitorKeyDownEvent(_ event: NSEvent) -> Bool {
-        // Rely on terminal activation state instead of exact event.window
-        // matching. SwiftUI/AppKit can route keyDown through wrapper views
-        // where event.window identity checks are too strict.
-        let keyWindowActive = window?.isKeyWindow ?? true
-        let textInputFocused = isTextInputFocusedInWindow()
-        let commandHeld = event.modifierFlags.intersection([.command]).contains(.command)
-        let encodable = encodeEventBytes(event) != nil
-
-        return Self.shouldCaptureLocalKeyEvent(
-            isEnabled: isEnabled,
-            hasSessionID: sessionID != nil,
-            isLocalSession: isLocalSession,
-            keyWindowActive: keyWindowActive,
-            textInputFocused: textInputFocused,
-            commandHeld: commandHeld,
-            isEncodable: encodable
-        )
+        refreshLocalKeyEventMonitor()
     }
 
     static func shouldCaptureLocalKeyEvent(
@@ -151,15 +133,19 @@ final class DirectTerminalInputNSView: NSView {
         keyWindowActive: Bool,
         textInputFocused: Bool,
         commandHeld: Bool,
-        isEncodable: Bool
+        isEncodable: Bool,
+        terminalFocused: Bool = true
     ) -> Bool {
-        guard isEnabled else { return false }
-        guard hasSessionID else { return false }
         guard isLocalSession else { return false }
-        guard keyWindowActive else { return false }
-        guard !textInputFocused else { return false }
-        guard !commandHeld else { return false }
-        return isEncodable
+        return LocalTerminalSubsystem.shouldCaptureHardwareKeyEvent(
+            isEnabled: isEnabled,
+            hasSessionID: hasSessionID,
+            keyWindowActive: keyWindowActive,
+            terminalFocused: terminalFocused,
+            textInputFocused: textInputFocused,
+            commandHeld: commandHeld,
+            isEncodable: isEncodable
+        )
     }
 
     func armForKeyboardInputIfNeeded() {
@@ -183,38 +169,58 @@ final class DirectTerminalInputNSView: NSView {
         }
     }
 
-    private func removeKeyEventMonitor() {
-        if let keyEventMonitor {
-            NSEvent.removeMonitor(keyEventMonitor)
-            self.keyEventMonitor = nil
+    private func refreshLocalKeyEventMonitor() {
+        removeLocalKeyEventMonitor()
+        guard isLocalSession else { return }
+        localKeyEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return event }
+            guard self.shouldMonitorLocalKeyEvent(event) else { return event }
+            guard self.dispatchEncodedEvent(event) else { return event }
+            return nil
         }
     }
 
-    override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        if isLocalSession {
-            return super.performKeyEquivalent(with: event)
+    private func removeLocalKeyEventMonitor() {
+        if let localKeyEventMonitor {
+            NSEvent.removeMonitor(localKeyEventMonitor)
+            self.localKeyEventMonitor = nil
         }
+    }
+
+    private func shouldMonitorLocalKeyEvent(_ event: NSEvent) -> Bool {
+        guard isLocalSession else { return false }
+
+        let commandHeld = event.modifierFlags.intersection([.command]).contains(.command)
+        let keyWindowActive = window?.isKeyWindow ?? true
+        let textInputFocused = isTextInputFocusedInWindow()
+        guard let payload = localInputPayload(for: event) else { return false }
+
+        return Self.shouldCaptureLocalKeyEvent(
+            isEnabled: isEnabled,
+            hasSessionID: sessionID != nil,
+            isLocalSession: true,
+            keyWindowActive: keyWindowActive,
+            textInputFocused: textInputFocused,
+            commandHeld: commandHeld,
+            isEncodable: !payload.bytes.isEmpty,
+            terminalFocused: true
+        )
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if isTextInputFocusedInWindow() {
             return super.performKeyEquivalent(with: event)
         }
         if handleCommandShortcut(event) {
             return true
         }
-        // Intercept Tab / Shift-Tab before NSWindow uses them for focus
-        // navigation.  Tab must reach the shell for tab-completion to work.
-        if event.keyCode == 48 /* Tab */ {
-            if dispatchEncodedEvent(event) {
-                return true
-            }
+        if dispatchEncodedEvent(event) {
+            return true
         }
         return super.performKeyEquivalent(with: event)
     }
 
     override func keyDown(with event: NSEvent) {
-        if isLocalSession {
-            super.keyDown(with: event)
-            return
-        }
         if isTextInputFocusedInWindow() {
             super.keyDown(with: event)
             return
@@ -248,14 +254,16 @@ final class DirectTerminalInputNSView: NSView {
 
     private func dispatchEncodedEvent(_ event: NSEvent) -> Bool {
         guard isEnabled, let sessionID else { return false }
-        guard let bytes = encodeEventBytes(event) else { return false }
 
         if isLocalSession {
+            guard let payload = localInputPayload(for: event) else { return false }
+            guard shouldCaptureLocalEvent(event, payload: payload) else { return false }
             guard let onSendBytes else { return false }
-            onSendBytes(sessionID, bytes, localInputEventType(for: event))
+            onSendBytes(sessionID, payload.bytes, payload.eventType)
             return true
         }
 
+        guard let bytes = encodeEventBytes(event) else { return false }
         guard let sequence = String(bytes: bytes, encoding: .utf8) else {
             return false
         }
@@ -263,139 +271,44 @@ final class DirectTerminalInputNSView: NSView {
         return true
     }
 
-    private func localInputEventType(for event: NSEvent) -> String {
-        let modifiers = mapModifiers(event.modifierFlags)
-        if let label = specialKeyLabel(for: event.keyCode) {
-            return label
-        }
-        if modifiers.contains(.ctrl) { return "ctrl_character" }
-        if modifiers.contains(.alt) { return "alt_character" }
-        if let characters = event.characters, !characters.isEmpty {
-            return characters.count == 1 ? "character" : "text_sequence"
-        }
-        return "unknown"
+    private func localInputPayload(for event: NSEvent) -> LocalTerminalInputPayload? {
+        let options = keyEncoderOptions?() ?? .default
+        return LocalTerminalSubsystem.encodeKeyEvent(event, options: options)
+    }
+
+    private func shouldCaptureLocalEvent(_ event: NSEvent, payload: LocalTerminalInputPayload) -> Bool {
+        let commandHeld = event.modifierFlags.intersection([.command]).contains(.command)
+        let keyWindowActive = window?.isKeyWindow ?? true
+        let textInputFocused = isTextInputFocusedInWindow()
+
+        // Pass terminalFocused: true here. This method is only called from
+        // dispatchEncodedEvent, which is invoked from keyDown and performKeyEquivalent
+        // — both of which only reach this view when it is in the active responder
+        // chain. The local monitor path already hardcodes terminalFocused: true in
+        // shouldMonitorLocalKeyEvent. The armForKeyboardInputIfNeeded() call is
+        // deferred async, so isTerminalFocused (firstResponder === self) can be
+        // transiently false even when the terminal is the active input context,
+        // causing Tab and Ctrl+C (key equivalents) to be silently dropped.
+        return Self.shouldCaptureLocalKeyEvent(
+            isEnabled: isEnabled,
+            hasSessionID: sessionID != nil,
+            isLocalSession: isLocalSession,
+            keyWindowActive: keyWindowActive,
+            textInputFocused: textInputFocused,
+            commandHeld: commandHeld,
+            isEncodable: !payload.bytes.isEmpty,
+            terminalFocused: true
+        )
     }
 
     private func encodeEventBytes(_ event: NSEvent) -> [UInt8]? {
-        let flags = event.modifierFlags.intersection([.shift, .control, .option, .command])
-
-        // Command-modified keys are handled by SwiftUI shortcut layer.
-        if flags.contains(.command) { return nil }
-
-        let modifiers = mapModifiers(event.modifierFlags)
         let options = keyEncoderOptions?() ?? .default
-        let encoder = KeyEncoder(options: options)
-
-        // 1. Special keys (arrows, Tab, Enter, Esc, F-keys, editing keys, Backspace, Delete).
-        if let keyEvent = specialKeyEvent(keyCode: event.keyCode, modifiers: modifiers) {
-            return encoder.encode(keyEvent)
-        }
-
-        // 2. Ctrl+character — encode via KeyEncoder for proper control bytes.
-        if modifiers.contains(.ctrl),
-           let raw = event.charactersIgnoringModifiers, !raw.isEmpty {
-            let ch = raw.first!
-            if let scalar = ch.unicodeScalars.first,
-               scalar.isASCII,
-               (scalar.value < 0x20 || scalar.value == 0x7F) {
-                return [UInt8(scalar.value)]
-            }
-            let keyEvent = KeyEvent(key: .character(ch), modifiers: modifiers)
-            return encoder.encode(keyEvent)
-        }
-
-        // 3. Alt/Option+character — ESC prefix + base character.
-        if modifiers.contains(.alt),
-           let raw = event.charactersIgnoringModifiers, !raw.isEmpty {
-            let ch = raw.first!
-            let keyEvent = KeyEvent(key: .character(ch), modifiers: modifiers)
-            return encoder.encode(keyEvent)
-        }
-
-        // 4. Regular characters (includes Shift effect: Shift+1→"!").
-        if let characters = event.characters, !characters.isEmpty {
-            return Array(characters.utf8)
-        }
-
-        return nil
+        return LocalTerminalSubsystem.encodeKeyEvent(event, options: options)?.bytes
     }
 
-    // MARK: - Special Key Mapping
-
-    private func specialKeyEvent(keyCode: UInt16, modifiers: KeyModifiers) -> KeyEvent? {
-        let key: EncodableKey
-        switch keyCode {
-        case 126: key = .arrow(.up)
-        case 125: key = .arrow(.down)
-        case 124: key = .arrow(.right)
-        case 123: key = .arrow(.left)
-        case 36, 76: key = .enter
-        case 48: key = .tab
-        case 53: key = .escape
-        case 51: key = .backspace
-        case 117: key = .editing(.delete)
-        case 115: key = .editing(.home)
-        case 119: key = .editing(.end)
-        case 116: key = .editing(.pageUp)
-        case 121: key = .editing(.pageDown)
-        case 114: key = .editing(.insert)
-        case 122: key = .function(1)
-        case 120: key = .function(2)
-        case 99:  key = .function(3)
-        case 118: key = .function(4)
-        case 96:  key = .function(5)
-        case 97:  key = .function(6)
-        case 98:  key = .function(7)
-        case 100: key = .function(8)
-        case 101: key = .function(9)
-        case 109: key = .function(10)
-        case 103: key = .function(11)
-        case 111: key = .function(12)
-        default: return nil
-        }
-        return KeyEvent(key: key, modifiers: modifiers)
-    }
-
-    private func specialKeyLabel(for keyCode: UInt16) -> String? {
-        switch keyCode {
-        case 126: return "arrow_up"
-        case 125: return "arrow_down"
-        case 124: return "arrow_right"
-        case 123: return "arrow_left"
-        case 36, 76: return "enter"
-        case 48: return "tab"
-        case 53: return "escape"
-        case 51: return "backspace"
-        case 117: return "delete"
-        case 115: return "home"
-        case 119: return "end"
-        case 116: return "page_up"
-        case 121: return "page_down"
-        case 114: return "insert"
-        case 122: return "function_f1"
-        case 120: return "function_f2"
-        case 99:  return "function_f3"
-        case 118: return "function_f4"
-        case 96:  return "function_f5"
-        case 97:  return "function_f6"
-        case 98:  return "function_f7"
-        case 100: return "function_f8"
-        case 101: return "function_f9"
-        case 109: return "function_f10"
-        case 103: return "function_f11"
-        case 111: return "function_f12"
-        default: return nil
-        }
-    }
-
-    // MARK: - Modifier Mapping
-
-    private func mapModifiers(_ flags: NSEvent.ModifierFlags) -> KeyModifiers {
-        var result: KeyModifiers = []
-        if flags.contains(.shift) { result.insert(.shift) }
-        if flags.contains(.option) { result.insert(.alt) }
-        if flags.contains(.control) { result.insert(.ctrl) }
-        return result
+    private var isTerminalFocused: Bool {
+        guard let window else { return false }
+        return window.firstResponder === self
     }
 
     // MARK: - Command Shortcuts

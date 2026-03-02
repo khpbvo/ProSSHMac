@@ -53,4 +53,30 @@ final class TerminalInputCaptureViewTests: XCTestCase {
         XCTAssertFalse(blocked)
         XCTAssertTrue(resumed)
     }
+
+    func testLocalInputCaptureRequiresTerminalFocus() {
+        let unfocused = DirectTerminalInputNSView.shouldCaptureLocalKeyEvent(
+            isEnabled: true,
+            hasSessionID: true,
+            isLocalSession: true,
+            keyWindowActive: true,
+            textInputFocused: false,
+            commandHeld: false,
+            isEncodable: true,
+            terminalFocused: false
+        )
+        let focused = DirectTerminalInputNSView.shouldCaptureLocalKeyEvent(
+            isEnabled: true,
+            hasSessionID: true,
+            isLocalSession: true,
+            keyWindowActive: true,
+            textInputFocused: false,
+            commandHeld: false,
+            isEncodable: true,
+            terminalFocused: true
+        )
+
+        XCTAssertFalse(unfocused)
+        XCTAssertTrue(focused)
+    }
 }

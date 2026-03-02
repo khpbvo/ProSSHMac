@@ -14,6 +14,8 @@ actor LocalPTYProcess {
     private let continuation: AsyncStream<Data>.Continuation
     private var readerTask: Task<Void, Never>?
     private var isClosed = false
+    private var didSuppressZshTTYPgrpWarning = false
+    private var zshWarningPrefixCarry = ""
 
     // MARK: - Spawn
 
@@ -66,38 +68,32 @@ actor LocalPTYProcess {
 
         if pid == 0 {
             // ── Child process ──────────────────────────────────────────────
-            //
-            // Become a new session leader so we own the PTY as our controlling
-            // terminal. forkpty already called setsid() for us, but we call it
-            // again defensively. Then TIOCSCTTY acquires the slave pty as the
-            // controlling terminal, which is what lets tcsetpgrp succeed.
             _ = setsid()
             _ = ioctl(0, TIOCSCTTY, 1)
 
             _ = chdir(workingDirectory)
 
-            // Replace the entire environment with our clean set.
-            // clearenv() is essential: the GUI app inherits vars like ZDOTDIR,
-            // __CF_USER_TEXT_ENCODING, DYLD_* etc. that corrupt zsh startup.
-            clearenv()
-            for (key, value) in environment {
-                key.withCString { k in
-                    value.withCString { v in
-                        _ = setenv(k, v, 1)
+            let shellName = (shellPath as NSString).lastPathComponent
+            let loginName = "-" + shellName
+
+            let argvValues = [loginName]
+            var argv: [UnsafeMutablePointer<CChar>?] = argvValues.map { strdup($0) }
+            argv.append(nil)
+
+            let envStrings = environment.map { k, v in strdup("\(k)=\(v)") }
+            var envp: [UnsafeMutablePointer<CChar>?] = envStrings.map { $0 }
+            envp.append(nil)
+
+            shellPath.withCString { shellPtr in
+                argv.withUnsafeMutableBufferPointer { argBuf in
+                    envp.withUnsafeMutableBufferPointer { envBuf in
+                        _ = execve(shellPtr, argBuf.baseAddress, envBuf.baseAddress)
                     }
                 }
             }
 
-            // Launch as a login shell: argv[0] = "-zsh"
-            let shellName = (shellPath as NSString).lastPathComponent
-            let loginName = "-" + shellName
-            var argv: [UnsafeMutablePointer<CChar>?] = [strdup(loginName), nil]
-            shellPath.withCString { shellPtr in
-                argv.withUnsafeMutableBufferPointer { buf in
-                    _ = execv(shellPtr, buf.baseAddress)
-                }
-            }
-            free(argv[0])
+            for ptr in argv where ptr != nil { free(ptr) }
+            for ptr in envStrings { free(ptr) }
             _exit(127)
         }
 
@@ -227,7 +223,7 @@ actor LocalPTYProcess {
                 }
 
                 if !chunk.isEmpty {
-                    await self?.yield(chunk)
+                    await self?.yieldSanitized(chunk)
                 }
             }
 
@@ -245,5 +241,61 @@ actor LocalPTYProcess {
     }
 
     private func yield(_ data: Data) { continuation.yield(data) }
-    private func finish() { continuation.finish() }
+    private func yieldSanitized(_ data: Data) {
+        guard !didSuppressZshTTYPgrpWarning,
+              let chunk = String(data: data, encoding: .utf8) else {
+            continuation.yield(data)
+            return
+        }
+
+        let warningMarker = "zsh: can't set tty pgrp:"
+        var text = zshWarningPrefixCarry + chunk
+        zshWarningPrefixCarry.removeAll(keepingCapacity: false)
+
+        if let markerRange = text.range(of: warningMarker, options: [.caseInsensitive]) {
+            let lineStart = text[..<markerRange.lowerBound].lastIndex(of: "\n")
+                .map { text.index(after: $0) } ?? text.startIndex
+            let lineEnd = text[markerRange.upperBound...].firstIndex(of: "\n")
+                .map { text.index(after: $0) } ?? text.endIndex
+
+            text.removeSubrange(lineStart..<lineEnd)
+            didSuppressZshTTYPgrpWarning = true
+            if !text.isEmpty {
+                continuation.yield(Data(text.utf8))
+            }
+            return
+        }
+
+        let lowercaseText = text.lowercased()
+        let markerLowercase = warningMarker.lowercased()
+        let maxSuffixLength = min(lowercaseText.count, markerLowercase.count - 1)
+        var carryLength = 0
+
+        if maxSuffixLength > 0 {
+            for length in stride(from: maxSuffixLength, through: 1, by: -1) {
+                if lowercaseText.suffix(length) == markerLowercase.prefix(length) {
+                    carryLength = length
+                    break
+                }
+            }
+        }
+
+        if carryLength == 0 {
+            continuation.yield(Data(text.utf8))
+            return
+        }
+
+        let emitCount = text.count - carryLength
+        if emitCount > 0 {
+            continuation.yield(Data(text.prefix(emitCount).utf8))
+        }
+        zshWarningPrefixCarry = String(text.suffix(carryLength))
+    }
+    private func finish() {
+        if !zshWarningPrefixCarry.isEmpty {
+            continuation.yield(Data(zshWarningPrefixCarry.utf8))
+            zshWarningPrefixCarry.removeAll(keepingCapacity: false)
+        }
+        continuation.finish()
+    }
 }

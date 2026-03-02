@@ -70,6 +70,28 @@ extension MetalTerminalRenderer {
         gradientConfiguration
     }
 
+    // MARK: - Solid Background Effect
+
+    /// Enable or disable the solid background effect.
+    func setSolidBackgroundEnabled(_ enabled: Bool) {
+        solidBackgroundConfiguration.isEnabled = enabled
+        solidBackgroundConfiguration.save()
+        isDirty = true
+    }
+
+    /// Apply a complete solid background configuration.
+    func setSolidBackgroundConfiguration(_ configuration: SolidBackgroundConfiguration) {
+        solidBackgroundConfiguration = configuration
+        solidBackgroundConfiguration.save()
+        isDirty = true
+    }
+
+    /// Reload solid background settings from persisted UserDefaults.
+    func reloadSolidBackgroundSettings() {
+        solidBackgroundConfiguration = SolidBackgroundConfiguration.load()
+        isDirty = true
+    }
+
     func ensurePostProcessTextures(for drawableSize: CGSize) {
         let width = max(1, Int(drawableSize.width))
         let height = max(1, Int(drawableSize.height))

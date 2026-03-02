@@ -588,3 +588,38 @@ extension GradientBackgroundConfiguration {
         }
     }
 }
+
+// MARK: - SolidBackgroundConfiguration
+
+/// Configuration for a single-color terminal background replacement.
+/// Applied in post-process when gradient background is disabled.
+struct SolidBackgroundConfiguration: Codable, Sendable, Equatable {
+    /// Master toggle.
+    var isEnabled: Bool
+
+    /// Background color used to replace default near-black terminal background pixels.
+    var color: GradientColor
+
+    static let `default` = SolidBackgroundConfiguration(
+        isEnabled: false,
+        color: GradientColor.black
+    )
+}
+
+extension SolidBackgroundConfiguration {
+    static let defaultsKey = "terminal.effects.solidBackground"
+
+    static func load(from defaults: UserDefaults = .standard) -> SolidBackgroundConfiguration {
+        guard let data = defaults.data(forKey: defaultsKey),
+              let config = try? JSONDecoder().decode(SolidBackgroundConfiguration.self, from: data) else {
+            return .default
+        }
+        return config
+    }
+
+    func save(to defaults: UserDefaults = .standard) {
+        if let data = try? JSONEncoder().encode(self) {
+            defaults.set(data, forKey: Self.defaultsKey)
+        }
+    }
+}

@@ -128,6 +128,13 @@ struct TerminalUniforms {
     float  gradientContrast;          // contrast multiplier
     float  _gradientPad;              // alignment padding
 
+    // -- Solid Background Effect --
+    float  solidBackgroundEnabled;    // 1.0 = solid background replacement on
+    float  _solidBackgroundPad0;      // alignment padding
+    float  _solidBackgroundPad1;      // alignment padding
+    float  _solidBackgroundPad2;      // alignment padding
+    float4 solidBackgroundColor;      // replacement color (RGBA)
+
     // -- Scanner (Knight Rider) Effect --
     float  scannerEnabled;            // 1.0 = scanner glow active
     float  scannerSpeed;              // sweep speed multiplier
@@ -827,6 +834,10 @@ fragment float4 terminal_post_fragment(
         }
 
         color.rgb = result;
+    } else if (uniforms.solidBackgroundEnabled > 0.5) {
+        float luminance = dot(color.rgb, float3(0.2126, 0.7152, 0.0722));
+        float contentAlpha = smoothstep(0.01, 0.08, luminance);
+        color.rgb = mix(uniforms.solidBackgroundColor.rgb, color.rgb, contentAlpha);
     }
 
     // Knight Rider scanner glow on the username (cursor row, columns 0..usernameLen).

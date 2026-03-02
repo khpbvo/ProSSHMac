@@ -59,6 +59,24 @@ struct SettingsView: View {
                     Toggle("Enable CRT Effect (Experimental)", isOn: $terminalCRTEffectEnabled)
 
                     NavigationLink {
+                        SolidBackgroundSettingsView()
+                    } label: {
+                        HStack {
+                            Label("Solid Background", systemImage: "paintbrush.pointed")
+                            Spacer()
+                            if SolidBackgroundConfiguration.load().isEnabled {
+                                Text("On")
+                                    .font(.subheadline)
+                                    .foregroundStyle(Color.accentColor)
+                            } else {
+                                Text("Off")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+
+                    NavigationLink {
                         GradientBackgroundSettingsView()
                     } label: {
                         HStack {

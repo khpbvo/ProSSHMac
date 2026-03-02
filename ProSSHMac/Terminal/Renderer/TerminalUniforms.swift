@@ -175,6 +175,19 @@ struct TerminalUniformData {
     /// Padding to maintain 16-byte alignment.
     var _gradientPad: Float
 
+    // -- Solid Background Effect Uniforms --
+
+    /// 1.0 when single-color background replacement is enabled.
+    var solidBackgroundEnabled: Float
+
+    /// Padding to align solidBackgroundColor to 16-byte boundary.
+    var _solidBackgroundPad0: Float
+    var _solidBackgroundPad1: Float
+    var _solidBackgroundPad2: Float
+
+    /// Solid background replacement color (RGBA).
+    var solidBackgroundColor: SIMD4<Float>
+
     // -- Scanner (Knight Rider) Effect Uniforms --
 
     /// 1.0 when scanner effect is enabled and session is local, else 0.0.
@@ -313,6 +326,7 @@ final class TerminalUniformBuffer {
         phosphorBlend: Float = 0.0,
         contentScale: Float = 1.0,
         gradientConfig: GradientBackgroundConfiguration? = nil,
+        solidBackgroundConfig: SolidBackgroundConfiguration? = nil,
         scannerConfig: ScannerEffectConfiguration? = nil,
         isLocalSession: Bool = false
     ) {
@@ -340,6 +354,7 @@ final class TerminalUniformBuffer {
 
         // Resolve gradient configuration.
         let gc = gradientConfig ?? GradientBackgroundConfiguration.default
+        let solid = solidBackgroundConfig ?? SolidBackgroundConfiguration.default
 
         // Resolve scanner configuration.
         let sc = scannerConfig ?? ScannerEffectConfiguration.default
@@ -395,6 +410,11 @@ final class TerminalUniformBuffer {
             gradientBrightness: min(0.5, max(-0.5, gc.brightness)),
             gradientContrast: min(3, max(0.1, gc.contrast)),
             _gradientPad: 0,
+            solidBackgroundEnabled: solid.isEnabled ? 1.0 : 0.0,
+            _solidBackgroundPad0: 0,
+            _solidBackgroundPad1: 0,
+            _solidBackgroundPad2: 0,
+            solidBackgroundColor: SIMD4<Float>(solid.color.red, solid.color.green, solid.color.blue, solid.color.alpha),
             scannerEnabled: scannerActive ? 1.0 : 0.0,
             scannerSpeed: max(0.1, sc.speed),
             scannerGlowWidth: min(0.5, max(0.02, sc.glowWidth)),

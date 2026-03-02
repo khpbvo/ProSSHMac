@@ -50,7 +50,10 @@ extension MetalTerminalRenderer {
 
         let drawableSize = view.drawableSize
         let scannerActive = scannerConfiguration.isEnabled && isLocalSession
-        let usesPostProcessing = crtConfiguration.isEnabled || gradientConfiguration.isEnabled || scannerActive
+        let usesPostProcessing = crtConfiguration.isEnabled
+            || gradientConfiguration.isEnabled
+            || solidBackgroundConfiguration.isEnabled
+            || scannerActive
         if usesPostProcessing {
             ensurePostProcessTextures(for: drawableSize)
         }
@@ -95,6 +98,7 @@ extension MetalTerminalRenderer {
             phosphorBlend: phosphorBlend,
             contentScale: Float(screenScale),
             gradientConfig: gradientConfiguration,
+            solidBackgroundConfig: solidBackgroundConfiguration,
             scannerConfig: scannerConfiguration,
             isLocalSession: isLocalSession
         )

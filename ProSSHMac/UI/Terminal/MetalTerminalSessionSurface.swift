@@ -165,6 +165,7 @@ final class MetalTerminalSurfaceModel: ObservableObject {
     private var appliedFontSize: CGFloat
     private var appliedFontFamily: String
     private var cachedGradientConfiguration: GradientBackgroundConfiguration
+    private var cachedSolidBackgroundConfiguration: SolidBackgroundConfiguration
     private var cachedScannerConfiguration: ScannerEffectConfiguration
     private var cachedCRTEffectEnabled: Bool
 
@@ -185,6 +186,7 @@ final class MetalTerminalSurfaceModel: ObservableObject {
         self.appliedFontSize = initialFontSize
         self.appliedFontFamily = initialFontFamily
         self.cachedGradientConfiguration = GradientBackgroundConfiguration.load()
+        self.cachedSolidBackgroundConfiguration = SolidBackgroundConfiguration.load()
         self.cachedScannerConfiguration = ScannerEffectConfiguration.load()
         self.cachedCRTEffectEnabled = CRTEffect.loadEnabledFromDefaults()
 
@@ -308,6 +310,12 @@ final class MetalTerminalSurfaceModel: ObservableObject {
         if gradientConfiguration != cachedGradientConfiguration {
             cachedGradientConfiguration = gradientConfiguration
             renderer.reloadGradientBackgroundSettings()
+        }
+
+        let solidBackgroundConfiguration = SolidBackgroundConfiguration.load()
+        if solidBackgroundConfiguration != cachedSolidBackgroundConfiguration {
+            cachedSolidBackgroundConfiguration = solidBackgroundConfiguration
+            renderer.reloadSolidBackgroundSettings()
         }
 
         let crtEffectEnabled = CRTEffect.loadEnabledFromDefaults()

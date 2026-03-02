@@ -190,6 +190,11 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     /// Runtime gradient background configuration (default disabled).
     var gradientConfiguration: GradientBackgroundConfiguration = GradientBackgroundConfiguration.load()
 
+    // MARK: - Solid Background Effect
+
+    /// Runtime solid background configuration (default disabled).
+    var solidBackgroundConfiguration: SolidBackgroundConfiguration = SolidBackgroundConfiguration.load()
+
     // MARK: - Scanner (Knight Rider) Effect
 
     /// Runtime scanner effect configuration (default disabled).
