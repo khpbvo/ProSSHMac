@@ -6,7 +6,7 @@ struct SettingsView: View {
     @Environment(\.openWindow) private var openWindow
     @EnvironmentObject private var sessionManager: SessionManager
     @EnvironmentObject private var auditLogManager: AuditLogManager
-    @EnvironmentObject private var openAISettingsViewModel: OpenAISettingsViewModel
+    @EnvironmentObject private var aiProviderSettingsViewModel: AIProviderSettingsViewModel
     @AppStorage("app.appearance") private var appAppearanceRawValue = AppAppearance.system.rawValue
     @AppStorage("terminal.effects.crtEnabled") private var terminalCRTEffectEnabled = false
     @AppStorage(BellEffectController.settingsKey) private var terminalBellFeedbackMode = BellFeedbackMode.none.rawValue
@@ -169,63 +169,96 @@ struct SettingsView: View {
                 }
 
                 Section("AI Assistant") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("OpenAI API Key")
-                            .font(.subheadline)
+                    Picker("Provider", selection: $aiProviderSettingsViewModel.selectedProviderID) {
+                        ForEach(aiProviderSettingsViewModel.availableProviders) { provider in
+                            Text(provider.displayName).tag(provider)
+                        }
+                    }
 
-                        SecureField("sk-...", text: $openAISettingsViewModel.apiKeyInput)
-                            .textFieldStyle(.roundedBorder)
-                            .font(.body.monospaced())
+                    Picker("Model", selection: $aiProviderSettingsViewModel.selectedModelID) {
+                        ForEach(aiProviderSettingsViewModel.modelsForSelectedProvider) { model in
+                            Text(model.displayName).tag(model.id)
+                        }
+                    }
 
-                        HStack {
-                            Button("Paste from Clipboard") {
-                                if let pasted = PlatformClipboard.readString() {
-                                    openAISettingsViewModel.apiKeyInput = pasted.trimmingCharacters(in: .whitespacesAndNewlines)
-                                }
+                    if aiProviderSettingsViewModel.selectedProviderID == .ollama {
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(ollamaStatusColor)
+                                .frame(width: 8, height: 8)
+                            Text(ollamaStatusText)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button("Refresh Models") {
+                                Task { await aiProviderSettingsViewModel.refreshOllamaModels() }
                             }
                             .buttonStyle(.borderless)
-
-                            Spacer()
+                            .disabled(aiProviderSettingsViewModel.isRefreshingModels)
                         }
-                    }
 
-                    Text("Stored securely in the device Keychain and used by the AI assistant service.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-
-                    if openAISettingsViewModel.hasStoredAPIKey {
-                        Label(
-                            "Saved key: \(openAISettingsViewModel.storedKeyHint ?? "••••")",
-                            systemImage: "checkmark.circle.fill"
-                        )
-                        .font(.footnote)
-                        .foregroundStyle(.green)
-                    } else {
-                        Text("No API key saved.")
+                        Text("Ollama runs locally — no API key needed. Make sure Ollama is running on your Mac.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
 
-                    HStack {
-                        Button("Save API Key") {
-                            Task {
-                                await openAISettingsViewModel.saveAPIKey()
+                    if aiProviderSettingsViewModel.requiresAPIKey {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("\(aiProviderSettingsViewModel.selectedProviderID.displayName) API Key")
+                                .font(.subheadline)
+
+                            SecureField("API key...", text: $aiProviderSettingsViewModel.apiKeyInput)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.body.monospaced())
+
+                            HStack {
+                                Button("Paste from Clipboard") {
+                                    aiProviderSettingsViewModel.pasteFromClipboard()
+                                }
+                                .buttonStyle(.borderless)
+
+                                Spacer()
                             }
                         }
-                        .disabled(trimmedOpenAIAPIKeyInput.isEmpty)
 
-                        Button("Remove API Key", role: .destructive) {
-                            Task {
-                                await openAISettingsViewModel.removeAPIKey()
-                            }
-                        }
-                        .disabled(!openAISettingsViewModel.hasStoredAPIKey)
-                    }
-
-                    if let statusMessage = openAISettingsViewModel.statusMessage {
-                        Text(statusMessage)
+                        Text("Stored securely in the device Keychain and used by the AI assistant service.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
+
+                        if aiProviderSettingsViewModel.hasStoredAPIKey {
+                            Label(
+                                "Saved key: \(aiProviderSettingsViewModel.storedKeyHint ?? "••••")",
+                                systemImage: "checkmark.circle.fill"
+                            )
+                            .font(.footnote)
+                            .foregroundStyle(.green)
+                        } else {
+                            Text("No API key saved.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        HStack {
+                            Button("Save API Key") {
+                                Task {
+                                    await aiProviderSettingsViewModel.saveAPIKey()
+                                }
+                            }
+                            .disabled(aiProviderSettingsViewModel.apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                            Button("Remove API Key", role: .destructive) {
+                                Task {
+                                    await aiProviderSettingsViewModel.removeAPIKey()
+                                }
+                            }
+                            .disabled(!aiProviderSettingsViewModel.hasStoredAPIKey)
+                        }
+
+                        if let statusMessage = aiProviderSettingsViewModel.statusMessage {
+                            Text(statusMessage)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
                     }
 
                     Text("AI Copilot lives in Terminal. Use ⌥⌘I to toggle it. In the composer: Enter sends, Shift+Enter inserts a new line.")
@@ -375,7 +408,7 @@ struct SettingsView: View {
         .task {
             await auditLogManager.refresh()
             await sessionManager.refreshKnownHosts()
-            await openAISettingsViewModel.refresh()
+            await aiProviderSettingsViewModel.refresh()
         }
         .confirmationDialog(
             "Clear audit log?",
@@ -407,6 +440,22 @@ struct SettingsView: View {
         }
     }
 
+    private var ollamaStatusColor: Color {
+        switch aiProviderSettingsViewModel.ollamaConnectionStatus {
+        case .unknown: return .gray
+        case .connected: return .green
+        case .notRunning: return .red
+        }
+    }
+
+    private var ollamaStatusText: String {
+        switch aiProviderSettingsViewModel.ollamaConnectionStatus {
+        case .unknown: return "Checking..."
+        case .connected(let count): return "Connected (\(count) models)"
+        case .notRunning: return "Not detected"
+        }
+    }
+
     private var supportsMultitaskingControls: Bool {
         horizontalSizeClass == .regular && PlatformDevice.isPad
     }
@@ -420,10 +469,6 @@ struct SettingsView: View {
                 terminalBackgroundOpacityPercent = TransparencyManager.clampBackgroundOpacityPercent(newValue)
             }
         )
-    }
-
-    private var trimmedOpenAIAPIKeyInput: String {
-        openAISettingsViewModel.apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private var availableTerminalFontChoices: [String] {

@@ -25,8 +25,8 @@ final class LLMProviderRegistry: ObservableObject {
     // MARK: - Init
 
     init(
-        defaultProvider: LLMProviderID = .mistral,
-        defaultModel: String = "mistral-large-latest"
+        defaultProvider: LLMProviderID = .openai,
+        defaultModel: String = "gpt-5.1-codex-max"
     ) {
         let storedProvider = UserDefaults.standard.string(forKey: Self.providerDefaultsKey)
             .flatMap(LLMProviderID.init(rawValue:))

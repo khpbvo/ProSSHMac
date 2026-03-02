@@ -94,73 +94,11 @@ struct OpenAIResponsesToolOutput: Sendable, Equatable {
     var output: String
 }
 
-enum OpenAIJSONValue: Sendable, Equatable {
-    case string(String)
-    case number(Double)
-    case bool(Bool)
-    case object([String: OpenAIJSONValue])
-    case array([OpenAIJSONValue])
-    case null
-}
-
-extension OpenAIJSONValue: Codable {
-    init(from decoder: any Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        if container.decodeNil() {
-            self = .null
-            return
-        }
-        if let value = try? container.decode(Bool.self) {
-            self = .bool(value)
-            return
-        }
-        if let value = try? container.decode(Double.self) {
-            self = .number(value)
-            return
-        }
-        if let value = try? container.decode(String.self) {
-            self = .string(value)
-            return
-        }
-        if let value = try? container.decode([String: OpenAIJSONValue].self) {
-            self = .object(value)
-            return
-        }
-        if let value = try? container.decode([OpenAIJSONValue].self) {
-            self = .array(value)
-            return
-        }
-
-        throw DecodingError.dataCorruptedError(
-            in: container,
-            debugDescription: "Unsupported JSON value for OpenAI payload."
-        )
-    }
-
-    func encode(to encoder: any Encoder) throws {
-        var container = encoder.singleValueContainer()
-        switch self {
-        case let .string(value):
-            try container.encode(value)
-        case let .number(value):
-            try container.encode(value)
-        case let .bool(value):
-            try container.encode(value)
-        case let .object(value):
-            try container.encode(value)
-        case let .array(value):
-            try container.encode(value)
-        case .null:
-            try container.encodeNil()
-        }
-    }
-}
-
 struct OpenAIResponsesToolDefinition: Encodable, Sendable, Equatable {
     var type: String = "function"
     var name: String
     var description: String
-    var parameters: OpenAIJSONValue
+    var parameters: LLMJSONValue
     var strict: Bool?
 }
 

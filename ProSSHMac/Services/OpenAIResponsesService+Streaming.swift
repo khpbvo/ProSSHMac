@@ -8,7 +8,7 @@ extension OpenAIResponsesService {
         _ request: OpenAIResponsesRequest,
         onEvent: @escaping @Sendable (OpenAIResponsesStreamEvent) -> Void
     ) async throws -> OpenAIResponsesResponse {
-        let apiKey = await apiKeyProvider.currentAPIKey()?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let apiKey = await apiKeyProvider.apiKey(for: .openai)?.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let apiKey, !apiKey.isEmpty else {
             throw OpenAIResponsesServiceError.missingAPIKey
         }

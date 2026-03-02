@@ -478,8 +478,8 @@ enum ApplyPatchToolDefinition {
     ///
     /// This produces a definition compatible with OpenAI, Anthropic, and Ollama
     /// tool calling formats (all use JSON Schema for parameters).
-    static func definition() -> OpenAIResponsesToolDefinition {
-        OpenAIResponsesToolDefinition(
+    static func definition() -> LLMToolDefinition {
+        LLMToolDefinition(
             name: "apply_patch",
             description: """
                 Create, modify, or delete files using V4A diff format. Three operations:
@@ -550,7 +550,7 @@ enum ApplyPatchToolDefinition {
 //         let diff = Self.optionalString(key: "diff", in: arguments)
 //
 //         guard let opType = PatchOperation.OperationType(rawValue: operationType) else {
-//             throw OpenAIAgentServiceError.invalidToolArguments(
+//             throw AIAgentServiceError.invalidToolArguments(
 //                 toolName: toolCall.name,
 //                 message: "operation must be 'create', 'update', or 'delete'"
 //             )
@@ -559,7 +559,7 @@ enum ApplyPatchToolDefinition {
 //         let operation = PatchOperation(type: opType, path: path, diff: diff)
 //
 //         guard let session = provider.sessions.first(where: { $0.id == sessionID }) else {
-//             throw OpenAIAgentServiceError.sessionNotFound
+//             throw AIAgentServiceError.sessionNotFound
 //         }
 //
 //         // Approval gate (for guided mode profiles)

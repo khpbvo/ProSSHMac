@@ -14,10 +14,10 @@ import os.log
 
     func executeToolCalls(
         sessionID: UUID,
-        toolCalls: [OpenAIResponsesResponse.ToolCall],
+        toolCalls: [LLMToolCall],
         traceID: String
-    ) async -> [OpenAIResponsesToolOutput] {
-        var outputs: [OpenAIResponsesToolOutput] = []
+    ) async -> [LLMToolOutput] {
+        var outputs: [LLMToolOutput] = []
         outputs.reserveCapacity(toolCalls.count)
 
         for toolCall in toolCalls {
@@ -53,7 +53,7 @@ import os.log
 
     private func executeSingleToolCall(
         sessionID: UUID,
-        toolCall: OpenAIResponsesResponse.ToolCall
+        toolCall: LLMToolCall
     ) async throws -> String {
         let arguments = try Self.decodeArguments(
             toolName: toolCall.name,
@@ -61,7 +61,7 @@ import os.log
         )
 
         guard let provider = service?.sessionProvider else {
-            throw OpenAIAgentServiceError.sessionNotFound
+            throw AIAgentServiceError.sessionNotFound
         }
 
         switch toolCall.name {
@@ -89,7 +89,7 @@ import os.log
                 toolName: toolCall.name
             )
             guard let blockID = UUID(uuidString: blockIDRaw) else {
-                throw OpenAIAgentServiceError.invalidToolArguments(
+                throw AIAgentServiceError.invalidToolArguments(
                     toolName: toolCall.name,
                     message: "block_id must be a UUID"
                 )
@@ -106,7 +106,7 @@ import os.log
             let returnedChars = cappedOutput.map { $0.count }
             return AIToolDefinitions.jsonString(from: .object([
                 "ok": .bool(true),
-                "output": cappedOutput.map(OpenAIJSONValue.string) ?? .null,
+                "output": cappedOutput.map(LLMJSONValue.string) ?? .null,
                 "max_chars": .number(Double(maxChars)),
                 "returned_chars": returnedChars.map { .number(Double($0)) } ?? .null,
                 "total_chars": totalChars.map { .number(Double($0)) } ?? .null,
@@ -119,8 +119,8 @@ import os.log
             let lines = Array(allLines.suffix(limit))
             return AIToolDefinitions.jsonString(from: .object([
                 "ok": .bool(true),
-                "working_directory": provider.workingDirectoryBySessionID[sessionID].map(OpenAIJSONValue.string) ?? .null,
-                "lines": .array(lines.map(OpenAIJSONValue.string)),
+                "working_directory": provider.workingDirectoryBySessionID[sessionID].map(LLMJSONValue.string) ?? .null,
+                "lines": .array(lines.map(LLMJSONValue.string)),
             ]))
 
         case "get_recent_commands":
@@ -133,7 +133,7 @@ import os.log
 
         case "search_filesystem":
             guard let session = provider.sessions.first(where: { $0.id == sessionID }) else {
-                throw OpenAIAgentServiceError.sessionNotFound
+                throw AIAgentServiceError.sessionNotFound
             }
 
             let searchPath = try Self.requiredString(
@@ -156,7 +156,7 @@ import os.log
                 max: 200
             )
 
-            let result: OpenAIJSONValue
+            let result: LLMJSONValue
             if session.isLocal {
                 let workingDirectory = provider.workingDirectoryBySessionID[sessionID]
                 result = try await Self.searchFilesystemEntries(
@@ -178,7 +178,7 @@ import os.log
 
         case "search_file_contents":
             guard let session = provider.sessions.first(where: { $0.id == sessionID }) else {
-                throw OpenAIAgentServiceError.sessionNotFound
+                throw AIAgentServiceError.sessionNotFound
             }
 
             let searchPath = try Self.requiredString(
@@ -201,7 +201,7 @@ import os.log
                 max: 200
             )
 
-            let result: OpenAIJSONValue
+            let result: LLMJSONValue
             if session.isLocal {
                 let workingDirectory = provider.workingDirectoryBySessionID[sessionID]
                 result = try await Self.searchFileContents(
@@ -223,7 +223,7 @@ import os.log
 
         case "read_file_chunk":
             guard let session = provider.sessions.first(where: { $0.id == sessionID }) else {
-                throw OpenAIAgentServiceError.sessionNotFound
+                throw AIAgentServiceError.sessionNotFound
             }
 
             let path = try Self.requiredString(
@@ -250,7 +250,7 @@ import os.log
                 max: 500
             )
 
-            let result: OpenAIJSONValue
+            let result: LLMJSONValue
             if session.isLocal {
                 let workingDirectory = provider.workingDirectoryBySessionID[sessionID]
                 result = try await Self.readLocalFileChunk(
@@ -272,18 +272,18 @@ import os.log
 
         case "read_files":
             guard let session = provider.sessions.first(where: { $0.id == sessionID }) else {
-                throw OpenAIAgentServiceError.sessionNotFound
+                throw AIAgentServiceError.sessionNotFound
             }
 
             guard case let .array(filesArray) = arguments["files"] else {
-                throw OpenAIAgentServiceError.invalidToolArguments(
+                throw AIAgentServiceError.invalidToolArguments(
                     toolName: toolCall.name,
                     message: "missing 'files' array"
                 )
             }
 
             let capped = filesArray.prefix(10)
-            var results: [OpenAIJSONValue] = []
+            var results: [LLMJSONValue] = []
             results.reserveCapacity(capped.count)
 
             for fileEntry in capped {
@@ -301,7 +301,7 @@ import os.log
                 let startLine = Self.clamp(Int(startNum.rounded()), min: 1, max: 2_000_000_000)
                 let lineCount = Self.clamp(Int(countNum.rounded()), min: 1, max: 500)
 
-                let result: OpenAIJSONValue
+                let result: LLMJSONValue
                 if session.isLocal {
                     let workingDirectory = provider.workingDirectoryBySessionID[sessionID]
                     result = (try? await Self.readLocalFileChunk(
@@ -406,7 +406,7 @@ import os.log
 
         case "get_session_info":
             guard let session = provider.sessions.first(where: { $0.id == sessionID }) else {
-                throw OpenAIAgentServiceError.sessionNotFound
+                throw AIAgentServiceError.sessionNotFound
             }
 
             return AIToolDefinitions.jsonString(from: .object([
@@ -418,7 +418,7 @@ import os.log
                 "port": .number(Double(session.port)),
                 "is_local": .bool(session.isLocal),
                 "started_at": .string(iso8601Formatter.string(from: session.startedAt)),
-                "working_directory": provider.workingDirectoryBySessionID[sessionID].map(OpenAIJSONValue.string) ?? .null,
+                "working_directory": provider.workingDirectoryBySessionID[sessionID].map(LLMJSONValue.string) ?? .null,
             ]))
 
         case "apply_patch":
@@ -427,7 +427,7 @@ import os.log
             let diff = Self.optionalString(key: "diff", in: arguments)
 
             guard let opType = PatchOperation.OperationType(rawValue: operationType) else {
-                throw OpenAIAgentServiceError.invalidToolArguments(
+                throw AIAgentServiceError.invalidToolArguments(
                     toolName: toolCall.name,
                     message: "operation must be 'create', 'update', or 'delete'"
                 )
@@ -443,7 +443,7 @@ import os.log
             }
 
             guard let session = provider.sessions.first(where: { $0.id == sessionID }) else {
-                throw OpenAIAgentServiceError.sessionNotFound
+                throw AIAgentServiceError.sessionNotFound
             }
 
             // Approval gate
@@ -865,7 +865,7 @@ import os.log
             )
             service?.patchResultCallback?(operation, result)
 
-            var payload: [String: OpenAIJSONValue] = [
+            var payload: [String: LLMJSONValue] = [
                 "ok": .bool(result.success),
                 "output": .string(result.output),
                 "lines_changed": .number(Double(result.linesChanged)),
@@ -921,7 +921,7 @@ import os.log
     }
 
     private func canUseSudoWithoutPassword(
-        provider: any OpenAIAgentSessionProviding,
+        provider: any AIAgentSessionProviding,
         sessionID: UUID
     ) async -> Bool {
         let sudoCheck = await provider.executeCommandAndWait(

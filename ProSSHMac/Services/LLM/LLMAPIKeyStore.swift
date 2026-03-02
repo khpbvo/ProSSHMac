@@ -75,7 +75,7 @@ actor KeychainLLMAPIKeyStore: LLMAPIKeyStoring {
             if let oldKey = try loadFromKeychain(service: legacyService, useDataProtection: true)
                 ?? loadFromKeychain(service: legacyService, useDataProtection: false) {
                 try saveToKeychain(oldKey, service: svc)
-                // Don't delete old key yet — OpenAIAPIKeyStore might still be referenced
+                // Keep old key in place for users who haven't migrated yet
                 return oldKey
             }
         }
@@ -191,18 +191,3 @@ struct DefaultLLMAPIKeyProvider: LLMAPIKeyProviding {
     }
 }
 
-// MARK: - Backward Compatibility Bridge
-
-/// Bridges the new LLMAPIKeyStore to the old OpenAIAPIKeyProviding protocol.
-/// Use this during migration so existing OpenAIResponsesService keeps working.
-struct LLMToOpenAIKeyProviderBridge: OpenAIAPIKeyProviding {
-    private let keyProvider: any LLMAPIKeyProviding
-
-    init(keyProvider: any LLMAPIKeyProviding) {
-        self.keyProvider = keyProvider
-    }
-
-    func currentAPIKey() async -> String? {
-        await keyProvider.apiKey(for: .openai)
-    }
-}

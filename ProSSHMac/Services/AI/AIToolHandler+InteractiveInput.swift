@@ -5,8 +5,8 @@ import Foundation
 // MARK: - Tool Definition
 
 enum SendInputToolDefinition {
-    static func definition() -> OpenAIResponsesToolDefinition {
-        OpenAIResponsesToolDefinition(
+    static func definition() -> LLMToolDefinition {
+        LLMToolDefinition(
             name: "send_input",
             description: "Send raw input to the active terminal session — use for answering interactive prompts (y/n, passwords), sending control signals (ctrl_c to interrupt a running process), pressing special keys (tab for completion, arrow keys for navigation in CLIs). Unlike execute_command, no newline is appended and input is sent directly to whatever program is currently running in the terminal. Each element of 'keys' is either a named special key (enter, tab, shift_tab, escape, ctrl_c, ctrl_d, ctrl_z, ctrl_a, ctrl_e, ctrl_k, ctrl_u, ctrl_r, ctrl_w, ctrl_l, ctrl_x, ctrl_o, up, down, right, left, backspace, delete, home, end, page_up, page_down, f1–f12) or a literal text string sent verbatim. Elements are concatenated and sent left to right with no delay.",
             parameters: .object([
@@ -31,11 +31,11 @@ enum SendInputToolDefinition {
 extension AIToolHandler {
     func executeSendInput(
         sessionID: UUID,
-        arguments: [String: OpenAIJSONValue],
-        provider: any OpenAIAgentSessionProviding
+        arguments: [String: LLMJSONValue],
+        provider: any AIAgentSessionProviding
     ) async throws -> String {
         guard case let .array(keysArray) = arguments["keys"] else {
-            throw OpenAIAgentServiceError.invalidToolArguments(
+            throw AIAgentServiceError.invalidToolArguments(
                 toolName: "send_input", message: "missing 'keys' array"
             )
         }
@@ -44,7 +44,7 @@ extension AIToolHandler {
             if case let .string(s) = $0 { return s } else { return nil }
         }
         guard !tokens.isEmpty else {
-            throw OpenAIAgentServiceError.invalidToolArguments(
+            throw AIAgentServiceError.invalidToolArguments(
                 toolName: "send_input", message: "'keys' array must not be empty"
             )
         }

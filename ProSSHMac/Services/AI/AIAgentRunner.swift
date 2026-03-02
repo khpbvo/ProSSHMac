@@ -14,23 +14,23 @@ import os.log
     func run(
         sessionID: UUID,
         prompt: String,
-        streamHandler: (@Sendable (OpenAIAgentStreamEvent) -> Void)? = nil
-    ) async throws -> OpenAIAgentReply {
+        streamHandler: (@Sendable (AIAgentStreamEvent) -> Void)? = nil
+    ) async throws -> AIAgentReply {
         guard let service else {
-            throw OpenAIAgentServiceError.sessionNotFound
+            throw AIAgentServiceError.sessionNotFound
         }
 
         let traceID = AIToolDefinitions.shortTraceID()
         let turnStart = DispatchTime.now().uptimeNanoseconds
         guard service.sessionProvider.sessions.contains(where: { $0.id == sessionID }) else {
             Self.logger.error("[\(traceID, privacy: .public)] session_not_found session=\(AIToolDefinitions.shortSessionID(sessionID), privacy: .public)")
-            throw OpenAIAgentServiceError.sessionNotFound
+            throw AIAgentServiceError.sessionNotFound
         }
 
         let trimmedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedPrompt.isEmpty else {
             Self.logger.error("[\(traceID, privacy: .public)] empty_prompt session=\(AIToolDefinitions.shortSessionID(sessionID), privacy: .public)")
-            throw OpenAIAgentServiceError.emptyPrompt
+            throw AIAgentServiceError.emptyPrompt
         }
         Self.logger.info(
             "[\(traceID, privacy: .public)] turn_start session=\(AIToolDefinitions.shortSessionID(sessionID), privacy: .public) prompt_chars=\(trimmedPrompt.count) persist_context=\(service.persistConversationContext)"
@@ -47,9 +47,19 @@ import os.log
             "[\(traceID, privacy: .public)] turn_mode direct_action=\(directActionMode) tools=\(activeToolDefinitions.count) iteration_limit=\(iterationLimit)"
         )
 
-        var previousResponseID = service.persistConversationContext
-            ? service.conversationContext.responseID(for: sessionID)
+        var conversationState: LLMConversationState? = service.persistConversationContext
+            ? service.conversationContext.state(for: sessionID)
             : nil
+
+        // Clear conversation state if provider changed mid-conversation
+        if let existingState = conversationState,
+           existingState.providerID != service.providerRegistry.activeProviderID {
+            Self.logger.warning(
+                "[\(traceID, privacy: .public)] provider_mismatch state_provider=\(existingState.providerID.rawValue, privacy: .public) active_provider=\(service.providerRegistry.activeProviderID.rawValue, privacy: .public) — clearing state"
+            )
+            conversationState = nil
+            service.conversationContext.clear(sessionID: sessionID)
+        }
 
         let screenLines = service.sessionProvider.shellBuffers[sessionID] ?? []
         let screenSnapshot = screenLines.suffix(20).joined(separator: "\n")
@@ -60,52 +70,53 @@ import os.log
             userMessageText = trimmedPrompt
         }
 
-        var pendingMessages: [OpenAIResponsesMessage] = [
-            .init(role: .developer, text: AIToolDefinitions.developerPrompt()),
-            .init(role: .user, text: userMessageText),
+        var pendingMessages: [LLMMessage] = [
+            LLMMessage(role: .developer, content: AIToolDefinitions.developerPrompt()),
+            LLMMessage(role: .user, content: userMessageText),
         ]
-        var pendingToolOutputs: [OpenAIResponsesToolOutput] = []
+        var pendingToolOutputs: [LLMToolOutput] = []
         var totalToolCalls = 0
 
         for iteration in 1...iterationLimit {
             let iterationStart = DispatchTime.now().uptimeNanoseconds
-            let request = OpenAIResponsesRequest(
+            let request = LLMRequest(
                 messages: pendingMessages,
-                previousResponseID: previousResponseID,
                 tools: activeToolDefinitions,
-                toolOutputs: pendingToolOutputs
+                toolOutputs: pendingToolOutputs,
+                conversationState: conversationState
             )
             Self.logger.debug(
-                "[\(traceID, privacy: .public)] iteration_start i=\(iteration) prev_id_present=\(request.previousResponseID != nil) pending_messages=\(request.messages.count) pending_tool_outputs=\(request.toolOutputs.count)"
+                "[\(traceID, privacy: .public)] iteration_start i=\(iteration) prev_id_present=\(request.conversationState != nil) pending_messages=\(request.messages.count) pending_tool_outputs=\(request.toolOutputs.count)"
             )
 
             let response = try await createResponseWithRecovery(
                 request: request,
-                previousResponseID: &previousResponseID,
+                conversationState: &conversationState,
                 traceID: traceID,
                 streamHandler: streamHandler
             )
             let responseMs = AIToolDefinitions.elapsedMillis(since: iterationStart)
 
-            previousResponseID = response.id
+            conversationState = response.updatedConversationState
             if service.persistConversationContext {
-                service.conversationContext.update(responseID: response.id, for: sessionID)
+                service.conversationContext.update(state: response.updatedConversationState, for: sessionID)
             } else {
                 service.conversationContext.clear(sessionID: sessionID)
             }
 
             let toolCalls = response.toolCalls
+            let responseIDString = response.updatedConversationState.stringValue ?? ""
             Self.logger.debug(
-                "[\(traceID, privacy: .public)] iteration_response i=\(iteration) response_ms=\(responseMs) response_id=\(response.id, privacy: .public) tool_calls=\(toolCalls.count) text_chars=\(response.text.count)"
+                "[\(traceID, privacy: .public)] iteration_response i=\(iteration) response_ms=\(responseMs) response_id=\(responseIDString, privacy: .public) tool_calls=\(toolCalls.count) text_chars=\(response.text.count)"
             )
             guard !toolCalls.isEmpty else {
                 let totalMs = AIToolDefinitions.elapsedMillis(since: turnStart)
                 Self.logger.info(
                     "[\(traceID, privacy: .public)] turn_complete session=\(AIToolDefinitions.shortSessionID(sessionID), privacy: .public) iterations=\(iteration) tool_calls=\(totalToolCalls) total_ms=\(totalMs) reply_chars=\(response.text.count)"
                 )
-                return OpenAIAgentReply(
+                return AIAgentReply(
                     text: response.text,
-                    responseID: response.id,
+                    responseID: responseIDString,
                     toolCallsExecuted: totalToolCalls
                 )
             }
@@ -128,32 +139,31 @@ import os.log
         Self.logger.error(
             "[\(traceID, privacy: .public)] turn_failed_tool_loop session=\(AIToolDefinitions.shortSessionID(sessionID), privacy: .public) limit=\(iterationLimit) total_ms=\(totalMs)"
         )
-        throw OpenAIAgentServiceError.toolLoopExceeded(limit: iterationLimit)
+        throw AIAgentServiceError.toolLoopExceeded(limit: iterationLimit)
     }
 
     // MARK: - Response Recovery
 
     private func createResponseWithRecovery(
-        request: OpenAIResponsesRequest,
-        previousResponseID: inout String?,
+        request: LLMRequest,
+        conversationState: inout LLMConversationState?,
         traceID: String,
-        streamHandler: (@Sendable (OpenAIAgentStreamEvent) -> Void)?
-    ) async throws -> OpenAIResponsesResponse {
+        streamHandler: (@Sendable (AIAgentStreamEvent) -> Void)?
+    ) async throws -> LLMResponse {
         guard let service else {
-            throw OpenAIAgentServiceError.sessionNotFound
+            throw AIAgentServiceError.sessionNotFound
         }
-        let responsesService = service.responsesService
         let timeoutSeconds = service.requestTimeoutSeconds
         do {
             return try await runWithTimeout(timeoutSeconds: timeoutSeconds) {
-                try await responsesService.createResponseStreaming(request) { streamEvent in
+                try await service.sendProviderRequest(request) { streamEvent in
                     Self.forward(streamEvent: streamEvent, to: streamHandler)
                 }
             }
-        } catch let error as OpenAIResponsesServiceError {
+        } catch let error as LLMProviderError {
             guard case let .httpError(statusCode, message) = error,
                   statusCode == 400 || statusCode == 404,
-                  request.previousResponseID != nil,
+                  request.conversationState != nil,
                   AIToolDefinitions.isPreviousResponseIDError(message: message) else {
                 Self.logger.error(
                     "[\(traceID, privacy: .public)] response_failed status_recoverable=false error=\(error.localizedDescription, privacy: .public)"
@@ -164,15 +174,15 @@ import os.log
             Self.logger.warning(
                 "[\(traceID, privacy: .public)] previous_response_recovery triggered=true status=\(statusCode) message=\(message, privacy: .public)"
             )
-            previousResponseID = nil
-            let retryRequest = OpenAIResponsesRequest(
+            conversationState = nil
+            let retryRequest = LLMRequest(
                 messages: request.messages,
-                previousResponseID: nil,
                 tools: request.tools,
-                toolOutputs: request.toolOutputs
+                toolOutputs: request.toolOutputs,
+                conversationState: nil
             )
             return try await runWithTimeout(timeoutSeconds: timeoutSeconds) {
-                try await responsesService.createResponseStreaming(retryRequest) { streamEvent in
+                try await service.sendProviderRequest(retryRequest) { streamEvent in
                     Self.forward(streamEvent: streamEvent, to: streamHandler)
                 }
             }
@@ -180,22 +190,22 @@ import os.log
     }
 
     nonisolated private static func forward(
-        streamEvent: OpenAIResponsesStreamEvent,
-        to streamHandler: (@Sendable (OpenAIAgentStreamEvent) -> Void)?
+        streamEvent: LLMStreamEvent,
+        to streamHandler: (@Sendable (AIAgentStreamEvent) -> Void)?
     ) {
         guard let streamHandler else { return }
         switch streamEvent {
-        case let .outputTextDelta(delta):
+        case let .textDelta(delta):
             streamHandler(.assistantTextDelta(delta))
-        case let .outputTextDone(text):
+        case let .textDone(text):
             streamHandler(.assistantTextDone(text))
-        case let .reasoningTextDelta(delta):
+        case let .reasoningDelta(delta):
             streamHandler(.reasoningTextDelta(delta))
-        case let .reasoningTextDone(text):
+        case let .reasoningDone(text):
             streamHandler(.reasoningTextDone(text))
-        case let .reasoningSummaryTextDelta(delta):
+        case let .reasoningSummaryDelta(delta):
             streamHandler(.reasoningSummaryDelta(delta))
-        case let .reasoningSummaryTextDone(text):
+        case let .reasoningSummaryDone(text):
             streamHandler(.reasoningSummaryDone(text))
         }
     }
@@ -211,12 +221,12 @@ import os.log
             }
             group.addTask {
                 try await Task.sleep(nanoseconds: timeoutNanoseconds)
-                throw OpenAIAgentServiceError.requestTimedOut(seconds: timeoutSeconds)
+                throw AIAgentServiceError.requestTimedOut(seconds: timeoutSeconds)
             }
 
             guard let result = try await group.next() else {
                 group.cancelAll()
-                throw OpenAIAgentServiceError.requestTimedOut(seconds: timeoutSeconds)
+                throw AIAgentServiceError.requestTimedOut(seconds: timeoutSeconds)
             }
             group.cancelAll()
             return result

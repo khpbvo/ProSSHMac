@@ -7,7 +7,7 @@ final class TerminalAIAssistantViewModelTests: XCTestCase {
     func testSubmitPromptAppendsUserAndAssistantMessages() async throws {
         let sessionID = UUID()
         let service = MockOpenAIAgentService(
-            nextReply: OpenAIAgentReply(
+            nextReply: AIAgentReply(
                 text: "Use `tail -f /var/log/system.log` for live logs.",
                 responseID: "resp_123",
                 toolCallsExecuted: 2
@@ -37,7 +37,7 @@ final class TerminalAIAssistantViewModelTests: XCTestCase {
     func testClearConversationResetsMessagesAndCallsService() throws {
         let sessionID = UUID()
         let service = MockOpenAIAgentService(
-            nextReply: OpenAIAgentReply(text: "ok", responseID: "resp", toolCallsExecuted: 0)
+            nextReply: AIAgentReply(text: "ok", responseID: "resp", toolCallsExecuted: 0)
         )
         let viewModel = TerminalAIAssistantViewModel(
             agentService: service,
@@ -59,7 +59,7 @@ final class TerminalAIAssistantViewModelTests: XCTestCase {
         This repository contains a CLI orchestrator for document workflows. It includes configuration and runtime integration for external tools. The project also wires approval-aware execution paths for safe editing. It supports retrieval and summarization flows for large document sets.
         """
         let service = MockOpenAIAgentService(
-            nextReply: OpenAIAgentReply(
+            nextReply: AIAgentReply(
                 text: denseReply,
                 responseID: "resp_456",
                 toolCallsExecuted: 3
@@ -84,7 +84,7 @@ final class TerminalAIAssistantViewModelTests: XCTestCase {
 
     func testRequestPatchApprovalUsesModalStateWithoutInlineMessage() async throws {
         let service = MockOpenAIAgentService(
-            nextReply: OpenAIAgentReply(text: "ok", responseID: "resp_patch", toolCallsExecuted: 0)
+            nextReply: AIAgentReply(text: "ok", responseID: "resp_patch", toolCallsExecuted: 0)
         )
         let viewModel = TerminalAIAssistantViewModel(
             agentService: service,
@@ -119,7 +119,7 @@ final class TerminalAIAssistantViewModelTests: XCTestCase {
 
     func testPatchApprovalSheetDismissDeniesPendingApproval() async throws {
         let service = MockOpenAIAgentService(
-            nextReply: OpenAIAgentReply(text: "ok", responseID: "resp_patch_dismiss", toolCallsExecuted: 0)
+            nextReply: AIAgentReply(text: "ok", responseID: "resp_patch_dismiss", toolCallsExecuted: 0)
         )
         let viewModel = TerminalAIAssistantViewModel(
             agentService: service,
@@ -146,7 +146,7 @@ final class TerminalAIAssistantViewModelTests: XCTestCase {
     func testSubmitPromptStreamsReasoningBubbleMessages() async throws {
         let sessionID = UUID()
         let service = MockOpenAIAgentService(
-            nextReply: OpenAIAgentReply(
+            nextReply: AIAgentReply(
                 text: "Done.",
                 responseID: "resp_stream",
                 toolCallsExecuted: 0
@@ -181,7 +181,7 @@ final class TerminalAIAssistantViewModelTests: XCTestCase {
     func testSubmitPromptCapturesLateReasoningInFixedPanel() async throws {
         let sessionID = UUID()
         let service = MockOpenAIAgentService(
-            nextReply: OpenAIAgentReply(
+            nextReply: AIAgentReply(
                 text: "Final answer.",
                 responseID: "resp_late_reasoning",
                 toolCallsExecuted: 0
@@ -213,7 +213,7 @@ final class TerminalAIAssistantViewModelTests: XCTestCase {
     func testSubmitPromptKeepsStreamedAssistantTextWhenFinalReplyTextEmpty() async throws {
         let sessionID = UUID()
         let service = MockOpenAIAgentService(
-            nextReply: OpenAIAgentReply(
+            nextReply: AIAgentReply(
                 text: "",
                 responseID: "resp_stream_empty_final",
                 toolCallsExecuted: 0
@@ -244,7 +244,7 @@ final class TerminalAIAssistantViewModelTests: XCTestCase {
         let sessionID = UUID()
         let rawReply = "I can:Run commands and inspect output.Provide summaries and explain failures.Search files and inspect results."
         let service = MockOpenAIAgentService(
-            nextReply: OpenAIAgentReply(
+            nextReply: AIAgentReply(
                 text: rawReply,
                 responseID: "resp_fmt",
                 toolCallsExecuted: 0
@@ -271,7 +271,7 @@ final class TerminalAIAssistantViewModelTests: XCTestCase {
         let sessionID = UUID()
         let rawReply = "Sure, here is a concise list of abilities:Execute shell commands and return output directly (execute_and_wait).Run interactive commands (execute_command) and inspect live screen (get_current_screen).View command history (get_recent_commands) and fetch command output (get_command_output).Search files (search_filesystem) and content (search_file_contents)."
         let service = MockOpenAIAgentService(
-            nextReply: OpenAIAgentReply(
+            nextReply: AIAgentReply(
                 text: rawReply,
                 responseID: "resp_fmt_tools",
                 toolCallsExecuted: 0
@@ -313,15 +313,15 @@ final class TerminalAIAssistantViewModelTests: XCTestCase {
 }
 
 @MainActor
-private final class MockOpenAIAgentService: OpenAIAgentServicing {
-    var toolDefinitions: [OpenAIResponsesToolDefinition] = []
-    var nextReply: OpenAIAgentReply
+private final class MockOpenAIAgentService: AIAgentServicing {
+    var toolDefinitions: [LLMToolDefinition] = []
+    var nextReply: AIAgentReply
     var replyDelayNanoseconds: UInt64
-    var streamEvents: [OpenAIAgentStreamEvent] = []
+    var streamEvents: [AIAgentStreamEvent] = []
     private(set) var capturedPrompts: [String] = []
     private(set) var clearedSessionIDs: [UUID] = []
 
-    init(nextReply: OpenAIAgentReply, replyDelayNanoseconds: UInt64 = 0) {
+    init(nextReply: AIAgentReply, replyDelayNanoseconds: UInt64 = 0) {
         self.nextReply = nextReply
         self.replyDelayNanoseconds = replyDelayNanoseconds
     }
@@ -335,7 +335,7 @@ private final class MockOpenAIAgentService: OpenAIAgentServicing {
     func generateReply(
         sessionID: UUID,
         prompt: String
-    ) async throws -> OpenAIAgentReply {
+    ) async throws -> AIAgentReply {
         if replyDelayNanoseconds > 0 {
             try? await Task.sleep(nanoseconds: replyDelayNanoseconds)
         }
@@ -346,8 +346,8 @@ private final class MockOpenAIAgentService: OpenAIAgentServicing {
     func generateReply(
         sessionID: UUID,
         prompt: String,
-        streamHandler: (@Sendable (OpenAIAgentStreamEvent) -> Void)?
-    ) async throws -> OpenAIAgentReply {
+        streamHandler: (@Sendable (AIAgentStreamEvent) -> Void)?
+    ) async throws -> AIAgentReply {
         if replyDelayNanoseconds > 0 {
             try? await Task.sleep(nanoseconds: replyDelayNanoseconds)
         }

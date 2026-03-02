@@ -174,11 +174,11 @@ enum AIToolDefinitions {
 
     // MARK: - Tool Definitions
 
-    static func buildToolDefinitions(patchToolEnabled: Bool = true) -> [OpenAIResponsesToolDefinition] {
-        let commonNoExtraProperties = OpenAIJSONValue.bool(false)
+    static func buildToolDefinitions(patchToolEnabled: Bool = true) -> [LLMToolDefinition] {
+        let commonNoExtraProperties = LLMJSONValue.bool(false)
 
         return [
-            OpenAIResponsesToolDefinition(
+            LLMToolDefinition(
                 name: "search_terminal_history",
                 description: "Search through the session's command history. Searches both command text and output. Returns matching CommandBlocks with: id (UUID), command, output_preview, started_at, exit_code. Use the returned block id with get_command_output to retrieve full output.",
                 parameters: .object([
@@ -198,7 +198,7 @@ enum AIToolDefinitions {
                 ]),
                 strict: true
             ),
-            OpenAIResponsesToolDefinition(
+            LLMToolDefinition(
                 name: "get_command_output",
                 description: "Retrieve the full output of a previously executed command by its block ID. Get block IDs from search_terminal_history or get_recent_commands. Returns the output text, capped to max_chars (100-16000). Indicates if output was truncated and total character count.",
                 parameters: .object([
@@ -218,7 +218,7 @@ enum AIToolDefinitions {
                 ]),
                 strict: true
             ),
-            OpenAIResponsesToolDefinition(
+            LLMToolDefinition(
                 name: "get_current_screen",
                 description: "Read the current visible terminal screen contents. Returns an array of visible lines and the current working directory. Use after execute_command (fire-and-forget) to see what happened, or to understand the current state of the terminal.",
                 parameters: .object([
@@ -234,7 +234,7 @@ enum AIToolDefinitions {
                 ]),
                 strict: true
             ),
-            OpenAIResponsesToolDefinition(
+            LLMToolDefinition(
                 name: "search_filesystem",
                 description: "Search for files and directories by name pattern in the active session's filesystem. Works on both local and remote (SSH) sessions. Supports glob patterns (*.swift, *.log) and substring matching. Returns paths with is_directory flag.",
                 parameters: .object([
@@ -258,7 +258,7 @@ enum AIToolDefinitions {
                 ]),
                 strict: true
             ),
-            OpenAIResponsesToolDefinition(
+            LLMToolDefinition(
                 name: "search_file_contents",
                 description: "Search for text inside files under a directory tree. Works on both local and remote sessions. Uses ripgrep (rg) if available, falls back to grep. Returns matching lines grouped by file with line numbers.",
                 parameters: .object([
@@ -282,7 +282,7 @@ enum AIToolDefinitions {
                 ]),
                 strict: true
             ),
-            OpenAIResponsesToolDefinition(
+            LLMToolDefinition(
                 name: "read_file_chunk",
                 description: "Read a window of lines from a text file. Returns content, lines_returned, has_more flag, and next_start_line for pagination. Max 500 lines per call. Use read_files for batch reading multiple files.",
                 parameters: .object([
@@ -306,7 +306,7 @@ enum AIToolDefinitions {
                 ]),
                 strict: true
             ),
-            OpenAIResponsesToolDefinition(
+            LLMToolDefinition(
                 name: "read_files",
                 description: "Read chunks from up to 10 files in a single call. More efficient than multiple read_file_chunk calls. Each file entry needs path, start_line, and line_count.",
                 parameters: .object([
@@ -341,7 +341,7 @@ enum AIToolDefinitions {
                 ]),
                 strict: true
             ),
-            OpenAIResponsesToolDefinition(
+            LLMToolDefinition(
                 name: "get_recent_commands",
                 description: "List recent command blocks in reverse chronological order. Each block includes: id (UUID), command text, output_preview (first 150 chars), started_at timestamp, and exit_code (null if unknown). Use get_command_output with the block id to see full output.",
                 parameters: .object([
@@ -357,7 +357,7 @@ enum AIToolDefinitions {
                 ]),
                 strict: true
             ),
-            OpenAIResponsesToolDefinition(
+            LLMToolDefinition(
                 name: "execute_command",
                 description: "Execute a shell command in the terminal (fire-and-forget). The command is sent to the shell but this tool does NOT wait for output — it returns immediately with status 'queued'. Use get_current_screen or get_command_output afterward to see results. Best for: interactive programs (vim, top, nano), long-running tasks, or when you just need to send input. For one-shot commands where you need the output, prefer execute_and_wait instead.",
                 parameters: .object([
@@ -373,7 +373,7 @@ enum AIToolDefinitions {
                 ]),
                 strict: true
             ),
-            OpenAIResponsesToolDefinition(
+            LLMToolDefinition(
                 name: "execute_and_wait",
                 description: "Execute a shell command and wait for it to complete, returning the output and exit code directly. Use this for one-shot commands (ls, grep, git, make, curl, etc.). Do NOT use for interactive or long-running programs (vim, nano, top, tail -f, ssh) — use execute_command instead. Returns: output text, exit_code (integer), timed_out (bool), truncated (bool).",
                 parameters: .object([
@@ -393,7 +393,7 @@ enum AIToolDefinitions {
                 ]),
                 strict: true
             ),
-            OpenAIResponsesToolDefinition(
+            LLMToolDefinition(
                 name: "get_session_info",
                 description: "Get metadata about the current terminal session: host label, username, hostname, port, connection state, whether it is local or SSH, start time, and current working directory.",
                 parameters: .object([
@@ -411,8 +411,8 @@ enum AIToolDefinitions {
     // MARK: - Direct Action Tool Filtering
 
     static func directActionToolDefinitions(
-        from tools: [OpenAIResponsesToolDefinition]
-    ) -> [OpenAIResponsesToolDefinition] {
+        from tools: [LLMToolDefinition]
+    ) -> [LLMToolDefinition] {
         let allowedNames: Set<String> = [
             "execute_command", "execute_and_wait", "get_current_screen",
             "get_session_info", "get_recent_commands", "get_command_output",
@@ -430,7 +430,7 @@ enum AIToolDefinitions {
 
     // MARK: - Shared Formatting Helpers
 
-    static func jsonString(from value: OpenAIJSONValue) -> String {
+    static func jsonString(from value: LLMJSONValue) -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         guard let data = try? encoder.encode(value),

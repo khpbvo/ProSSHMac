@@ -26,7 +26,7 @@ struct ChatCompletionsWireRequest: Encodable {
     }
 }
 
-struct ChatCompletionsWireMessage: Encodable {
+struct ChatCompletionsWireMessage: Codable {
     var role: String
     var content: String?
     var toolCalls: [ChatCompletionsWireToolCallRef]?
@@ -39,13 +39,13 @@ struct ChatCompletionsWireMessage: Encodable {
     }
 }
 
-struct ChatCompletionsWireToolCallRef: Encodable {
+struct ChatCompletionsWireToolCallRef: Codable {
     var id: String
     var type: String = "function"
     var function: ChatCompletionsWireFunctionRef
 }
 
-struct ChatCompletionsWireFunctionRef: Encodable {
+struct ChatCompletionsWireFunctionRef: Codable {
     var name: String
     var arguments: String
 }

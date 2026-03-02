@@ -8,21 +8,21 @@ extension AIToolHandler {
     static func decodeArguments(
         toolName: String,
         rawArguments: String
-    ) throws -> [String: OpenAIJSONValue] {
+    ) throws -> [String: LLMJSONValue] {
         let trimmed = rawArguments.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             return [:]
         }
         guard let data = trimmed.data(using: .utf8) else {
-            throw OpenAIAgentServiceError.invalidToolArguments(
+            throw AIAgentServiceError.invalidToolArguments(
                 toolName: toolName,
                 message: "arguments are not valid UTF-8"
             )
         }
         do {
-            return try JSONDecoder().decode([String: OpenAIJSONValue].self, from: data)
+            return try JSONDecoder().decode([String: LLMJSONValue].self, from: data)
         } catch {
-            throw OpenAIAgentServiceError.invalidToolArguments(
+            throw AIAgentServiceError.invalidToolArguments(
                 toolName: toolName,
                 message: "arguments must be a JSON object"
             )
@@ -31,11 +31,11 @@ extension AIToolHandler {
 
     static func requiredString(
         key: String,
-        in arguments: [String: OpenAIJSONValue],
+        in arguments: [String: LLMJSONValue],
         toolName: String
     ) throws -> String {
         guard let raw = arguments[key] else {
-            throw OpenAIAgentServiceError.invalidToolArguments(
+            throw AIAgentServiceError.invalidToolArguments(
                 toolName: toolName,
                 message: "missing '\(key)'"
             )
@@ -47,7 +47,7 @@ extension AIToolHandler {
         default:
             break
         }
-        throw OpenAIAgentServiceError.invalidToolArguments(
+        throw AIAgentServiceError.invalidToolArguments(
             toolName: toolName,
             message: "'\(key)' must be a non-empty string"
         )
@@ -55,11 +55,11 @@ extension AIToolHandler {
 
     static func requiredInt(
         key: String,
-        in arguments: [String: OpenAIJSONValue],
+        in arguments: [String: LLMJSONValue],
         toolName: String
     ) throws -> Int {
         guard let raw = arguments[key] else {
-            throw OpenAIAgentServiceError.invalidToolArguments(
+            throw AIAgentServiceError.invalidToolArguments(
                 toolName: toolName,
                 message: "missing '\(key)'"
             )
@@ -75,7 +75,7 @@ extension AIToolHandler {
         default:
             break
         }
-        throw OpenAIAgentServiceError.invalidToolArguments(
+        throw AIAgentServiceError.invalidToolArguments(
             toolName: toolName,
             message: "'\(key)' must be an integer"
         )
@@ -83,7 +83,7 @@ extension AIToolHandler {
 
     static func optionalString(
         key: String,
-        in arguments: [String: OpenAIJSONValue]
+        in arguments: [String: LLMJSONValue]
     ) -> String? {
         guard let value = arguments[key] else { return nil }
         switch value {
@@ -96,7 +96,7 @@ extension AIToolHandler {
 
     static func optionalInt(
         key: String,
-        in arguments: [String: OpenAIJSONValue]
+        in arguments: [String: LLMJSONValue]
     ) -> Int? {
         guard let value = arguments[key] else {
             return nil

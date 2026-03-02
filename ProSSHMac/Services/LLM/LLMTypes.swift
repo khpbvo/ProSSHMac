@@ -15,9 +15,9 @@ enum LLMProviderID: String, CaseIterable, Codable, Sendable, Identifiable {
     case anthropic
     case ollama
 
-    var id: String { rawValue }
+    nonisolated var id: String { rawValue }
 
-    var displayName: String {
+    nonisolated var displayName: String {
         switch self {
         case .openai:    return "OpenAI"
         case .mistral:   return "Mistral AI"
@@ -27,7 +27,7 @@ enum LLMProviderID: String, CaseIterable, Codable, Sendable, Identifiable {
     }
 
     /// Whether this provider requires an API key.
-    var requiresAPIKey: Bool {
+    nonisolated var requiresAPIKey: Bool {
         switch self {
         case .ollama: return false
         default:      return true
@@ -280,7 +280,3 @@ extension LLMJSONValue: Codable {
     }
 }
 
-// MARK: - Migration Typealiases
-
-/// Temporary aliases to ease migration. Remove once all call sites are updated.
-typealias OpenAIJSONValue = LLMJSONValue

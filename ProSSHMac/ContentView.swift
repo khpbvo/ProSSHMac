@@ -37,7 +37,7 @@ private struct ContentViewPreview: View {
             .environmentObject(dependencies.portForwardingManager)
             .environmentObject(dependencies.navigationCoordinator)
             .environmentObject(dependencies.idleScreensaverManager)
-            .environmentObject(dependencies.openAISettingsViewModel)
+            .environmentObject(dependencies.aiProviderSettingsViewModel)
             .environmentObject(dependencies.terminalAIAssistantViewModel)
     }
 }

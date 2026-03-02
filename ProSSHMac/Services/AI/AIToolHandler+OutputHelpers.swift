@@ -5,7 +5,7 @@ extension AIToolHandler {
 
     // MARK: - Output Helpers
 
-    static func commandBlockSummary(_ block: CommandBlock) -> OpenAIJSONValue {
+    static func commandBlockSummary(_ block: CommandBlock) -> LLMJSONValue {
         .object([
             "id": .string(block.id.uuidString.lowercased()),
             "command": .string(block.command),
@@ -21,7 +21,7 @@ extension AIToolHandler {
         startLine: Int,
         lineCount: Int,
         source: String
-    ) -> OpenAIJSONValue {
+    ) -> LLMJSONValue {
         let normalized = output
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
@@ -43,7 +43,7 @@ extension AIToolHandler {
         let boundedCount = max(1, min(200, lineCount))
         let content = lines.joined(separator: "\n")
         let hasMore = lines.count >= boundedCount
-        let nextStart: OpenAIJSONValue = hasMore
+        let nextStart: LLMJSONValue = hasMore
             ? .number(Double(max(1, startLine) + lines.count))
             : .null
 

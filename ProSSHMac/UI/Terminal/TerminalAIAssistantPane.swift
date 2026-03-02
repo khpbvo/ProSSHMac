@@ -3,6 +3,7 @@ import AppKit
 
 struct TerminalAIAssistantPane: View {
     @Environment(\.colorScheme) private var colorScheme
+    @EnvironmentObject private var providerRegistry: LLMProviderRegistry
     @ObservedObject var viewModel: TerminalAIAssistantViewModel
     @State private var composerHeight: CGFloat = 38
     private let reasoningBottomID = "reasoning-stream-bottom"
@@ -63,11 +64,31 @@ struct TerminalAIAssistantPane: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
 
+            Text("\(providerRegistry.activeProviderID.displayName) · \(activeModelDisplayName)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
             Text(session.map { "Session: \($0.hostLabel)" } ?? "Select a connected session to start.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
         .padding(12)
+    }
+
+    private var activeModelDisplayName: String {
+        let modelID = providerRegistry.activeModelID
+        if providerRegistry.activeProviderID == .openai {
+            // Hardcoded OpenAI model names (no LLMProvider conformer yet)
+            let openAINames: [String: String] = [
+                "gpt-5.1-codex-max": "GPT-5.1 Codex Max",
+                "o3": "o3",
+                "o4-mini": "o4-mini",
+                "gpt-4.1": "GPT-4.1",
+            ]
+            return openAINames[modelID] ?? modelID
+        }
+        return providerRegistry.activeProvider?.availableModels
+            .first(where: { $0.id == modelID })?.displayName ?? modelID
     }
 
     private var messagesView: some View {

@@ -78,7 +78,9 @@ ProSSHMac/
 ├── Models/               # Host, Session, Transfer, SSHKey, SSHCertificate, AuditLogEntry
 ├── Services/             # SessionManager, TransferManager, EncryptedStorage, PortForwardingManager,
 │   ├── SSH/              #   LibSSHTransport, MockSSHTransport, SSHCredentialResolver, RemotePath, etc.
-│   └── AI/               #   AIToolHandler, AIAgentRunner, AIToolDefinitions, ApplyPatchTool, etc.
+│   ├── AI/               #   AIToolHandler, AIAgentRunner, AIToolDefinitions, ApplyPatchTool, etc.
+│   └── LLM/             #   LLMTypes, LLMProvider, LLMProviderRegistry, LLMAPIKeyStore
+│       └── Providers/    #   ChatCompletionsClient, MistralProvider (Phase 2+: OllamaProvider, etc.)
 ├── Terminal/
 │   ├── Grid/             # TerminalGrid + 11 TerminalGrid+*.swift extensions, TerminalCell, ScrollbackBuffer
 │   ├── Parser/           # VT parser, CSIHandler, OSCHandler, SGRHandler, ESCHandler, DCSHandler
@@ -96,7 +98,7 @@ ProSSHMac/
 │   ├── Settings/         # SettingsView + effect settings subviews
 │   ├── KeyForge/         # KeyForgeView, KeyInspectorView
 │   └── Certificates/     # CertificatesView, CertificateInspectorView
-├── ViewModels/           # HostListViewModel, KeyForgeViewModel, CertificatesViewModel
+├── ViewModels/           # HostListViewModel, KeyForgeViewModel, CertificatesViewModel, AIProviderSettingsViewModel
 └── Platform/             # PlatformCompatibility (macOS/iOS shims)
 ```
 
@@ -127,17 +129,26 @@ All paths below are relative to the repo root. Source files live under `ProSSHMa
 | `ProSSHMac/Services/SessionSFTPCoordinator.swift` | SFTP operations extracted from SessionManager | |
 | `ProSSHMac/Services/SessionShellIOCoordinator.swift` | Shell I/O coordination extracted from SessionManager | |
 | `ProSSHMac/Services/SSH/LibSSHTransport.swift` | LibSSH transport actor, connect/auth/shell/SFTP/forward logic | ~797 lines |
-| `ProSSHMac/Services/OpenAIAgentService.swift` | Thin orchestrator: protocols, error types, coordinator wiring | ~172 lines |
+| `ProSSHMac/Services/LLM/LLMTypes.swift` | Provider-agnostic types: `LLMProviderID`, `LLMMessage`, `LLMToolDefinition`, `LLMToolCall`, `LLMToolOutput`, `LLMConversationState`, `LLMRequest`, `LLMResponse`, `LLMStreamEvent`, `LLMProviderError`, `LLMJSONValue` | ~287 lines |
+| `ProSSHMac/Services/LLM/LLMProvider.swift` | `LLMProvider` protocol, `LLMAPIKeyProviding` protocol | ~85 lines |
+| `ProSSHMac/Services/LLM/LLMProviderRegistry.swift` | Runtime provider/model selection, UserDefaults persistence | ~101 lines |
+| `ProSSHMac/Services/LLM/LLMAPIKeyStore.swift` | `KeychainLLMAPIKeyStore`, `LLMToOpenAIKeyProviderBridge` | ~209 lines |
+| `ProSSHMac/Services/LLM/Providers/ChatCompletionsClient.swift` | Shared HTTP client for Chat Completions wire format (Mistral, Ollama); wire types, SSE streaming, translation helpers | ~350 lines |
+| `ProSSHMac/Services/LLM/Providers/MistralProvider.swift` | `MistralProvider: LLMProvider` — conversation history packing, streaming + non-streaming | ~200 lines |
+| `ProSSHMac/Services/LLM/Providers/OllamaProvider.swift` | `OllamaProvider: LLMProvider` — local inference via Ollama, dynamic model discovery, conversation history packing, no API key | ~200 lines |
+| `ProSSHMac/Services/LLM/Providers/AnthropicProvider.swift` | `AnthropicProvider: LLMProvider` — Anthropic Messages API, custom wire types, SSE streaming, extended thinking, `x-api-key` auth, `input_schema` tool format | ~500 lines |
+| `ProSSHMac/Services/OpenAIAgentService.swift` | Agent-layer protocols (`AIAgentServicing`, `AIAgentSessionProviding`), `OpenAIAgentService` class, provider routing (`sendProviderRequest` branches OpenAI Responses API vs `LLMProvider` protocol) | ~290 lines |
 | `ProSSHMac/Services/AI/AIToolHandler.swift` | Tool dispatch switch + tool case handlers (`executeSingleToolCall`) | ~503 lines |
 | `ProSSHMac/Services/AI/AIToolHandler+ArgumentParsing.swift` | Static argument parsing helpers | ~117 lines |
 | `ProSSHMac/Services/AI/AIToolHandler+RemoteExecution.swift` | Remote execution, output parsing, command building | ~421 lines |
 | `ProSSHMac/Services/AI/AIToolHandler+LocalFilesystem.swift` | nonisolated static local filesystem methods | ~339 lines |
 | `ProSSHMac/Services/AI/AIToolHandler+OutputHelpers.swift` | Output formatting helpers (commandBlockSummary, etc.) | ~123 lines |
 | `ProSSHMac/Services/AI/AIToolDefinitions.swift` | Developer prompt, tool schemas, static helpers | ~373 lines |
-| `ProSSHMac/Services/AI/AIAgentRunner.swift` | Agent iteration loop, response recovery, timeout | ~187 lines |
-| `ProSSHMac/Services/AI/AIConversationContext.swift` | previousResponseID store keyed by session UUID | ~21 lines |
+| `ProSSHMac/Services/AI/AIAgentRunner.swift` | Agent iteration loop, response recovery, timeout, provider mismatch detection | ~195 lines |
+| `ProSSHMac/Services/AI/AIConversationContext.swift` | `LLMConversationState` store keyed by session UUID | ~22 lines |
 | `ProSSHMac/Services/AI/ApplyPatchTool.swift` | `PatchApprovalTracker`, `LocalWorkspacePatcher`, `RemotePatchCommandBuilder`, tool definition | ~456 lines |
 | `ProSSHMac/Services/AI/UnifiedDiffPatcher.swift` | V4A unified diff parser and applicator | ~370 lines |
+| `ProSSHMac/ViewModels/AIProviderSettingsViewModel.swift` | Multi-provider settings VM: provider/model picker, API key management, Combine sync to registry | ~175 lines |
 | `ProSSHMac/Terminal/Grid/TerminalGrid.swift` | Terminal grid state, init, buffer access, grapheme encoding, helpers | 457 lines |
 | `ProSSHMac/Terminal/Grid/TerminalGrid+ModeSetters.swift` | Mode flag setters (DEC modes, mouse, charset, SGR) | |
 | `ProSSHMac/Terminal/Grid/TerminalGrid+OSCHandlers.swift` | OSC title/color/hyperlink handlers | |
@@ -160,8 +171,8 @@ All paths below are relative to the repo root. Source files live under `ProSSHMa
 - **Grid snapshots** flow: `TerminalGrid.snapshot()` → `SessionManager` stores + increments nonce → SwiftUI `.onChange(of: nonce)` → `MetalTerminalRenderer.updateSnapshot()` → `isDirty = true`
 - **Terminal keyboard input** goes through `DirectTerminalInputNSView` (transparent NSView overlay, `hitTest` returns `nil`). It captures keys when it's the first responder.
 - **Focus management** between terminal and chat sidebar uses `isAIAssistantComposerFocused` state. The `ComposerTextView` (NSTextView) signals focus via callbacks. `focusSessionAndPane()` resigns text inputs and re-arms terminal input.
-- **AI service stack**: `OpenAIResponsesService` (HTTP + retry) → `OpenAIAgentService` (tool loop + safety) → `TerminalAIAssistantViewModel` → `TerminalAIAssistantPane`
-- **AI agent tools**: 11 tools + `apply_patch`. `execute_and_wait` runs a command and returns output+exit code in one step (marker-based polling). `execute_command` is fire-and-forget for interactive programs. Context persistence via `previousResponseID`. Default max iterations: 50 (app override: 200). Direct action prompts (starting with "run "/"execute "/"cd ") use a restricted tool set with 15-iteration cap.
+- **AI service stack (multi-provider)**: `OpenAIAgentService.sendProviderRequest()` routes requests based on `providerRegistry.activeProviderID`: OpenAI (`.openai`) stays on Responses API path (translates `LLMRequest` ↔ `OpenAIResponsesRequest` → `OpenAIResponsesService`); non-OpenAI providers (Mistral, Ollama, Anthropic) go through `LLMProvider` protocol (`sendRequest`/`sendRequestStreaming`). Agent layer uses provider-agnostic types (`LLMMessage`, `LLMToolCall`, `LLMToolOutput`, `LLMConversationState`, `LLMRequest`, `LLMResponse`). `LLMProviderRegistry` manages active provider/model selection. `KeychainLLMAPIKeyStore` stores API keys per provider; `OpenAIResponsesService` uses `LLMAPIKeyProviding` directly (legacy `OpenAIAPIKeyProviding` protocol and bridge removed in Phase 5). Chat Completions providers (Mistral, Ollama) pack full wire message history (`[ChatCompletionsWireMessage]`) into `LLMConversationState.data` between iterations. Anthropic packs `[AnthropicWireMessage]` history (excluding thinking blocks) into `LLMConversationState.data`. `AIAgentRunner` detects provider mismatch and clears stale conversation state.
+- **AI agent tools**: 11 tools + `apply_patch`. `execute_and_wait` runs a command and returns output+exit code in one step (marker-based polling). `execute_command` is fire-and-forget for interactive programs. Context persistence via `LLMConversationState` (opaque per-provider state; OpenAI packs `previousResponseID` as a string). Default max iterations: 50 (app override: 200). Direct action prompts (starting with "run "/"execute "/"cd ") use a restricted tool set with 15-iteration cap.
 - **`apply_patch` remote update flow** (Phase 3 fix, 2026-02-27): `buildReadCommand(path:)` (emits `base64 <path>`) → `decodeBase64FileOutput(_:)` (filters output to base64-only lines, decodes UTF-8) → `applyDiff(input:diff:)` (V4A in-process) → `buildWriteCommand(path:content:)` (base64 heredoc write). This replaced `buildRemoteReadFileChunkCommand` (sed) which contaminated `originalContent` with the shell prompt and command echo, causing V4A context matching failures. `V4AParserState` in `apply_diff.swift` uses `nonisolated deinit` to prevent `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` from routing deallocation through `swift_task_deinitOnExecutorImpl` (which crashes in non-task contexts such as XCTest callbacks).
 - **`nonisolated` on TerminalGrid extension methods**: `TerminalGrid` is a `nonisolated final class` but `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` causes methods in separate extension files to default to `@MainActor`. All methods in every `TerminalGrid+*.swift` file must be explicitly `nonisolated`.
 - **Coordinator pattern for SessionManager**: Responsibilities are extracted into `@MainActor final class` coordinators (`SessionReconnectCoordinator`, `SessionKeepaliveCoordinator`, `TerminalRenderingCoordinator`, `SessionRecordingCoordinator`, `SessionAIToolCoordinator`, `SessionSFTPCoordinator`, `SessionShellIOCoordinator`). Each holds `weak var manager: SessionManager?`.

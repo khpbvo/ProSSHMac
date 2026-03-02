@@ -44,7 +44,7 @@ final class TerminalAIAssistantViewModel: ObservableObject {
     @Published private(set) var isReasoningStreaming = false
     @Published private(set) var activePatchApproval: PatchApprovalRequest?
 
-    private let agentService: any OpenAIAgentServicing
+    private let agentService: any AIAgentServicing
     private let streamChunkDelayNanoseconds: UInt64
     private let minChunkSize: Int
     private let maxChunkSize: Int
@@ -74,7 +74,7 @@ final class TerminalAIAssistantViewModel: ObservableObject {
     }
 
     init(
-        agentService: any OpenAIAgentServicing,
+        agentService: any AIAgentServicing,
         streamChunkDelayNanoseconds: UInt64 = 6_000_000,
         minChunkSize: Int = 28,
         maxChunkSize: Int = 120
@@ -248,7 +248,7 @@ final class TerminalAIAssistantViewModel: ObservableObject {
         }
     }
 
-    private func handleStreamEvent(_ event: OpenAIAgentStreamEvent, assistantMessageID: UUID) {
+    private func handleStreamEvent(_ event: AIAgentStreamEvent, assistantMessageID: UUID) {
         switch event {
         case let .assistantTextDelta(delta):
             appendDelta(delta, to: assistantMessageID)

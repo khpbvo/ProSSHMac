@@ -498,10 +498,10 @@ final class OpenAIResponsesServiceTests: XCTestCase {
     }
 }
 
-private struct StaticAPIKeyProvider: OpenAIAPIKeyProviding {
+private struct StaticAPIKeyProvider: LLMAPIKeyProviding {
     var key: String?
 
-    func currentAPIKey() async -> String? {
+    func apiKey(for provider: LLMProviderID) async -> String? {
         key
     }
 }

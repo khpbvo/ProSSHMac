@@ -14,29 +14,29 @@ final class AIConversationContextTests: XCTestCase {
         context = nil
     }
 
-    func testResponseIDReturnsNilForUnknownSession() {
+    func testStateReturnsNilForUnknownSession() {
         let id = UUID()
-        XCTAssertNil(context.responseID(for: id))
+        XCTAssertNil(context.state(for: id))
     }
 
-    func testUpdateAndRetrieveResponseID() {
+    func testUpdateAndRetrieveState() {
         let id = UUID()
-        context.update(responseID: "resp_1", for: id)
-        XCTAssertEqual(context.responseID(for: id), "resp_1")
+        context.update(state: .string("resp_1", provider: .openai), for: id)
+        XCTAssertEqual(context.state(for: id)?.stringValue, "resp_1")
     }
 
     func testUpdateWithNilSetsNil() {
         let id = UUID()
-        context.update(responseID: "resp_1", for: id)
-        context.update(responseID: nil, for: id)
-        XCTAssertNil(context.responseID(for: id))
+        context.update(state: .string("resp_1", provider: .openai), for: id)
+        context.update(state: nil, for: id)
+        XCTAssertNil(context.state(for: id))
     }
 
     func testClearRemovesEntry() {
         let id = UUID()
-        context.update(responseID: "resp_1", for: id)
+        context.update(state: .string("resp_1", provider: .openai), for: id)
         context.clear(sessionID: id)
-        XCTAssertNil(context.responseID(for: id))
+        XCTAssertNil(context.state(for: id))
     }
 
     func testClearNonexistentSessionIsSafe() {
@@ -47,22 +47,22 @@ final class AIConversationContextTests: XCTestCase {
     func testMultipleSessionsAreIndependent() {
         let id1 = UUID()
         let id2 = UUID()
-        context.update(responseID: "resp_A", for: id1)
-        context.update(responseID: "resp_B", for: id2)
-        XCTAssertEqual(context.responseID(for: id1), "resp_A")
-        XCTAssertEqual(context.responseID(for: id2), "resp_B")
+        context.update(state: .string("resp_A", provider: .openai), for: id1)
+        context.update(state: .string("resp_B", provider: .openai), for: id2)
+        XCTAssertEqual(context.state(for: id1)?.stringValue, "resp_A")
+        XCTAssertEqual(context.state(for: id2)?.stringValue, "resp_B")
     }
 
-    func testPreviousResponseIDBySessionIDReflectsState() {
+    func testStateBySessionIDReflectsState() {
         let id1 = UUID()
         let id2 = UUID()
-        context.update(responseID: "resp_X", for: id1)
-        context.update(responseID: "resp_Y", for: id2)
-        XCTAssertEqual(context.previousResponseIDBySessionID.count, 2)
-        XCTAssertEqual(context.previousResponseIDBySessionID[id1], "resp_X")
-        XCTAssertEqual(context.previousResponseIDBySessionID[id2], "resp_Y")
+        context.update(state: .string("resp_X", provider: .openai), for: id1)
+        context.update(state: .string("resp_Y", provider: .openai), for: id2)
+        XCTAssertEqual(context.stateBySessionID.count, 2)
+        XCTAssertEqual(context.stateBySessionID[id1]?.stringValue, "resp_X")
+        XCTAssertEqual(context.stateBySessionID[id2]?.stringValue, "resp_Y")
         context.clear(sessionID: id1)
-        XCTAssertEqual(context.previousResponseIDBySessionID.count, 1)
+        XCTAssertEqual(context.stateBySessionID.count, 1)
     }
 }
 

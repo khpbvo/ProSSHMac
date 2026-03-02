@@ -3,7 +3,7 @@ import XCTest
 @testable import ProSSHMac
 
 @MainActor
-final class OpenAIAgentServiceTests: XCTestCase {
+final class AIAgentServiceTests: XCTestCase {
     func testGenerateReplyRunsToolLoopAndReturnsAssistantAnswer() async throws {
         let sessionProvider = MockAgentSessionProvider()
         let responses = MockOpenAIResponsesService()
@@ -206,7 +206,7 @@ final class OpenAIAgentServiceTests: XCTestCase {
                 prompt: "status"
             )
             XCTFail("Expected tool loop exceeded")
-        } catch let error as OpenAIAgentServiceError {
+        } catch let error as AIAgentServiceError {
             XCTAssertEqual(error, .toolLoopExceeded(limit: 2))
         } catch {
             XCTFail("Unexpected error: \(error)")
@@ -620,7 +620,7 @@ final class OpenAIAgentServiceTests: XCTestCase {
             sessionProvider: sessionProvider
         )
 
-        var streamed: [OpenAIAgentStreamEvent] = []
+        var streamed: [AIAgentStreamEvent] = []
         let reply = try await service.generateReply(
             sessionID: sessionProvider.sessionID,
             prompt: "status",
@@ -680,7 +680,7 @@ final class OpenAIAgentServiceTests: XCTestCase {
 }
 
 @MainActor
-private final class MockAgentSessionProvider: OpenAIAgentSessionProviding {
+private final class MockAgentSessionProvider: AIAgentSessionProviding {
     let sessionID = UUID()
     var sessions: [Session]
     var shellBuffers: [UUID: [String]]

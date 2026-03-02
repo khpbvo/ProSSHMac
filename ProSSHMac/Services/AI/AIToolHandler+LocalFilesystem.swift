@@ -10,17 +10,17 @@ extension AIToolHandler {
         namePattern: String,
         maxResults: Int,
         workingDirectory: String?
-    ) async throws -> OpenAIJSONValue {
+    ) async throws -> LLMJSONValue {
         try await Task.detached(priority: .userInitiated) {
             let rootURL = try resolvedLocalSearchURL(path: path, workingDirectory: workingDirectory)
             let fileManager = FileManager.default
-            var results: [OpenAIJSONValue] = []
+            var results: [LLMJSONValue] = []
             let maxScannedEntries = max(2_000, maxResults * 300)
             var scannedEntries = 0
 
             var isDirectory: ObjCBool = false
             guard fileManager.fileExists(atPath: rootURL.path, isDirectory: &isDirectory) else {
-                return OpenAIJSONValue.object([
+                return LLMJSONValue.object([
                     "ok": .bool(false),
                     "error": .string("Path does not exist: \(rootURL.path)"),
                 ])
@@ -85,18 +85,18 @@ extension AIToolHandler {
         textPattern: String,
         maxResults: Int,
         workingDirectory: String?
-    ) async throws -> OpenAIJSONValue {
+    ) async throws -> LLMJSONValue {
         try await Task.detached(priority: .userInitiated) {
             let rootURL = try resolvedLocalSearchURL(path: path, workingDirectory: workingDirectory)
             let fileManager = FileManager.default
-            var matches: [OpenAIJSONValue] = []
+            var matches: [LLMJSONValue] = []
             let maxScannedFiles = max(500, maxResults * 80)
             let maxFileBytes = 1_500_000
             var scannedFiles = 0
 
             var isDirectory: ObjCBool = false
             guard fileManager.fileExists(atPath: rootURL.path, isDirectory: &isDirectory) else {
-                return OpenAIJSONValue.object([
+                return LLMJSONValue.object([
                     "ok": .bool(false),
                     "error": .string("Path does not exist: \(rootURL.path)"),
                 ])
@@ -167,20 +167,20 @@ extension AIToolHandler {
         startLine: Int,
         lineCount: Int,
         workingDirectory: String?
-    ) async throws -> OpenAIJSONValue {
+    ) async throws -> LLMJSONValue {
         try await Task.detached(priority: .userInitiated) {
             let fileURL = try resolvedLocalSearchURL(path: path, workingDirectory: workingDirectory)
             let fileManager = FileManager.default
 
             var isDirectory: ObjCBool = false
             guard fileManager.fileExists(atPath: fileURL.path, isDirectory: &isDirectory) else {
-                return OpenAIJSONValue.object([
+                return LLMJSONValue.object([
                     "ok": .bool(false),
                     "error": .string("Path does not exist: \(fileURL.path)"),
                 ])
             }
             guard !isDirectory.boolValue else {
-                return OpenAIJSONValue.object([
+                return LLMJSONValue.object([
                     "ok": .bool(false),
                     "error": .string("Path is a directory, not a regular file: \(fileURL.path)"),
                 ])
@@ -188,7 +188,7 @@ extension AIToolHandler {
 
             let data = try Data(contentsOf: fileURL, options: [.mappedIfSafe])
             if data.contains(0) {
-                return OpenAIJSONValue.object([
+                return LLMJSONValue.object([
                     "ok": .bool(false),
                     "error": .string("File appears to be binary and cannot be read as text."),
                 ])
@@ -200,7 +200,7 @@ extension AIToolHandler {
             } else if let latin = String(data: data, encoding: .isoLatin1) {
                 content = latin
             } else {
-                return OpenAIJSONValue.object([
+                return LLMJSONValue.object([
                     "ok": .bool(false),
                     "error": .string("Unable to decode file as UTF-8/Latin-1 text."),
                 ])
@@ -215,7 +215,7 @@ extension AIToolHandler {
             let startIndex = safeStartLine - 1
 
             if startIndex >= splitLines.count {
-                return OpenAIJSONValue.object([
+                return LLMJSONValue.object([
                     "ok": .bool(true),
                     "content": .string(""),
                     "lines_returned": .number(0),
@@ -228,11 +228,11 @@ extension AIToolHandler {
             let slice = splitLines[startIndex..<endExclusive]
             let chunkContent = slice.map(String.init).joined(separator: "\n")
             let hasMore = endExclusive < splitLines.count
-            let nextStart: OpenAIJSONValue = hasMore
+            let nextStart: LLMJSONValue = hasMore
                 ? .number(Double(endExclusive + 1))
                 : .null
 
-            return OpenAIJSONValue.object([
+            return LLMJSONValue.object([
                 "ok": .bool(true),
                 "content": .string(chunkContent),
                 "lines_returned": .number(Double(slice.count)),
@@ -271,9 +271,9 @@ extension AIToolHandler {
         return filename.range(of: trimmed, options: [.caseInsensitive, .diacriticInsensitive]) != nil
     }
 
-    nonisolated static func groupMatchesByFile(_ matches: [OpenAIJSONValue]) -> [OpenAIJSONValue] {
+    nonisolated static func groupMatchesByFile(_ matches: [LLMJSONValue]) -> [LLMJSONValue] {
         var fileOrder: [String] = []
-        var hitsByFile: [String: [OpenAIJSONValue]] = [:]
+        var hitsByFile: [String: [LLMJSONValue]] = [:]
 
         for match in matches {
             guard case let .object(dict) = match,
@@ -302,7 +302,7 @@ extension AIToolHandler {
         textPattern: String,
         maxRemaining: Int,
         maxFileBytes: Int
-    ) -> [OpenAIJSONValue]? {
+    ) -> [LLMJSONValue]? {
         guard maxRemaining > 0 else { return nil }
         guard let data = try? Data(contentsOf: fileURL, options: [.mappedIfSafe]) else { return nil }
         guard data.count <= maxFileBytes else { return nil }
@@ -320,7 +320,7 @@ extension AIToolHandler {
         let pattern = textPattern.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !pattern.isEmpty else { return nil }
 
-        var results: [OpenAIJSONValue] = []
+        var results: [LLMJSONValue] = []
         results.reserveCapacity(min(8, maxRemaining))
 
         for (index, line) in content.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {

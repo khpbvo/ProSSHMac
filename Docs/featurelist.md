@@ -109,6 +109,9 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 
 ## Loop Log
 
+- 2026-03-02: Completed Phase 5 of multi-provider architecture — cleanup & polish. Removed `typealias OpenAIJSONValue = LLMJSONValue` from `LLMTypes.swift` (updated `OpenAIResponsesTypes.swift` to use `LLMJSONValue` directly). Refactored `OpenAIResponsesService` to use `LLMAPIKeyProviding` protocol natively (`.apiKey(for: .openai)`) instead of the legacy `OpenAIAPIKeyProviding` protocol, eliminating the `LLMToOpenAIKeyProviderBridge` class. Removed `openAIAPIKeyProvider` stored property from `AppDependencies`. Updated `StaticAPIKeyProvider` test mock in `OpenAIResponsesServiceTests.swift` to conform to `LLMAPIKeyProviding`. Deleted deprecated files: `OpenAIAPIKeyStore.swift`, `OpenAISettingsViewModel.swift`, `OpenAISettingsViewModelTests.swift`. Deleted `FilesForMultiProvider/` directory (7 reference copies). Renamed `OpenAIAgentServiceTests.swift` → `AIAgentServiceTests.swift` (class name updated too). Build succeeds; all tests pass (0 new failures). Files: `LLMTypes.swift`, `OpenAIResponsesTypes.swift`, `OpenAIResponsesService.swift`, `OpenAIResponsesService+Streaming.swift`, `AppDependencies.swift`, `LLMAPIKeyStore.swift`, `OpenAIResponsesServiceTests.swift`, `AIAgentServiceTests.swift` (renamed).
+- 2026-03-02: Implemented Phase 4 of multi-provider architecture — Anthropic is now the fourth working LLM provider. Created `Services/LLM/Providers/AnthropicProvider.swift` (~500 lines) with full Anthropic Messages API support including: custom wire types (request/response/streaming SSE), polymorphic `AnthropicContent` encoding (string or content block array), `x-api-key` header auth with `anthropic-version: 2023-06-01`, tool definitions using `input_schema` (not `parameters`), `tool_result` content blocks for tool outputs, extended thinking support for reasoning-capable models (Opus/Sonnet with `budget_tokens: 10000`), SSE streaming with per-block accumulation and synthetic response assembly, conversation history packing with thinking blocks excluded, and `tool_use` input re-serialization via `AIToolDefinitions.jsonString(from:)`. Models: `claude-opus-4-6`, `claude-sonnet-4-6`, `claude-haiku-4-5-20251001`. Registered in `AppDependencies.swift`. Build succeeds; all existing tests pass (no regressions). Files: `AnthropicProvider.swift` (new), `AppDependencies.swift`.
+- 2026-03-02: Implemented Phase 2 of multi-provider architecture — Mistral AI is now a working alternative to OpenAI. Copied pre-built `ChatCompletionsClient.swift` and `MistralProvider.swift` to `Services/LLM/Providers/`, made wire message types `Codable` for conversation history serialization, added full message-history packing/unpacking in `MistralProvider` (Chat Completions APIs are stateless — every request includes the full wire-format history via `LLMConversationState.data`), changed `LLMProviderRegistry` defaults to OpenAI (`.openai` / `gpt-5.1-codex-max`) for backward compatibility, added `providerRegistry` to `OpenAIAgentService` with provider-routing branch in `sendProviderRequest` (OpenAI stays on Responses API, non-OpenAI providers go through `LLMProvider` protocol), added provider-mismatch detection in `AIAgentRunner` (clears stale state on provider switch), rewired `AppDependencies` with `MistralProvider` registration and `LLMToOpenAIKeyProviderBridge`, created `AIProviderSettingsViewModel` (replaces `OpenAISettingsViewModel`) with provider/model pickers and per-provider API key management, updated `SettingsView` AI section with provider picker + model picker + conditional API key field, added provider/model display in `TerminalAIAssistantPane` header, and updated all environment object injection points (`ProSSHMacApp`, `ContentView`, `RootTabView`). All existing tests pass (209 tests, 2 pre-existing unrelated failures). Files: `ChatCompletionsClient.swift`, `MistralProvider.swift`, `LLMProviderRegistry.swift`, `OpenAIAgentService.swift`, `AIAgentRunner.swift`, `AppDependencies.swift`, `AIProviderSettingsViewModel.swift` (new), `SettingsView.swift`, `TerminalAIAssistantPane.swift`, `ProSSHMacApp.swift`, `ContentView.swift`, `RootTabView.swift`.
 - 2026-03-02: Restored custom prompt overlay system lost during LocalShellChannel refactor (commit `8bcfc35`). The `ensurePromptOverlay()` method and helpers (`safeZshSourceLine`, `safeBashSourceLine`, `zshCompletionFallback`) were migrated to `LocalShellBootstrap.swift` (their natural home for environment/bootstrap concerns). Updated `buildEnvironment(shellPath:)` to accept a `shellIntegration:` parameter, call `ensurePromptOverlay()`, and set `ZDOTDIR`/`BASH_ENV` accordingly. Updated `LocalShellChannel.spawn()` to pass `shellIntegration` through. `PromptAppearanceConfiguration` settings are now applied again — local terminals show the custom colored prompt instead of system default. Validation: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build` passed.
 - 2026-03-02: Disabled App Sandbox for non-App-Store builds by switching `ENABLE_APP_SANDBOX` from `YES` to `NO` in both Debug and Release target build settings (`ProSSHMac.xcodeproj/project.pbxproj`). Validation: `xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform=macOS' build` succeeded, and generated entitlements no longer include `com.apple.security.app-sandbox`.
 - 2026-03-02: Fixed local terminal startup warning leakage after PTY chunk-boundary splits. `LocalPTYProcess.yieldSanitized` now keeps a small prefix carry for `zsh: can't set tty pgrp:` and removes the full warning line only when fully assembled, preventing partial residues like `ration not permitted` from appearing in later output. Also removed stale `ShellIntegrationTests` cases that referenced deleted `LocalShellChannel` overlay helpers (`safeZshSourceLine`/`safeBashSourceLine`/`zshCompletionFallback`/`shellLaunchArguments`) so the current local-shell architecture compiles cleanly under test. Validation: targeted tests passed via `xcodebuild test -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform=macOS' -only-testing:ProSSHMacTests/ShellIntegrationTests/testLocalShellTabCompletionCompletesPartialToken -only-testing:ProSSHMacTests/ShellIntegrationTests/testLocalShellCtrlCInterruptsForegroundCommand` (2/2).
@@ -720,3 +723,69 @@ Committed as `99ef976`. Updated `docs/RefactorTheFinalRun.md` (Phase 0 checked o
 **Fix (HostFormView.swift)**: Relaxed the TOTP guard from `editingHostID != nil` to show the section for all keyboard-interactive hosts. For new (unsaved) hosts, displays a "Save this host first" message instead of the provisioning button, since TOTP secrets are Keychain-keyed by host UUID which doesn't exist until save.
 
 Build: SUCCEEDED.
+
+---
+
+### 2026-03-02 — Multi-Provider Abstraction Layer (Phase 1)
+
+**Goal**: Insert a provider abstraction (`LLMProvider` protocol, `LLMProviderRegistry`, provider-agnostic types) so the agent layer works with generic types instead of OpenAI-specific ones. Zero behavior change — OpenAI is still the only provider, routed through the new abstraction. Unblocks Phase 2 (Mistral) and beyond.
+
+**New files added** (`Services/LLM/`):
+- `LLMTypes.swift` — `LLMProviderID`, `LLMModelInfo`, `LLMMessage`, `LLMToolDefinition`, `LLMToolCall`, `LLMToolOutput`, `LLMConversationState`, `LLMRequest`, `LLMResponse`, `LLMStreamEvent`, `LLMProviderError`, `LLMJSONValue` (replaces `OpenAIJSONValue` via typealias)
+- `LLMProvider.swift` — `LLMProvider` protocol (provider contract), `LLMAPIKeyProviding` protocol
+- `LLMProviderRegistry.swift` — `LLMProviderRegistry` (runtime provider/model selection, UserDefaults persistence)
+- `LLMAPIKeyStore.swift` — `KeychainLLMAPIKeyStore` (generic Keychain-backed API key store parameterized by provider), `LLMToOpenAIKeyProviderBridge`
+
+**Agent layer types renamed** (in `OpenAIAgentService.swift`):
+- `OpenAIAgentServicing` → `AIAgentServicing`
+- `OpenAIAgentReply` → `AIAgentReply`
+- `OpenAIAgentStreamEvent` → `AIAgentStreamEvent`
+- `OpenAIAgentServiceError` → `AIAgentServiceError`
+- `OpenAIAgentSessionProviding` → `AIAgentSessionProviding`
+- `toolDefinitions` type: `[OpenAIResponsesToolDefinition]` → `[LLMToolDefinition]`
+
+**Translation bridge**: `OpenAIAgentService.sendProviderRequest(_:streamHandler:)` translates `LLMRequest` → `OpenAIResponsesRequest`, calls `responsesService`, and translates response back to `LLMResponse`.
+
+**`AIAgentRunner.swift` refactored**: Uses `LLMMessage`, `LLMToolOutput`, `LLMRequest`, `LLMResponse`, `LLMConversationState`. Calls `service.sendProviderRequest()` instead of `responsesService.createResponseStreaming()` directly. Recovery catches `LLMProviderError.httpError` instead of `OpenAIResponsesServiceError.httpError`.
+
+**`AIConversationContext.swift` updated**: Stores `[UUID: LLMConversationState]` instead of `[UUID: String]`.
+
+**Tool handler/definitions updated**: All use `LLMToolDefinition`, `LLMToolCall`, `LLMToolOutput`, `LLMJSONValue`, `AIAgentServiceError` instead of OpenAI-specific types.
+
+**Duplicate `OpenAIJSONValue` enum removed** from `OpenAIResponsesTypes.swift` — resolves through `typealias OpenAIJSONValue = LLMJSONValue` in `LLMTypes.swift`.
+
+**OpenAI internal layer untouched**: `OpenAIResponsesService.swift`, `OpenAIResponsesService+Streaming.swift`, `OpenAIResponsesPayloadTypes.swift`, `OpenAIResponsesStreamAccumulator.swift`, `OpenAIAPIKeyStore.swift` — all unchanged.
+
+**App wiring**: `AppDependencies` gains `llmAPIKeyStore` and `llmProviderRegistry`. `ProSSHMacApp` injects `llmProviderRegistry` as environment object.
+
+**Tests updated**: `AIConversationContextTests`, `OpenAIAgentServiceTests`, `TerminalAIAssistantViewModelTests` — all updated to use new type names. All AI-related test suites pass.
+
+Build: SUCCEEDED. All key AI tests pass.
+
+---
+
+### 2026-03-02 — Multi-Provider Phase 2: Mistral + Settings UI
+
+**Goal**: Add Mistral as the first selectable non-OpenAI provider. Settings UI gets provider/model pickers and per-provider API key management.
+
+**New files**: `ChatCompletionsClient.swift` (shared HTTP client for Chat Completions wire format), `MistralProvider.swift` (Mistral provider with conversation history packing), `AIProviderSettingsViewModel.swift` (multi-provider settings VM).
+
+**Key changes**: `OpenAIAgentService.sendProviderRequest()` branches on `activeProviderID` — OpenAI stays on Responses API, non-OpenAI goes through `LLMProvider` protocol. `AIAgentRunner` detects provider mismatch and clears stale conversation state. `SettingsView` AI section gains provider picker, model picker, conditional API key field.
+
+Build: SUCCEEDED. 209 tests pass (2 pre-existing unrelated failures).
+
+---
+
+### 2026-03-02 — Multi-Provider Phase 3: Ollama (Local Inference)
+
+**Goal**: Add Ollama for local model inference. No API key needed — just requires Ollama running on localhost.
+
+**File copied + modified**: `OllamaProvider.swift` from `FilesForMultiProvider/` → `Services/LLM/Providers/`. Added conversation history management (same `extractPriorMessages`/`buildUpdatedHistory`/`toLLMResponse` pattern as `MistralProvider`). Uses `ChatCompletionsClient` with `authStyle: .none`.
+
+**AppDependencies**: Registered `OllamaProvider()` (no API key provider needed).
+
+**AIProviderSettingsViewModel**: Added `isRefreshingModels`, `ollamaConnectionStatus` (`.unknown`/`.connected`/`.notRunning`), `refreshOllamaModels()` method. Auto-triggers on provider switch to `.ollama` and on `refresh()`.
+
+**SettingsView**: Ollama-specific section with connection status indicator (green/red/gray dot), "Refresh Models" button, and info text explaining no API key is needed.
+
+Build: SUCCEEDED. All tests pass (pre-existing failures unchanged).

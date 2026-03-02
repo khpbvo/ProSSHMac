@@ -13,12 +13,12 @@ extension AIToolHandler {
     }
 
     func searchFilesystemEntriesRemote(
-        provider: any OpenAIAgentSessionProviding,
+        provider: any AIAgentSessionProviding,
         sessionID: UUID,
         path: String,
         namePattern: String,
         maxResults: Int
-    ) async -> OpenAIJSONValue {
+    ) async -> LLMJSONValue {
         let command = Self.buildRemoteFilesystemSearchCommand(
             path: path,
             namePattern: namePattern,
@@ -51,12 +51,12 @@ extension AIToolHandler {
     }
 
     func searchFileContentsRemote(
-        provider: any OpenAIAgentSessionProviding,
+        provider: any AIAgentSessionProviding,
         sessionID: UUID,
         path: String,
         textPattern: String,
         maxResults: Int
-    ) async -> OpenAIJSONValue {
+    ) async -> LLMJSONValue {
         let command = Self.buildRemoteFileContentSearchCommand(
             path: path,
             textPattern: textPattern,
@@ -89,12 +89,12 @@ extension AIToolHandler {
     }
 
     func readRemoteFileChunk(
-        provider: any OpenAIAgentSessionProviding,
+        provider: any AIAgentSessionProviding,
         sessionID: UUID,
         path: String,
         startLine: Int,
         lineCount: Int
-    ) async -> OpenAIJSONValue {
+    ) async -> LLMJSONValue {
         // Use the same base64 read that apply_patch uses — immune to prompt contamination.
         let readCmd = RemotePatchCommandBuilder.buildReadCommand(path: path)
         let execution = await provider.executeCommandAndWait(
@@ -140,7 +140,7 @@ extension AIToolHandler {
             ? Array(allLines[zeroStart..<zeroEnd]) : []
         let content = slicedLines.joined(separator: "\n")
         let hasMore = zeroEnd < allLines.count
-        let nextStart: OpenAIJSONValue = hasMore
+        let nextStart: LLMJSONValue = hasMore
             ? .number(Double(zeroEnd + 1)) : .null
 
         return .object([
@@ -153,7 +153,7 @@ extension AIToolHandler {
     }
 
     func executeRemoteToolCommand(
-        provider: any OpenAIAgentSessionProviding,
+        provider: any AIAgentSessionProviding,
         sessionID: UUID,
         commandBody: String,
         timeoutSeconds: TimeInterval = 20
@@ -232,7 +232,7 @@ extension AIToolHandler {
         path: String,
         namePattern: String,
         maxResults: Int
-    ) -> OpenAIJSONValue {
+    ) -> LLMJSONValue {
         let normalized = output
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
@@ -247,7 +247,7 @@ extension AIToolHandler {
             ])
         }
 
-        var results: [OpenAIJSONValue] = []
+        var results: [LLMJSONValue] = []
         results.reserveCapacity(min(lines.count, maxResults))
 
         for line in lines.prefix(maxResults) {
@@ -258,7 +258,7 @@ extension AIToolHandler {
             ]))
         }
 
-        var payload: [String: OpenAIJSONValue] = [
+        var payload: [String: LLMJSONValue] = [
             "ok": .bool(true),
             "truncated": .bool(results.count >= maxResults),
             "results": .array(results),
@@ -276,7 +276,7 @@ extension AIToolHandler {
         path: String,
         textPattern: String,
         maxResults: Int
-    ) -> OpenAIJSONValue {
+    ) -> LLMJSONValue {
         let normalized = output
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
@@ -291,7 +291,7 @@ extension AIToolHandler {
             ])
         }
 
-        var matches: [OpenAIJSONValue] = []
+        var matches: [LLMJSONValue] = []
         matches.reserveCapacity(min(lines.count, maxResults))
 
         for line in lines.prefix(maxResults) {
@@ -303,7 +303,7 @@ extension AIToolHandler {
             ]))
         }
 
-        var payload: [String: OpenAIJSONValue] = [
+        var payload: [String: LLMJSONValue] = [
             "ok": .bool(true),
             "truncated": .bool(matches.count >= maxResults),
             "matches": .array(groupMatchesByFile(matches)),

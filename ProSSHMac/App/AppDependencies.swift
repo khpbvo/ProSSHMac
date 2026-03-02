@@ -12,11 +12,12 @@ final class AppDependencies: ObservableObject {
     let keyForgeViewModel: KeyForgeViewModel
     let certificatesViewModel: CertificatesViewModel
     let idleScreensaverManager: IdleScreensaverManager
-    let openAISettingsViewModel: OpenAISettingsViewModel
+    let aiProviderSettingsViewModel: AIProviderSettingsViewModel
     let terminalAIAssistantViewModel: TerminalAIAssistantViewModel
-    let openAIAPIKeyProvider: any OpenAIAPIKeyProviding
     let openAIResponsesService: any OpenAIResponsesServicing
-    let openAIAgentService: any OpenAIAgentServicing
+    let openAIAgentService: any AIAgentServicing
+    let llmAPIKeyStore: KeychainLLMAPIKeyStore
+    let llmProviderRegistry: LLMProviderRegistry
 
     static var isScreenshotMode: Bool {
         ProcessInfo.processInfo.arguments.contains("--screenshot-mode")
@@ -105,17 +106,45 @@ final class AppDependencies: ObservableObject {
         )
 
         self.idleScreensaverManager = IdleScreensaverManager()
-        let openAIAPIKeyStore = KeychainOpenAIAPIKeyStore()
-        self.openAISettingsViewModel = OpenAISettingsViewModel(apiKeyStore: openAIAPIKeyStore)
-        self.openAIAPIKeyProvider = DefaultOpenAIAPIKeyProvider(store: openAIAPIKeyStore)
-        let openAIResponsesService = OpenAIResponsesService(apiKeyProvider: self.openAIAPIKeyProvider)
+
+        // Multi-provider LLM infrastructure
+        let llmAPIKeyStore = KeychainLLMAPIKeyStore()
+        self.llmAPIKeyStore = llmAPIKeyStore
+        let llmAPIKeyProvider = DefaultLLMAPIKeyProvider(store: llmAPIKeyStore)
+
+        let openAIResponsesService = OpenAIResponsesService(apiKeyProvider: llmAPIKeyProvider)
         self.openAIResponsesService = openAIResponsesService
+
+        // Provider registry
+        let llmProviderRegistry = LLMProviderRegistry()
+        self.llmProviderRegistry = llmProviderRegistry
+
+        // Register Mistral provider
+        let mistralProvider = MistralProvider(apiKeyProvider: llmAPIKeyProvider)
+        llmProviderRegistry.register(mistralProvider)
+
+        // Register Ollama provider (local inference, no API key needed)
+        let ollamaProvider = OllamaProvider()
+        llmProviderRegistry.register(ollamaProvider)
+
+        // Register Anthropic provider
+        let anthropicProvider = AnthropicProvider(apiKeyProvider: llmAPIKeyProvider)
+        llmProviderRegistry.register(anthropicProvider)
+
+        // Agent service with registry
         self.openAIAgentService = OpenAIAgentService(
             responsesService: openAIResponsesService,
             sessionProvider: sessionManager,
+            providerRegistry: llmProviderRegistry,
             requestTimeoutSeconds: 60,
             maxToolIterations: 200,
             persistConversationContext: true
+        )
+
+        // Settings ViewModel
+        self.aiProviderSettingsViewModel = AIProviderSettingsViewModel(
+            registry: llmProviderRegistry,
+            apiKeyStore: llmAPIKeyStore
         )
         self.terminalAIAssistantViewModel = TerminalAIAssistantViewModel(
             agentService: self.openAIAgentService

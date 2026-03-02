@@ -7,14 +7,14 @@ final class OpenAIResponsesService: OpenAIResponsesServicing {
     static let logger = Logger(subsystem: "com.prossh", category: "AICopilot.Responses")
     private static let maxResponsePreviewCharacters = 2_000
 
-    let apiKeyProvider: any OpenAIAPIKeyProviding
+    let apiKeyProvider: any LLMAPIKeyProviding
     let session: any OpenAIHTTPSessioning
     let endpointURL: URL
     private let maxRetryAttempts: Int
     private let baseRetryDelayNanoseconds: UInt64
 
     init(
-        apiKeyProvider: any OpenAIAPIKeyProviding,
+        apiKeyProvider: any LLMAPIKeyProviding,
         session: any OpenAIHTTPSessioning = URLSession.shared,
         endpointURL: URL = URL(string: "https://api.openai.com/v1/responses")!,
         maxRetryAttempts: Int = 2,
@@ -28,7 +28,7 @@ final class OpenAIResponsesService: OpenAIResponsesServicing {
     }
 
     func createResponse(_ request: OpenAIResponsesRequest) async throws -> OpenAIResponsesResponse {
-        let apiKey = await apiKeyProvider.currentAPIKey()?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let apiKey = await apiKeyProvider.apiKey(for: .openai)?.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let apiKey, !apiKey.isEmpty else {
             throw OpenAIResponsesServiceError.missingAPIKey
         }

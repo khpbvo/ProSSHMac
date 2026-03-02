@@ -79,13 +79,22 @@ final class OllamaProvider: LLMProvider {
         _ request: LLMRequest,
         model: String
     ) async throws -> LLMResponse {
-        Self.logger.debug("request_start model=\(model, privacy: .public) messages=\(request.messages.count)")
+        let priorMessages = try extractPriorMessages(from: request.conversationState)
 
-        let wireRequest = ChatCompletionsWireRequest(from: request, model: model)
+        Self.logger.debug("request_start model=\(model, privacy: .public) messages=\(request.messages.count) history=\(priorMessages.count)")
+
+        var wireRequest = ChatCompletionsWireRequest(from: request, model: model)
+        wireRequest.messages = priorMessages + wireRequest.messages
+
         let wireResponse = try await client.send(wireRequest, apiKey: "", authStyle: .none)
 
         Self.logger.debug("request_ok")
-        return wireResponse.toLLMResponse(providerID: providerID)
+
+        let updatedHistory = buildUpdatedHistory(
+            prior: wireRequest.messages,
+            response: wireResponse
+        )
+        return toLLMResponse(wireResponse: wireResponse, history: updatedHistory)
     }
 
     func sendRequestStreaming(
@@ -93,18 +102,88 @@ final class OllamaProvider: LLMProvider {
         model: String,
         onEvent: @escaping @Sendable (LLMStreamEvent) -> Void
     ) async throws -> LLMResponse {
-        Self.logger.debug("stream_start model=\(model, privacy: .public)")
+        let priorMessages = try extractPriorMessages(from: request.conversationState)
 
-        let wireRequest = ChatCompletionsWireRequest(from: request, model: model)
+        Self.logger.debug("stream_start model=\(model, privacy: .public) messages=\(request.messages.count) history=\(priorMessages.count)")
+
+        var wireRequest = ChatCompletionsWireRequest(from: request, model: model)
+        wireRequest.messages = priorMessages + wireRequest.messages
+
         let wireResponse = try await client.sendStreaming(
             wireRequest, apiKey: "", authStyle: .none, onEvent: onEvent
         )
 
         Self.logger.debug("stream_ok")
-        return wireResponse.toLLMResponse(providerID: providerID)
+
+        let updatedHistory = buildUpdatedHistory(
+            prior: wireRequest.messages,
+            response: wireResponse
+        )
+        return toLLMResponse(wireResponse: wireResponse, history: updatedHistory)
     }
 
     func resetConversationState() { }
+
+    // MARK: - Conversation History
+
+    private func extractPriorMessages(
+        from state: LLMConversationState?
+    ) throws -> [ChatCompletionsWireMessage] {
+        guard let state else { return [] }
+        guard state.providerID == providerID else {
+            throw LLMProviderError.conversationStateMismatch(
+                expected: providerID, got: state.providerID
+            )
+        }
+        return (try? state.decoded(as: [ChatCompletionsWireMessage].self)) ?? []
+    }
+
+    private func buildUpdatedHistory(
+        prior: [ChatCompletionsWireMessage],
+        response: ChatCompletionsWireResponse
+    ) -> [ChatCompletionsWireMessage] {
+        var history = prior
+        guard let choice = response.choices.first else { return history }
+        let msg = choice.message
+        let toolCallRefs: [ChatCompletionsWireToolCallRef]? = msg.toolCalls?.map { tc in
+            ChatCompletionsWireToolCallRef(
+                id: tc.id,
+                type: tc.type,
+                function: ChatCompletionsWireFunctionRef(
+                    name: tc.function.name,
+                    arguments: tc.function.arguments
+                )
+            )
+        }
+        history.append(ChatCompletionsWireMessage(
+            role: msg.role,
+            content: msg.content,
+            toolCalls: toolCallRefs
+        ))
+        return history
+    }
+
+    private func toLLMResponse(
+        wireResponse: ChatCompletionsWireResponse,
+        history: [ChatCompletionsWireMessage]
+    ) -> LLMResponse {
+        let choice = wireResponse.choices.first
+        let text = choice?.message.content ?? ""
+        let toolCalls: [LLMToolCall] = (choice?.message.toolCalls ?? []).map { tc in
+            LLMToolCall(id: tc.id, name: tc.function.name, arguments: tc.function.arguments)
+        }
+        let state: LLMConversationState
+        if let packed = try? LLMConversationState.encoded(history, provider: providerID) {
+            state = packed
+        } else {
+            state = .string(wireResponse.id, provider: providerID)
+        }
+        return LLMResponse(
+            text: text,
+            toolCalls: toolCalls,
+            updatedConversationState: state
+        )
+    }
 
     // MARK: - Fallback Models
 
