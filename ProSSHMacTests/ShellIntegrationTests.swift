@@ -162,8 +162,21 @@ final class ShellIntegrationTests: XCTestCase {
     func testLocalShellZshCompletionFallbackIncludesTabBinding() {
         let fallback = LocalShellChannel.zshCompletionFallback
         XCTAssertTrue(fallback.contains("compinit -u"))
+        XCTAssertTrue(fallback.contains("add-zsh-hook"))
+        XCTAssertTrue(fallback.contains("__prossh_force_tab_completion"))
         XCTAssertTrue(fallback.contains("bindkey '^I' expand-or-complete"))
-        XCTAssertTrue(fallback.contains("_main_complete"))
+        XCTAssertTrue(fallback.contains("bindkey -M viins '^I' expand-or-complete"))
+    }
+
+    func testLocalShellLaunchArgumentsForceInteractiveForZsh() {
+        let arguments = LocalShellChannel.shellLaunchArguments(shellPath: "/bin/zsh")
+        XCTAssertEqual(arguments.first, "-zsh")
+        XCTAssertTrue(arguments.contains("-i"))
+    }
+
+    func testLocalShellLaunchArgumentsDoNotForceInteractiveForUnknownShell() {
+        let arguments = LocalShellChannel.shellLaunchArguments(shellPath: "/usr/local/bin/elvish")
+        XCTAssertEqual(arguments, ["-elvish"])
     }
 
     // MARK: - Vendor Prompt Regex Tests

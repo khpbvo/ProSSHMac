@@ -60,9 +60,7 @@ actor LocalShellChannel: SSHShellChannel {
         // Change working directory -- use real home, not sandbox container
         let cwd = workingDirectory ?? childEnv["HOME"] ?? realHome
 
-        // Build argv -- login shell (prefix with -)
-        let shellName = (resolvedShell as NSString).lastPathComponent
-        let loginName = "-" + shellName
+        let childArguments = shellLaunchArguments(shellPath: resolvedShell)
 
         let pid = forkpty(&master, &slaveName, nil, &size)
         guard pid >= 0 else {
@@ -85,7 +83,8 @@ actor LocalShellChannel: SSHShellChannel {
                 }
             }
 
-            var childArgv: [UnsafeMutablePointer<CChar>?] = [strdup(loginName), nil]
+            var childArgv: [UnsafeMutablePointer<CChar>?] = childArguments.map { strdup($0) }
+            childArgv.append(nil)
             resolvedShell.withCString { shellPtr in
                 childArgv.withUnsafeMutableBufferPointer { argvBuffer in
                     _ = execv(shellPtr, argvBuffer.baseAddress)
@@ -588,6 +587,29 @@ PS1='\(promptStr)'
         )
     }
 
+    nonisolated static func shellLaunchArguments(shellPath: String) -> [String] {
+        let shellName = (shellPath as NSString).lastPathComponent
+        let loginName = "-" + shellName
+        var arguments = [loginName]
+        let lowercasedName = shellName.lowercased()
+
+        // Force interactive mode so tab-completion/readline stays active in local PTYs.
+        if supportsInteractiveFlag(shellName: lowercasedName) {
+            arguments.append("-i")
+        }
+
+        return arguments
+    }
+
+    private nonisolated static func supportsInteractiveFlag(shellName: String) -> Bool {
+        switch shellName {
+        case "zsh", "bash", "sh", "dash", "ksh", "fish", "csh", "tcsh":
+            return true
+        default:
+            return false
+        }
+    }
+
     nonisolated static func safeZshSourceLine(path: String) -> String {
         let escaped = path.replacingOccurrences(of: "\"", with: "\\\"")
         return "if [[ -r \"\(escaped)\" ]]; then ZDOTDIR=\"$HOME\" source \"\(escaped)\" 2>/dev/null; fi"
@@ -602,11 +624,15 @@ PS1='\(promptStr)'
         """
         # Fallback completion when sandbox restrictions block user dotfiles.
         if [[ -o interactive ]]; then
-          if ! typeset -f _main_complete >/dev/null 2>&1; then
-            autoload -Uz compinit
-            compinit -u -d "${TMPDIR:-/tmp}/.zcompdump-prossh-${UID}" >/dev/null 2>&1
-          fi
-          bindkey '^I' expand-or-complete >/dev/null 2>&1
+          autoload -Uz compinit
+          compinit -u -d "${TMPDIR:-/tmp}/.zcompdump-prossh-${UID}" >/dev/null 2>&1
+          autoload -Uz add-zsh-hook >/dev/null 2>&1
+          __prossh_force_tab_completion() {
+            bindkey '^I' expand-or-complete >/dev/null 2>&1
+            bindkey -M viins '^I' expand-or-complete >/dev/null 2>&1
+          }
+          __prossh_force_tab_completion
+          add-zsh-hook precmd __prossh_force_tab_completion >/dev/null 2>&1
         fi
         """
     }

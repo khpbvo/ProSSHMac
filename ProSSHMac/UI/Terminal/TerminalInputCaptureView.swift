@@ -64,6 +64,7 @@ final class DirectTerminalInputNSView: NSView {
     var onSendSequence: ((UUID, String) -> Void)?
     private var windowDidBecomeKeyObserver: NSObjectProtocol?
     private var appDidBecomeActiveObserver: NSObjectProtocol?
+    private var keyEventMonitor: Any?
 
     override var acceptsFirstResponder: Bool {
         isEnabled
@@ -76,12 +77,14 @@ final class DirectTerminalInputNSView: NSView {
     deinit {
         MainActor.assumeIsolated {
             removeActivationObservers()
+            removeKeyEventMonitor()
         }
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         removeActivationObservers()
+        removeKeyEventMonitor()
 
         guard let window else { return }
         windowDidBecomeKeyObserver = NotificationCenter.default.addObserver(
@@ -102,6 +105,36 @@ final class DirectTerminalInputNSView: NSView {
                 self?.armForKeyboardInputIfNeeded()
             }
         }
+
+        // Intercept terminal-bound keyDown events before SwiftUI/AppKit
+        // consume them for focus navigation or default controls.
+        keyEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return event }
+            guard self.shouldMonitorKeyDownEvent(event) else { return event }
+            guard let sessionID = self.sessionID,
+                  let sequence = self.encodeEvent(event) else {
+                return event
+            }
+            self.onSendSequence?(sessionID, sequence)
+            return nil // consume the event
+        }
+    }
+
+    private func shouldMonitorKeyDownEvent(_ event: NSEvent) -> Bool {
+        guard isEnabled else { return false }
+        guard sessionID != nil else { return false }
+        // Rely on terminal activation state instead of exact event.window
+        // matching. SwiftUI/AppKit can route keyDown through wrapper views
+        // where event.window identity checks are too strict.
+        if window?.isKeyWindow == false { return false }
+        if isTextInputFocusedInWindow() { return false }
+
+        // Preserve AppKit/SwiftUI Command shortcuts.
+        let commandHeld = event.modifierFlags.intersection([.command]).contains(.command)
+        guard !commandHeld else { return false }
+
+        // Only consume events we can encode for terminal delivery.
+        return encodeEvent(event) != nil
     }
 
     func armForKeyboardInputIfNeeded() {
@@ -125,12 +158,27 @@ final class DirectTerminalInputNSView: NSView {
         }
     }
 
+    private func removeKeyEventMonitor() {
+        if let keyEventMonitor {
+            NSEvent.removeMonitor(keyEventMonitor)
+            self.keyEventMonitor = nil
+        }
+    }
+
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if isTextInputFocusedInWindow() {
             return super.performKeyEquivalent(with: event)
         }
         if handleCommandShortcut(event) {
             return true
+        }
+        // Intercept Tab / Shift-Tab before NSWindow uses them for focus
+        // navigation.  Tab must reach the shell for tab-completion to work.
+        if event.keyCode == 48 /* Tab */ {
+            if isEnabled, let sessionID, let sequence = encodeEvent(event) {
+                onSendSequence?(sessionID, sequence)
+                return true
+            }
         }
         return super.performKeyEquivalent(with: event)
     }
