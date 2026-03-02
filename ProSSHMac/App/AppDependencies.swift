@@ -136,7 +136,7 @@ final class AppDependencies: ObservableObject {
             responsesService: openAIResponsesService,
             sessionProvider: sessionManager,
             providerRegistry: llmProviderRegistry,
-            requestTimeoutSeconds: 60,
+            requestTimeoutSeconds: 600,
             maxToolIterations: 200,
             persistConversationContext: true
         )

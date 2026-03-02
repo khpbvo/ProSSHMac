@@ -174,7 +174,7 @@ final class ChatCompletionsClient: Sendable {
         urlRequest.httpMethod = "POST"
         urlRequest.httpBody = data
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        urlRequest.timeoutInterval = 60
+        urlRequest.timeoutInterval = 600
         applyAuth(to: &urlRequest, apiKey: apiKey, style: authStyle)
 
         let (responseData, response) = try await session.data(for: urlRequest)
@@ -211,7 +211,7 @@ final class ChatCompletionsClient: Sendable {
         urlRequest.httpMethod = "POST"
         urlRequest.httpBody = data
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        urlRequest.timeoutInterval = 120
+        urlRequest.timeoutInterval = 600
         applyAuth(to: &urlRequest, apiKey: apiKey, style: authStyle)
 
         let (bytes, response) = try await session.bytes(for: urlRequest)
