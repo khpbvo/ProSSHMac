@@ -191,21 +191,24 @@ final class DirectTerminalInputNSView: NSView {
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        if isLocalSession {
-            return super.performKeyEquivalent(with: event)
-        }
         if isTextInputFocusedInWindow() {
             return super.performKeyEquivalent(with: event)
         }
-        if handleCommandShortcut(event) {
-            return true
-        }
         // Intercept Tab / Shift-Tab before NSWindow uses them for focus
         // navigation.  Tab must reach the shell for tab-completion to work.
+        // This applies to BOTH local and remote sessions — without it,
+        // AppKit's default Tab handling steals focus to the next responder
+        // and all subsequent keys are lost to the terminal.
         if event.keyCode == 48 /* Tab */ {
             if dispatchEncodedEvent(event) {
                 return true
             }
+        }
+        if isLocalSession {
+            return super.performKeyEquivalent(with: event)
+        }
+        if handleCommandShortcut(event) {
+            return true
         }
         return super.performKeyEquivalent(with: event)
     }
