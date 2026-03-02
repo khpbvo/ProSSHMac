@@ -47,3 +47,6 @@ Package.pins
 .env
 .env.local
 WARNINGS_BASELINE.txt
+
+# Claude Code session data
+.claude/
