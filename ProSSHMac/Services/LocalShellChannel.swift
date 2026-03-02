@@ -49,32 +49,11 @@ actor LocalShellChannel: SSHShellChannel {
             ws_ypixel: 0
         )
 
-        // Pass explicit termios to openpty so the slave PTY has correct
-        // settings from the start.  Critically this ensures ISIG is set
-        // (Ctrl-C -> SIGINT, Ctrl-Z -> SIGTSTP, etc.) and the standard
-        // control characters (VINTR, VEOF, VSUSP ...) are defined.
-        var tio = Darwin.termios()
-        cfmakeraw(&tio)          // start from a clean raw base
-        // Re-enable cooked-mode flags the login shell expects:
-        tio.c_iflag |= tcflag_t(ICRNL | IXON | IXANY | IMAXBEL | IUTF8)
-        tio.c_oflag |= tcflag_t(OPOST | ONLCR)
-        tio.c_lflag |= tcflag_t(ICANON | ISIG | IEXTEN | ECHO | ECHOE | ECHOK | ECHOKE | ECHOCTL)
-        // Set standard control characters via pointer reinterpretation
-        // (c_cc is a tuple in Swift; subscript access requires casting).
-        withUnsafeMutablePointer(to: &tio.c_cc) { ccPtr in
-            let cc = UnsafeMutableRawPointer(ccPtr).assumingMemoryBound(to: cc_t.self)
-            cc[Int(VEOF)]    = 0x04  // Ctrl-D
-            cc[Int(VEOL)]    = 0xFF  // disabled
-            cc[Int(VERASE)]  = 0x7F  // DEL (backspace)
-            cc[Int(VKILL)]   = 0x15  // Ctrl-U
-            cc[Int(VINTR)]   = 0x03  // Ctrl-C  -> SIGINT
-            cc[Int(VQUIT)]   = 0x1C  // Ctrl-\  -> SIGQUIT
-            cc[Int(VSUSP)]   = 0x1A  // Ctrl-Z  -> SIGTSTP
-            cc[Int(VSTART)]  = 0x11  // Ctrl-Q  (XON)
-            cc[Int(VSTOP)]   = 0x13  // Ctrl-S  (XOFF)
-            cc[Int(VMIN)]    = 1
-            cc[Int(VTIME)]   = 0
-        }
+        // Use system-default termios — the kernel provides correct cooked-mode
+        // settings (ICANON, ISIG, ECHO, standard control characters, proper
+        // baud rate, etc.).  The shell will switch to raw mode for its line
+        // editor (ZLE/readline) on startup, then restore cooked mode when
+        // running foreground jobs.  This matches iTerm2/Terminal.app/Alacritty.
 
         // Build environment for child
         let childEnv = buildChildEnvironment(base: environment, shellIntegration: shellIntegration)
@@ -85,7 +64,7 @@ actor LocalShellChannel: SSHShellChannel {
         let shellName = (resolvedShell as NSString).lastPathComponent
         let loginName = "-" + shellName
 
-        let pid = forkpty(&master, &slaveName, &tio, &size)
+        let pid = forkpty(&master, &slaveName, nil, &size)
         guard pid >= 0 else {
             Darwin.close(master)
             throw LocalShellError.ptyAllocationFailed
@@ -96,9 +75,6 @@ actor LocalShellChannel: SSHShellChannel {
         }
 
         if pid == 0 {
-            // Keep child in its own foreground process group for job control.
-            _ = setpgid(0, 0)
-            _ = tcsetpgrp(STDIN_FILENO, getpid())
             _ = chdir(cwd)
 
             for (key, value) in childEnv {
@@ -180,55 +156,10 @@ actor LocalShellChannel: SSHShellChannel {
         let data = Array(input.utf8)
         guard !data.isEmpty else { return }
 
-        // Robust local signal delivery for Ctrl-C / Ctrl-Z / Ctrl-\.
-        // In some local PTY states the line discipline may echo "^C"
-        // without delivering SIGINT to the foreground job, so we
-        // explicitly request signal delivery as a fallback.
-        let isSignalChar = data.count == 1
-            && (data[0] == 0x03 || data[0] == 0x1A || data[0] == 0x1C)
-        var savedTermios: Darwin.termios?
-        var termiosFD: Int32 = -1
-
-        if isSignalChar {
-            termiosFD = open(slaveDevicePath, O_RDWR | O_NOCTTY)
-            if termiosFD >= 0 {
-                var tio = Darwin.termios()
-                if tcgetattr(termiosFD, &tio) == 0 {
-                    savedTermios = tio
-                    tio.c_lflag |= tcflag_t(ISIG)
-                    withUnsafeMutablePointer(to: &tio.c_cc) { ccPtr in
-                        let cc = UnsafeMutableRawPointer(ccPtr).assumingMemoryBound(to: cc_t.self)
-                        cc[Int(VINTR)] = 0x03  // Ctrl-C  -> SIGINT
-                        cc[Int(VQUIT)] = 0x1C  // Ctrl-\  -> SIGQUIT
-                        cc[Int(VSUSP)] = 0x1A  // Ctrl-Z  -> SIGTSTP
-                    }
-                    _ = tcsetattr(termiosFD, TCSANOW, &tio)
-                }
-            }
-
-            let sig: Int32
-            switch data[0] {
-            case 0x03: sig = SIGINT
-            case 0x1A: sig = SIGTSTP
-            case 0x1C: sig = SIGQUIT
-            default:   sig = 0
-            }
-            if sig != 0 {
-                var delivered = false
-                if termiosFD >= 0 {
-                    var sigValue = sig
-                    delivered = ioctl(termiosFD, TIOCSIG, &sigValue) == 0
-                }
-                if !delivered {
-                    var sigValue = sig
-                    delivered = ioctl(masterFD, TIOCSIG, &sigValue) == 0
-                }
-                if !delivered {
-                    _ = sendSignalToForegroundGroup(sig)
-                }
-            }
-        }
-
+        // Write raw bytes to the PTY master — the kernel line discipline
+        // handles everything (signal delivery when ISIG is set, echo when
+        // ECHO is set, etc.).  This matches how LibSSHShellChannel.send()
+        // works and how every standard terminal emulator passes input.
         var offset = 0
         while offset < data.count {
             let written = data.withUnsafeBufferPointer { buffer -> Int in
@@ -254,13 +185,6 @@ actor LocalShellChannel: SSHShellChannel {
                 continue
             }
             throw LocalShellError.writeFailed(err)
-        }
-
-        if var restore = savedTermios, termiosFD >= 0 {
-            _ = tcsetattr(termiosFD, TCSANOW, &restore)
-        }
-        if termiosFD >= 0 {
-            Darwin.close(termiosFD)
         }
     }
 
