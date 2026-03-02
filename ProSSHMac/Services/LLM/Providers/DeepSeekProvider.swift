@@ -1,51 +1,36 @@
-// MistralProvider.swift
+// DeepSeekProvider.swift
 // ProSSHMac
 //
-// Mistral AI provider using Chat Completions-compatible API.
-// First non-OpenAI provider — Kevin has API credits here.
+// DeepSeek provider using Chat Completions-compatible API.
+// Supports deepseek-reasoner (R1) with native reasoning_content streaming
+// and deepseek-chat (V3) for general purpose use.
 
 import Foundation
 import os.log
 
 @MainActor
-final class MistralProvider: LLMProvider {
-    private static let logger = Logger(subsystem: "com.prossh", category: "LLM.Mistral")
+final class DeepSeekProvider: LLMProvider {
+    private static let logger = Logger(subsystem: "com.prossh", category: "LLM.DeepSeek")
 
-    let providerID = LLMProviderID.mistral
-    let displayName = "Mistral AI"
+    let providerID = LLMProviderID.deepseek
+    let displayName = "DeepSeek"
 
     let availableModels: [LLMModelInfo] = [
         LLMModelInfo(
-            id: "mistral-large-latest",
-            displayName: "Mistral Large",
-            providerID: .mistral,
+            id: "deepseek-reasoner",
+            displayName: "DeepSeek R1",
+            providerID: .deepseek,
             supportsFunctionCalling: true,
             supportsStreaming: true,
-            supportsReasoning: false
+            supportsReasoning: true
         ),
         LLMModelInfo(
-            id: "mistral-medium-latest",
-            displayName: "Mistral Medium",
-            providerID: .mistral,
+            id: "deepseek-chat",
+            displayName: "DeepSeek V3",
+            providerID: .deepseek,
             supportsFunctionCalling: true,
             supportsStreaming: true,
-            supportsReasoning: false
-        ),
-        LLMModelInfo(
-            id: "codestral-latest",
-            displayName: "Codestral",
-            providerID: .mistral,
-            supportsFunctionCalling: true,
-            supportsStreaming: true,
-            supportsReasoning: false
-        ),
-        LLMModelInfo(
-            id: "mistral-small-latest",
-            displayName: "Mistral Small",
-            providerID: .mistral,
-            supportsFunctionCalling: true,
-            supportsStreaming: true,
-            supportsReasoning: false
+            supportsReasoning: true
         ),
     ]
 
@@ -53,15 +38,13 @@ final class MistralProvider: LLMProvider {
     private let apiKeyProvider: any LLMAPIKeyProviding
 
     var isConfigured: Bool {
-        // We can't check async from a sync property, so we optimistically return true.
-        // sendRequest will throw .missingAPIKey if the key is absent.
         true
     }
 
     init(apiKeyProvider: any LLMAPIKeyProviding) {
         self.apiKeyProvider = apiKeyProvider
         self.client = ChatCompletionsClient(
-            endpointURL: URL(string: "https://api.mistral.ai/v1/chat/completions")!
+            endpointURL: URL(string: "https://api.deepseek.com/chat/completions")!
         )
     }
 
@@ -76,6 +59,7 @@ final class MistralProvider: LLMProvider {
 
         var wireRequest = ChatCompletionsWireRequest(from: request, model: model)
         wireRequest.messages = priorMessages + wireRequest.messages
+        applyThinkingConfig(to: &wireRequest, model: model)
 
         let wireResponse = try await client.send(wireRequest, apiKey: apiKey)
 
@@ -100,6 +84,7 @@ final class MistralProvider: LLMProvider {
 
         var wireRequest = ChatCompletionsWireRequest(from: request, model: model)
         wireRequest.messages = priorMessages + wireRequest.messages
+        applyThinkingConfig(to: &wireRequest, model: model)
 
         let wireResponse = try await client.sendStreaming(
             wireRequest, apiKey: apiKey, extractThinkTags: true, onEvent: onEvent
@@ -152,7 +137,8 @@ final class MistralProvider: LLMProvider {
         history.append(ChatCompletionsWireMessage(
             role: msg.role,
             content: msg.content,
-            toolCalls: toolCallRefs
+            toolCalls: toolCallRefs,
+            reasoningContent: msg.reasoningContent
         ))
         return history
     }
@@ -181,8 +167,21 @@ final class MistralProvider: LLMProvider {
 
     // MARK: - Private
 
+    /// DeepSeek thinking mode constraints: temperature/top_p must not be set,
+    /// max_tokens is required. deepseek-reasoner uses thinking by default;
+    /// deepseek-chat needs the explicit thinking config.
+    private func applyThinkingConfig(to request: inout ChatCompletionsWireRequest, model: String) {
+        request.temperature = nil
+        if model == "deepseek-chat" {
+            request.thinking = ChatCompletionsThinkingConfig(type: "enabled")
+        }
+        if request.maxTokens == nil {
+            request.maxTokens = 8192
+        }
+    }
+
     private func resolveAPIKey() async throws -> String {
-        guard let key = await apiKeyProvider.apiKey(for: .mistral),
+        guard let key = await apiKeyProvider.apiKey(for: .deepseek),
               !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw LLMProviderError.missingAPIKey(provider: displayName)
         }

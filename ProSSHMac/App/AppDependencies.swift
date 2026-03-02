@@ -131,6 +131,10 @@ final class AppDependencies: ObservableObject {
         let anthropicProvider = AnthropicProvider(apiKeyProvider: llmAPIKeyProvider)
         llmProviderRegistry.register(anthropicProvider)
 
+        // Register DeepSeek provider
+        let deepseekProvider = DeepSeekProvider(apiKeyProvider: llmAPIKeyProvider)
+        llmProviderRegistry.register(deepseekProvider)
+
         // Agent service with registry
         self.openAIAgentService = OpenAIAgentService(
             responsesService: openAIResponsesService,

@@ -14,6 +14,7 @@ enum LLMProviderID: String, CaseIterable, Codable, Sendable, Identifiable {
     case mistral
     case anthropic
     case ollama
+    case deepseek
 
     nonisolated var id: String { rawValue }
 
@@ -23,6 +24,7 @@ enum LLMProviderID: String, CaseIterable, Codable, Sendable, Identifiable {
         case .mistral:   return "Mistral AI"
         case .anthropic: return "Anthropic"
         case .ollama:    return "Ollama (Local)"
+        case .deepseek:  return "DeepSeek"
         }
     }
 

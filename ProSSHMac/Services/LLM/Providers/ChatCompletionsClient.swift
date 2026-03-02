@@ -18,12 +18,18 @@ struct ChatCompletionsWireRequest: Encodable {
     var stream: Bool?
     var temperature: Double?
     var maxTokens: Int?
+    /// DeepSeek thinking mode: `{"type": "enabled"}` activates chain-of-thought on deepseek-chat.
+    var thinking: ChatCompletionsThinkingConfig?
 
     enum CodingKeys: String, CodingKey {
-        case model, messages, tools, stream, temperature
+        case model, messages, tools, stream, temperature, thinking
         case toolChoice = "tool_choice"
         case maxTokens = "max_tokens"
     }
+}
+
+struct ChatCompletionsThinkingConfig: Encodable {
+    var type: String  // "enabled" or "disabled"
 }
 
 struct ChatCompletionsWireMessage: Codable {
@@ -31,11 +37,14 @@ struct ChatCompletionsWireMessage: Codable {
     var content: String?
     var toolCalls: [ChatCompletionsWireToolCallRef]?
     var toolCallID: String?
+    /// DeepSeek thinking mode requires assistant messages to include reasoning_content.
+    var reasoningContent: String?
 
     enum CodingKeys: String, CodingKey {
         case role, content
         case toolCalls = "tool_calls"
         case toolCallID = "tool_call_id"
+        case reasoningContent = "reasoning_content"
     }
 }
 
@@ -81,10 +90,12 @@ struct ChatCompletionsWireResponse: Decodable {
         var role: String
         var content: String?
         var toolCalls: [ChatCompletionsWireResponseToolCall]?
+        var reasoningContent: String?
 
         enum CodingKeys: String, CodingKey {
             case role, content
             case toolCalls = "tool_calls"
+            case reasoningContent = "reasoning_content"
         }
     }
 
@@ -116,12 +127,62 @@ struct ChatCompletionsStreamChunk: Decodable {
     }
 
     struct StreamDelta: Decodable {
+        /// Text content (string for OpenAI/Ollama, extracted from structured blocks for Mistral)
         var content: String?
+        /// Reasoning from Ollama ("reasoning") or DeepSeek ("reasoning_content") wire field
+        var reasoning: String?
+        /// Thinking extracted from Mistral Magistral structured content blocks
+        var thinkingContent: String?
         var toolCalls: [StreamToolCall]?
 
         enum CodingKeys: String, CodingKey {
-            case content
+            case content, reasoning
+            case reasoningContent = "reasoning_content"
             case toolCalls = "tool_calls"
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            toolCalls = try container.decodeIfPresent([StreamToolCall].self, forKey: .toolCalls)
+
+            // Ollama uses "reasoning", DeepSeek API uses "reasoning_content"
+            let r1 = try container.decodeIfPresent(String.self, forKey: .reasoning)
+            let r2 = try container.decodeIfPresent(String.self, forKey: .reasoningContent)
+            reasoning = r1 ?? r2
+
+            // content: string (OpenAI/Ollama) or array of typed blocks (Mistral Magistral)
+            if let stringContent = try? container.decodeIfPresent(String.self, forKey: .content) {
+                content = stringContent
+                thinkingContent = nil
+            } else if let blocks = try? container.decodeIfPresent([MistralContentBlock].self, forKey: .content) {
+                var textParts: [String] = []
+                var thinkParts: [String] = []
+                for block in blocks {
+                    if block.type == "text", let t = block.text {
+                        textParts.append(t)
+                    } else if block.type == "thinking" {
+                        for tb in block.thinking ?? [] {
+                            if let t = tb.text { thinkParts.append(t) }
+                        }
+                    }
+                }
+                content = textParts.isEmpty ? nil : textParts.joined()
+                thinkingContent = thinkParts.isEmpty ? nil : thinkParts.joined()
+            } else {
+                content = nil
+                thinkingContent = nil
+            }
+        }
+
+        struct MistralContentBlock: Decodable {
+            var type: String
+            var text: String?
+            var thinking: [MistralThinkingBlock]?
+        }
+
+        struct MistralThinkingBlock: Decodable {
+            var type: String?
+            var text: String?
         }
     }
 
@@ -151,12 +212,51 @@ struct ChatCompletionsWireError: Decodable {
 final class ChatCompletionsClient: Sendable {
     private static let logger = Logger(subsystem: "com.prossh", category: "LLM.ChatCompletions")
 
+    /// When true, every outgoing request payload is written to ~/Desktop/llm_request_log/
+    /// with a timestamped filename. API keys are redacted. Enable for security auditing.
+    static let debugLogRequests = true
+
     let endpointURL: URL
     let session: URLSession
 
     init(endpointURL: URL, session: URLSession = .shared) {
         self.endpointURL = endpointURL
         self.session = session
+    }
+
+    private func logRequestPayload(_ data: Data, endpoint: URL, streaming: Bool) {
+        guard Self.debugLogRequests else { return }
+        let dir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Desktop/llm_request_log")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+        let ts = ISO8601DateFormatter().string(from: Date())
+            .replacingOccurrences(of: ":", with: "-")
+        let mode = streaming ? "stream" : "sync"
+        let filename = "\(ts)_\(mode)_\(endpoint.host ?? "unknown").json"
+        let fileURL = dir.appendingPathComponent(filename)
+
+        // Pretty-print the JSON for readability
+        var payload: String
+        if let json = try? JSONSerialization.jsonObject(with: data),
+           let pretty = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys]),
+           let str = String(data: pretty, encoding: .utf8) {
+            payload = str
+        } else {
+            payload = String(data: data, encoding: .utf8) ?? "<binary>"
+        }
+
+        // Prepend metadata
+        let header = """
+        // ENDPOINT: \(endpoint.absoluteString)
+        // TIMESTAMP: \(ts)
+        // MODE: \(mode)
+        // PAYLOAD_BYTES: \(data.count)
+        // ---
+
+        """
+        try? (header + payload).data(using: .utf8)?.write(to: fileURL, options: .atomic)
+        Self.logger.info("DEBUG_LOG wrote \(data.count) bytes to \(fileURL.lastPathComponent, privacy: .public)")
     }
 
     // MARK: - Non-Streaming
@@ -170,6 +270,7 @@ final class ChatCompletionsClient: Sendable {
         wireRequest.stream = false
 
         let data = try JSONEncoder().encode(wireRequest)
+        logRequestPayload(data, endpoint: endpointURL, streaming: false)
         var urlRequest = URLRequest(url: endpointURL)
         urlRequest.httpMethod = "POST"
         urlRequest.httpBody = data
@@ -201,12 +302,14 @@ final class ChatCompletionsClient: Sendable {
         _ request: ChatCompletionsWireRequest,
         apiKey: String,
         authStyle: AuthStyle = .bearer,
+        extractThinkTags: Bool = false,
         onEvent: @escaping @Sendable (LLMStreamEvent) -> Void
     ) async throws -> ChatCompletionsWireResponse {
         var wireRequest = request
         wireRequest.stream = true
 
         let data = try JSONEncoder().encode(wireRequest)
+        logRequestPayload(data, endpoint: endpointURL, streaming: true)
         var urlRequest = URLRequest(url: endpointURL)
         urlRequest.httpMethod = "POST"
         urlRequest.httpBody = data
@@ -218,11 +321,20 @@ final class ChatCompletionsClient: Sendable {
 
         guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-            throw LLMProviderError.httpError(statusCode: status, message: "Streaming request failed")
+            // Read error body from SSE stream to surface the real API error message
+            var errorBody = ""
+            for try await line in bytes.lines {
+                errorBody += line
+                if errorBody.count > 4096 { break }
+            }
+            let msg = extractErrorMessage(from: Data(errorBody.utf8))
+            throw LLMProviderError.httpError(statusCode: status, message: msg.isEmpty ? "Streaming request failed" : msg)
         }
 
         var accumulatedText = ""
+        var accumulatedReasoning = ""
         var accumulatedToolCalls: [String: (id: String, name: String, arguments: String)] = [:]
+        var extractor = ThinkTagExtractor()
 
         for try await line in bytes.lines {
             guard line.hasPrefix("data: ") else { continue }
@@ -233,9 +345,33 @@ final class ChatCompletionsClient: Sendable {
             else { continue }
 
             for choice in chunk.choices {
+                // Native reasoning field (Ollama "reasoning" / DeepSeek "reasoning_content")
+                if let reasoning = choice.delta.reasoning, !reasoning.isEmpty {
+                    accumulatedReasoning += reasoning
+                    onEvent(.reasoningDelta(reasoning))
+                }
+                // Mistral Magistral structured thinking blocks
+                if let thinking = choice.delta.thinkingContent, !thinking.isEmpty {
+                    accumulatedReasoning += thinking
+                    onEvent(.reasoningDelta(thinking))
+                }
                 if let content = choice.delta.content, !content.isEmpty {
-                    accumulatedText += content
-                    onEvent(.textDelta(content))
+                    if extractThinkTags {
+                        for output in extractor.feed(content) {
+                            switch output {
+                            case .text(let t):
+                                accumulatedText += t
+                                onEvent(.textDelta(t))
+                            case .reasoningDelta(let t):
+                                onEvent(.reasoningDelta(t))
+                            case .reasoningDone(let t):
+                                onEvent(.reasoningDone(t))
+                            }
+                        }
+                    } else {
+                        accumulatedText += content
+                        onEvent(.textDelta(content))
+                    }
                 }
                 if let toolCalls = choice.delta.toolCalls {
                     for tc in toolCalls {
@@ -246,6 +382,25 @@ final class ChatCompletionsClient: Sendable {
                         if let args = tc.function?.arguments { existing.arguments += args }
                         accumulatedToolCalls[key] = existing
                     }
+                }
+            }
+        }
+
+        // Flush native reasoning_content accumulated across chunks
+        if !accumulatedReasoning.isEmpty {
+            onEvent(.reasoningDone(accumulatedReasoning))
+        }
+
+        // Flush ThinkTagExtractor buffer (for <think> tags in content)
+        if extractThinkTags {
+            for output in extractor.flush() {
+                switch output {
+                case .text(let t):
+                    accumulatedText += t
+                case .reasoningDelta(let t):
+                    onEvent(.reasoningDelta(t))
+                case .reasoningDone(let t):
+                    onEvent(.reasoningDone(t))
                 }
             }
         }
@@ -269,7 +424,8 @@ final class ChatCompletionsClient: Sendable {
                     message: .init(
                         role: "assistant",
                         content: accumulatedText.isEmpty ? nil : accumulatedText,
-                        toolCalls: toolCallRefs.isEmpty ? nil : toolCallRefs
+                        toolCalls: toolCallRefs.isEmpty ? nil : toolCallRefs,
+                        reasoningContent: accumulatedReasoning.isEmpty ? nil : accumulatedReasoning
                     ),
                     finishReason: toolCallRefs.isEmpty ? "stop" : "tool_calls"
                 )
@@ -294,6 +450,89 @@ final class ChatCompletionsClient: Sendable {
             break
         }
     }
+}
+
+// MARK: - ThinkTagExtractor
+
+private struct ThinkTagExtractor {
+    enum Output {
+        case text(String)
+        case reasoningDelta(String)
+        case reasoningDone(String)   // full accumulated thinking for this block
+    }
+
+    private static let openTag  = "<think>"
+    private static let closeTag = "</think>"
+
+    private var buffer = ""
+    private var isInsideThink = false
+    private var accumulatedThinking = ""
+
+    mutating func feed(_ input: String) -> [Output] {
+        buffer += input
+        return drain()
+    }
+
+    mutating func flush() -> [Output] {
+        guard !buffer.isEmpty else { return [] }
+        var outputs: [Output] = []
+        if isInsideThink {
+            accumulatedThinking += buffer
+            outputs.append(.reasoningDelta(buffer))
+            outputs.append(.reasoningDone(accumulatedThinking))
+            accumulatedThinking = ""
+            isInsideThink = false
+        } else {
+            outputs.append(.text(buffer))
+        }
+        buffer = ""
+        return outputs
+    }
+
+    private mutating func drain() -> [Output] {
+        var outputs: [Output] = []
+        while true {
+            let target = isInsideThink ? Self.closeTag : Self.openTag
+            if let range = buffer.range(of: target) {
+                let before = String(buffer[..<range.lowerBound])
+                buffer = String(buffer[range.upperBound...])
+                if !before.isEmpty {
+                    if isInsideThink {
+                        accumulatedThinking += before
+                        outputs.append(.reasoningDelta(before))
+                    } else {
+                        outputs.append(.text(before))
+                    }
+                }
+                if isInsideThink {
+                    outputs.append(.reasoningDone(accumulatedThinking))
+                    accumulatedThinking = ""
+                    isInsideThink = false
+                } else {
+                    isInsideThink = true
+                }
+            } else {
+                // Hold back (tag.count - 1) chars — they might be a partial tag
+                let holdback = target.count - 1
+                guard buffer.count > holdback else { break }
+                let safe = String(buffer.prefix(buffer.count - holdback))
+                buffer = String(buffer.dropFirst(safe.count))
+                if !safe.isEmpty {
+                    if isInsideThink {
+                        accumulatedThinking += safe
+                        outputs.append(.reasoningDelta(safe))
+                    } else {
+                        outputs.append(.text(safe))
+                    }
+                }
+                break
+            }
+        }
+        return outputs
+    }
+}
+
+extension ChatCompletionsClient {
 
     // MARK: - Helpers
 

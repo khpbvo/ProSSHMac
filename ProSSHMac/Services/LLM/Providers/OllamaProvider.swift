@@ -110,7 +110,7 @@ final class OllamaProvider: LLMProvider {
         wireRequest.messages = priorMessages + wireRequest.messages
 
         let wireResponse = try await client.sendStreaming(
-            wireRequest, apiKey: "", authStyle: .none, onEvent: onEvent
+            wireRequest, apiKey: "", authStyle: .none, extractThinkTags: true, onEvent: onEvent
         )
 
         Self.logger.debug("stream_ok")
