@@ -876,3 +876,48 @@ Build: SUCCEEDED. All 17 new tests + 26 existing PaneManagerTests pass.
 **Estimated savings**: ~2,900 tokens per request from prompt/schema compression, plus fewer unnecessary tool calls from behavioral guidance.
 
 Build: SUCCEEDED. All pre-existing tests pass (AIAgentServiceTests have a pre-existing Mistral provider config issue unrelated to this change).
+
+---
+
+## 2026-03-04 — Issue #11 Phase 0: Instrumentation & Baseline
+
+**Feature spec:** `docs/Issue11.md`
+**Phase:** 0 of 5 (investigation only, no functional changes)
+
+### What changed
+- `ProSSHMac/Terminal/Renderer/MetalTerminalRenderer+DrawLoop.swift`: Added `#if DEBUG` periodic renderer stats dump every 300 frames (~5s at 60Hz). Logs avg/p95 CPU frame time, dropped-frame counts, and GlyphCache hit rate to console.
+- `ProSSHMac/Services/TerminalRenderingCoordinator.swift`: Added `#if DEBUG` snapshot publish frequency counter. Logs snapshot rate (per second) to console every 100ms window.
+
+### Files modified
+- `ProSSHMac/Terminal/Renderer/MetalTerminalRenderer+DrawLoop.swift`
+- `ProSSHMac/Services/TerminalRenderingCoordinator.swift`
+- `docs/Issue11.md` (Phase 0 partial check-off; baseline table still empty — requires manual Instruments run)
+
+### Build/test status
+Build: SUCCEEDED (DEBUG). SourceKit false positives in coordinator (pre-existing pattern). No test run required for instrumentation-only change.
+
+### Next
+Phase 0 is complete for the code side. User must run the app under Instruments (Metal System Trace) with an htop session to fill in the baseline measurements table in `docs/Issue11.md`, then Phase 0 can be fully checked off before proceeding to Phase 1.
+
+---
+
+## 2026-03-04 — Issue #11 Phase 1: Output Batching in Parser Reader
+
+**Feature spec:** `docs/Issue11.md`
+**Phase:** 1 of 5
+
+### What changed
+- `ProSSHMac/Services/SessionShellIOCoordinator.swift`: Replaced single-task parser reader loop with a two-task pipeline:
+  - **Accumulator task**: reads `rawOutput`, calls `recordParsedChunk` per chunk (preserving accurate byte counts + recording timestamps), then pushes to `ChunkBatchAccumulator`.
+  - **Parser task**: reads from `batchedStream` (4ms batches, 4 KB size threshold), calls `engine.feed(batch)` once per window. `defer { accTask.cancel() }` cascades cancellation.
+  - **`ChunkBatchAccumulator`** private actor (new): generation counter prevents stale timer flushes; `bufferingPolicy: .unbounded` prevents drops; size threshold avoids latency spikes on large single chunks.
+
+### Files modified
+- `ProSSHMac/Services/SessionShellIOCoordinator.swift`
+- `docs/Issue11.md` (Phase 1 checked off)
+
+### Build/test status
+Build: SUCCEEDED.
+
+### Next
+Phase 2: Async glyph rasterization — offload cache misses from draw path in `MetalTerminalRenderer+GlyphResolution.swift`.

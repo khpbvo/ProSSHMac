@@ -241,14 +241,14 @@ All paths relative to repo root, under `ProSSHMac/`.
 
 <!-- NEXT SESSION PLAN -->
 Feature: Issue #11 (visual jitter in TUI apps) — spec: `docs/Issue11.md`
-Next phase: **Phase 1 — Output batching in parser reader**
+Next phase: **Phase 2 — Async glyph rasterization (offload cache misses)**
 
 Context:
-- Phase 0 code is done (debug logging in DrawLoop + RenderingCoordinator).
-- Baseline Instruments run is a manual step for the user; may or may not be done.
-- Phase 1 target: `Services/SessionShellIOCoordinator.swift` line ~181 (`startParserReader`).
-  Accumulate SSH chunks for up to 4ms before feeding the parser instead of feeding immediately.
+- Phase 1 complete: `ChunkBatchAccumulator` in `SessionShellIOCoordinator.startParserReader()` batches SSH chunks into 4ms/4KB windows before feeding `TerminalEngine`.
+- Phase 2 target: `Terminal/Renderer/MetalTerminalRenderer+GlyphResolution.swift` + `Terminal/Renderer/GlyphCache.swift`
+  - On cache miss: return `noGlyphIndex` (blank cell) immediately; enqueue glyph for background rasterization
+  - Background task rasterizes → inserts into GlyphCache → sets `isDirty = true`
+  - Pre-warm cache with box-drawing characters (U+2500–U+257F, ~128 glyphs) in `prePopulateASCII()`
 
-Key decision: use `Task.sleep(for: .milliseconds(4))` accumulator loop.
-Reentrancy guard in `TerminalEngine.feed()` (isFeeding + feedQueue) must still work after batching.
+Key concern: check GlyphCache thread-safety model (lock vs actor) before modifying.
 <!-- /NEXT SESSION PLAN -->

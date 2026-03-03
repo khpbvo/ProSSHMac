@@ -173,13 +173,27 @@ enum RawShellInputSource: String {
             return
         }
 
-        parserReaderTasks[sessionID] = Task.detached(priority: .userInitiated) { [weak self] in
+        let (batchedStream, batchContinuation) = AsyncStream<Data>.makeStream(bufferingPolicy: .unbounded)
+        let accumulator = ChunkBatchAccumulator(continuation: batchContinuation)
+
+        // Accumulator task: record each raw chunk (preserving per-chunk timestamps/byte counts),
+        // then batch into 4ms windows to reduce actor-hop frequency on engine.feed().
+        let accTask = Task.detached(priority: .userInitiated) { [weak self] in
             for await chunk in rawOutput {
-                if Task.isCancelled {
-                    break
-                }
-                await engine.feed(chunk)
+                if Task.isCancelled { break }
                 await self?.recordParsedChunk(sessionID: sessionID, chunk: chunk)
+                await accumulator.push(chunk)
+            }
+            await accumulator.finish()
+        }
+
+        // Parser task: feed batched data to engine, schedule publishes.
+        parserReaderTasks[sessionID] = Task.detached(priority: .userInitiated) { [weak self] in
+            defer { accTask.cancel() }
+
+            for await batch in batchedStream {
+                if Task.isCancelled { break }
+                await engine.feed(batch)
 
                 if let syncExitSnap = await engine.consumeSyncExitSnapshot() {
                     await self?.manager?.renderingCoordinator.publishSyncExitSnapshot(
@@ -230,4 +244,46 @@ enum RawShellInputSource: String {
 private enum LocalInputSendFailure: Int {
     case disconnected = -1001
     case missingShellChannel = -1002
+}
+
+/// Accumulates incoming SSH data chunks and yields them in 4ms batches
+/// (or immediately when the buffer exceeds 4 KB) to reduce actor-hop frequency
+/// on TerminalEngine.feed() during output bursts.
+private actor ChunkBatchAccumulator {
+    private var buffer = Data()
+    private var generation = 0
+    private let continuation: AsyncStream<Data>.Continuation
+
+    init(continuation: AsyncStream<Data>.Continuation) {
+        self.continuation = continuation
+    }
+
+    func push(_ chunk: Data) {
+        let wasEmpty = buffer.isEmpty
+        buffer.append(contentsOf: chunk)
+        if buffer.count >= 4096 {
+            flush()                          // size threshold: flush immediately
+        } else if wasEmpty {
+            let gen = generation             // start 4ms timer for first chunk in window
+            Task { await self.scheduledFlush(generation: gen) }
+        }
+    }
+
+    func finish() {
+        flush()
+        continuation.finish()
+    }
+
+    private func flush() {
+        guard !buffer.isEmpty else { return }
+        generation &+= 1                     // invalidate any pending timer
+        continuation.yield(buffer)
+        buffer = Data()
+    }
+
+    private func scheduledFlush(generation: Int) async {
+        try? await Task.sleep(for: .milliseconds(4))
+        guard self.generation == generation else { return }  // stale timer guard
+        flush()
+    }
 }

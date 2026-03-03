@@ -84,9 +84,9 @@ _Baseline captured: 2026-03-04. Session included SSH + TUI activity. ~14,400 tot
 
 ### Phase 1: Output batching in parser reader
 
-- [ ] In `SessionShellIOCoordinator.startParserReader()`: accumulate chunks for up to 4ms (or 4 KB) before feeding parser
-- [ ] Use a local `var batch = Data()` + `Task.sleep(for: .milliseconds(4))` accumulator
-- [ ] Ensure reentrancy guard in `TerminalEngine.feedQueue` still functions correctly after batching
+- [x] In `SessionShellIOCoordinator.startParserReader()`: accumulate chunks for up to 4ms (or 4 KB) before feeding parser
+- [x] Use `ChunkBatchAccumulator` private actor with generation counter + `Task.sleep(for: .milliseconds(4))`
+- [x] Ensure reentrancy guard in `TerminalEngine.feedQueue` still functions correctly after batching (no changes needed — batch is fed as one Data payload)
 - [ ] Verify: snapshot publish frequency drops during `cat largefile.txt`
 
 ### Phase 2: Async glyph rasterization (offload cache misses)
