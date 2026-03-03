@@ -24,6 +24,8 @@ final class PaneManager: ObservableObject {
     @Published var maximizedPaneId: UUID?
     @Published var inputRoutingMode: InputRoutingMode = .singleFocus
     @Published var groupPaneIDs: Set<UUID> = []
+    /// When set during broadcast/group mode, input is temporarily routed to only this pane.
+    @Published var soloPaneId: UUID?
     private var savedRootNode: SplitNode?
     private var savedInputRoutingMode: InputRoutingMode?
     private var savedGroupPaneIDs: Set<UUID>?
@@ -82,6 +84,11 @@ final class PaneManager: ObservableObject {
     /// Session IDs that should receive keyboard input based on the current routing mode.
     /// Deduplicates (same session in two panes → one ID). Skips panes with nil sessionID.
     var targetSessionIDs: [UUID] {
+        // Solo override: route input only to the soloed pane.
+        if let soloPaneId, inputRoutingMode != .singleFocus,
+           let pane = rootNode.findPane(id: soloPaneId) {
+            return pane.sessionID.map { [$0] } ?? []
+        }
         let sessionIDs: [UUID?]
         switch inputRoutingMode {
         case .singleFocus:
@@ -103,6 +110,9 @@ final class PaneManager: ObservableObject {
 
     /// Pane IDs that are currently targeted for input (for visual indicators).
     var targetPaneIDs: Set<UUID> {
+        if let soloPaneId, inputRoutingMode != .singleFocus {
+            return [soloPaneId]
+        }
         switch inputRoutingMode {
         case .singleFocus:
             return [focusedPaneId]
@@ -116,7 +126,28 @@ final class PaneManager: ObservableObject {
     // MARK: - Input Routing
 
     func toggleBroadcast() {
-        inputRoutingMode = inputRoutingMode == .broadcast ? .singleFocus : .broadcast
+        if soloPaneId != nil {
+            // End solo and return to broadcast.
+            soloPaneId = nil
+        } else {
+            inputRoutingMode = inputRoutingMode == .broadcast ? .singleFocus : .broadcast
+        }
+    }
+
+    /// Temporarily route input to a single pane while in broadcast/group mode.
+    /// Option+Click the same pane again to return to broadcast.
+    func soloPane(_ paneID: UUID) {
+        if soloPaneId == paneID {
+            soloPaneId = nil
+        } else {
+            guard rootNode.findPane(id: paneID) != nil else { return }
+            soloPaneId = paneID
+            focusPane(paneID)
+        }
+    }
+
+    func endSolo() {
+        soloPaneId = nil
     }
 
     func togglePaneInGroup(_ paneID: UUID) {
@@ -179,6 +210,9 @@ final class PaneManager: ObservableObject {
 
         let wasFocused = paneID == focusedPaneId
         rootNode = rootNode.removePane(paneID)
+
+        // Clean up solo state if the soloed pane was closed.
+        if soloPaneId == paneID { soloPaneId = nil }
 
         // Clean up input routing state for the closed pane.
         groupPaneIDs.remove(paneID)
@@ -251,6 +285,7 @@ final class PaneManager: ObservableObject {
         savedInputRoutingMode = inputRoutingMode
         savedGroupPaneIDs = groupPaneIDs
         maximizedPaneId = paneID
+        soloPaneId = nil
         inputRoutingMode = .singleFocus
         groupPaneIDs.removeAll()
         focusPane(paneID)

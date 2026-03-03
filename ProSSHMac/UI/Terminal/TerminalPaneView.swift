@@ -4,6 +4,7 @@
 // Renders a single terminal pane with focus border, dim overlay, and context menu.
 
 import SwiftUI
+import AppKit
 
 struct TerminalPaneView<Content: View>: View {
     let pane: TerminalPane
@@ -23,6 +24,10 @@ struct TerminalPaneView<Content: View>: View {
 
     private var isFocused: Bool {
         pane.id == paneManager.focusedPaneId
+    }
+
+    private var isSoloed: Bool {
+        paneManager.soloPaneId == pane.id && inputRoutingMode != .singleFocus
     }
 
     private var isMaximized: Bool {
@@ -49,30 +54,56 @@ struct TerminalPaneView<Content: View>: View {
                 }
             }
             .overlay(alignment: .topLeading) {
-                if isInputTarget && inputRoutingMode != .singleFocus && paneManager.paneCount > 1 {
-                    RoundedRectangle(cornerRadius: 4)
-                        .stroke(Color.orange, lineWidth: 2)
-                        .allowsHitTesting(false)
+                if paneManager.paneCount > 1 && inputRoutingMode != .singleFocus {
+                    if isSoloed {
+                        RoundedRectangle(cornerRadius: 4)
+                            .stroke(Color.cyan, lineWidth: 2)
+                            .allowsHitTesting(false)
+                    } else if isInputTarget && paneManager.soloPaneId == nil {
+                        RoundedRectangle(cornerRadius: 4)
+                            .stroke(Color.orange, lineWidth: 2)
+                            .allowsHitTesting(false)
+                    }
                 }
             }
             .overlay(alignment: .topTrailing) {
-                if isInputTarget && inputRoutingMode != .singleFocus && paneManager.paneCount > 1 {
-                    HStack(spacing: 3) {
-                        Image(systemName: inputRoutingMode == .broadcast
-                            ? "antenna.radiowaves.left.and.right" : "person.2.fill")
-                        Text(inputRoutingMode == .broadcast ? "Broadcast" : "Group")
-                            .font(.caption2.weight(.semibold))
+                if paneManager.paneCount > 1 && inputRoutingMode != .singleFocus {
+                    if isSoloed {
+                        HStack(spacing: 3) {
+                            Image(systemName: "lock.fill")
+                            Text("Solo")
+                                .font(.caption2.weight(.semibold))
+                        }
+                        .padding(.horizontal, 6).padding(.vertical, 3)
+                        .background(.cyan.opacity(0.85), in: Capsule())
+                        .foregroundColor(.black)
+                        .padding(6)
+                        .allowsHitTesting(false)
+                    } else if isInputTarget && paneManager.soloPaneId == nil {
+                        HStack(spacing: 3) {
+                            Image(systemName: inputRoutingMode == .broadcast
+                                ? "antenna.radiowaves.left.and.right" : "person.2.fill")
+                            Text(inputRoutingMode == .broadcast ? "Broadcast" : "Group")
+                                .font(.caption2.weight(.semibold))
+                        }
+                        .padding(.horizontal, 6).padding(.vertical, 3)
+                        .background(.orange.opacity(0.85), in: Capsule())
+                        .foregroundColor(.white)
+                        .padding(6)
+                        .allowsHitTesting(false)
                     }
-                    .padding(.horizontal, 6).padding(.vertical, 3)
-                    .background(.orange.opacity(0.85), in: Capsule())
-                    .foregroundColor(.white)
-                    .padding(6)
-                    .allowsHitTesting(false)
                 }
             }
             .contentShape(Rectangle())
             .onTapGesture {
-                paneManager.focusPane(pane.id)
+                // Option+Click in broadcast/group mode → solo this pane for input.
+                if NSEvent.modifierFlags.contains(.option)
+                    && inputRoutingMode != .singleFocus
+                    && paneManager.paneCount > 1 {
+                    paneManager.soloPane(pane.id)
+                } else {
+                    paneManager.focusPane(pane.id)
+                }
             }
             .contextMenu {
                 paneContextMenu
