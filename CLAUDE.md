@@ -47,6 +47,8 @@ Key capabilities:
 - KeyForge (SSH key generation), certificate management, port forwarding
 - Visual effects: CRT scanlines, barrel distortion, gradient glow, matrix screensaver
 - AI `apply_patch` tool: create/update/delete files via V4A diff with user approval flow
+- AI `send_input` tool: sends raw input/control sequences to terminal for interactive prompts
+- AI broadcast: in broadcast/group mode, the AI agent sees all sessions, can target individual sessions via `target_session`, and fans out commands across all broadcast sessions
 
 ---
 
@@ -77,28 +79,34 @@ ProSSHMac/
 ├── CLibSSH/              # C wrapper around libssh (ProSSHLibSSHWrapper.c/.h)
 ├── Models/               # Host, Session, Transfer, SSHKey, SSHCertificate, AuditLogEntry
 ├── Services/             # SessionManager, TransferManager, EncryptedStorage, PortForwardingManager,
+│   │                     #   LocalPTYProcess, LocalShellBootstrap,
+│   │                     #   OpenAIResponsesPayloadTypes, OpenAIResponsesStreamAccumulator
 │   ├── SSH/              #   LibSSHTransport, MockSSHTransport, SSHCredentialResolver, RemotePath, etc.
-│   ├── AI/               #   AIToolHandler, AIAgentRunner, AIToolDefinitions, ApplyPatchTool, etc.
+│   ├── AI/               #   AIToolHandler, AIAgentRunner, AIToolDefinitions, ApplyPatchTool,
+│   │                     #   AIToolHandler+InteractiveInput, etc.
 │   └── LLM/             #   LLMTypes, LLMProvider, LLMProviderRegistry, LLMAPIKeyStore
 │       └── Providers/    #   ChatCompletionsClient, MistralProvider, OllamaProvider, AnthropicProvider, DeepSeekProvider
 ├── Terminal/
 │   ├── Grid/             # TerminalGrid + 11 TerminalGrid+*.swift extensions, TerminalCell, ScrollbackBuffer
 │   ├── Parser/           # VT parser, CSIHandler, OSCHandler, SGRHandler, ESCHandler, DCSHandler
-│   ├── Input/            # KeyEncoder, MouseEncoder, HardwareKeyHandler, PasteHandler
+│   ├── Input/            # KeyEncoder, MouseEncoder, HardwareKeyHandler, PasteHandler, LocalTerminalSubsystem
 │   ├── Renderer/         # MetalTerminalRenderer + 8 MetalTerminalRenderer+*.swift extensions,
-│   │                     #   GlyphAtlas, GlyphCache, CellBuffer, CursorRenderer, Shaders.metal
-│   ├── Effects/          # CRT, gradient, scanner, blink, transparency, bell, link detection
+│   │                     #   GlyphAtlas, GlyphCache, CellBuffer, CursorRenderer, Shaders.metal,
+│   │                     #   TerminalMetalView, SelectionRenderer
+│   ├── Effects/          # CRT, gradient, scanner, blink, transparency, bell, link detection, PromptAppearance
 │   └── Features/         # PaneManager, SessionTabManager, TerminalSearch, QuickCommands,
 │                         #   SessionRecorder, TerminalHistoryIndex, CommandBlock
 ├── UI/
 │   ├── Terminal/         # TerminalView.swift (1,002L), TerminalAIAssistantPane,
-│   │                     #   MetalTerminalSessionSurface, + 11 extracted Terminal*.swift components
+│   │                     #   MetalTerminalSessionSurface, TerminalInputCaptureView,
+│   │                     #   ExternalTerminalWindowView, + 11 extracted Terminal*.swift components
 │   ├── Hosts/            # HostsView, HostFormView
 │   ├── Transfers/        # TransfersView
-│   ├── Settings/         # SettingsView + effect settings subviews
+│   ├── Settings/         # SettingsView + effect settings subviews, PromptAppearanceSettingsView
 │   ├── KeyForge/         # KeyForgeView, KeyInspectorView
 │   └── Certificates/     # CertificatesView, CertificateInspectorView
-├── ViewModels/           # HostListViewModel, KeyForgeViewModel, CertificatesViewModel, AIProviderSettingsViewModel
+├── ViewModels/           # HostListViewModel, KeyForgeViewModel, CertificatesViewModel,
+│                         #   AIProviderSettingsViewModel, TerminalAIAssistantViewModel
 └── Platform/             # PlatformCompatibility (macOS/iOS shims)
 ```
 
@@ -150,6 +158,19 @@ All paths below are relative to the repo root. Source files live under `ProSSHMa
 | `ProSSHMac/Services/AI/ApplyPatchTool.swift` | `PatchApprovalTracker`, `LocalWorkspacePatcher`, `RemotePatchCommandBuilder`, tool definition | ~456 lines |
 | `ProSSHMac/Services/AI/UnifiedDiffPatcher.swift` | V4A unified diff parser and applicator | ~370 lines |
 | `ProSSHMac/ViewModels/AIProviderSettingsViewModel.swift` | Multi-provider settings VM: provider/model picker, API key management, Combine sync to registry | ~175 lines |
+| `ProSSHMac/ViewModels/TerminalAIAssistantViewModel.swift` | AI copilot sidebar VM: messages, streaming, reasoning panels, patch approval, draft prompts | ~379 lines |
+| `ProSSHMac/Services/LocalPTYProcess.swift` | Actor wrapping Unix forkpty: spawn local shell, async output stream, resize, input write | ~302 lines |
+| `ProSSHMac/Services/LocalShellBootstrap.swift` | Builds child env for local PTY sessions: user info, env vars, custom prompt overlay via ZDOTDIR/BASH_ENV | ~203 lines |
+| `ProSSHMac/Services/OpenAIResponsesPayloadTypes.swift` | Wire-format types for OpenAI Responses API: CreateRequestPayload, CreateInputMessage, error types | ~82 lines |
+| `ProSSHMac/Services/OpenAIResponsesStreamAccumulator.swift` | Accumulates SSE streaming events from OpenAI Responses API, merges output items, assembles final response | ~298 lines |
+| `ProSSHMac/Services/AI/AIToolHandler+InteractiveInput.swift` | `send_input` AI tool: sends raw input/control sequences to terminal without newline, for interactive prompts | ~110 lines |
+| `ProSSHMac/UI/Terminal/TerminalInputCaptureView.swift` | NSViewRepresentable capturing keyboard for local terminal sessions: key encoding, copy/paste shortcuts, LocalTerminalSubsystem bridge | ~423 lines |
+| `ProSSHMac/UI/Terminal/ExternalTerminalWindowView.swift` | SwiftUI view for terminal sessions in a separate window: session header, Metal surface, input capture | ~316 lines |
+| `ProSSHMac/UI/Settings/PromptAppearanceSettingsView.swift` | Settings UI for local prompt colors: color pickers + Canvas preview | ~293 lines |
+| `ProSSHMac/Terminal/Input/LocalTerminalSubsystem.swift` | Local terminal input policy + key encoding: LocalTerminalInputPayload, shouldCaptureHardwareKeyEvent, encodeKeyEvent → PTY bytes | ~184 lines |
+| `ProSSHMac/Terminal/Renderer/TerminalMetalView.swift` | NSViewRepresentable wrapping MTKView: gesture recognizers (click, drag, scroll, double/triple tap), background opacity | ~177 lines |
+| `ProSSHMac/Terminal/Renderer/SelectionRenderer.swift` | Selection state (start/end, char/word/line expansion), applies selection flags to snapshot cells for shaders | ~235 lines |
+| `ProSSHMac/Terminal/Effects/PromptAppearance.swift` | Local prompt color config (username/path/symbol styles), shell prompt generation for zsh/bash, UserDefaults persistence | ~269 lines |
 | `ProSSHMac/Terminal/Grid/TerminalGrid.swift` | Terminal grid state, init, buffer access, grapheme encoding, helpers | 457 lines |
 | `ProSSHMac/Terminal/Grid/TerminalGrid+ModeSetters.swift` | Mode flag setters (DEC modes, mouse, charset, SGR) | |
 | `ProSSHMac/Terminal/Grid/TerminalGrid+OSCHandlers.swift` | OSC title/color/hyperlink handlers | |
@@ -173,10 +194,13 @@ All paths below are relative to the repo root. Source files live under `ProSSHMa
 - **Terminal keyboard input** goes through `DirectTerminalInputNSView` (transparent NSView overlay, `hitTest` returns `nil`). It captures keys when it's the first responder.
 - **Focus management** between terminal and chat sidebar uses `isAIAssistantComposerFocused` state. The `ComposerTextView` (NSTextView) signals focus via callbacks. `focusSessionAndPane()` resigns text inputs and re-arms terminal input.
 - **AI service stack (multi-provider)**: `OpenAIAgentService.sendProviderRequest()` routes requests based on `providerRegistry.activeProviderID`: OpenAI (`.openai`) stays on Responses API path (translates `LLMRequest` ↔ `OpenAIResponsesRequest` → `OpenAIResponsesService`); non-OpenAI providers (Mistral, Ollama, Anthropic, DeepSeek) go through `LLMProvider` protocol (`sendRequest`/`sendRequestStreaming`). Agent layer uses provider-agnostic types (`LLMMessage`, `LLMToolCall`, `LLMToolOutput`, `LLMConversationState`, `LLMRequest`, `LLMResponse`). `LLMProviderRegistry` manages active provider/model selection. `KeychainLLMAPIKeyStore` stores API keys per provider; `OpenAIResponsesService` uses `LLMAPIKeyProviding` directly (legacy `OpenAIAPIKeyProviding` protocol and bridge removed in Phase 5). Chat Completions providers (Mistral, Ollama, DeepSeek) pack full wire message history (`[ChatCompletionsWireMessage]`) into `LLMConversationState.data` between iterations. Anthropic packs `[AnthropicWireMessage]` history (excluding thinking blocks) into `LLMConversationState.data`. `AIAgentRunner` detects provider mismatch and clears stale conversation state.
-- **AI agent tools**: 11 tools + `apply_patch`. `execute_and_wait` runs a command and returns output+exit code in one step (marker-based polling). `execute_command` is fire-and-forget for interactive programs. Context persistence via `LLMConversationState` (opaque per-provider state; OpenAI packs `previousResponseID` as a string). Default max iterations: 50 (app override: 200). Direct action prompts (starting with "run "/"execute "/"cd ") use a restricted tool set with 15-iteration cap.
+- **AI agent tools**: 12 tools + `apply_patch`. `execute_and_wait` runs a command and returns output+exit code in one step (marker-based polling). `execute_command` is fire-and-forget for interactive programs. `send_input` sends raw bytes/control sequences to the terminal without newline (for interactive prompts). Context persistence via `LLMConversationState` (opaque per-provider state; OpenAI packs `previousResponseID` as a string). Default max iterations: 50 (app override: 200). Direct action prompts (starting with "run "/"execute "/"cd ") use a restricted tool set with 15-iteration cap.
+- **Local PTY sessions**: `LocalPTYProcess` (actor; wraps `forkpty`) is initialized by `LocalShellBootstrap` (resolves user env, injects ZDOTDIR/BASH_ENV for custom prompts). `LocalTerminalSubsystem` translates `NSEvent` → PTY bytes. `TerminalInputCaptureView` is the SwiftUI keyboard bridge for local sessions.
 - **`apply_patch` remote update flow** (Phase 3 fix, 2026-02-27): `buildReadCommand(path:)` (emits `base64 <path>`) → `decodeBase64FileOutput(_:)` (filters output to base64-only lines, decodes UTF-8) → `applyDiff(input:diff:)` (V4A in-process) → `buildWriteCommand(path:content:)` (base64 heredoc write). This replaced `buildRemoteReadFileChunkCommand` (sed) which contaminated `originalContent` with the shell prompt and command echo, causing V4A context matching failures. `V4AParserState` in `apply_diff.swift` uses `nonisolated deinit` to prevent `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` from routing deallocation through `swift_task_deinitOnExecutorImpl` (which crashes in non-task contexts such as XCTest callbacks).
 - **`nonisolated` on TerminalGrid extension methods**: `TerminalGrid` is a `nonisolated final class` but `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` causes methods in separate extension files to default to `@MainActor`. All methods in every `TerminalGrid+*.swift` file must be explicitly `nonisolated`.
 - **Coordinator pattern for SessionManager**: Responsibilities are extracted into `@MainActor final class` coordinators (`SessionReconnectCoordinator`, `SessionKeepaliveCoordinator`, `TerminalRenderingCoordinator`, `SessionRecordingCoordinator`, `SessionAIToolCoordinator`, `SessionSFTPCoordinator`, `SessionShellIOCoordinator`). Each holds `weak var manager: SessionManager?`.
+- **Input routing (broadcast/group)**: `InputRoutingMode` enum (`.singleFocus`, `.broadcast`, `.selectGroup`) in `SplitNode.swift`. `PaneManager` holds `inputRoutingMode` and `groupPaneIDs`. `targetSessionIDs` (computed, deduplicated) resolves mode to session UUIDs. Fan-out happens at `TerminalView.directTerminalInputOverlay` callbacks. `Cmd+Shift+B` toggles broadcast. Broadcast bypasses the per-session safety-mode buffer. Maximize saves/restores routing state. Close-pane and sync-sessions clean stale group entries.
+- **AI broadcast (session-aware agent)**: `BroadcastContext` (`Sendable` struct in `AIToolHandler.swift`) holds `primarySessionID`, `allSessionIDs`, `sessionLabels`. Built by `OpenAIAgentService.buildBroadcastContext()` from `paneManager.targetSessionIDs`. All tools accept optional `target_session` parameter (nullable string for OpenAI strict mode). `resolveTargetSessions()` resolves: explicit target → that session; broadcast + no target → all sessions; single focus → primary. `execute_and_wait` uses sequential fan-out (not TaskGroup — `@MainActor` constraint); results labeled in JSON array. `AIAgentRunner` injects session map preamble. Developer prompt includes `MULTI-SESSION BROADCAST` instructions. Spec: `docs/AIBroadCaster.md`.
 
 ---
 
@@ -205,5 +229,11 @@ All paths below are relative to the repo root. Source files live under `ProSSHMa
 | `docs/RefactorMetalTerminalRenderer.md` | Completed refactor spec — MetalTerminalRenderer (Phases 0–8) |
 | `RefactorTerminalGrid.md` | Completed refactor spec — TerminalGrid decomposition (Phases 0–11) |
 | `RefactorTerminalView.md` | Completed refactor spec — TerminalView decomposition (Phases 0–9) |
-| `RefactorTheActor.md` | Completed refactor spec — Strict Concurrency / actor isolation (Phases 0–8) |
 | `AGENTS.md` | Working memory for GPT-based agents (legacy, kept for compatibility) |
+| `docs/multiprovider-architecture.md` | Multi-provider LLM architecture overview |
+| `docs/RemotePatchingFix.md` | Remote patching fix details (base64 read/write approach) |
+| `docs/BlackTextRenderingFix.md` | Black text rendering fix — SGR hidden marker, timeout SGR reset, selection CellBuffer flush (issue #9) |
+| `docs/FixTerminalCopyAndSelection.md` | Terminal copy/selection fix — click-to-deselect, drag safety, wide-char skip (issue #22) |
+| `docs/IntegrationOfNewFeats.md` | Pre-built module integration guide — TOTP 2FA and other future features |
+| `docs/Issue15.md` | Multi-session broadcast input — routing modes, fan-out architecture, edge cases |
+| `docs/AIBroadCaster.md` | AI Broadcaster — session-aware AI agent for multi-pane broadcast, BroadcastContext, target_session resolution |

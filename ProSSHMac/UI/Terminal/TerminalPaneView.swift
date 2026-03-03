@@ -17,6 +17,8 @@ struct TerminalPaneView<Content: View>: View {
     var availableSessions: [(id: UUID, label: String)] = []
     /// Called to split this pane with an existing session. Parameters: (sessionID, paneID, direction).
     var onSplitWithExistingSession: ((UUID, UUID, SplitDirection) -> Void)?
+    var inputRoutingMode: InputRoutingMode = .singleFocus
+    var isInputTarget: Bool = false
     @ViewBuilder let content: () -> Content
 
     private var isFocused: Bool {
@@ -44,6 +46,28 @@ struct TerminalPaneView<Content: View>: View {
                     RoundedRectangle(cornerRadius: 4)
                         .stroke(Color.accentColor, lineWidth: 1)
                         .allowsHitTesting(false)
+                }
+            }
+            .overlay(alignment: .topLeading) {
+                if isInputTarget && inputRoutingMode != .singleFocus && paneManager.paneCount > 1 {
+                    RoundedRectangle(cornerRadius: 4)
+                        .stroke(Color.orange, lineWidth: 2)
+                        .allowsHitTesting(false)
+                }
+            }
+            .overlay(alignment: .topTrailing) {
+                if isInputTarget && inputRoutingMode != .singleFocus && paneManager.paneCount > 1 {
+                    HStack(spacing: 3) {
+                        Image(systemName: inputRoutingMode == .broadcast
+                            ? "antenna.radiowaves.left.and.right" : "person.2.fill")
+                        Text(inputRoutingMode == .broadcast ? "Broadcast" : "Group")
+                            .font(.caption2.weight(.semibold))
+                    }
+                    .padding(.horizontal, 6).padding(.vertical, 3)
+                    .background(.orange.opacity(0.85), in: Capsule())
+                    .foregroundColor(.white)
+                    .padding(6)
+                    .allowsHitTesting(false)
                 }
             }
             .contentShape(Rectangle())
@@ -118,6 +142,50 @@ struct TerminalPaneView<Content: View>: View {
                 onMoveToNewTab?(pane.id)
             } label: {
                 Label("Move to New Tab", systemImage: "rectangle.portrait.on.rectangle.portrait")
+            }
+        }
+
+        if paneManager.paneCount > 1 {
+            Divider()
+
+            if paneManager.inputRoutingMode == .broadcast {
+                Button {
+                    paneManager.inputRoutingMode = .singleFocus
+                } label: {
+                    Label("Stop Broadcasting", systemImage: "antenna.radiowaves.left.and.right.slash")
+                }
+            } else {
+                Button {
+                    paneManager.inputRoutingMode = .broadcast
+                } label: {
+                    Label("Broadcast to All", systemImage: "antenna.radiowaves.left.and.right")
+                }
+            }
+
+            if paneManager.inputRoutingMode == .selectGroup {
+                if paneManager.groupPaneIDs.contains(pane.id) {
+                    Button {
+                        paneManager.togglePaneInGroup(pane.id)
+                    } label: {
+                        Label("Remove from Input Group", systemImage: "minus.circle")
+                    }
+                } else {
+                    Button {
+                        paneManager.togglePaneInGroup(pane.id)
+                    } label: {
+                        Label("Add to Input Group", systemImage: "plus.circle")
+                    }
+                }
+            } else {
+                Button {
+                    var initialGroup: Set<UUID> = [pane.id]
+                    if let focusedID = paneManager.focusedPane?.id, focusedID != pane.id {
+                        initialGroup.insert(focusedID)
+                    }
+                    paneManager.setSelectGroupMode(paneIDs: initialGroup)
+                } label: {
+                    Label("Start Group Selection...", systemImage: "person.2")
+                }
             }
         }
 

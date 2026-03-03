@@ -381,6 +381,11 @@ actor LibSSHTransport: SSHTransporting {
         let total: UnsafeMutablePointer<Int64>
     }
 
+    /// Sendable box for a heap-allocated cancel flag shared with withTaskCancellationHandler's onCancel closure.
+    private struct CancelFlagPointer: @unchecked Sendable {
+        let flag: UnsafeMutablePointer<Int32>
+    }
+
     func uploadFile(sessionID: UUID, localPath: String, remotePath: String, progressHandler: (@Sendable (Int64, Int64) -> Void)?) async throws -> SFTPTransferResult {
         guard let handle = handles[sessionID] else {
             throw SSHTransportError.sessionNotFound
@@ -395,6 +400,11 @@ actor LibSSHTransport: SSHTransporting {
             totalPtr.deinitialize(count: 1); totalPtr.deallocate()
         }
 
+        let cancelFlagPtr = UnsafeMutablePointer<Int32>.allocate(capacity: 1)
+        cancelFlagPtr.initialize(to: 0)
+        defer { cancelFlagPtr.deinitialize(count: 1); cancelFlagPtr.deallocate() }
+        let cancelBox = CancelFlagPointer(flag: cancelFlagPtr)
+
         let ptrs = ProgressPointers(bytes: bytesPtr, total: totalPtr)
         let pollingTask: Task<Void, Never>? = progressHandler.map { handler in
             Task.detached {
@@ -408,29 +418,32 @@ actor LibSSHTransport: SSHTransporting {
         var errorBuffer = [CChar](repeating: 0, count: 512)
         let targetPath = RemotePath.normalize(remotePath)
 
-        let result = localPath.withCString { localPtr in
-            targetPath.withCString { remotePtr in
-                prossh_libssh_sftp_upload_file(
-                    handle,
-                    localPtr,
-                    remotePtr,
-                    bytesPtr,
-                    totalPtr,
-                    &errorBuffer,
-                    errorBuffer.count
-                )
+        return try await withTaskCancellationHandler {
+            let cResult = localPath.withCString { localPtr in
+                targetPath.withCString { remotePtr in
+                    prossh_libssh_sftp_upload_file(
+                        handle,
+                        localPtr,
+                        remotePtr,
+                        bytesPtr,
+                        totalPtr,
+                        cancelFlagPtr,
+                        &errorBuffer,
+                        errorBuffer.count
+                    )
+                }
             }
+            pollingTask?.cancel()
+            progressHandler?(bytesPtr.pointee, totalPtr.pointee)
+            if cancelFlagPtr.pointee != 0 { throw CancellationError() }
+            if cResult != 0 {
+                let message = errorBuffer.asString
+                throw SSHTransportError.transportFailure(message: message.isEmpty ? "Failed to upload file via SFTP." : message)
+            }
+            return SFTPTransferResult(bytesTransferred: bytesPtr.pointee, totalBytes: totalPtr.pointee)
+        } onCancel: {
+            cancelBox.flag.pointee = 1
         }
-
-        pollingTask?.cancel()
-        progressHandler?(bytesPtr.pointee, totalPtr.pointee)
-
-        if result != 0 {
-            let message = errorBuffer.asString
-            throw SSHTransportError.transportFailure(message: message.isEmpty ? "Failed to upload file via SFTP." : message)
-        }
-
-        return SFTPTransferResult(bytesTransferred: bytesPtr.pointee, totalBytes: totalPtr.pointee)
     }
 
     func downloadFile(sessionID: UUID, remotePath: String, localPath: String) async throws -> SFTPTransferResult {
@@ -451,6 +464,11 @@ actor LibSSHTransport: SSHTransporting {
             totalPtr.deinitialize(count: 1); totalPtr.deallocate()
         }
 
+        let cancelFlagPtr = UnsafeMutablePointer<Int32>.allocate(capacity: 1)
+        cancelFlagPtr.initialize(to: 0)
+        defer { cancelFlagPtr.deinitialize(count: 1); cancelFlagPtr.deallocate() }
+        let cancelBox = CancelFlagPointer(flag: cancelFlagPtr)
+
         let ptrs = ProgressPointers(bytes: bytesPtr, total: totalPtr)
         let pollingTask: Task<Void, Never>? = progressHandler.map { handler in
             Task.detached {
@@ -464,29 +482,32 @@ actor LibSSHTransport: SSHTransporting {
         var errorBuffer = [CChar](repeating: 0, count: 512)
         let sourcePath = RemotePath.normalize(remotePath)
 
-        let result = sourcePath.withCString { remotePtr in
-            localPath.withCString { localPtr in
-                prossh_libssh_sftp_download_file(
-                    handle,
-                    remotePtr,
-                    localPtr,
-                    bytesPtr,
-                    totalPtr,
-                    &errorBuffer,
-                    errorBuffer.count
-                )
+        return try await withTaskCancellationHandler {
+            let cResult = sourcePath.withCString { remotePtr in
+                localPath.withCString { localPtr in
+                    prossh_libssh_sftp_download_file(
+                        handle,
+                        remotePtr,
+                        localPtr,
+                        bytesPtr,
+                        totalPtr,
+                        cancelFlagPtr,
+                        &errorBuffer,
+                        errorBuffer.count
+                    )
+                }
             }
+            pollingTask?.cancel()
+            progressHandler?(bytesPtr.pointee, totalPtr.pointee)
+            if cancelFlagPtr.pointee != 0 { throw CancellationError() }
+            if cResult != 0 {
+                let message = errorBuffer.asString
+                throw SSHTransportError.transportFailure(message: message.isEmpty ? "Failed to download file via SFTP." : message)
+            }
+            return SFTPTransferResult(bytesTransferred: bytesPtr.pointee, totalBytes: totalPtr.pointee)
+        } onCancel: {
+            cancelBox.flag.pointee = 1
         }
-
-        pollingTask?.cancel()
-        progressHandler?(bytesPtr.pointee, totalPtr.pointee)
-
-        if result != 0 {
-            let message = errorBuffer.asString
-            throw SSHTransportError.transportFailure(message: message.isEmpty ? "Failed to download file via SFTP." : message)
-        }
-
-        return SFTPTransferResult(bytesTransferred: bytesPtr.pointee, totalBytes: totalPtr.pointee)
     }
 
     func openForwardChannel(sessionID: UUID, remoteHost: String, remotePort: UInt16, sourceHost: String, sourcePort: UInt16) async throws -> any SSHForwardChannel {

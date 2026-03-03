@@ -17,8 +17,9 @@ enum SendInputToolDefinition {
                         "description": .string("Ordered sequence of inputs to send. Each element is a named special key (e.g. 'enter', 'ctrl_c', 'up') or a literal string sent verbatim as UTF-8. Multiple elements are joined and sent in one write."),
                         "items": .object(["type": .string("string")]),
                     ]),
+                    "target_session": AIToolDefinitions.targetSessionProperty,
                 ]),
-                "required": .array([.string("keys")]),
+                "required": .array([.string("keys"), .string("target_session")]),
                 "additionalProperties": .bool(false),
             ]),
             strict: true
@@ -31,6 +32,7 @@ enum SendInputToolDefinition {
 extension AIToolHandler {
     func executeSendInput(
         sessionID: UUID,
+        broadcastContext: BroadcastContext?,
         arguments: [String: LLMJSONValue],
         provider: any AIAgentSessionProviding
     ) async throws -> String {
@@ -50,11 +52,19 @@ extension AIToolHandler {
         }
 
         let payload = Self.resolveKeys(tokens)
-        await provider.sendRawShellInput(sessionID: sessionID, input: payload)
+        let targets = resolveTargetSessions(
+            arguments: arguments,
+            primarySessionID: sessionID,
+            broadcastContext: broadcastContext
+        )
+        for target in targets {
+            await provider.sendRawShellInput(sessionID: target, input: payload)
+        }
 
         return AIToolDefinitions.jsonString(from: .object([
             "ok": .bool(true),
             "sent_bytes": .number(Double(payload.utf8.count)),
+            "sessions_targeted": .number(Double(targets.count)),
         ]))
     }
 

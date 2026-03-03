@@ -80,6 +80,18 @@ enum AIToolDefinitions {
         - If a command could have irreversible side effects, mention the risk and ask for confirmation before executing.
         - Do not modify system files (/etc, /boot, etc.) unless the user specifically asks.
 
+        MULTI-SESSION BROADCAST:
+        - When broadcast mode is active, you control multiple terminal sessions simultaneously.
+        - Each session has a unique ID and label shown in the session map below the user message.
+        - All execution tools accept an optional "target_session" parameter (nullable string).
+          Pass null to target ALL broadcast sessions. Pass a session ID string to target only that session.
+        - Use get_session_info or get_current_screen with target_session to inspect individual sessions.
+        - When a command fails on one session but succeeds on others, use target_session
+          to fix the failing session individually.
+        - Issue parallel tool calls (multiple tool calls in one response) to work on
+          different sessions simultaneously when targeting specific sessions.
+        - In single-session mode (no broadcast), target_session can be null — it defaults to the active session.
+
         FORMAT:
         - Use readable markdown with short paragraphs, bullet points, and code blocks.
         - If the user asks for a list (abilities, steps, options, checks), respond as a markdown bullet or numbered list, not a single dense paragraph.
@@ -174,6 +186,11 @@ enum AIToolDefinitions {
 
     // MARK: - Tool Definitions
 
+    static let targetSessionProperty: LLMJSONValue = .object([
+        "type": .array([.string("string"), .string("null")]),
+        "description": .string("Session ID to target. Pass null to target all sessions in broadcast mode, or the primary session in single mode. Use get_session_info to see available sessions."),
+    ])
+
     static func buildToolDefinitions(patchToolEnabled: Bool = true) -> [LLMToolDefinition] {
         let commonNoExtraProperties = LLMJSONValue.bool(false)
 
@@ -192,8 +209,9 @@ enum AIToolDefinitions {
                             "type": .string("integer"),
                             "description": .string("Max results to return (1-50)."),
                         ]),
+                        "target_session": targetSessionProperty,
                     ]),
-                    "required": .array([.string("query"), .string("limit")]),
+                    "required": .array([.string("query"), .string("limit"), .string("target_session")]),
                     "additionalProperties": commonNoExtraProperties,
                 ]),
                 strict: true
@@ -212,8 +230,9 @@ enum AIToolDefinitions {
                             "type": .string("integer"),
                             "description": .string("Maximum characters to return (100-16000)."),
                         ]),
+                        "target_session": targetSessionProperty,
                     ]),
-                    "required": .array([.string("block_id"), .string("max_chars")]),
+                    "required": .array([.string("block_id"), .string("max_chars"), .string("target_session")]),
                     "additionalProperties": commonNoExtraProperties,
                 ]),
                 strict: true
@@ -228,8 +247,9 @@ enum AIToolDefinitions {
                             "type": .string("integer"),
                             "description": .string("Maximum lines to return (10-800)."),
                         ]),
+                        "target_session": targetSessionProperty,
                     ]),
-                    "required": .array([.string("max_lines")]),
+                    "required": .array([.string("max_lines"), .string("target_session")]),
                     "additionalProperties": commonNoExtraProperties,
                 ]),
                 strict: true
@@ -252,8 +272,9 @@ enum AIToolDefinitions {
                             "type": .string("integer"),
                             "description": .string("Maximum results to return (1-200)."),
                         ]),
+                        "target_session": targetSessionProperty,
                     ]),
-                    "required": .array([.string("path"), .string("name_pattern"), .string("max_results")]),
+                    "required": .array([.string("path"), .string("name_pattern"), .string("max_results"), .string("target_session")]),
                     "additionalProperties": commonNoExtraProperties,
                 ]),
                 strict: true
@@ -276,8 +297,9 @@ enum AIToolDefinitions {
                             "type": .string("integer"),
                             "description": .string("Maximum results to return (1-200)."),
                         ]),
+                        "target_session": targetSessionProperty,
                     ]),
-                    "required": .array([.string("path"), .string("text_pattern"), .string("max_results")]),
+                    "required": .array([.string("path"), .string("text_pattern"), .string("max_results"), .string("target_session")]),
                     "additionalProperties": commonNoExtraProperties,
                 ]),
                 strict: true
@@ -300,8 +322,9 @@ enum AIToolDefinitions {
                             "type": .string("integer"),
                             "description": .string("Number of lines to read (1-500)."),
                         ]),
+                        "target_session": targetSessionProperty,
                     ]),
-                    "required": .array([.string("path"), .string("start_line"), .string("line_count")]),
+                    "required": .array([.string("path"), .string("start_line"), .string("line_count"), .string("target_session")]),
                     "additionalProperties": commonNoExtraProperties,
                 ]),
                 strict: true
@@ -335,8 +358,9 @@ enum AIToolDefinitions {
                                 "additionalProperties": commonNoExtraProperties,
                             ]),
                         ]),
+                        "target_session": targetSessionProperty,
                     ]),
-                    "required": .array([.string("files")]),
+                    "required": .array([.string("files"), .string("target_session")]),
                     "additionalProperties": commonNoExtraProperties,
                 ]),
                 strict: true
@@ -351,8 +375,9 @@ enum AIToolDefinitions {
                             "type": .string("integer"),
                             "description": .string("Max command blocks to return (1-50)."),
                         ]),
+                        "target_session": targetSessionProperty,
                     ]),
-                    "required": .array([.string("limit")]),
+                    "required": .array([.string("limit"), .string("target_session")]),
                     "additionalProperties": commonNoExtraProperties,
                 ]),
                 strict: true
@@ -367,8 +392,9 @@ enum AIToolDefinitions {
                             "type": .string("string"),
                             "description": .string("Shell command to execute."),
                         ]),
+                        "target_session": targetSessionProperty,
                     ]),
-                    "required": .array([.string("command")]),
+                    "required": .array([.string("command"), .string("target_session")]),
                     "additionalProperties": commonNoExtraProperties,
                 ]),
                 strict: true
@@ -387,8 +413,9 @@ enum AIToolDefinitions {
                             "type": .string("integer"),
                             "description": .string("Max seconds to wait for completion (5-60, default 30)."),
                         ]),
+                        "target_session": targetSessionProperty,
                     ]),
-                    "required": .array([.string("command"), .string("timeout_seconds")]),
+                    "required": .array([.string("command"), .string("timeout_seconds"), .string("target_session")]),
                     "additionalProperties": commonNoExtraProperties,
                 ]),
                 strict: true
@@ -398,8 +425,10 @@ enum AIToolDefinitions {
                 description: "Get metadata about the current terminal session: host label, username, hostname, port, connection state, whether it is local or SSH, start time, and current working directory.",
                 parameters: .object([
                     "type": .string("object"),
-                    "properties": .object([:]),
-                    "required": .array([]),
+                    "properties": .object([
+                        "target_session": targetSessionProperty,
+                    ]),
+                    "required": .array([.string("target_session")]),
                     "additionalProperties": commonNoExtraProperties,
                 ]),
                 strict: true

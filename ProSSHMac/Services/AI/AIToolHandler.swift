@@ -2,6 +2,14 @@
 import Foundation
 import os.log
 
+struct BroadcastContext: Sendable {
+    let primarySessionID: UUID
+    let allSessionIDs: [UUID]
+    let sessionLabels: [UUID: String]
+
+    var isBroadcasting: Bool { allSessionIDs.count > 1 }
+}
+
 @MainActor final class AIToolHandler {
     private static let logger = Logger(subsystem: "com.prossh", category: "AICopilot.ToolHandler")
     weak var service: OpenAIAgentService?
@@ -14,6 +22,7 @@ import os.log
 
     func executeToolCalls(
         sessionID: UUID,
+        broadcastContext: BroadcastContext?,
         toolCalls: [LLMToolCall],
         traceID: String
     ) async -> [LLMToolOutput] {
@@ -25,6 +34,7 @@ import os.log
             do {
                 let output = try await executeSingleToolCall(
                     sessionID: sessionID,
+                    broadcastContext: broadcastContext,
                     toolCall: toolCall
                 )
                 outputs.append(.init(callID: toolCall.id, output: output))
@@ -53,6 +63,7 @@ import os.log
 
     private func executeSingleToolCall(
         sessionID: UUID,
+        broadcastContext: BroadcastContext?,
         toolCall: LLMToolCall
     ) async throws -> String {
         let arguments = try Self.decodeArguments(
@@ -72,8 +83,13 @@ import os.log
                 toolName: toolCall.name
             )
             let limit = Self.clamp(Self.optionalInt(key: "limit", in: arguments) ?? 20, min: 1, max: 50)
+            let resolvedID = resolveTargetSessions(
+                arguments: arguments,
+                primarySessionID: sessionID,
+                broadcastContext: broadcastContext
+            ).first ?? sessionID
             let blocks = await provider.searchCommandHistory(
-                sessionID: sessionID,
+                sessionID: resolvedID,
                 query: query,
                 limit: limit
             )
@@ -100,7 +116,12 @@ import os.log
                 min: 100,
                 max: 16000
             )
-            let output = await provider.commandOutput(sessionID: sessionID, blockID: blockID)
+            let resolvedID = resolveTargetSessions(
+                arguments: arguments,
+                primarySessionID: sessionID,
+                broadcastContext: broadcastContext
+            ).first ?? sessionID
+            let output = await provider.commandOutput(sessionID: resolvedID, blockID: blockID)
             let cappedOutput = output.map { String($0.prefix(maxChars)) }
             let totalChars = output.map { $0.count }
             let returnedChars = cappedOutput.map { $0.count }
@@ -115,24 +136,82 @@ import os.log
 
         case "get_current_screen":
             let limit = Self.clamp(Self.optionalInt(key: "max_lines", in: arguments) ?? 200, min: 10, max: 800)
-            let allLines = provider.shellBuffers[sessionID] ?? []
-            let lines = Array(allLines.suffix(limit))
-            return AIToolDefinitions.jsonString(from: .object([
-                "ok": .bool(true),
-                "working_directory": provider.workingDirectoryBySessionID[sessionID].map(LLMJSONValue.string) ?? .null,
-                "lines": .array(lines.map(LLMJSONValue.string)),
-            ]))
+            let targets = resolveTargetSessions(
+                arguments: arguments,
+                primarySessionID: sessionID,
+                broadcastContext: broadcastContext
+            )
+            if targets.count == 1 {
+                let target = targets[0]
+                let allLines = provider.shellBuffers[target] ?? []
+                let lines = Array(allLines.suffix(limit))
+                return AIToolDefinitions.jsonString(from: .object([
+                    "ok": .bool(true),
+                    "working_directory": provider.workingDirectoryBySessionID[target].map(LLMJSONValue.string) ?? .null,
+                    "lines": .array(lines.map(LLMJSONValue.string)),
+                ]))
+            } else if let ctx = broadcastContext {
+                var sessionResults: [(sessionID: UUID, output: String)] = []
+                for target in targets {
+                    let allLines = provider.shellBuffers[target] ?? []
+                    let lines = Array(allLines.suffix(limit))
+                    sessionResults.append((target, lines.joined(separator: "\n")))
+                }
+                return AIToolDefinitions.jsonString(from: .object([
+                    "ok": .bool(true),
+                    "sessions_targeted": .number(Double(targets.count)),
+                    "output": .string(formatBroadcastResult(results: sessionResults, context: ctx)),
+                ]))
+            } else {
+                let allLines = provider.shellBuffers[sessionID] ?? []
+                let lines = Array(allLines.suffix(limit))
+                return AIToolDefinitions.jsonString(from: .object([
+                    "ok": .bool(true),
+                    "working_directory": provider.workingDirectoryBySessionID[sessionID].map(LLMJSONValue.string) ?? .null,
+                    "lines": .array(lines.map(LLMJSONValue.string)),
+                ]))
+            }
 
         case "get_recent_commands":
             let limit = Self.clamp(Self.optionalInt(key: "limit", in: arguments) ?? 20, min: 1, max: 50)
-            let blocks = await provider.recentCommandBlocks(sessionID: sessionID, limit: limit)
-            return AIToolDefinitions.jsonString(from: .object([
-                "ok": .bool(true),
-                "results": .array(blocks.map(Self.commandBlockSummary)),
-            ]))
+            let targets = resolveTargetSessions(
+                arguments: arguments,
+                primarySessionID: sessionID,
+                broadcastContext: broadcastContext
+            )
+            if targets.count == 1 {
+                let blocks = await provider.recentCommandBlocks(sessionID: targets[0], limit: limit)
+                return AIToolDefinitions.jsonString(from: .object([
+                    "ok": .bool(true),
+                    "results": .array(blocks.map(Self.commandBlockSummary)),
+                ]))
+            } else if let ctx = broadcastContext {
+                var sessionResults: [(sessionID: UUID, output: String)] = []
+                for target in targets {
+                    let blocks = await provider.recentCommandBlocks(sessionID: target, limit: limit)
+                    let json = AIToolDefinitions.jsonString(from: .array(blocks.map(Self.commandBlockSummary)))
+                    sessionResults.append((target, json))
+                }
+                return AIToolDefinitions.jsonString(from: .object([
+                    "ok": .bool(true),
+                    "sessions_targeted": .number(Double(targets.count)),
+                    "output": .string(formatBroadcastResult(results: sessionResults, context: ctx)),
+                ]))
+            } else {
+                let blocks = await provider.recentCommandBlocks(sessionID: sessionID, limit: limit)
+                return AIToolDefinitions.jsonString(from: .object([
+                    "ok": .bool(true),
+                    "results": .array(blocks.map(Self.commandBlockSummary)),
+                ]))
+            }
 
         case "search_filesystem":
-            guard let session = provider.sessions.first(where: { $0.id == sessionID }) else {
+            let resolvedID = resolveTargetSessions(
+                arguments: arguments,
+                primarySessionID: sessionID,
+                broadcastContext: broadcastContext
+            ).first ?? sessionID
+            guard let session = provider.sessions.first(where: { $0.id == resolvedID }) else {
                 throw AIAgentServiceError.sessionNotFound
             }
 
@@ -158,7 +237,7 @@ import os.log
 
             let result: LLMJSONValue
             if session.isLocal {
-                let workingDirectory = provider.workingDirectoryBySessionID[sessionID]
+                let workingDirectory = provider.workingDirectoryBySessionID[resolvedID]
                 result = try await Self.searchFilesystemEntries(
                     path: searchPath,
                     namePattern: namePattern,
@@ -168,7 +247,7 @@ import os.log
             } else {
                 result = await searchFilesystemEntriesRemote(
                     provider: provider,
-                    sessionID: sessionID,
+                    sessionID: resolvedID,
                     path: searchPath,
                     namePattern: namePattern,
                     maxResults: maxResults
@@ -177,7 +256,12 @@ import os.log
             return AIToolDefinitions.jsonString(from: result)
 
         case "search_file_contents":
-            guard let session = provider.sessions.first(where: { $0.id == sessionID }) else {
+            let resolvedID = resolveTargetSessions(
+                arguments: arguments,
+                primarySessionID: sessionID,
+                broadcastContext: broadcastContext
+            ).first ?? sessionID
+            guard let session = provider.sessions.first(where: { $0.id == resolvedID }) else {
                 throw AIAgentServiceError.sessionNotFound
             }
 
@@ -203,7 +287,7 @@ import os.log
 
             let result: LLMJSONValue
             if session.isLocal {
-                let workingDirectory = provider.workingDirectoryBySessionID[sessionID]
+                let workingDirectory = provider.workingDirectoryBySessionID[resolvedID]
                 result = try await Self.searchFileContents(
                     path: searchPath,
                     textPattern: textPattern,
@@ -213,7 +297,7 @@ import os.log
             } else {
                 result = await searchFileContentsRemote(
                     provider: provider,
-                    sessionID: sessionID,
+                    sessionID: resolvedID,
                     path: searchPath,
                     textPattern: textPattern,
                     maxResults: maxResults
@@ -222,7 +306,12 @@ import os.log
             return AIToolDefinitions.jsonString(from: result)
 
         case "read_file_chunk":
-            guard let session = provider.sessions.first(where: { $0.id == sessionID }) else {
+            let resolvedID = resolveTargetSessions(
+                arguments: arguments,
+                primarySessionID: sessionID,
+                broadcastContext: broadcastContext
+            ).first ?? sessionID
+            guard let session = provider.sessions.first(where: { $0.id == resolvedID }) else {
                 throw AIAgentServiceError.sessionNotFound
             }
 
@@ -252,7 +341,7 @@ import os.log
 
             let result: LLMJSONValue
             if session.isLocal {
-                let workingDirectory = provider.workingDirectoryBySessionID[sessionID]
+                let workingDirectory = provider.workingDirectoryBySessionID[resolvedID]
                 result = try await Self.readLocalFileChunk(
                     path: path,
                     startLine: startLine,
@@ -262,7 +351,7 @@ import os.log
             } else {
                 result = await readRemoteFileChunk(
                     provider: provider,
-                    sessionID: sessionID,
+                    sessionID: resolvedID,
                     path: path,
                     startLine: startLine,
                     lineCount: lineCount
@@ -271,7 +360,12 @@ import os.log
             return AIToolDefinitions.jsonString(from: result)
 
         case "read_files":
-            guard let session = provider.sessions.first(where: { $0.id == sessionID }) else {
+            let resolvedID = resolveTargetSessions(
+                arguments: arguments,
+                primarySessionID: sessionID,
+                broadcastContext: broadcastContext
+            ).first ?? sessionID
+            guard let session = provider.sessions.first(where: { $0.id == resolvedID }) else {
                 throw AIAgentServiceError.sessionNotFound
             }
 
@@ -303,7 +397,7 @@ import os.log
 
                 let result: LLMJSONValue
                 if session.isLocal {
-                    let workingDirectory = provider.workingDirectoryBySessionID[sessionID]
+                    let workingDirectory = provider.workingDirectoryBySessionID[resolvedID]
                     result = (try? await Self.readLocalFileChunk(
                         path: path,
                         startLine: startLine,
@@ -316,7 +410,7 @@ import os.log
                 } else {
                     result = await readRemoteFileChunk(
                         provider: provider,
-                        sessionID: sessionID,
+                        sessionID: resolvedID,
                         path: path,
                         startLine: startLine,
                         lineCount: lineCount
@@ -346,15 +440,23 @@ import os.log
                 ]))
             }
 
-            await provider.sendShellInput(
-                sessionID: sessionID,
-                input: command,
-                suppressEcho: false
+            let targets = resolveTargetSessions(
+                arguments: arguments,
+                primarySessionID: sessionID,
+                broadcastContext: broadcastContext
             )
+            for target in targets {
+                await provider.sendShellInput(
+                    sessionID: target,
+                    input: command,
+                    suppressEcho: false
+                )
+            }
 
             return AIToolDefinitions.jsonString(from: .object([
                 "ok": .bool(true),
                 "status": .string("queued"),
+                "sessions_targeted": .number(Double(targets.count)),
             ]))
 
         case "execute_and_wait":
@@ -378,34 +480,92 @@ import os.log
                 ]))
             }
 
-            let result = await provider.executeCommandAndWait(
-                sessionID: sessionID,
-                command: command,
-                timeoutSeconds: timeout
+            let targets = resolveTargetSessions(
+                arguments: arguments,
+                primarySessionID: sessionID,
+                broadcastContext: broadcastContext
             )
 
-            if result.timedOut {
+            if targets.count <= 1 {
+                let target = targets.first ?? sessionID
+                let result = await provider.executeCommandAndWait(
+                    sessionID: target,
+                    command: command,
+                    timeoutSeconds: timeout
+                )
+
+                if result.timedOut {
+                    return AIToolDefinitions.jsonString(from: .object([
+                        "ok": .bool(false),
+                        "status": .string("timed_out"),
+                        "message": .string("Command did not complete within \(Int(timeout)) seconds. It may still be running. Use get_current_screen to check."),
+                    ]))
+                }
+
+                let maxOutputChars = 16000
+                let truncated = result.output.count > maxOutputChars
+                let output = truncated ? String(result.output.prefix(maxOutputChars)) : result.output
+
                 return AIToolDefinitions.jsonString(from: .object([
-                    "ok": .bool(false),
-                    "status": .string("timed_out"),
-                    "message": .string("Command did not complete within \(Int(timeout)) seconds. It may still be running. Use get_current_screen to check."),
+                    "ok": .bool(true),
+                    "output": .string(output),
+                    "exit_code": result.exitCode.map { .number(Double($0)) } ?? .null,
+                    "truncated": .bool(truncated),
+                    "total_chars": .number(Double(result.output.count)),
+                ]))
+            } else {
+                // Sequential execution across broadcast sessions (MainActor-safe)
+                var collected: [(UUID, CommandExecutionResult)] = []
+                for target in targets {
+                    let r = await provider.executeCommandAndWait(
+                        sessionID: target,
+                        command: command,
+                        timeoutSeconds: timeout
+                    )
+                    collected.append((target, r))
+                }
+
+                guard let ctx = broadcastContext else {
+                    // Shouldn't happen (targets.count > 1 implies broadcast)
+                    return AIToolDefinitions.jsonString(from: .object([
+                        "ok": .bool(false),
+                        "error": .string("Internal error: missing broadcast context"),
+                    ]))
+                }
+
+                let maxOutputChars = 16000
+                var sessionResults: [LLMJSONValue] = []
+                for (sid, result) in collected {
+                    let label = ctx.sessionLabels[sid]
+                        ?? String(sid.uuidString.prefix(8))
+                    let truncated = result.output.count > maxOutputChars
+                    let output = truncated
+                        ? String(result.output.prefix(maxOutputChars))
+                        : result.output
+                    sessionResults.append(.object([
+                        "session": .string(label),
+                        "session_id": .string(sid.uuidString),
+                        "output": .string(output),
+                        "exit_code": result.exitCode.map { .number(Double($0)) } ?? .null,
+                        "timed_out": .bool(result.timedOut),
+                        "truncated": .bool(truncated),
+                    ]))
+                }
+
+                return AIToolDefinitions.jsonString(from: .object([
+                    "ok": .bool(true),
+                    "sessions_targeted": .number(Double(targets.count)),
+                    "results": .array(sessionResults),
                 ]))
             }
 
-            let maxOutputChars = 16000
-            let truncated = result.output.count > maxOutputChars
-            let output = truncated ? String(result.output.prefix(maxOutputChars)) : result.output
-
-            return AIToolDefinitions.jsonString(from: .object([
-                "ok": .bool(true),
-                "output": .string(output),
-                "exit_code": result.exitCode.map { .number(Double($0)) } ?? .null,
-                "truncated": .bool(truncated),
-                "total_chars": .number(Double(result.output.count)),
-            ]))
-
         case "get_session_info":
-            guard let session = provider.sessions.first(where: { $0.id == sessionID }) else {
+            let resolvedID = resolveTargetSessions(
+                arguments: arguments,
+                primarySessionID: sessionID,
+                broadcastContext: broadcastContext
+            ).first ?? sessionID
+            guard let session = provider.sessions.first(where: { $0.id == resolvedID }) else {
                 throw AIAgentServiceError.sessionNotFound
             }
 
@@ -418,7 +578,7 @@ import os.log
                 "port": .number(Double(session.port)),
                 "is_local": .bool(session.isLocal),
                 "started_at": .string(iso8601Formatter.string(from: session.startedAt)),
-                "working_directory": provider.workingDirectoryBySessionID[sessionID].map(LLMJSONValue.string) ?? .null,
+                "working_directory": provider.workingDirectoryBySessionID[resolvedID].map(LLMJSONValue.string) ?? .null,
             ]))
 
         case "apply_patch":
@@ -442,7 +602,12 @@ import os.log
                 ]))
             }
 
-            guard let session = provider.sessions.first(where: { $0.id == sessionID }) else {
+            let resolvedID = resolveTargetSessions(
+                arguments: arguments,
+                primarySessionID: sessionID,
+                broadcastContext: broadcastContext
+            ).first ?? sessionID
+            guard let session = provider.sessions.first(where: { $0.id == resolvedID }) else {
                 throw AIAgentServiceError.sessionNotFound
             }
 
@@ -473,7 +638,7 @@ import os.log
                 warnings: []
             )
             if session.isLocal {
-                let workingDir = provider.workingDirectoryBySessionID[sessionID]
+                let workingDir = provider.workingDirectoryBySessionID[resolvedID]
                     ?? FileManager.default.currentDirectoryPath
                 let patcher = LocalWorkspacePatcher(workspaceRoot: URL(fileURLWithPath: workingDir))
                 result = try patcher.apply(operation)
@@ -486,21 +651,21 @@ import os.log
 
                     let readCmd = RemotePatchCommandBuilder.buildReadCommand(path: path)
                     let readResult = await provider.executeCommandAndWait(
-                        sessionID: sessionID, command: readCmd, timeoutSeconds: 10
+                        sessionID: resolvedID, command: readCmd, timeoutSeconds: 10
                     )
                     originalContent = RemotePatchCommandBuilder.decodeBase64FileOutput(readResult.output)
 
                     if originalContent == nil {
                         let readOutput = Self.trimmedPatchOutput(readResult.output)
                         if Self.isPermissionDeniedPatchOutput(readOutput) {
-                            if await canUseSudoWithoutPassword(provider: provider, sessionID: sessionID) {
+                            if await canUseSudoWithoutPassword(provider: provider, sessionID: resolvedID) {
                                 let sudoReadCmd = RemotePatchCommandBuilder.buildReadCommand(
                                     path: path,
                                     useSudo: true,
                                     nonInteractiveSudo: true
                                 )
                                 let sudoReadResult = await provider.executeCommandAndWait(
-                                    sessionID: sessionID,
+                                    sessionID: resolvedID,
                                     command: sudoReadCmd,
                                     timeoutSeconds: 10
                                 )
@@ -521,7 +686,7 @@ import os.log
                                 }
                             } else {
                                 await provider.sendShellInput(
-                                    sessionID: sessionID,
+                                    sessionID: resolvedID,
                                     input: RemotePatchCommandBuilder.buildSudoPrimingCommand(),
                                     suppressEcho: false
                                 )
@@ -566,7 +731,7 @@ import os.log
                                 nonInteractiveSudo: readUsedSudo
                             )
                             let initialWriteResult = await provider.executeCommandAndWait(
-                                sessionID: sessionID,
+                                sessionID: resolvedID,
                                 command: initialWriteCmd,
                                 timeoutSeconds: 20
                             )
@@ -583,7 +748,7 @@ import os.log
                             } else {
                                 let initialWriteOutput = Self.trimmedPatchOutput(initialWriteResult.output)
                                 if !readUsedSudo && Self.isPermissionDeniedPatchOutput(initialWriteOutput) {
-                                    if await canUseSudoWithoutPassword(provider: provider, sessionID: sessionID) {
+                                    if await canUseSudoWithoutPassword(provider: provider, sessionID: resolvedID) {
                                         let sudoWriteCmd = RemotePatchCommandBuilder.buildWriteCommand(
                                             path: path,
                                             content: patched,
@@ -591,7 +756,7 @@ import os.log
                                             nonInteractiveSudo: true
                                         )
                                         let sudoWriteResult = await provider.executeCommandAndWait(
-                                            sessionID: sessionID,
+                                            sessionID: resolvedID,
                                             command: sudoWriteCmd,
                                             timeoutSeconds: 20
                                         )
@@ -620,7 +785,7 @@ import os.log
                                             useSudo: true
                                         )
                                         await provider.sendShellInput(
-                                            sessionID: sessionID,
+                                            sessionID: resolvedID,
                                             input: sudoInteractiveWrite,
                                             suppressEcho: false
                                         )
@@ -644,7 +809,7 @@ import os.log
                                         useSudo: true
                                     )
                                     await provider.sendShellInput(
-                                        sessionID: sessionID,
+                                        sessionID: resolvedID,
                                         input: sudoInteractiveWrite,
                                         suppressEcho: false
                                     )
@@ -690,7 +855,7 @@ import os.log
                             path: path, content: content
                         )
                         let writeResult = await provider.executeCommandAndWait(
-                            sessionID: sessionID, command: writeCmd, timeoutSeconds: 20
+                            sessionID: resolvedID, command: writeCmd, timeoutSeconds: 20
                         )
 
                         if writeResult.exitCode == 0 {
@@ -703,7 +868,7 @@ import os.log
                         } else if Self.isPermissionDeniedPatchOutput(
                             Self.trimmedPatchOutput(writeResult.output)
                         ) {
-                            if await canUseSudoWithoutPassword(provider: provider, sessionID: sessionID) {
+                            if await canUseSudoWithoutPassword(provider: provider, sessionID: resolvedID) {
                                 let sudoWriteCmd = RemotePatchCommandBuilder.buildWriteCommand(
                                     path: path,
                                     content: content,
@@ -711,7 +876,7 @@ import os.log
                                     nonInteractiveSudo: true
                                 )
                                 let sudoWriteResult = await provider.executeCommandAndWait(
-                                    sessionID: sessionID,
+                                    sessionID: resolvedID,
                                     command: sudoWriteCmd,
                                     timeoutSeconds: 20
                                 )
@@ -740,7 +905,7 @@ import os.log
                                     useSudo: true
                                 )
                                 await provider.sendShellInput(
-                                    sessionID: sessionID,
+                                    sessionID: resolvedID,
                                     input: sudoInteractiveWrite,
                                     suppressEcho: false
                                 )
@@ -780,7 +945,7 @@ import os.log
                     // Remote delete path.
                     let deleteCmd = RemotePatchCommandBuilder.buildDeleteCommand(path: path)
                     let deleteResult = await provider.executeCommandAndWait(
-                        sessionID: sessionID, command: deleteCmd, timeoutSeconds: 15
+                        sessionID: resolvedID, command: deleteCmd, timeoutSeconds: 15
                     )
 
                     if deleteResult.exitCode == 0 {
@@ -788,14 +953,14 @@ import os.log
                     } else if Self.isPermissionDeniedPatchOutput(
                         Self.trimmedPatchOutput(deleteResult.output)
                     ) {
-                        if await canUseSudoWithoutPassword(provider: provider, sessionID: sessionID) {
+                        if await canUseSudoWithoutPassword(provider: provider, sessionID: resolvedID) {
                             let sudoDeleteCmd = RemotePatchCommandBuilder.buildDeleteCommand(
                                 path: path,
                                 useSudo: true,
                                 nonInteractiveSudo: true
                             )
                             let sudoDeleteResult = await provider.executeCommandAndWait(
-                                sessionID: sessionID,
+                                sessionID: resolvedID,
                                 command: sudoDeleteCmd,
                                 timeoutSeconds: 15
                             )
@@ -823,7 +988,7 @@ import os.log
                                 useSudo: true
                             )
                             await provider.sendShellInput(
-                                sessionID: sessionID,
+                                sessionID: resolvedID,
                                 input: sudoInteractiveDelete,
                                 suppressEcho: false
                             )
@@ -879,6 +1044,7 @@ import os.log
         case "send_input":
             return try await executeSendInput(
                 sessionID: sessionID,
+                broadcastContext: broadcastContext,
                 arguments: arguments,
                 provider: provider
             )
@@ -930,6 +1096,39 @@ import os.log
             timeoutSeconds: 5
         )
         return !sudoCheck.timedOut && sudoCheck.exitCode == 0
+    }
+
+    // MARK: - Broadcast Session Resolution
+
+    func resolveTargetSessions(
+        arguments: [String: LLMJSONValue],
+        primarySessionID: UUID,
+        broadcastContext: BroadcastContext?
+    ) -> [UUID] {
+        // 1. Explicit target_session in arguments → that one session
+        if let targetStr = Self.optionalString(key: "target_session", in: arguments),
+           let targetID = UUID(uuidString: targetStr),
+           broadcastContext?.allSessionIDs.contains(targetID) ?? true {
+            return [targetID]
+        }
+        // 2. Broadcasting + no explicit target → all sessions
+        if let ctx = broadcastContext, ctx.isBroadcasting {
+            return ctx.allSessionIDs
+        }
+        // 3. Default → primary session only
+        return [primarySessionID]
+    }
+
+    func formatBroadcastResult(
+        results: [(sessionID: UUID, output: String)],
+        context: BroadcastContext
+    ) -> String {
+        if results.count == 1 { return results[0].output }
+        return results.map { r in
+            let label = context.sessionLabels[r.sessionID]
+                ?? String(r.sessionID.uuidString.prefix(8))
+            return "[\(label)]\n\(r.output)"
+        }.joined(separator: "\n---\n")
     }
 
 }

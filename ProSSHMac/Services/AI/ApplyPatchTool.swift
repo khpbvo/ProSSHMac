@@ -533,6 +533,7 @@ enum ApplyPatchToolDefinition {
                             "For 'delete': omit or leave empty."
                         ),
                     ]),
+                    "target_session": AIToolDefinitions.targetSessionProperty,
                 ]),
                 "required": .array([.string("operation"), .string("path")]),
             ])

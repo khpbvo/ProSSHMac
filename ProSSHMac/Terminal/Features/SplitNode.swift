@@ -12,6 +12,12 @@ enum SplitDirection: String, Codable, Sendable, CaseIterable {
     case vertical
 }
 
+enum InputRoutingMode: String, Codable, Sendable, CaseIterable {
+    case singleFocus
+    case broadcast
+    case selectGroup
+}
+
 enum PaneSessionType: Codable, Hashable, Sendable {
     case ssh(hostID: UUID, hostLabel: String)
     case local

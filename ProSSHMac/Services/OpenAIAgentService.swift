@@ -6,11 +6,13 @@ protocol AIAgentServicing {
     func clearConversation(sessionID: UUID)
     func generateReply(
         sessionID: UUID,
-        prompt: String
+        prompt: String,
+        broadcastSessionIDs: [UUID]?
     ) async throws -> AIAgentReply
     func generateReply(
         sessionID: UUID,
         prompt: String,
+        broadcastSessionIDs: [UUID]?,
         streamHandler: (@Sendable (AIAgentStreamEvent) -> Void)?
     ) async throws -> AIAgentReply
 }
@@ -19,10 +21,11 @@ extension AIAgentServicing {
     func generateReply(
         sessionID: UUID,
         prompt: String,
+        broadcastSessionIDs: [UUID]? = nil,
         streamHandler: (@Sendable (AIAgentStreamEvent) -> Void)?
     ) async throws -> AIAgentReply {
         _ = streamHandler
-        return try await generateReply(sessionID: sessionID, prompt: prompt)
+        return try await generateReply(sessionID: sessionID, prompt: prompt, broadcastSessionIDs: broadcastSessionIDs)
     }
 }
 
@@ -152,11 +155,13 @@ final class OpenAIAgentService: AIAgentServicing {
 
     func generateReply(
         sessionID: UUID,
-        prompt: String
+        prompt: String,
+        broadcastSessionIDs: [UUID]? = nil
     ) async throws -> AIAgentReply {
         return try await generateReply(
             sessionID: sessionID,
             prompt: prompt,
+            broadcastSessionIDs: broadcastSessionIDs,
             streamHandler: nil
         )
     }
@@ -164,12 +169,38 @@ final class OpenAIAgentService: AIAgentServicing {
     func generateReply(
         sessionID: UUID,
         prompt: String,
+        broadcastSessionIDs: [UUID]? = nil,
         streamHandler: (@Sendable (AIAgentStreamEvent) -> Void)?
     ) async throws -> AIAgentReply {
+        let broadcastContext = buildBroadcastContext(
+            primarySessionID: sessionID,
+            broadcastSessionIDs: broadcastSessionIDs
+        )
         return try await agentRunner.run(
             sessionID: sessionID,
             prompt: prompt,
+            broadcastContext: broadcastContext,
             streamHandler: streamHandler
+        )
+    }
+
+    private func buildBroadcastContext(
+        primarySessionID: UUID,
+        broadcastSessionIDs: [UUID]?
+    ) -> BroadcastContext? {
+        guard let ids = broadcastSessionIDs, ids.count > 1 else { return nil }
+        var labels: [UUID: String] = [:]
+        for id in ids {
+            if let session = sessionProvider.sessions.first(where: { $0.id == id }) {
+                labels[id] = session.isLocal
+                    ? "Local Shell"
+                    : "\(session.username)@\(session.hostname)"
+            }
+        }
+        return BroadcastContext(
+            primarySessionID: primarySessionID,
+            allSessionIDs: ids,
+            sessionLabels: labels
         )
     }
 

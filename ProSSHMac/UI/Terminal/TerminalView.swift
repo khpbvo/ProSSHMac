@@ -96,6 +96,20 @@ struct TerminalView: View {
                 }
             }
 
+            if paneManager.inputRoutingMode != .singleFocus && paneManager.paneCount > 1 {
+                ToolbarItem(placement: .automatic) {
+                    Button {
+                        paneManager.inputRoutingMode = .singleFocus
+                    } label: {
+                        Label(
+                            paneManager.inputRoutingMode == .broadcast ? "Broadcasting" : "Group Input",
+                            systemImage: "antenna.radiowaves.left.and.right.fill"
+                        )
+                    }
+                    .tint(.orange)
+                }
+            }
+
             ToolbarItem(placement: .automatic) {
                 Button {
                     showAIAssistant.toggle()
@@ -147,6 +161,7 @@ struct TerminalView: View {
                     if let sessionID = sid { pasteClipboardToSession(sessionID) }
                 },
                 onSelectAll:           { selectAllInFocusedTerminal() },
+                onToggleBroadcast:     { paneManager.toggleBroadcast() },
                 onToggleMaximize:      { navigationCoordinator.toggleTerminalMaximize() }
             )
             .frame(width: 0, height: 0)
@@ -275,7 +290,9 @@ struct TerminalView: View {
                     availableSessions: tabManager.tabs.map { ($0.id, $0.session.hostLabel) },
                     onSplitWithExistingSession: { sessionID, paneID, direction in
                         splitWithExistingSession(sessionID, beside: paneID, direction: direction)
-                    }
+                    },
+                    inputRoutingMode: paneManager.inputRoutingMode,
+                    targetPaneIDs: paneManager.targetPaneIDs
                 ) { pane in
                     if let session = sessionForPane(pane) {
                         let paneFocused = pane.id == paneManager.focusedPaneId
@@ -489,7 +506,13 @@ struct TerminalView: View {
                 showAIAssistant = false
             },
             onSend: { sessionID in
-                terminalAIAssistantViewModel.submitPrompt(for: sessionID)
+                let broadcastIDs = paneManager.inputRoutingMode != .singleFocus
+                    ? paneManager.targetSessionIDs
+                    : nil
+                terminalAIAssistantViewModel.submitPrompt(
+                    for: sessionID,
+                    broadcastSessionIDs: broadcastIDs
+                )
             },
             onComposerFocusChanged: { isFocused in
                 isAIAssistantComposerFocused = isFocused
@@ -574,16 +597,37 @@ struct TerminalView: View {
                 handleHardwareCommandShortcut(action)
             },
             onSendSequence: { sessionID, sequence in
-                handleDirectTerminalInput(sequence, sessionID: sessionID)
+                if paneManager.inputRoutingMode != .singleFocus {
+                    // Broadcast/group: send directly to all targets, bypass per-session safety buffer
+                    for targetID in paneManager.targetSessionIDs {
+                        sendControl(sequence, sessionID: targetID)
+                    }
+                } else {
+                    handleDirectTerminalInput(sequence, sessionID: sessionID)
+                }
             },
             onSendBytes: { sessionID, bytes, eventType in
-                Task {
-                    await sessionManager.sendRawShellInputBytes(
-                        sessionID: sessionID,
-                        bytes: bytes,
-                        source: .hardwareKeyCapture,
-                        eventType: eventType
-                    )
+                if paneManager.inputRoutingMode != .singleFocus {
+                    // Broadcast/group: fan out to all targets
+                    for targetID in paneManager.targetSessionIDs {
+                        Task {
+                            await sessionManager.sendRawShellInputBytes(
+                                sessionID: targetID,
+                                bytes: bytes,
+                                source: .hardwareKeyCapture,
+                                eventType: eventType
+                            )
+                        }
+                    }
+                } else {
+                    Task {
+                        await sessionManager.sendRawShellInputBytes(
+                            sessionID: sessionID,
+                            bytes: bytes,
+                            source: .hardwareKeyCapture,
+                            eventType: eventType
+                        )
+                    }
                 }
             }
         )
@@ -932,9 +976,17 @@ struct TerminalView: View {
     }
 
     private func sendControl(_ sequence: String) {
-        let targetSessionID = paneManager.focusedSessionID ?? focusedSessionID ?? tabManager.selectedSessionID
-        guard let sessionID = targetSessionID else { return }
-        sendControl(sequence, sessionID: sessionID)
+        let targets = paneManager.targetSessionIDs
+        if targets.isEmpty {
+            // Fallback for single-pane non-split mode
+            let targetSessionID = focusedSessionID ?? tabManager.selectedSessionID
+            guard let sessionID = targetSessionID else { return }
+            sendControl(sequence, sessionID: sessionID)
+        } else {
+            for sessionID in targets {
+                sendControl(sequence, sessionID: sessionID)
+            }
+        }
     }
 
     private func sendControl(_ sequence: String, sessionID: UUID) {

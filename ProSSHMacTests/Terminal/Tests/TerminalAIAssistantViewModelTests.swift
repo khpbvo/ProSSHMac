@@ -334,7 +334,8 @@ private final class MockOpenAIAgentService: AIAgentServicing {
 
     func generateReply(
         sessionID: UUID,
-        prompt: String
+        prompt: String,
+        broadcastSessionIDs: [UUID]? = nil
     ) async throws -> AIAgentReply {
         if replyDelayNanoseconds > 0 {
             try? await Task.sleep(nanoseconds: replyDelayNanoseconds)
@@ -346,6 +347,7 @@ private final class MockOpenAIAgentService: AIAgentServicing {
     func generateReply(
         sessionID: UUID,
         prompt: String,
+        broadcastSessionIDs: [UUID]? = nil,
         streamHandler: (@Sendable (AIAgentStreamEvent) -> Void)?
     ) async throws -> AIAgentReply {
         if replyDelayNanoseconds > 0 {

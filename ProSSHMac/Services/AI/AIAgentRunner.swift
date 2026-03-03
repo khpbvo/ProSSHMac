@@ -14,6 +14,7 @@ import os.log
     func run(
         sessionID: UUID,
         prompt: String,
+        broadcastContext: BroadcastContext? = nil,
         streamHandler: (@Sendable (AIAgentStreamEvent) -> Void)? = nil
     ) async throws -> AIAgentReply {
         guard let service else {
@@ -63,11 +64,23 @@ import os.log
 
         let screenLines = service.sessionProvider.shellBuffers[sessionID] ?? []
         let screenSnapshot = screenLines.suffix(20).joined(separator: "\n")
+
+        // Build session map context for broadcast mode
+        var broadcastPreamble = ""
+        if let ctx = broadcastContext, ctx.isBroadcasting {
+            let sessionMap = ctx.allSessionIDs.map { id in
+                let label = ctx.sessionLabels[id] ?? "Unknown"
+                let isPrimary = id == ctx.primarySessionID ? " (primary)" : ""
+                return "  - \(id.uuidString): \(label)\(isPrimary)"
+            }.joined(separator: "\n")
+            broadcastPreamble = "[Active broadcast sessions — \(ctx.allSessionIDs.count) sessions]\n\(sessionMap)\n\n"
+        }
+
         let userMessageText: String
         if !screenSnapshot.isEmpty {
-            userMessageText = "[Current terminal screen — use this to identify the environment, OS, device type, and current path/mode before acting]\n```\n\(screenSnapshot)\n```\n\n\(trimmedPrompt)"
+            userMessageText = broadcastPreamble + "[Current terminal screen — use this to identify the environment, OS, device type, and current path/mode before acting]\n```\n\(screenSnapshot)\n```\n\n\(trimmedPrompt)"
         } else {
-            userMessageText = trimmedPrompt
+            userMessageText = broadcastPreamble + trimmedPrompt
         }
 
         var pendingMessages: [LLMMessage] = [
@@ -125,6 +138,7 @@ import os.log
             let toolStart = DispatchTime.now().uptimeNanoseconds
             pendingToolOutputs = await service.toolHandler.executeToolCalls(
                 sessionID: sessionID,
+                broadcastContext: broadcastContext,
                 toolCalls: toolCalls,
                 traceID: traceID
             )

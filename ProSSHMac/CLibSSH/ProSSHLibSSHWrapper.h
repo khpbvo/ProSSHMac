@@ -198,6 +198,7 @@ int prossh_libssh_sftp_download_file(
     const char *local_path,
     int64_t *bytes_transferred,
     int64_t *total_bytes,
+    volatile int32_t *cancel_flag,
     char *error_buffer,
     size_t error_buffer_len
 );
@@ -208,6 +209,7 @@ int prossh_libssh_sftp_upload_file(
     const char *remote_path,
     int64_t *bytes_transferred,
     int64_t *total_bytes,
+    volatile int32_t *cancel_flag,
     char *error_buffer,
     size_t error_buffer_len
 );

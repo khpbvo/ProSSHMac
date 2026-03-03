@@ -24,6 +24,7 @@ struct TerminalKeyboardShortcutLayer: View {
     var onCopy:                 () -> Void
     var onPaste:                () -> Void
     var onSelectAll:            () -> Void
+    var onToggleBroadcast:      () -> Void
     var onToggleMaximize:       () -> Void
 
     var body: some View {
@@ -76,6 +77,8 @@ struct TerminalKeyboardShortcutLayer: View {
                 .keyboardShortcut("v", modifiers: [.command])
             Button("Select All")               { onSelectAll() }
                 .keyboardShortcut("a", modifiers: [.command])
+            Button("Toggle Broadcast Input")   { onToggleBroadcast() }
+                .keyboardShortcut("b", modifiers: [.command, .shift])
             Button("Toggle Maximize")          { onToggleMaximize() }
                 .keyboardShortcut("f", modifiers: [.command, .shift])
         }

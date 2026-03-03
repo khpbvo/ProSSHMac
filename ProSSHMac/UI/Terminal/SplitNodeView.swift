@@ -14,6 +14,8 @@ struct SplitNodeView<PaneContent: View>: View {
     var onSplitWithNewSession: ((UUID) -> Void)?
     var availableSessions: [(id: UUID, label: String)] = []
     var onSplitWithExistingSession: ((UUID, UUID, SplitDirection) -> Void)?
+    var inputRoutingMode: InputRoutingMode = .singleFocus
+    var targetPaneIDs: Set<UUID> = []
     @ViewBuilder let paneContent: (TerminalPane) -> PaneContent
 
     var body: some View {
@@ -28,7 +30,9 @@ struct SplitNodeView<PaneContent: View>: View {
                 onMoveToNewTab: onMoveToNewTab,
                 onSplitWithNewSession: onSplitWithNewSession,
                 availableSessions: sessionsForPane,
-                onSplitWithExistingSession: onSplitWithExistingSession
+                onSplitWithExistingSession: onSplitWithExistingSession,
+                inputRoutingMode: inputRoutingMode,
+                isInputTarget: targetPaneIDs.contains(pane.id)
             ) {
                 paneContent(pane)
             }
@@ -60,6 +64,8 @@ struct SplitNodeView<PaneContent: View>: View {
                     onSplitWithNewSession: onSplitWithNewSession,
                     availableSessions: availableSessions,
                     onSplitWithExistingSession: onSplitWithExistingSession,
+                    inputRoutingMode: inputRoutingMode,
+                    targetPaneIDs: targetPaneIDs,
                     paneContent: paneContent
                 )
                 .frame(width: firstLength)
@@ -83,6 +89,8 @@ struct SplitNodeView<PaneContent: View>: View {
                     onSplitWithNewSession: onSplitWithNewSession,
                     availableSessions: availableSessions,
                     onSplitWithExistingSession: onSplitWithExistingSession,
+                    inputRoutingMode: inputRoutingMode,
+                    targetPaneIDs: targetPaneIDs,
                     paneContent: paneContent
                 )
                 .frame(width: secondLength)
@@ -98,6 +106,8 @@ struct SplitNodeView<PaneContent: View>: View {
                     onSplitWithNewSession: onSplitWithNewSession,
                     availableSessions: availableSessions,
                     onSplitWithExistingSession: onSplitWithExistingSession,
+                    inputRoutingMode: inputRoutingMode,
+                    targetPaneIDs: targetPaneIDs,
                     paneContent: paneContent
                 )
                 .frame(height: firstLength)
@@ -121,6 +131,8 @@ struct SplitNodeView<PaneContent: View>: View {
                     onSplitWithNewSession: onSplitWithNewSession,
                     availableSessions: availableSessions,
                     onSplitWithExistingSession: onSplitWithExistingSession,
+                    inputRoutingMode: inputRoutingMode,
+                    targetPaneIDs: targetPaneIDs,
                     paneContent: paneContent
                 )
                 .frame(height: secondLength)

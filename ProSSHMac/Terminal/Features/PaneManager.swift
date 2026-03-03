@@ -22,7 +22,11 @@ final class PaneManager: ObservableObject {
     }
     @Published var focusedPaneId: UUID
     @Published var maximizedPaneId: UUID?
+    @Published var inputRoutingMode: InputRoutingMode = .singleFocus
+    @Published var groupPaneIDs: Set<UUID> = []
     private var savedRootNode: SplitNode?
+    private var savedInputRoutingMode: InputRoutingMode?
+    private var savedGroupPaneIDs: Set<UUID>?
     let layoutStore: PaneLayoutStore
 
     // MARK: - Init
@@ -75,6 +79,62 @@ final class PaneManager: ObservableObject {
         return rootNode
     }
 
+    /// Session IDs that should receive keyboard input based on the current routing mode.
+    /// Deduplicates (same session in two panes → one ID). Skips panes with nil sessionID.
+    var targetSessionIDs: [UUID] {
+        let sessionIDs: [UUID?]
+        switch inputRoutingMode {
+        case .singleFocus:
+            return focusedSessionID.map { [$0] } ?? []
+        case .broadcast:
+            sessionIDs = allPanes.map(\.sessionID)
+        case .selectGroup:
+            sessionIDs = allPanes.filter { groupPaneIDs.contains($0.id) }.map(\.sessionID)
+        }
+        // Deduplicate while preserving order, skip nil
+        var seen = Set<UUID>()
+        var result = [UUID]()
+        for sid in sessionIDs {
+            guard let sid, seen.insert(sid).inserted else { continue }
+            result.append(sid)
+        }
+        return result
+    }
+
+    /// Pane IDs that are currently targeted for input (for visual indicators).
+    var targetPaneIDs: Set<UUID> {
+        switch inputRoutingMode {
+        case .singleFocus:
+            return [focusedPaneId]
+        case .broadcast:
+            return Set(allPanes.map(\.id))
+        case .selectGroup:
+            return groupPaneIDs
+        }
+    }
+
+    // MARK: - Input Routing
+
+    func toggleBroadcast() {
+        inputRoutingMode = inputRoutingMode == .broadcast ? .singleFocus : .broadcast
+    }
+
+    func togglePaneInGroup(_ paneID: UUID) {
+        if groupPaneIDs.contains(paneID) {
+            groupPaneIDs.remove(paneID)
+            if groupPaneIDs.isEmpty {
+                inputRoutingMode = .singleFocus
+            }
+        } else {
+            groupPaneIDs.insert(paneID)
+        }
+    }
+
+    func setSelectGroupMode(paneIDs: Set<UUID>) {
+        groupPaneIDs = paneIDs
+        inputRoutingMode = paneIDs.isEmpty ? .singleFocus : .selectGroup
+    }
+
     // MARK: - Validation
 
     func canSplit(_ paneID: UUID) -> Bool {
@@ -119,6 +179,17 @@ final class PaneManager: ObservableObject {
 
         let wasFocused = paneID == focusedPaneId
         rootNode = rootNode.removePane(paneID)
+
+        // Clean up input routing state for the closed pane.
+        groupPaneIDs.remove(paneID)
+        if inputRoutingMode == .selectGroup && groupPaneIDs.isEmpty {
+            inputRoutingMode = .singleFocus
+        }
+        // Auto-revert to single focus when only one pane remains.
+        if paneCount <= 1 {
+            inputRoutingMode = .singleFocus
+            groupPaneIDs.removeAll()
+        }
 
         if wasFocused {
             // Focus the first available pane.
@@ -177,7 +248,11 @@ final class PaneManager: ObservableObject {
         guard rootNode.findPane(id: paneID) != nil else { return }
         guard paneCount > 1 else { return }
         savedRootNode = rootNode
+        savedInputRoutingMode = inputRoutingMode
+        savedGroupPaneIDs = groupPaneIDs
         maximizedPaneId = paneID
+        inputRoutingMode = .singleFocus
+        groupPaneIDs.removeAll()
         focusPane(paneID)
     }
 
@@ -218,6 +293,14 @@ final class PaneManager: ObservableObject {
             savedRootNode = nil
         }
         maximizedPaneId = nil
+        if let savedMode = savedInputRoutingMode {
+            inputRoutingMode = savedMode
+            savedInputRoutingMode = nil
+        }
+        if let savedGroup = savedGroupPaneIDs {
+            groupPaneIDs = savedGroup
+            savedGroupPaneIDs = nil
+        }
     }
 
     func toggleMaximize(_ paneID: UUID) {
@@ -256,6 +339,13 @@ final class PaneManager: ObservableObject {
                     p.title = "Terminal"
                 }
             }
+        }
+
+        // Clean stale pane IDs from group selection.
+        let currentPaneIDs = Set(allPanes.map(\.id))
+        groupPaneIDs = groupPaneIDs.intersection(currentPaneIDs)
+        if inputRoutingMode == .selectGroup && groupPaneIDs.isEmpty {
+            inputRoutingMode = .singleFocus
         }
     }
 

@@ -158,7 +158,7 @@ final class TerminalAIAssistantViewModel: ObservableObject {
         ))
     }
 
-    func submitPrompt(for sessionID: UUID) {
+    func submitPrompt(for sessionID: UUID, broadcastSessionIDs: [UUID]? = nil) {
         let trimmed = draftPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isSending else {
             return
@@ -176,10 +176,10 @@ final class TerminalAIAssistantViewModel: ObservableObject {
             )
         )
 
-        sendPrompt(trimmed, for: sessionID)
+        sendPrompt(trimmed, for: sessionID, broadcastSessionIDs: broadcastSessionIDs)
     }
 
-    private func sendPrompt(_ prompt: String, for sessionID: UUID) {
+    private func sendPrompt(_ prompt: String, for sessionID: UUID, broadcastSessionIDs: [UUID]? = nil) {
         isSending = true
         clearReasoningPanel()
         messages.removeAll(where: { message in
@@ -204,6 +204,7 @@ final class TerminalAIAssistantViewModel: ObservableObject {
                 let reply = try await self.agentService.generateReply(
                     sessionID: sessionID,
                     prompt: prompt,
+                    broadcastSessionIDs: broadcastSessionIDs,
                     streamHandler: { [weak self] event in
                         Task { @MainActor [weak self] in
                             self?.handleStreamEvent(event, assistantMessageID: assistantID)

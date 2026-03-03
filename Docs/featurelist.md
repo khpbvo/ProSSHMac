@@ -1,6 +1,6 @@
 # ProSSHMac AI + File Browser Expansion Checklist
 
-Last verified against repo: 2026-03-02
+Last verified against repo: 2026-03-03
 Required assistant model for this work: `gpt-5.1-codex-max`
 
 ## Goal
@@ -30,6 +30,7 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 - Active phase: Phase 6 (persistence + hardening + remaining test coverage).
 - Immediate objective: continue migrating legacy tests into the shared test bundle while keeping targeted regressions green during migration.
 - Test stability TODOs: no active crash quarantines remain for previously skipped pane/AI view-model tests.
+- AI Broadcaster complete (2026-03-03): session-aware AI agent for multi-pane broadcast. All 9 phases (0–8) implemented and tested. See `docs/AIBroadCaster.md`.
 - Task alignment (2026-03-02, disable App Sandbox for non-App-Store distribution):
   - Starting Point: local terminal behavior was constrained by App Sandbox (`ENABLE_APP_SANDBOX = YES`), which blocked ICMP/raw-socket operations in local sessions and surfaced `ping: recvmsg: Operation not permitted`.
   - End Point: App Sandbox is disabled for both Debug and Release target configs (`ENABLE_APP_SANDBOX = NO` in `project.pbxproj`), keeping existing entitlements/signing flow but removing sandbox enforcement at runtime.
@@ -109,6 +110,8 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 
 ## Loop Log
 
+- 2026-03-03: Implemented AI Broadcaster — session-aware AI agent for multi-pane broadcast. When broadcast/group input routing is active, the AI agent now knows which sessions exist (with host labels), can target individual sessions via `target_session` tool parameter, and fans out execution across all broadcast sessions when no target is specified. Added `BroadcastContext` struct (in `AIToolHandler.swift`) threaded through ViewModel → AgentService → AgentRunner → ToolHandler. Added `resolveTargetSessions` and `formatBroadcastResult` helpers. All 13 tools + `apply_patch` now include nullable `target_session` parameter (OpenAI strict mode compatible). Developer prompt includes `MULTI-SESSION BROADCAST` section. Agent runner injects session map preamble into user messages during broadcast. UI wiring passes `paneManager.targetSessionIDs` from `TerminalView` through `TerminalAIAssistantViewModel` to the service layer. Sequential fan-out for `execute_and_wait` (labeled JSON results), loop fan-out for `execute_command`/`send_input`, labeled output for `get_current_screen`/`get_recent_commands`, single-target for file-reading tools and `apply_patch`. 10 new tests in `AIBroadcastTests.swift` covering context, resolution, and formatting. Build: SUCCEEDED. Files: `AIToolHandler.swift`, `AIToolHandler+InteractiveInput.swift`, `AIAgentRunner.swift`, `AIToolDefinitions.swift`, `ApplyPatchTool.swift`, `OpenAIAgentService.swift`, `TerminalAIAssistantViewModel.swift`, `TerminalView.swift`, `TerminalAIAssistantViewModelTests.swift` (mock update), `AIBroadcastTests.swift` (new), `docs/AIBroadCaster.md` (new).
+- 2026-03-03: Updated CLAUDE.md to reflect current codebase state — 15 new source files documented across local PTY sessions (`LocalPTYProcess`, `LocalShellBootstrap`, `LocalTerminalSubsystem`, `TerminalInputCaptureView`, `ExternalTerminalWindowView`), OpenAI streaming types (`OpenAIResponsesPayloadTypes`, `OpenAIResponsesStreamAccumulator`), AI interactive input (`AIToolHandler+InteractiveInput`, `send_input` now the 12th AI tool), Metal renderer decomposition (`TerminalMetalView`, `SelectionRenderer`), prompt appearance (`PromptAppearance`, `PromptAppearanceSettingsView`), and `TerminalAIAssistantViewModel`. Updated Project Structure directory comments, Key Files table, Architecture Conventions (tool count 11→12, added Local PTY sessions convention), and Reference Docs table. Removed broken `RefactorTheActor.md` reference (file not found in repo). Added `docs/BlackTextRenderingFix.md`, `docs/FixTerminalCopyAndSelection.md`, `docs/IntegrationOfNewFeats.md` to Reference Docs. Files changed: `CLAUDE.md`, `docs/featurelist.md`.
 - 2026-03-02: Added DeepSeek as the fifth LLM provider. Created `DeepSeekProvider.swift` following the `MistralProvider`/`ChatCompletionsClient` pattern — endpoint `https://api.deepseek.com/chat/completions` (no `/v1/` prefix), Bearer auth, two models: `deepseek-reasoner` (R1, reasoning by default) and `deepseek-chat` (V3, thinking enabled via `"thinking": {"type": "enabled"}` request parameter). Added `ChatCompletionsThinkingConfig` to `ChatCompletionsWireRequest` in `ChatCompletionsClient.swift`. Both models have `supportsReasoning: true`. Added `case deepseek` to `LLMProviderID` enum in `LLMTypes.swift`. Registered in `AppDependencies.swift`. Native `reasoning_content` streaming already decoded by `StreamDelta`'s custom `init(from:)`; `extractThinkTags: true` enabled as fallback. No UI changes needed — settings auto-discover registered providers. Build: SUCCEEDED. Files: `LLMTypes.swift`, `ChatCompletionsClient.swift`, `DeepSeekProvider.swift` (new), `AppDependencies.swift`.
 - 2026-03-02: Fixed reasoning/thinking stream support for Ollama and Mistral. Three mechanisms now coexist in `ChatCompletionsClient.sendStreaming`: (1) Ollama's native `"reasoning"` wire field decoded from SSE delta (initial attempt wrongly used `"reasoning_content"` — Ollama uses `"reasoning"`, DeepSeek uses `"reasoning_content"`, both now decoded via custom `init(from:)`); (2) Mistral Magistral's structured content blocks where `delta.content` is an array of `{type:"thinking",...}`/`{type:"text",...}` objects instead of a plain string (custom decoding tries `String` first, then `[MistralContentBlock]`); (3) `ThinkTagExtractor` for `<think>`/`</think>` tags in `content` (fallback). `StreamDelta` now has `reasoning`, `thinkingContent`, and `content` fields populated by custom `init(from:)`. Streaming loop emits `.reasoningDelta` from all three sources + `.reasoningDone` at stream end. Enabled `extractThinkTags: true` for both `OllamaProvider` and `MistralProvider`. Build: SUCCEEDED. Files: `ChatCompletionsClient.swift`, `OllamaProvider.swift`, `MistralProvider.swift`.
 - 2026-03-02: Completed Phase 5 of multi-provider architecture — cleanup & polish. Removed `typealias OpenAIJSONValue = LLMJSONValue` from `LLMTypes.swift` (updated `OpenAIResponsesTypes.swift` to use `LLMJSONValue` directly). Refactored `OpenAIResponsesService` to use `LLMAPIKeyProviding` protocol natively (`.apiKey(for: .openai)`) instead of the legacy `OpenAIAPIKeyProviding` protocol, eliminating the `LLMToOpenAIKeyProviderBridge` class. Removed `openAIAPIKeyProvider` stored property from `AppDependencies`. Updated `StaticAPIKeyProvider` test mock in `OpenAIResponsesServiceTests.swift` to conform to `LLMAPIKeyProviding`. Deleted deprecated files: `OpenAIAPIKeyStore.swift`, `OpenAISettingsViewModel.swift`, `OpenAISettingsViewModelTests.swift`. Deleted `FilesForMultiProvider/` directory (7 reference copies). Renamed `OpenAIAgentServiceTests.swift` → `AIAgentServiceTests.swift` (class name updated too). Build succeeds; all tests pass (0 new failures). Files: `LLMTypes.swift`, `OpenAIResponsesTypes.swift`, `OpenAIResponsesService.swift`, `OpenAIResponsesService+Streaming.swift`, `AppDependencies.swift`, `LLMAPIKeyStore.swift`, `OpenAIResponsesServiceTests.swift`, `AIAgentServiceTests.swift` (renamed).
@@ -791,3 +794,42 @@ Build: SUCCEEDED. 209 tests pass (2 pre-existing unrelated failures).
 **SettingsView**: Ollama-specific section with connection status indicator (green/red/gray dot), "Refresh Models" button, and info text explaining no API key is needed.
 
 Build: SUCCEEDED. All tests pass (pre-existing failures unchanged).
+
+### 2026-03-03 — Fix Issue #12: SFTP transfer cancellation now interrupts blocking C I/O
+
+**Problem**: The Cancel button in TransfersView already called `activeTransferTask?.cancel()`, but Swift task cancellation only cancelled the Task wrapper — the underlying blocking C call (`prossh_libssh_sftp_upload_file` / `prossh_libssh_sftp_download_file`) continued running through its `sftp_read`/`sftp_write` loop with no cancellation check, so transfers ran to completion regardless.
+
+**Fix** — 3 files changed:
+
+- **`CLibSSH/ProSSHLibSSHWrapper.h`**: Added `volatile int32_t *cancel_flag` parameter (between `total_bytes` and `error_buffer`) to both `prossh_libssh_sftp_download_file` and `prossh_libssh_sftp_upload_file` signatures. Passing `NULL` disables the feature.
+
+- **`CLibSSH/ProSSHLibSSHWrapper.c`**: Added cancel-flag check at the top of the `while(1)` loop in both functions. When `*cancel_flag != 0`: download closes + removes the partial local file then returns -2 via `goto cleanup` (releasing the mutex and restoring session mode); upload skips partial-remote cleanup and returns -2 via `goto cleanup`.
+
+- **`Services/SSH/LibSSHTransport.swift`**: Added `CancelFlagPointer: @unchecked Sendable` struct (wraps `UnsafeMutablePointer<Int32>` for safe capture in `@Sendable` closures). Both `uploadFile` and `downloadFile` (progress-handler variants) now allocate a cancel flag pointer and wrap the blocking C call in `withTaskCancellationHandler { ... } onCancel: { cancelBox.flag.pointee = 1 }`. After C returns, `cancelFlagPtr.pointee != 0` is checked first to throw `CancellationError()`; other non-zero results throw `SSHTransportError.transportFailure`.
+
+**No changes needed** to `TransferManager`, `TransfersView`, `SessionSFTPCoordinator`, or `Transfer` — cancellation infrastructure was already wired correctly.
+
+Build: SUCCEEDED.
+
+### 2026-03-03 — Issue #15: Multi-Session Broadcast Keyboard Input
+
+**Feature**: Added input routing modes for multi-pane terminal sessions. Keyboard input can now be routed to one pane (default), all panes (broadcast), or a user-selected group of panes.
+
+**Three routing modes**:
+- `singleFocus` (default): input goes to focused pane only. No behavior change from before.
+- `broadcast`: input fans out to all panes simultaneously. Toggle with `Cmd+Shift+B`.
+- `selectGroup`: input goes to a user-selected subset of panes via context menu.
+
+**Files changed** (7 modified, 1 new):
+- `SplitNode.swift`: Added `InputRoutingMode` enum.
+- `PaneManager.swift`: Added `inputRoutingMode`, `groupPaneIDs`, computed `targetSessionIDs`/`targetPaneIDs`, `toggleBroadcast()`, `togglePaneInGroup()`, `setSelectGroupMode()`. Edge-case cleanup in `closePane`/`syncSessions`/`maximizePane`/`restoreMaximize`.
+- `TerminalView.swift`: Input fan-out in `onSendSequence`/`onSendBytes` callbacks, shortcut wiring, toolbar indicator, routing state pass-through to SplitNodeView.
+- `TerminalKeyboardShortcutLayer.swift`: `onToggleBroadcast` callback + `Cmd+Shift+B` binding.
+- `TerminalPaneView.swift`: Orange broadcast border/badge overlays, context menu items for broadcast/group selection.
+- `SplitNodeView.swift`: Pass-through `inputRoutingMode` + `targetPaneIDs` to TerminalPaneView.
+- `InputRoutingTests.swift` (new): 17 tests covering all routing logic.
+
+**Design decisions**: Broadcast mode bypasses per-session safety-mode buffer (power-user feature). Fan-out uses existing `sendControl(_:sessionID:)` path (one Task per target). No changes to SessionShellIOCoordinator or lower layers.
+
+Build: SUCCEEDED. All 17 new tests + 26 existing PaneManagerTests pass.
+

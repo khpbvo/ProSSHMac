@@ -3384,6 +3384,7 @@ int prossh_libssh_sftp_download_file(
     const char *local_path,
     int64_t *bytes_transferred,
     int64_t *total_bytes,
+    volatile int32_t *cancel_flag,
     char *error_buffer,
     size_t error_buffer_len
 ) {
@@ -3445,6 +3446,16 @@ int prossh_libssh_sftp_download_file(
     char buffer[32768];
     int64_t transferred = 0;
     while (1) {
+        if (cancel_flag != NULL && *cancel_flag != 0) {
+            if (local != NULL) {
+                fclose(local);
+                local = NULL;
+                remove(local_path);
+            }
+            status = -2;
+            goto cleanup;
+        }
+
         ssize_t read_count = sftp_read(remote, buffer, sizeof(buffer));
         if (read_count < 0) {
             prossh_set_error(handle, "Failed while reading remote file.", error_buffer, error_buffer_len);
@@ -3490,6 +3501,7 @@ int prossh_libssh_sftp_upload_file(
     const char *remote_path,
     int64_t *bytes_transferred,
     int64_t *total_bytes,
+    volatile int32_t *cancel_flag,
     char *error_buffer,
     size_t error_buffer_len
 ) {
@@ -3552,6 +3564,11 @@ int prossh_libssh_sftp_upload_file(
     char buffer[32768];
     int64_t transferred = 0;
     while (1) {
+        if (cancel_flag != NULL && *cancel_flag != 0) {
+            status = -2;
+            goto cleanup;
+        }
+
         size_t read_count = fread(buffer, 1, sizeof(buffer), local);
         if (read_count == 0) {
             if (ferror(local)) {
