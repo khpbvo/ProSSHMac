@@ -233,11 +233,22 @@ All paths relative to repo root, under `ProSSHMac/`.
 | `docs/BlackTextRenderingFix.md` | Black text rendering fix (issue #9) |
 | `docs/FixTerminalCopyAndSelection.md` | Terminal copy/selection fix (issue #22) |
 | `docs/IntegrationOfNewFeats.md` | Pre-built module integration guide (TOTP 2FA, etc.) |
+| `docs/Issue11.md` | Visual jitter fix — phased checklist (Phases 0–5) |
 
 ---
 
 ## Next Session Plan
 
 <!-- NEXT SESSION PLAN -->
-_No plan written yet. The previous session should write the next phase plan here before ending._
+Feature: Issue #11 (visual jitter in TUI apps) — spec: `docs/Issue11.md`
+Next phase: **Phase 1 — Output batching in parser reader**
+
+Context:
+- Phase 0 code is done (debug logging in DrawLoop + RenderingCoordinator).
+- Baseline Instruments run is a manual step for the user; may or may not be done.
+- Phase 1 target: `Services/SessionShellIOCoordinator.swift` line ~181 (`startParserReader`).
+  Accumulate SSH chunks for up to 4ms before feeding the parser instead of feeding immediately.
+
+Key decision: use `Task.sleep(for: .milliseconds(4))` accumulator loop.
+Reentrancy guard in `TerminalEngine.feed()` (isFeeding + feedQueue) must still work after batching.
 <!-- /NEXT SESSION PLAN -->

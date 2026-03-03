@@ -198,6 +198,16 @@ extension MetalTerminalRenderer {
             gpuFrameSeconds: nil,
             drawCalls: drawCalls
         )
+        #if DEBUG
+        let _snap = performanceMonitor.snapshot()
+        if _snap.totalFrames > 0, _snap.totalFrames % 300 == 0 {
+            let hr = String(format: "%.1f", glyphCache.hitRate * 100)
+            print("[Renderer] avg=\(String(format: "%.2f", _snap.averageCPUFrameMs))ms"
+                + " p95=\(String(format: "%.2f", _snap.p95CPUFrameMs))ms"
+                + " dropped60=\(_snap.dropped60HzFrames) dropped120=\(_snap.dropped120HzFrames)"
+                + " | GlyphCache hit=\(hr)%")
+        }
+        #endif
         commandBuffer.addCompletedHandler { _ in
             semaphore.signal()
         }

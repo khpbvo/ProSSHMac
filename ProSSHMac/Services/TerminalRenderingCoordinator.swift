@@ -27,6 +27,8 @@ import os.signpost
 
     #if DEBUG
     private let perfSignpostLog = OSLog(subsystem: "com.prossh", category: "TerminalPerf")
+    private var _dbgPublishCount = 0
+    private var _dbgWindowStart = Date.now
     #endif
 
     init() {}
@@ -222,6 +224,14 @@ import os.signpost
         os_signpost(.begin, log: perfSignpostLog, name: "PublishGridState", signpostID: signpostID)
         defer {
             os_signpost(.end, log: perfSignpostLog, name: "PublishGridState", signpostID: signpostID)
+        }
+        _dbgPublishCount += 1
+        let _elapsed = Date.now.timeIntervalSince(_dbgWindowStart)
+        if _elapsed >= 0.1 {
+            let rate = Double(_dbgPublishCount) / _elapsed
+            print("[RenderCoord] snapshot rate: \(String(format: "%.1f", rate))/s (\(_dbgPublishCount) in \(String(format: "%.0f", _elapsed * 1000))ms)")
+            _dbgPublishCount = 0
+            _dbgWindowStart = Date.now
         }
         #endif
 
