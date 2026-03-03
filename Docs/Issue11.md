@@ -91,18 +91,18 @@ _Baseline captured: 2026-03-04. Session included SSH + TUI activity. ~14,400 tot
 
 ### Phase 2: Async glyph rasterization (offload cache misses)
 
-- [ ] Move `resolveGlyphIndex()` cache-miss rasterization off the draw path
-- [ ] On cache miss: return `noGlyphIndex` (blank cell) immediately; enqueue glyph for background rasterization
-- [ ] Background task rasterizes glyph → inserts into `GlyphCache` → sets `isDirty = true`
-- [ ] On next frame, glyph is in cache → correct index returned
-- [ ] Pre-warm cache with box-drawing characters (U+2500–U+257F, ~128 glyphs) alongside ASCII in `GlyphCache.prePopulateASCII()`
+- [x] Move `resolveGlyphIndex()` cache-miss rasterization off the draw path
+- [x] On cache miss: return `noGlyphIndex` (blank cell) immediately; enqueue glyph for background rasterization
+- [x] Background task rasterizes glyph → inserts into `GlyphCache` → sets `isDirty = true`
+- [x] On next frame, glyph is in cache → correct index returned
+- [x] Pre-warm cache with box-drawing characters (U+2500–U+257F, ~128 glyphs) alongside ASCII in `GlyphCache.prePopulateASCII()`
 - [ ] Verify: no frame spikes during first render of htop/ncdu
 
 ### Phase 3: Adaptive snapshot coalescing
 
-- [ ] In `TerminalRenderingCoordinator`: detect burst mode (>3 publish requests within 16ms window)
-- [ ] Auto-switch to throughput interval (16ms) when burst detected; revert after 200ms quiet
-- [ ] Remove requirement for user to manually toggle throughput mode for common TUI apps
+- [x] In `TerminalRenderingCoordinator`: detect burst mode (>3 publish requests within 16ms window)
+- [x] Auto-switch to throughput interval (16ms) when burst detected; revert after 200ms quiet
+- [x] Remove requirement for user to manually toggle throughput mode for common TUI apps
 - [ ] Verify: snapshot rate stays ≤60/s during sustained htop output
 
 ### Phase 4: Cursor animation decoupling

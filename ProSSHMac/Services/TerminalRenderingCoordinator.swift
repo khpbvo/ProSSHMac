@@ -20,10 +20,22 @@ import os.signpost
     var pendingResizeTasks: [UUID: Task<Void, Never>] = [:]
     var desiredPTYBySessionID: [UUID: PTYConfiguration] = [:]
 
+    /// Number of publish requests received in the current burst window per session.
+    private var burstCountBySessionID: [UUID: Int] = [:]
+    /// Start timestamp of the current burst window per session.
+    private var burstWindowStartBySessionID: [UUID: Date] = [:]
+    /// Whether auto-burst mode is active per session (true = use throughput intervals).
+    private var autoBurstModeBySessionID: [UUID: Bool] = [:]
+    /// Pending revert task — fires 200ms after the last publish request.
+    private var burstRevertTasksBySessionID: [UUID: Task<Void, Never>] = [:]
+
     private let shellBufferPublishInterval: TimeInterval = 1.0 / 30.0
     private let throughputShellBufferPublishInterval: TimeInterval = 1.0 / 5.0
     private let snapshotPublishInterval: Duration = .milliseconds(8)
     private let throughputSnapshotPublishInterval: Duration = .milliseconds(16)
+    private let burstWindowDuration: TimeInterval = 0.016  // 16ms
+    private let burstThreshold = 3                         // requests within window to activate
+    private let burstRevertDelay: Duration = .milliseconds(200)
 
     #if DEBUG
     private let perfSignpostLog = OSLog(subsystem: "com.prossh", category: "TerminalPerf")
@@ -59,6 +71,11 @@ import os.signpost
         lastBellTimeBySessionID.removeValue(forKey: sessionID)
         scrollOffsetBySessionID.removeValue(forKey: sessionID)
         gridSnapshotsBySessionID.removeValue(forKey: sessionID)
+        burstCountBySessionID.removeValue(forKey: sessionID)
+        burstWindowStartBySessionID.removeValue(forKey: sessionID)
+        autoBurstModeBySessionID.removeValue(forKey: sessionID)
+        burstRevertTasksBySessionID[sessionID]?.cancel()
+        burstRevertTasksBySessionID.removeValue(forKey: sessionID)
     }
 
     // MARK: - Resize
@@ -258,7 +275,7 @@ import os.signpost
 
         let bellCount = await engine.consumeBellCount()
         if bellCount > 0 {
-            if manager.throughputModeEnabled {
+            if isInBurstMode(for: sessionID) {
                 let now = Date()
                 let lastBell = lastBellTimeBySessionID[sessionID] ?? .distantPast
                 if now.timeIntervalSince(lastBell) >= 1.0 {
@@ -285,6 +302,46 @@ import os.signpost
 
     // MARK: - Private helpers
 
+    private func isInBurstMode(for sessionID: UUID) -> Bool {
+        (manager?.throughputModeEnabled ?? false) || (autoBurstModeBySessionID[sessionID] == true)
+    }
+
+    private func updateBurstState(for sessionID: UUID) {
+        let now = Date()
+        let windowStart = burstWindowStartBySessionID[sessionID] ?? now
+
+        if now.timeIntervalSince(windowStart) > burstWindowDuration {
+            burstCountBySessionID[sessionID] = 1
+            burstWindowStartBySessionID[sessionID] = now
+        } else {
+            burstCountBySessionID[sessionID, default: 0] += 1
+        }
+
+        let count = burstCountBySessionID[sessionID, default: 0]
+        if count > burstThreshold, autoBurstModeBySessionID[sessionID] != true {
+            autoBurstModeBySessionID[sessionID] = true
+            #if DEBUG
+            print("[RenderCoord] burst mode ON  session=\(sessionID.uuidString.prefix(8)) count=\(count)")
+            #endif
+        }
+
+        burstRevertTasksBySessionID[sessionID]?.cancel()
+        burstRevertTasksBySessionID[sessionID] = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: self?.burstRevertDelay ?? .milliseconds(200))
+            guard !Task.isCancelled else { return }
+            guard let self else { return }
+            if self.autoBurstModeBySessionID[sessionID] == true {
+                self.autoBurstModeBySessionID[sessionID] = false
+                self.burstCountBySessionID.removeValue(forKey: sessionID)
+                self.burstWindowStartBySessionID.removeValue(forKey: sessionID)
+                #if DEBUG
+                print("[RenderCoord] burst mode OFF session=\(sessionID.uuidString.prefix(8))")
+                #endif
+            }
+            self.burstRevertTasksBySessionID.removeValue(forKey: sessionID)
+        }
+    }
+
     private func cancelPendingSnapshotPublish(for sessionID: UUID) {
         pendingSnapshotPublishTasksBySessionID[sessionID]?.cancel()
         pendingSnapshotPublishTasksBySessionID.removeValue(forKey: sessionID)
@@ -294,13 +351,15 @@ import os.signpost
         for sessionID: UUID,
         engine: TerminalEngine
     ) {
+        updateBurstState(for: sessionID)
+
         guard pendingSnapshotPublishTasksBySessionID[sessionID] == nil else {
             return
         }
 
         pendingSnapshotPublishTasksBySessionID[sessionID] = Task { @MainActor [weak self] in
-            guard let self, let manager = self.manager else { return }
-            let interval = manager.throughputModeEnabled
+            guard let self else { return }
+            let interval = self.isInBurstMode(for: sessionID)
                 ? self.throughputSnapshotPublishInterval
                 : self.snapshotPublishInterval
             try? await Task.sleep(for: interval)
@@ -311,8 +370,7 @@ import os.signpost
     }
 
     private func shouldPublishShellBuffer(for sessionID: UUID, now: Date = .now) -> Bool {
-        guard let manager else { return true }
-        let publishInterval = manager.throughputModeEnabled
+        let publishInterval = isInBurstMode(for: sessionID)
             ? throughputShellBufferPublishInterval
             : shellBufferPublishInterval
         if let lastPublished = lastShellBufferPublishAtBySessionID[sessionID],

@@ -921,3 +921,51 @@ Build: SUCCEEDED.
 
 ### Next
 Phase 2: Async glyph rasterization — offload cache misses from draw path in `MetalTerminalRenderer+GlyphResolution.swift`.
+
+## 2026-03-04 — Issue #11 Phase 2: Async Glyph Rasterization
+
+**Feature spec:** `docs/Issue11.md`
+**Phase:** 2 of 5
+
+### What changed
+- `GlyphCache.swift`: Added box-drawing block (U+2500–U+257F, 128 glyphs) to both `prePopulateASCII` variants (sync and async). Pre-warm eliminates first-frame spike for TUI apps like htop/ncdu.
+- `MetalTerminalRenderer.swift`: Added `pendingGlyphKeys: Set<GlyphKey>` and `glyphRasterTask: Task<Void, Never>?` properties.
+- `MetalTerminalRenderer+GlyphResolution.swift`: 
+  - `resolveGlyphIndex`: now enqueues cache misses in `pendingGlyphKeys` and returns `noGlyphIndex` instead of synchronously rasterizing.
+  - Added `nonisolated static func rasterizeGlyphForBackground(...)` — pure CPU rasterization callable from any thread.
+  - Marked `resolveRenderFont`, `isEmojiRange` as `nonisolated static` to permit background-thread calls.
+- `MetalTerminalRenderer+DrawLoop.swift`: Added `drainPendingGlyphKeysIfNeeded()` call after `applyPendingSnapshotIfNeeded()`; added private `drainPendingGlyphKeysIfNeeded()` method that launches a `Task.detached` capturing only Sendable scalars (fontName + scaledFontSize), reconstructs CTFont variants on background thread, uploads to atlas on main thread via `DispatchQueue.main.async`, then forces re-render via `pendingRenderSnapshot = latestSnapshot`.
+- `GlyphRasterizer.swift`: Marked `rasterize(codepoint:...)`, `isColorGlyph`, `isEmojiCodepoint`, `isWideCharacter`, `swizzleBGRAtoRGBA`, `deviceRGBColorSpace`, and `RasterizedGlyph.empty` as `nonisolated` (required by `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` project setting).
+
+### Files modified
+- `ProSSHMac/Terminal/Renderer/GlyphCache.swift`
+- `ProSSHMac/Terminal/Renderer/MetalTerminalRenderer.swift`
+- `ProSSHMac/Terminal/Renderer/MetalTerminalRenderer+GlyphResolution.swift`
+- `ProSSHMac/Terminal/Renderer/MetalTerminalRenderer+DrawLoop.swift`
+- `ProSSHMac/Terminal/Renderer/GlyphRasterizer.swift`
+- `docs/Issue11.md` (Phase 2 checked off)
+
+### Build/test status
+Build: SUCCEEDED.
+
+### Next
+Phase 3: Adaptive snapshot coalescing in `TerminalRenderingCoordinator`.
+
+---
+
+## 2026-03-04 — Issue #11 Phase 3: Adaptive snapshot coalescing
+
+### What changed
+Added automatic burst detection to `TerminalRenderingCoordinator`. When >3 publish requests arrive within a 16ms window, the coordinator auto-switches to the 16ms throughput interval; 200ms after the burst quiets, it reverts to the 8ms default. This eliminates the need for users to manually toggle throughput mode for htop/ncdu/other TUI apps.
+
+Added `isInBurstMode(for:)` as a single truth source replacing all three direct reads of `manager.throughputModeEnabled` (snapshot interval selection, shell buffer throttle, bell rate-limiting).
+
+### Files modified
+- `ProSSHMac/Services/TerminalRenderingCoordinator.swift`
+- `Docs/Issue11.md` (Phase 3 checked off)
+
+### Build/test status
+Build: SUCCEEDED.
+
+### Next
+Phase 4: Cursor animation decoupling — replace continuous MTKView display-link with Timer-driven blink, `isPaused = true` when idle.

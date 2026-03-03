@@ -241,15 +241,15 @@ All paths relative to repo root, under `ProSSHMac/`.
 
 <!-- NEXT SESSION PLAN -->
 Feature: Issue #11 (visual jitter in TUI apps) — spec: `docs/Issue11.md`
-Next phase: **Phase 3 — Adaptive snapshot coalescing**
+Next phase: **Phase 4 — Cursor animation decoupling**
 
 Context:
-- Phase 2 complete: box-drawing pre-warm in `GlyphCache.prePopulateASCII` (both variants) + async-on-miss in `resolveGlyphIndex` + `drainPendingGlyphKeysIfNeeded()` in draw loop.
-- Key `nonisolated` annotations added to `GlyphRasterizer` methods and `MetalTerminalRenderer` static helpers (required by `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`).
-- Phase 3 target: `Services/TerminalRenderingCoordinator.swift`
-  - Detect burst mode (>3 publish requests within 16ms window)
-  - Auto-switch to throughput interval (16ms) when burst detected; revert after 200ms quiet
-  - Remove requirement for user to manually toggle throughput mode for common TUI apps
+- Phase 3 complete: burst detection in `TerminalRenderingCoordinator`. `isInBurstMode(for:)` is the single truth source for all throughput-mode checks. Auto-activates at >3 requests/16ms, reverts 200ms after quiet.
+- Phase 4 target: `Terminal/Renderer/MetalTerminalRenderer+DrawLoop.swift`
+  - Replace `requiresContinuousFrames()` continuous display-link with a `Timer`-driven `isDirty = true` at the blink interval
+  - Set `MTKView.isPaused = true` when no snapshot is pending and cursor is not in blink phase
+  - Re-enable display link only when a snapshot arrives or blink timer fires
+  - Goal: idle terminal (no output) GPU usage drops to near zero
 
-Key concern: read `TerminalRenderingCoordinator.swift` and the current coalescing logic before modifying.
+Key concern: read `MetalTerminalRenderer+DrawLoop.swift` and understand how `isPaused`, `requiresContinuousFrames`, and the cursor blink timer interact before modifying.
 <!-- /NEXT SESSION PLAN -->
