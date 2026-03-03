@@ -43,13 +43,7 @@ struct BroadcastContext: Sendable {
                     "[\(traceID, privacy: .public)] tool_ok name=\(toolCall.name, privacy: .public) call_id=\(toolCall.id, privacy: .public) ms=\(toolMs) output_chars=\(output.count)"
                 )
             } catch {
-                let fallback = AIToolDefinitions.jsonString(
-                    from: .object([
-                        "ok": .bool(false),
-                        "error": .string(error.localizedDescription),
-                        "tool": .string(toolCall.name),
-                    ])
-                )
+                let fallback = AIToolDefinitions.errorResult(error.localizedDescription)
                 outputs.append(.init(callID: toolCall.id, output: fallback))
                 let toolMs = AIToolDefinitions.elapsedMillis(since: toolStart)
                 Self.logger.error(
@@ -76,28 +70,6 @@ struct BroadcastContext: Sendable {
         }
 
         switch toolCall.name {
-        case "search_terminal_history":
-            let query = try Self.requiredString(
-                key: "query",
-                in: arguments,
-                toolName: toolCall.name
-            )
-            let limit = Self.clamp(Self.optionalInt(key: "limit", in: arguments) ?? 20, min: 1, max: 50)
-            let resolvedID = resolveTargetSessions(
-                arguments: arguments,
-                primarySessionID: sessionID,
-                broadcastContext: broadcastContext
-            ).first ?? sessionID
-            let blocks = await provider.searchCommandHistory(
-                sessionID: resolvedID,
-                query: query,
-                limit: limit
-            )
-            return AIToolDefinitions.jsonString(from: .object([
-                "ok": .bool(true),
-                "results": .array(blocks.map(Self.commandBlockSummary)),
-            ]))
-
         case "get_command_output":
             let blockIDRaw = try Self.requiredString(
                 key: "block_id",
@@ -145,11 +117,19 @@ struct BroadcastContext: Sendable {
                 let target = targets[0]
                 let allLines = provider.shellBuffers[target] ?? []
                 let lines = Array(allLines.suffix(limit))
-                return AIToolDefinitions.jsonString(from: .object([
+                var payload: [String: LLMJSONValue] = [
                     "ok": .bool(true),
                     "working_directory": provider.workingDirectoryBySessionID[target].map(LLMJSONValue.string) ?? .null,
                     "lines": .array(lines.map(LLMJSONValue.string)),
-                ]))
+                ]
+                if let session = provider.sessions.first(where: { $0.id == target }) {
+                    payload["session_info"] = .object([
+                        "host_label": .string(session.hostLabel),
+                        "is_local": .bool(session.isLocal),
+                        "state": .string(session.state.rawValue),
+                    ])
+                }
+                return AIToolDefinitions.jsonString(from: .object(payload))
             } else if let ctx = broadcastContext {
                 var sessionResults: [(sessionID: UUID, output: String)] = []
                 for target in targets {
@@ -172,15 +152,21 @@ struct BroadcastContext: Sendable {
                 ]))
             }
 
-        case "get_recent_commands":
+        case "get_recent_commands", "search_terminal_history":
             let limit = Self.clamp(Self.optionalInt(key: "limit", in: arguments) ?? 20, min: 1, max: 50)
+            let query = Self.optionalString(key: "query", in: arguments)
             let targets = resolveTargetSessions(
                 arguments: arguments,
                 primarySessionID: sessionID,
                 broadcastContext: broadcastContext
             )
             if targets.count == 1 {
-                let blocks = await provider.recentCommandBlocks(sessionID: targets[0], limit: limit)
+                let blocks: [CommandBlock]
+                if let query, !query.isEmpty {
+                    blocks = await provider.searchCommandHistory(sessionID: targets[0], query: query, limit: limit)
+                } else {
+                    blocks = await provider.recentCommandBlocks(sessionID: targets[0], limit: limit)
+                }
                 return AIToolDefinitions.jsonString(from: .object([
                     "ok": .bool(true),
                     "results": .array(blocks.map(Self.commandBlockSummary)),
@@ -188,7 +174,12 @@ struct BroadcastContext: Sendable {
             } else if let ctx = broadcastContext {
                 var sessionResults: [(sessionID: UUID, output: String)] = []
                 for target in targets {
-                    let blocks = await provider.recentCommandBlocks(sessionID: target, limit: limit)
+                    let blocks: [CommandBlock]
+                    if let query, !query.isEmpty {
+                        blocks = await provider.searchCommandHistory(sessionID: target, query: query, limit: limit)
+                    } else {
+                        blocks = await provider.recentCommandBlocks(sessionID: target, limit: limit)
+                    }
                     let json = AIToolDefinitions.jsonString(from: .array(blocks.map(Self.commandBlockSummary)))
                     sessionResults.append((target, json))
                 }
@@ -198,7 +189,12 @@ struct BroadcastContext: Sendable {
                     "output": .string(formatBroadcastResult(results: sessionResults, context: ctx)),
                 ]))
             } else {
-                let blocks = await provider.recentCommandBlocks(sessionID: sessionID, limit: limit)
+                let blocks: [CommandBlock]
+                if let query, !query.isEmpty {
+                    blocks = await provider.searchCommandHistory(sessionID: sessionID, query: query, limit: limit)
+                } else {
+                    blocks = await provider.recentCommandBlocks(sessionID: sessionID, limit: limit)
+                }
                 return AIToolDefinitions.jsonString(from: .object([
                     "ok": .bool(true),
                     "results": .array(blocks.map(Self.commandBlockSummary)),
@@ -432,12 +428,10 @@ struct BroadcastContext: Sendable {
             )
 
             if let message = Self.readBoundViolationMessage(for: command) {
-                return AIToolDefinitions.jsonString(from: .object([
-                    "ok": .bool(false),
-                    "status": .string("read_window_required"),
-                    "message": .string(message),
-                    "hint": .string("Use read_file_chunk with line_count <= 500 and iterate by start_line."),
-                ]))
+                return AIToolDefinitions.errorResult(
+                    message,
+                    hint: "Use read_files with line_count <= 500 and iterate by start_line."
+                )
             }
 
             let targets = resolveTargetSessions(
@@ -472,12 +466,10 @@ struct BroadcastContext: Sendable {
             ))
 
             if let message = Self.readBoundViolationMessage(for: command) {
-                return AIToolDefinitions.jsonString(from: .object([
-                    "ok": .bool(false),
-                    "status": .string("read_window_required"),
-                    "message": .string(message),
-                    "hint": .string("Use read_file_chunk with line_count <= 500."),
-                ]))
+                return AIToolDefinitions.errorResult(
+                    message,
+                    hint: "Use read_files with line_count <= 500."
+                )
             }
 
             let targets = resolveTargetSessions(
@@ -495,11 +487,10 @@ struct BroadcastContext: Sendable {
                 )
 
                 if result.timedOut {
-                    return AIToolDefinitions.jsonString(from: .object([
-                        "ok": .bool(false),
-                        "status": .string("timed_out"),
-                        "message": .string("Command did not complete within \(Int(timeout)) seconds. It may still be running. Use get_current_screen to check."),
-                    ]))
+                    return AIToolDefinitions.errorResult(
+                        "Command timed out after \(Int(timeout)) seconds",
+                        hint: "May still be running. Use get_current_screen to check."
+                    )
                 }
 
                 let maxOutputChars = 16000
@@ -560,6 +551,7 @@ struct BroadcastContext: Sendable {
             }
 
         case "get_session_info":
+            // Backward-compat: still dispatches for in-flight conversations
             let resolvedID = resolveTargetSessions(
                 arguments: arguments,
                 primarySessionID: sessionID,
@@ -620,10 +612,7 @@ struct BroadcastContext: Sendable {
                     )
                     if !approved {
                         Self.logger.info("patch_denied path=\(path, privacy: .public)")
-                        return AIToolDefinitions.jsonString(from: .object([
-                            "ok": .bool(false),
-                            "status": .string("denied_by_user"),
-                        ]))
+                        return AIToolDefinitions.errorResult("Patch denied by user")
                     }
                     if remember { svc.patchApprovalTracker.remember(fingerprint) }
                 }
@@ -1050,11 +1039,7 @@ struct BroadcastContext: Sendable {
             )
 
         default:
-            return AIToolDefinitions.jsonString(from: .object([
-                "ok": .bool(false),
-                "error": .string("Unknown tool"),
-                "tool": .string(toolCall.name),
-            ]))
+            return AIToolDefinitions.errorResult("Unknown tool: \(toolCall.name)")
         }
     }
 

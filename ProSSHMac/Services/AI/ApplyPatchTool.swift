@@ -487,7 +487,7 @@ enum ApplyPatchToolDefinition {
                 "create" — new file. The diff field contains every line prefixed with +.
                   Example diff: "+line one\\n+line two\\n+line three"
 
-                "update" — modify an existing file. ALWAYS call read_file_chunk first.
+                "update" — modify an existing file. ALWAYS call read_files first.
                   The diff field uses V4A blocks (NOT unified @@ -N,M +N,M @@ headers):
                   - Use @@ or @@ <anchor> to start each change block.
                   - Include only changed lines in each block:

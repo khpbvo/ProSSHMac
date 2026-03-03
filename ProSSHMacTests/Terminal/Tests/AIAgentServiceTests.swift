@@ -169,8 +169,8 @@ final class AIAgentServiceTests: XCTestCase {
         XCTAssertEqual(reply.text, "Handled.")
         XCTAssertTrue(sessionProvider.sentCommands.isEmpty)
         let toolOutput = responses.capturedRequests[1].toolOutputs.first?.output ?? ""
-        XCTAssertTrue(toolOutput.contains("read_window_required"))
-        XCTAssertTrue(toolOutput.contains("read_file_chunk"))
+        XCTAssertTrue(toolOutput.contains(#""ok":false"#))
+        XCTAssertTrue(toolOutput.contains("read_files"))
     }
 
     func testGenerateReplyThrowsToolLoopExceededWhenNoTerminalResponse() async throws {
@@ -310,11 +310,12 @@ final class AIAgentServiceTests: XCTestCase {
         XCTAssertTrue(firstTools.contains("execute_command"))
         XCTAssertTrue(firstTools.contains("execute_and_wait"))
         XCTAssertTrue(firstTools.contains("get_current_screen"))
-        XCTAssertTrue(firstTools.contains("get_session_info"))
+        XCTAssertTrue(firstTools.contains("read_files"))
         XCTAssertTrue(firstTools.contains("get_recent_commands"))
         XCTAssertTrue(firstTools.contains("get_command_output"))
         XCTAssertFalse(firstTools.contains("search_terminal_history"))
         XCTAssertFalse(firstTools.contains("search_filesystem"))
+        XCTAssertFalse(firstTools.contains("get_session_info"))
     }
 
     func testExecuteAndWaitReturnsOutputDirectly() async throws {
@@ -383,7 +384,7 @@ final class AIAgentServiceTests: XCTestCase {
         XCTAssertEqual(reply.text, "Timed out.")
         let toolOutput = responses.capturedRequests[1].toolOutputs.first?.output ?? ""
         XCTAssertTrue(toolOutput.contains(#""ok":false"#))
-        XCTAssertTrue(toolOutput.contains("timed_out"))
+        XCTAssertTrue(toolOutput.contains("timed out"))
     }
 
     func testReadFilesToolReturnsBatchResults() async throws {

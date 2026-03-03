@@ -833,3 +833,44 @@ Build: SUCCEEDED.
 
 Build: SUCCEEDED. All 17 new tests + 26 existing PaneManagerTests pass.
 
+
+### 2026-03-03 — Optimize AI Agent Instructions and Tool Use
+
+**Goal**: Reduce per-request token cost, improve behavioral guidance, merge redundant tools, and standardize error output shapes.
+
+**Phase 1 — Compress Developer Prompt** (~184 → ~62 lines, ~55% reduction):
+- Deleted `INTERACTIVE INPUT` section (duplicated in send_input tool description)
+- Deleted `File Editing with apply_patch` tutorial (82 lines, duplicated in apply_patch tool description)
+- Compressed SUDO (11→3 lines), BROADCAST (8→2 lines), CAPABILITIES (6→3 lines), CONTEXT (5→1 line), APPROACH (6→3 lines)
+- Added EFFICIENCY section (parallel tool calls, batch reads, dedicated search tools)
+
+**Phase 2 — Behavioral Guidance**:
+- Added EFFICIENCY section: batch file reads, parallel tool calls, prefer dedicated search tools
+- Updated apply_patch tool description: `read_file_chunk` → `read_files` reference
+
+**Phase 3 — Merge Redundant Tools** (14 → 11 definitions):
+- Removed `read_file_chunk` definition — `read_files` now handles single-file reads too (updated description)
+- Removed `search_terminal_history` definition — merged into `get_recent_commands` via optional `query` parameter (nullable string)
+- Removed `get_session_info` definition — `get_current_screen` now includes `session_info` object (host_label, is_local, state)
+- All three removed tools retained as backward-compat dispatch cases in AIToolHandler
+- Updated `directActionToolDefinitions`: replaced `get_session_info` with `read_files`
+
+**Phase 4 — Standardize Error Output**:
+- Added `AIToolDefinitions.errorResult(_:hint:)` helper
+- Standardized all error shapes to `{ok:false, error:"...", hint:"..."}` (hint optional)
+- Updated: read-bound violations, execute_and_wait timeout, apply_patch denied, unknown tool, catch-all errors
+- Exception: `sudo_password_required` status kept as-is (flow-control signal, not error)
+
+**Phase 5 — Shorten target_session Description**:
+- Compressed from ~30 tokens to ~12 tokens per tool × 11 tools (~200 token savings)
+- Removed stale reference to `get_session_info`
+
+**Files changed** (4 modified):
+- `AIToolDefinitions.swift`: Compressed prompt, removed 3 tool definitions, added `query` to `get_recent_commands`, added `errorResult` helper, shortened `targetSessionProperty`
+- `AIToolHandler.swift`: Merged `search_terminal_history` into `get_recent_commands` dispatch, added `session_info` to `get_current_screen`, standardized error shapes, updated hint messages
+- `ApplyPatchTool.swift`: `read_file_chunk` → `read_files` in description
+- `AIAgentServiceTests.swift`: Updated assertions for new error shapes and tool names
+
+**Estimated savings**: ~2,900 tokens per request from prompt/schema compression, plus fewer unnecessary tool calls from behavioral guidance.
+
+Build: SUCCEEDED. All pre-existing tests pass (AIAgentServiceTests have a pre-existing Mistral provider config issue unrelated to this change).
