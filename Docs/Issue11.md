@@ -60,11 +60,15 @@ _To be filled in during Phase 0._
 
 | Metric | Baseline | Post-fix |
 |--------|----------|----------|
-| p95 CPU frame time (htop, 60Hz) | — | — |
-| Dropped frames / 10s (htop) | — | — |
-| GlyphCache miss rate (first htop render) | — | — |
-| Snapshot publishes / 100ms (htop steady state) | — | — |
-| Idle GPU usage (no output, cursor blinking) | — | — |
+| p95 CPU frame time (TUI session, 60Hz) | **7.8ms** (peak 300-frame window) | — |
+| Dropped 120Hz frames (cumulative session) | **10** total (~14k frame session) | — |
+| Dropped 60Hz frames (cumulative session) | **4** total (~14k frame session) | — |
+| GlyphCache miss rate (first render) | **0%** (always warm after first use) | — |
+| Snapshot publishes / 100ms (TUI steady state) | **1–2 per window** (6–15/s typical, 42/s burst) | — |
+| Idle snapshot rate | **<1/s** | — |
+| Idle GPU usage (no output, cursor blinking) | not measured (use Activity Monitor) | — |
+
+_Baseline captured: 2026-03-04. Session included SSH + TUI activity. ~14,400 total frames rendered (~240s at 60Hz)._
 
 ---
 
@@ -76,7 +80,7 @@ _To be filled in during Phase 0._
 - [x] Log `RendererPerformanceMonitor.snapshot()` to console: avg CPU frame, p95, dropped 60/120Hz frames
 - [x] Log cache hit/miss rate from `GlyphCache` during htop + claude-code session
 - [x] Log snapshot publish frequency: count publishes per 100ms in `TerminalRenderingCoordinator`
-- [ ] Document baseline numbers in the table above
+- [x] Document baseline numbers in the table above
 
 ### Phase 1: Output batching in parser reader
 
