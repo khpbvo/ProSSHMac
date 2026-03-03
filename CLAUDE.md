@@ -241,14 +241,15 @@ All paths relative to repo root, under `ProSSHMac/`.
 
 <!-- NEXT SESSION PLAN -->
 Feature: Issue #11 (visual jitter in TUI apps) — spec: `docs/Issue11.md`
-Next phase: **Phase 2 — Async glyph rasterization (offload cache misses)**
+Next phase: **Phase 3 — Adaptive snapshot coalescing**
 
 Context:
-- Phase 1 complete: `ChunkBatchAccumulator` in `SessionShellIOCoordinator.startParserReader()` batches SSH chunks into 4ms/4KB windows before feeding `TerminalEngine`.
-- Phase 2 target: `Terminal/Renderer/MetalTerminalRenderer+GlyphResolution.swift` + `Terminal/Renderer/GlyphCache.swift`
-  - On cache miss: return `noGlyphIndex` (blank cell) immediately; enqueue glyph for background rasterization
-  - Background task rasterizes → inserts into GlyphCache → sets `isDirty = true`
-  - Pre-warm cache with box-drawing characters (U+2500–U+257F, ~128 glyphs) in `prePopulateASCII()`
+- Phase 2 complete: box-drawing pre-warm in `GlyphCache.prePopulateASCII` (both variants) + async-on-miss in `resolveGlyphIndex` + `drainPendingGlyphKeysIfNeeded()` in draw loop.
+- Key `nonisolated` annotations added to `GlyphRasterizer` methods and `MetalTerminalRenderer` static helpers (required by `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`).
+- Phase 3 target: `Services/TerminalRenderingCoordinator.swift`
+  - Detect burst mode (>3 publish requests within 16ms window)
+  - Auto-switch to throughput interval (16ms) when burst detected; revert after 200ms quiet
+  - Remove requirement for user to manually toggle throughput mode for common TUI apps
 
-Key concern: check GlyphCache thread-safety model (lock vs actor) before modifying.
+Key concern: read `TerminalRenderingCoordinator.swift` and the current coalescing logic before modifying.
 <!-- /NEXT SESSION PLAN -->

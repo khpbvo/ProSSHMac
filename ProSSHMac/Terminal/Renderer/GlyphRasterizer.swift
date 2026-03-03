@@ -49,7 +49,7 @@ struct RasterizedGlyph: Sendable {
 
     /// An empty glyph with zero dimensions. Used as a fallback for unprintable
     /// codepoints or rasterization failures.
-    static let empty = RasterizedGlyph(
+    nonisolated static let empty = RasterizedGlyph(
         pixelData: [],
         width: 0,
         height: 0,
@@ -68,7 +68,7 @@ struct RasterizedGlyph: Sendable {
 /// All methods are static and thread-safe. No instance state is required
 /// because rasterization is a pure function of its inputs.
 enum GlyphRasterizer {
-    private static let deviceRGBColorSpace = CGColorSpaceCreateDeviceRGB()
+    private nonisolated static let deviceRGBColorSpace = CGColorSpaceCreateDeviceRGB()
 
     // MARK: - B.2.1 Primary Rasterization Entry Point
 
@@ -80,7 +80,7 @@ enum GlyphRasterizer {
     ///   - cellWidth: Width of a single terminal cell in pixels (from FontManager).
     ///   - cellHeight: Height of a single terminal cell in pixels (from FontManager).
     /// - Returns: A `RasterizedGlyph` containing the rendered pixel data and metrics.
-    static func rasterize(
+    nonisolated static func rasterize(
         codepoint: UnicodeScalar,
         font: CTFont,
         cellWidth: Int,
@@ -227,7 +227,7 @@ enum GlyphRasterizer {
     ///   - codepoint: The Unicode scalar value to check.
     ///   - font: The CTFont being used for rendering.
     /// - Returns: True if the codepoint should be rendered as a color (emoji) glyph.
-    private static func isColorGlyph(codepoint: UnicodeScalar, font: CTFont) -> Bool {
+    private nonisolated static func isColorGlyph(codepoint: UnicodeScalar, font: CTFont) -> Bool {
         // Fast path: check if the codepoint falls in well-known emoji ranges
         if isEmojiCodepoint(codepoint) {
             return true
@@ -258,7 +258,7 @@ enum GlyphRasterizer {
     ///
     /// This covers the majority of emoji without needing to query the font.
     /// Includes pictographs, emoticons, symbols, flags, and modifier sequences.
-    private static func isEmojiCodepoint(_ scalar: UnicodeScalar) -> Bool {
+    private nonisolated static func isEmojiCodepoint(_ scalar: UnicodeScalar) -> Bool {
         UnicodeClassification.isEmojiScalar(scalar)
     }
 
@@ -266,7 +266,7 @@ enum GlyphRasterizer {
 
     /// Determine if a codepoint is a wide (double-width) character.
     /// Delegates to `CharacterWidth.isWide(_:)` for consistency with the grid.
-    private static func isWideCharacter(codepoint: UnicodeScalar) -> Bool {
+    private nonisolated static func isWideCharacter(codepoint: UnicodeScalar) -> Bool {
         CharacterWidth.isWide(codepoint)
     }
 
@@ -281,7 +281,7 @@ enum GlyphRasterizer {
     /// - Parameters:
     ///   - buffer: The pixel buffer to swizzle in-place.
     ///   - count: Total number of bytes in the buffer.
-    private static func swizzleBGRAtoRGBA(_ buffer: inout [UInt8], count: Int) {
+    private nonisolated static func swizzleBGRAtoRGBA(_ buffer: inout [UInt8], count: Int) {
         let pixelCount = count / 4
         buffer.withUnsafeMutableBytes { raw in
             let words = raw.bindMemory(to: UInt32.self)

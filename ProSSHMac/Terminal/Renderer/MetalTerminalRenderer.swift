@@ -222,6 +222,12 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     /// In-flight task for applying font changes. New font updates cancel older ones.
     var fontChangeTask: Task<Void, Never>?
 
+    /// Glyph keys that missed the cache during this draw pass; dispatched for background rasterization.
+    var pendingGlyphKeys: Set<GlyphKey> = []
+
+    /// In-flight background rasterization task; nil when idle.
+    var glyphRasterTask: Task<Void, Never>?
+
     // MARK: - Initialization (B.8.1, B.8.2)
 
     /// Create a MetalTerminalRenderer with a Metal device and font manager.

@@ -64,6 +64,7 @@ extension MetalTerminalRenderer {
 
         // Apply latest pending snapshot in a buffer-safe context.
         applyPendingSnapshotIfNeeded()
+        drainPendingGlyphKeysIfNeeded()
 
         // Update uniforms for this frame via the TerminalUniformBuffer.
         let cursorFrame = cursorRenderer.frame(at: frameNow)
@@ -216,6 +217,73 @@ extension MetalTerminalRenderer {
         commandBuffer.commit()
 
         isDirty = false
+    }
+
+    /// Drain any glyph keys that missed the cache this frame by launching a single
+    /// background rasterization task. New misses during an in-flight task accumulate
+    /// in `pendingGlyphKeys` and are processed on the next pass (triggered by `isDirty = true`).
+    private func drainPendingGlyphKeysIfNeeded() {
+        guard !pendingGlyphKeys.isEmpty, glyphRasterTask == nil else { return }
+
+        let keys = pendingGlyphKeys
+        pendingGlyphKeys.removeAll()
+
+        let scale = screenScale
+        let cw = Int(ceil(cellWidth * scale))
+        let ch = Int(ceil(cellHeight * scale))
+        guard cw > 0, ch > 0 else { return }
+
+        // Capture Sendable scalars only — CTFont is not Sendable, so recreate on background thread.
+        rebuildRasterFontCacheIfNeeded(scale: scale)
+        let fontName = rasterFontName
+        let clampedScale = max(scale, 1.0)
+        let scaledFontSize = rasterFontSize * clampedScale
+
+        glyphRasterTask = Task.detached(priority: .userInitiated) { [weak self] in
+            // Reconstruct CTFont variants on the background thread from Sendable values.
+            let base = CTFontCreateWithName(fontName as CFString, scaledFontSize, nil)
+            let boldFont: CTFont = CTFontCreateCopyWithSymbolicTraits(
+                base, scaledFontSize, nil, .boldTrait, .boldTrait) ?? base
+            let italicFont: CTFont = CTFontCreateCopyWithSymbolicTraits(
+                base, scaledFontSize, nil, .italicTrait, .italicTrait) ?? base
+            let boldItalicTraits: CTFontSymbolicTraits = [.boldTrait, .italicTrait]
+            let boldItalicFont: CTFont = CTFontCreateCopyWithSymbolicTraits(
+                base, scaledFontSize, nil, boldItalicTraits, boldItalicTraits) ?? base
+
+            var results: [(GlyphKey, RasterizedGlyph)] = []
+            for key in keys {
+                if Task.isCancelled { break }
+                if let rasterized = MetalTerminalRenderer.rasterizeGlyphForBackground(
+                    key: key, cellWidth: cw, cellHeight: ch,
+                    regularFont: base, boldFont: boldFont,
+                    italicFont: italicFont, boldItalicFont: boldItalicFont
+                ) {
+                    results.append((key, rasterized))
+                }
+            }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                for (key, rasterized) in results {
+                    guard !self.glyphCache.contains(key) else { continue }
+                    let entry = rasterized.pixelData.withUnsafeBufferPointer { ptr -> AtlasEntry? in
+                        guard let base = ptr.baseAddress else { return nil }
+                        return self.glyphAtlas.allocate(
+                            width: rasterized.width, height: rasterized.height,
+                            pixelData: base,
+                            bearingX: Int8(clamping: rasterized.bearingX),
+                            bearingY: Int8(clamping: rasterized.bearingY)
+                        )
+                    }
+                    if let entry { self.glyphCache.insert(key, entry: entry) }
+                }
+                self.glyphRasterTask = nil
+                // Force re-render: re-apply current snapshot so noGlyphIndex cells are
+                // replaced now that their entries are in the cache.
+                self.pendingRenderSnapshot = self.latestSnapshot
+                self.forceFullUploadForPendingSnapshot = true
+                self.isDirty = true
+            }
+        }
     }
 
     func encodeTerminalScenePass(

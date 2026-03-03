@@ -123,7 +123,7 @@ extension MetalTerminalRenderer {
     ///   - scalar: The Unicode scalar to render.
     ///   - primaryFont: The primary terminal font (SF Mono variant).
     /// - Returns: The best CTFont for rendering this scalar.
-    static func resolveRenderFont(
+    nonisolated static func resolveRenderFont(
         for scalar: Unicode.Scalar,
         primaryFont: CTFont
     ) -> CTFont {
@@ -174,7 +174,7 @@ extension MetalTerminalRenderer {
     /// Check if a Unicode scalar value falls within well-known emoji ranges.
     /// These ranges should use a color emoji font rather than the monospace
     /// terminal font, which typically renders placeholders for these codepoints.
-    static func isEmojiRange(_ v: UInt32) -> Bool {
+    nonisolated static func isEmojiRange(_ v: UInt32) -> Bool {
         UnicodeClassification.isEmojiCodepoint(v)
     }
 
@@ -192,13 +192,8 @@ extension MetalTerminalRenderer {
             return packAtlasEntry(entry)
         }
 
-        // Cache miss: rasterize and upload.
-        if let entry = rasterizeAndUpload(key: key) {
-            glyphCache.insert(key, entry: entry)
-            return packAtlasEntry(entry)
-        }
-
-        // Rasterization failed; use no-glyph sentinel.
+        // Cache miss: enqueue for background rasterization; return blank sentinel for this frame.
+        pendingGlyphKeys.insert(key)
         return Self.noGlyphIndex
     }
 
@@ -212,5 +207,32 @@ extension MetalTerminalRenderer {
         let x = UInt32(entry.x) & 0xFFFF
         let y = UInt32(entry.y) & 0xFFFF
         return (y << 16) | x
+    }
+
+    /// Pure CPU glyph rasterization — safe to call from any thread.
+    /// Does NOT write to GlyphAtlas; caller must upload results on the main thread.
+    nonisolated static func rasterizeGlyphForBackground(
+        key: GlyphKey,
+        cellWidth cw: Int,
+        cellHeight ch: Int,
+        regularFont: CTFont,
+        boldFont: CTFont?,
+        italicFont: CTFont?,
+        boldItalicFont: CTFont?
+    ) -> RasterizedGlyph? {
+        guard let scalar = Unicode.Scalar(key.codepoint) else { return nil }
+        let variantFont: CTFont
+        if key.bold && key.italic      { variantFont = boldItalicFont ?? regularFont }
+        else if key.bold               { variantFont = boldFont ?? regularFont }
+        else if key.italic             { variantFont = italicFont ?? regularFont }
+        else                           { variantFont = regularFont }
+        let renderFont = resolveRenderFont(for: scalar, primaryFont: variantFont)
+        let rasterized = GlyphRasterizer.rasterize(
+            codepoint: scalar, font: renderFont, cellWidth: cw, cellHeight: ch
+        )
+        guard rasterized.width > 0, rasterized.height > 0, !rasterized.pixelData.isEmpty else {
+            return nil
+        }
+        return rasterized
     }
 }

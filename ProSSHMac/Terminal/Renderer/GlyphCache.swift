@@ -233,6 +233,16 @@ final class GlyphCache {
                     insert(key, entry: entry)
                 }
             }
+
+            // Box-drawing block (U+2500–U+257F, 128 glyphs) — eliminates first-frame
+            // spike when TUI apps like htop/ncdu first render.
+            for codepoint: UInt32 in 0x2500...0x257F {
+                let key = GlyphKey(codepoint: codepoint, bold: style.bold, italic: style.italic)
+                guard map[key] == nil else { continue }
+                if let entry = rasterize(key) {
+                    insert(key, entry: entry)
+                }
+            }
         }
     }
 
@@ -258,6 +268,15 @@ final class GlyphCache {
 
                 guard map[key] == nil else { continue }
 
+                if let entry = await rasterize(key) {
+                    insert(key, entry: entry)
+                }
+            }
+
+            // Box-drawing block (U+2500–U+257F, 128 glyphs)
+            for codepoint: UInt32 in 0x2500...0x257F {
+                let key = GlyphKey(codepoint: codepoint, bold: style.bold, italic: style.italic)
+                guard map[key] == nil else { continue }
                 if let entry = await rasterize(key) {
                     insert(key, entry: entry)
                 }
