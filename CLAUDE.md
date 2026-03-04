@@ -235,22 +235,23 @@ All paths relative to repo root, under `ProSSHMac/`.
 | `docs/IntegrationOfNewFeats.md` | Pre-built module integration guide (TOTP 2FA, etc.) |
 | `docs/Issue11.md` | Visual jitter fix — phased checklist (Phases 0–5) |
 | `docs/TextGlow.md` | Bloom / Text Glow — **COMPLETE** (Phases 0–7) |
-| `docs/SmoothScroll.md` | Smooth Scrolling — Phases 0–1 complete, Phase 2 next |
+| `docs/SmoothScroll.md` | Smooth Scrolling — Phases 0–2 complete, Phase 3 next |
 
 ---
 
 ## Next Session Plan
 
 <!-- NEXT SESSION PLAN -->
-**SmoothScroll Phase 2: Vertex Shader Integration**
+**SmoothScroll Phase 3: Wire Scroll Events Through Engine**
 
-Feature spec: `docs/SmoothScroll.md` — Phase 2.
+Feature spec: `docs/SmoothScroll.md` — Phase 3.
 
-Context: Phases 0–1 are complete. Phase 0 added `scrollOffsetPixels` to both Swift (`TerminalUniformData`) and Metal (`TerminalUniforms`) structs (hardcoded to 0.0). Phase 1 built `SmoothScrollEngine.swift` — CPU-side physics engine with `scrollDelta()`, `beginMomentum()`, `endMomentum()`, `frame()`, `requiresContinuousFrames()`, `onScrollLineChange` callback. Uses `CursorEffects.lerp` for spring-back, EMA velocity tracking, momentum decay via friction.
+Context: Phases 0–2 are complete. Phase 0 added `scrollOffsetPixels` to Swift/Metal uniform structs. Phase 1 built `SmoothScrollEngine` (CPU physics). Phase 2 added `pixelPos.y += uniforms.scrollOffsetPixels` in the vertex shader — GPU now shifts all cell quads by the sub-pixel offset. Fragment shader unchanged (cursor/glow use unscrolled `cellPixelPos`).
 
-Phase 2 applies `scrollOffsetPixels` in the vertex shader (`terminal_vertex`) so GPU shifts all cell quads vertically by the sub-pixel offset. Key decisions from spec:
-- Apply offset to `pixelPos.y` BEFORE NDC conversion (not in NDC space)
-- Also offset `cursorOrigin.y` by `scrollOffsetPixels` in fragment shader (Option A)
-- Post-process (bloom, CRT) operates on already-shifted scene texture — no adjustment needed
-- Verify with hardcoded test offset (e.g., `cellSize.y * 0.5`) before wiring to engine
+Phase 3 wires the engine into the renderer: replace integer-line scroll accumulation in `TerminalMetalContainerView.scrollWheel()` with `SmoothScrollEngine`, feed engine output into `scrollOffsetPixels` uniform, and drive display-link for momentum frames. Key tasks from spec:
+- Add `SmoothScrollEngine` instance to `MetalTerminalRenderer`
+- Route `scrollWheel` deltas through `engine.scrollDelta()`
+- In draw loop: call `engine.frame()`, write `scrollOffsetPixels` into uniforms
+- Use `requiresContinuousFrames()` to keep display-link alive during momentum
+- `onScrollLineChange` callback triggers integer grid scroll (existing logic)
 <!-- /NEXT SESSION PLAN -->

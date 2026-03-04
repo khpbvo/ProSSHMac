@@ -163,7 +163,7 @@ terminal_post_fragment
 
 ---
 
-### - [ ] Phase 2: Vertex Shader Integration
+### - [x] Phase 2: Vertex Shader Integration
 
 **Goal:** Apply `scrollOffsetPixels` in the vertex shader so the GPU shifts all cell quads vertically by the sub-pixel offset.
 

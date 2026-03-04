@@ -231,6 +231,10 @@ vertex VertexOut terminal_vertex(
     // Vertex position in pixels.
     float2 pixelPos = cellOrigin + corner * uniforms.cellSize;
 
+    // Smooth scroll: sub-pixel vertical offset (applied in pixel space
+    // before NDC conversion to avoid aspect-ratio scaling artifacts).
+    pixelPos.y += uniforms.scrollOffsetPixels;
+
     // Transform to Metal NDC: x in [-1,1], y in [-1,1].
     // Metal clip space: (-1,-1) is bottom-left, (1,1) is top-right.
     // Our pixel space: (0,0) is top-left.

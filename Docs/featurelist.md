@@ -1281,3 +1281,19 @@ Build: SUCCEEDED. Tests: 20 pass, 0 fail, pre-existing host app malloc crash (un
 
 ### Next
 Phase 2: Vertex Shader Integration — apply `scrollOffsetPixels` in `terminal_vertex` for sub-pixel Y-shift.
+
+---
+
+## 2026-03-04 — SmoothScroll Phase 2: Vertex Shader Integration
+
+### Summary
+Applied `scrollOffsetPixels` in the vertex shader (`terminal_vertex`) so the GPU shifts all cell quads vertically by the sub-pixel offset. One line added to `TerminalShaders.metal` — offset applied in pixel space before NDC conversion. Fragment shader unchanged (cursor, glow, decorations use unscrolled `cellPixelPos`). Post-process unchanged (UV space).
+
+### Changes
+- `ProSSHMac/Terminal/Renderer/TerminalShaders.metal`: Added `pixelPos.y += uniforms.scrollOffsetPixels;` after pixel position calculation, before NDC transform.
+
+### Build/Test
+Build: SUCCEEDED.
+
+### Next
+Phase 3: Wire SmoothScrollEngine into MetalTerminalRenderer — connect scroll events to engine, feed engine output into uniforms, drive display-link for momentum frames.
