@@ -243,7 +243,7 @@ All paths relative to repo root, under `ProSSHMac/`.
 <!-- NEXT SESSION PLAN -->
 **Feature:** TextGlow (Bloom / Text Glow Effect)
 **Spec:** `docs/TextGlow.md`
-**Next phase:** Phase 3 — Separable Gaussian Blur (H + V Passes)
+**Next phase:** Phase 4 — Composite Bloom into Post-Process Pass
 
-Phase 3 implements the two-pass Gaussian blur. In `TerminalShaders.metal`, implement `bloom_blur_fragment` with a 13-tap separable kernel (weights array, direction controlled by a uniform `bloomBlurHorizontal`). Add `bloomTexelWidth`, `bloomTexelHeight`, `bloomBlurHorizontal`, `bloomRadius` to both `TerminalUniformData` (Swift) and `TerminalUniforms` (Metal). In `MetalTerminalRenderer+DrawLoop.swift`, add `encodeBlurPasses(commandBuffer:)` that runs H-pass (bright→blurH) then V-pass (blurH→blurV). Phase 2 is complete: bright-pass shader extracts luminant pixels, `encodeBrightPass` wired into draw loop, bloom uniform fields present in both Swift and Metal structs.
+Phase 4 is the first visible result. In `TerminalShaders.metal`, modify `terminal_post_fragment` to accept `bloomBlurV` as `texture2d<float> bloomTexture [[texture(2)]]`. After sampling the scene, additively blend `bloomTexture.sample(s, uv).rgb * uniforms.bloomIntensity` into `color.rgb` (before gradient compositing). In `MetalTerminalRenderer+DrawLoop.swift`, bind `bloomBlurV` (or `crtFallbackTexture` when bloom is off) as fragment texture index 2 on the post-process encoder. Temporarily enable bloom by default to test visually — run `htop` or `ls --color` and verify bright text has a soft glow halo. Phase 3 is complete: `bloom_blur_fragment` implements 13-tap separable Gaussian via `setFragmentBytes` push constants, `encodeBlurPasses` runs H+V passes sequentially.
 <!-- /NEXT SESSION PLAN -->

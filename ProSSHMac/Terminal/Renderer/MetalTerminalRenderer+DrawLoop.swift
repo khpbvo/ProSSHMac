@@ -128,6 +128,8 @@ extension MetalTerminalRenderer {
 
             // Bloom bright-pass: extract luminant pixels → bloomBrightTexture (half-res)
             encodeBrightPass(commandBuffer: commandBuffer, sceneTexture: sceneTexture)
+            // Bloom blur: H+V separable Gaussian → bloomBlurV (ready for Phase 4 composite)
+            encodeBlurPasses(commandBuffer: commandBuffer)
 
             guard let postEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: drawableRenderPassDescriptor) else {
                 inflightSemaphore.signal()
@@ -362,5 +364,64 @@ extension MetalTerminalRenderer {
         encoder.setFragmentBuffer(uniformBuffer.buffer, offset: 0, index: 1)
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         encoder.endEncoding()
+    }
+
+    // MARK: - Bloom Blur Encoding (H + V Separable Gaussian)
+
+    private func encodeBlurPasses(commandBuffer: MTLCommandBuffer) {
+        guard bloomConfiguration.isEnabled,
+              let pipeline = bloomBlurHPipeline,
+              let brightTex = bloomBrightTexture,
+              let blurHTex = bloomBlurH,
+              let blurVTex = bloomBlurV else { return }
+
+        struct BloomBlurParams {
+            var texelWidth: Float
+            var texelHeight: Float
+            var horizontal: Float
+            var radius: Float
+        }
+
+        // H-pass: bloomBrightTexture → bloomBlurH
+        var hParams = BloomBlurParams(
+            texelWidth:  1.0 / Float(brightTex.width),
+            texelHeight: 1.0 / Float(brightTex.height),
+            horizontal:  1.0,
+            radius:      bloomConfiguration.radius
+        )
+        let hDescriptor = MTLRenderPassDescriptor()
+        hDescriptor.colorAttachments[0].texture = blurHTex
+        hDescriptor.colorAttachments[0].loadAction = .dontCare
+        hDescriptor.colorAttachments[0].storeAction = .store
+
+        if let enc = commandBuffer.makeRenderCommandEncoder(descriptor: hDescriptor) {
+            enc.label = "BloomBlurHPass"
+            enc.setRenderPipelineState(pipeline)
+            enc.setFragmentTexture(brightTex, index: 0)
+            enc.setFragmentBytes(&hParams, length: MemoryLayout<BloomBlurParams>.size, index: 2)
+            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+            enc.endEncoding()
+        }
+
+        // V-pass: bloomBlurH → bloomBlurV
+        var vParams = BloomBlurParams(
+            texelWidth:  1.0 / Float(blurHTex.width),
+            texelHeight: 1.0 / Float(blurHTex.height),
+            horizontal:  0.0,
+            radius:      bloomConfiguration.radius
+        )
+        let vDescriptor = MTLRenderPassDescriptor()
+        vDescriptor.colorAttachments[0].texture = blurVTex
+        vDescriptor.colorAttachments[0].loadAction = .dontCare
+        vDescriptor.colorAttachments[0].storeAction = .store
+
+        if let enc = commandBuffer.makeRenderCommandEncoder(descriptor: vDescriptor) {
+            enc.label = "BloomBlurVPass"
+            enc.setRenderPipelineState(pipeline)
+            enc.setFragmentTexture(blurHTex, index: 0)
+            enc.setFragmentBytes(&vParams, length: MemoryLayout<BloomBlurParams>.size, index: 2)
+            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+            enc.endEncoding()
+        }
     }
 }

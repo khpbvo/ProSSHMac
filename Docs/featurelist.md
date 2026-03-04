@@ -1126,3 +1126,28 @@ Build: SUCCEEDED. No visual change — bloom compositing into the final image is
 
 ### Next
 Phase 3: Separable Gaussian Blur (H + V Passes) — implement `bloom_blur_fragment` with 13-tap kernel, add blur uniform fields, encode H+V passes in DrawLoop.
+
+---
+
+## 2026-03-04 — TextGlow Phase 3: Separable Gaussian Blur (H + V Passes)
+
+**Feature spec:** `docs/TextGlow.md`
+**Phase:** 3 of 7
+
+### Changes
+- `ProSSHMac/Terminal/Renderer/TerminalShaders.metal`: Added `BloomBlurParams` struct (texelWidth, texelHeight, horizontal, radius) and 13-tap Gaussian kernel constants (`BLOOM_KERNEL_HALF = 6`, `BLOOM_WEIGHTS[7]`). Replaced `bloom_blur_fragment` stub with full implementation: takes `blurInput` texture at index 0 and `BloomBlurParams` at buffer index 2 via `setFragmentBytes`. Samples 13 taps along H or V direction based on `params.horizontal`, weights by pre-computed Gaussian weights, scales by `params.radius`.
+- `ProSSHMac/Terminal/Renderer/MetalTerminalRenderer+DrawLoop.swift`: Added `encodeBlurPasses(commandBuffer:)` private method that runs two sequential render passes: H-pass (`bloomBrightTexture → bloomBlurH`) and V-pass (`bloomBlurH → bloomBlurV`). Uses `setFragmentBytes` with a local `BloomBlurParams` struct for each pass — avoids the shared-buffer double-write problem. Called after `encodeBrightPass` and before the post-process encoder in `draw(in:)`.
+
+### Architecture note
+Used `setFragmentBytes` (inline push constants) instead of adding fields to `TerminalUniforms`. This is the correct Metal pattern for per-pass constants that change between render passes within a single command buffer — each pass command records its own copy of the 16-byte struct, so the GPU sees the correct direction for each pass.
+
+### Files modified
+- `ProSSHMac/Terminal/Renderer/TerminalShaders.metal`
+- `ProSSHMac/Terminal/Renderer/MetalTerminalRenderer+DrawLoop.swift`
+- `docs/TextGlow.md` (Phase 3 checked off)
+
+### Build/Test
+Build: SUCCEEDED. No visual change — compositing `bloomBlurV` into the final image is Phase 4.
+
+### Next
+Phase 4: Composite Bloom into Post-Process Pass — bind `bloomBlurV` as texture(2) in `terminal_post_fragment`, additive blend with `bloomIntensity`. First visible bloom result.

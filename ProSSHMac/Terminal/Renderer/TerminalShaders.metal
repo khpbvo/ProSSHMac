@@ -912,7 +912,25 @@ fragment float4 terminal_post_fragment(
     return color;
 }
 
-// MARK: - Bloom Effect Passes (Phase 1 stubs — black output until Phase 2–3)
+// MARK: - Bloom Blur Constants & Params
+
+constant int BLOOM_KERNEL_HALF = 6;  // 13-tap kernel (2*6 + 1)
+constant float BLOOM_WEIGHTS[7] = {
+    0.227027, 0.1945946, 0.1216216,
+    0.054054, 0.016216,  0.003784, 0.000541
+};
+
+/// Per-pass blur parameters bound via setFragmentBytes at buffer(2).
+/// Using inline bytes avoids the double-write problem when H and V passes
+/// share a command buffer — each pass command records its own copy.
+struct BloomBlurParams {
+    float texelWidth;   // 1.0 / texture.width
+    float texelHeight;  // 1.0 / texture.height
+    float horizontal;   // 1.0 = H-pass, 0.0 = V-pass
+    float radius;       // Gaussian sigma multiplier (from BloomEffectConfiguration.radius)
+};
+
+// MARK: - Bloom Effect Passes
 
 vertex PostVertexOut bloom_bright_vertex(uint vid [[vertex_id]]) {
     float2 positions[3] = {
@@ -963,6 +981,21 @@ vertex PostVertexOut bloom_blur_vertex(uint vid [[vertex_id]]) {
     return out;
 }
 
-fragment float4 bloom_blur_fragment(PostVertexOut in [[stage_in]]) {
-    return float4(0.0, 0.0, 0.0, 1.0);
+fragment float4 bloom_blur_fragment(
+    PostVertexOut in [[stage_in]],
+    texture2d<float> blurInput [[texture(0)]],
+    constant BloomBlurParams &params [[buffer(2)]]
+) {
+    constexpr sampler s(mag_filter::linear, min_filter::linear, address::clamp_to_edge);
+
+    float2 ts = float2(params.texelWidth, params.texelHeight);
+    float2 dir = (params.horizontal > 0.5) ? float2(ts.x, 0.0) : float2(0.0, ts.y);
+
+    float3 result = blurInput.sample(s, in.uv).rgb * BLOOM_WEIGHTS[0];
+    for (int i = 1; i <= BLOOM_KERNEL_HALF; i++) {
+        float w = BLOOM_WEIGHTS[i];
+        result += blurInput.sample(s, in.uv + dir * float(i)).rgb * w;
+        result += blurInput.sample(s, in.uv - dir * float(i)).rgb * w;
+    }
+    return float4(result * params.radius, 1.0);
 }

@@ -130,7 +130,7 @@ Implement a real bloom pipeline: bright-pass extraction → downsample → separ
 
 ---
 
-### - [ ] Phase 3: Separable Gaussian Blur (H + V Passes)
+### - [x] Phase 3: Separable Gaussian Blur (H + V Passes)
 
 **Goal:** Blur the bright texture with a two-pass separable Gaussian kernel.
 
