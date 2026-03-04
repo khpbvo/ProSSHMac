@@ -107,9 +107,9 @@ _Baseline captured: 2026-03-04. Session included SSH + TUI activity. ~14,400 tot
 
 ### Phase 4: Cursor animation decoupling
 
-- [ ] Replace `requiresContinuousFrames()` continuous-redraw for cursor blink with a `Timer`-driven `isDirty = true` at the blink interval
-- [ ] MTKView `isPaused = true` when no snapshot pending and cursor not in blink phase
-- [ ] Re-enable display link only when a snapshot arrives or blink timer fires
+- [x] Replace `requiresContinuousFrames()` continuous-redraw for cursor blink with a `Task`-driven `isDirty = true` at ~15fps blink interval
+- [x] MTKView `isPaused = true` when no snapshot pending and cursor not interpolating
+- [x] Re-enable display link only when a snapshot arrives or blink loop fires
 - [ ] Verify: idle terminal (no output) GPU usage drops to near zero
 
 ### Phase 5: Verification & close

@@ -228,6 +228,9 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     /// In-flight background rasterization task; nil when idle.
     var glyphRasterTask: Task<Void, Never>?
 
+    /// In-flight cursor blink loop task; nil when blink is inactive or view is externally paused.
+    var cursorBlinkTask: Task<Void, Never>?
+
     // MARK: - Initialization (B.8.1, B.8.2)
 
     /// Create a MetalTerminalRenderer with a Metal device and font manager.

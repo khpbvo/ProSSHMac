@@ -106,6 +106,11 @@ extension MetalTerminalRenderer {
     /// (e.g. hidden behind a maximized pane or off-screen in another tab).
     func setPaused(_ paused: Bool) {
         configuredMTKView?.isPaused = paused
+        if paused {
+            stopCursorBlinkLoop()
+        } else {
+            updateCursorBlinkLoop()
+        }
     }
 
     /// Set the preferred frames per second.
@@ -129,5 +134,37 @@ extension MetalTerminalRenderer {
             return mainFPS
         }
         return 60
+    }
+
+    // MARK: - Cursor Blink Loop
+
+    /// Start a ~15fps blink animation loop if cursor is visible and blink enabled.
+    /// The loop sets isDirty and unpauses the view on each tick.
+    func startCursorBlinkLoopIfNeeded() {
+        guard cursorBlinkTask == nil else { return }
+        guard cursorVisible, cursorBlinkEnabled else { return }
+        cursorBlinkTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(67)) // ~15fps
+                guard !Task.isCancelled, let self else { break }
+                self.isDirty = true
+                self.configuredMTKView?.isPaused = false
+            }
+        }
+    }
+
+    /// Stop the cursor blink loop.
+    func stopCursorBlinkLoop() {
+        cursorBlinkTask?.cancel()
+        cursorBlinkTask = nil
+    }
+
+    /// Start or stop the blink loop based on current cursor state.
+    func updateCursorBlinkLoop() {
+        if cursorVisible && cursorBlinkEnabled {
+            startCursorBlinkLoopIfNeeded()
+        } else {
+            stopCursorBlinkLoop()
+        }
     }
 }

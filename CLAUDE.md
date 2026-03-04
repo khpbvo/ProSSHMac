@@ -179,7 +179,7 @@ All paths relative to repo root, under `ProSSHMac/`.
 ## Architecture Conventions
 
 - **ObservableObject + @StateObject** throughout (not `@Observable`).
-- **Metal rendering**: `MTKView` display-link driven, `isPaused = false`. Dirty flag skips redundant draws.
+- **Metal rendering**: `MTKView` display-link auto-pauses when idle (`isPaused = true` in draw loop early-exit). Cursor blink driven by a ~15fps `Task` loop in `MetalTerminalRenderer+ViewConfiguration.swift`. Dirty flag skips redundant draws.
 - **Grid snapshot flow**: `TerminalGrid.snapshot()` → `SessionManager` nonce++ → SwiftUI `.onChange` → `MetalTerminalRenderer.updateSnapshot()` → `isDirty = true`.
 - **Terminal keyboard input**: `DirectTerminalInputNSView` (transparent NSView overlay, `hitTest` returns `nil`).
 - **Focus management**: `isAIAssistantComposerFocused` state. `focusSessionAndPane()` resigns at AppKit level, then re-arms terminal. See Known Issues.
@@ -241,15 +241,14 @@ All paths relative to repo root, under `ProSSHMac/`.
 
 <!-- NEXT SESSION PLAN -->
 Feature: Issue #11 (visual jitter in TUI apps) — spec: `docs/Issue11.md`
-Next phase: **Phase 4 — Cursor animation decoupling**
+Next phase: **Phase 5 — Verification & close**
 
 Context:
-- Phase 3 complete: burst detection in `TerminalRenderingCoordinator`. `isInBurstMode(for:)` is the single truth source for all throughput-mode checks. Auto-activates at >3 requests/16ms, reverts 200ms after quiet.
-- Phase 4 target: `Terminal/Renderer/MetalTerminalRenderer+DrawLoop.swift`
-  - Replace `requiresContinuousFrames()` continuous display-link with a `Timer`-driven `isDirty = true` at the blink interval
-  - Set `MTKView.isPaused = true` when no snapshot is pending and cursor is not in blink phase
-  - Re-enable display link only when a snapshot arrives or blink timer fires
-  - Goal: idle terminal (no output) GPU usage drops to near zero
-
-Key concern: read `MetalTerminalRenderer+DrawLoop.swift` and understand how `isPaused`, `requiresContinuousFrames`, and the cursor blink timer interact before modifying.
+- Phase 4 complete: cursor blink decoupled from display link. `CursorRenderer.requiresContinuousFrames()` now only tracks position interpolation. A Task-based ~15fps blink loop in `MetalTerminalRenderer+ViewConfiguration.swift` drives cursor animation. `view.isPaused = true` in the draw loop early-exit stops the display link when idle.
+- Phase 5 tasks:
+  - Run Instruments trace (Metal System Trace + Time Profiler) during htop session; confirm p95 CPU frame < 8ms at 60Hz
+  - Verify idle GPU usage in Activity Monitor (with and without cursor blink)
+  - Fill in post-fix column in baseline measurements table in `docs/Issue11.md`
+  - Run `xcodebuild test` — confirm all tests pass
+  - Close GitHub issue #11 with summary comment
 <!-- /NEXT SESSION PLAN -->

@@ -131,10 +131,10 @@ final class CursorRenderer {
         )
     }
 
-    /// Whether the cursor requires continuous frame updates.
+    /// Whether the cursor requires continuous frame updates (position interpolation only).
+    /// Cursor blink animation is driven by a separate timer in MetalTerminalRenderer.
     func requiresContinuousFrames() -> Bool {
-        let moving = abs(renderRow - targetRow) >= snapEpsilon || abs(renderCol - targetCol) >= snapEpsilon
-        return moving || (cursorVisible && blinkEnabled)
+        abs(renderRow - targetRow) >= snapEpsilon || abs(renderCol - targetCol) >= snapEpsilon
     }
 
     // MARK: - Internals

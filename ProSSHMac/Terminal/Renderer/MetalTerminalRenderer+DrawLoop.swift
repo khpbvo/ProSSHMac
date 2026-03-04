@@ -15,6 +15,7 @@ extension MetalTerminalRenderer {
     func draw(in view: MTKView) {
         let frameNow = CACurrentMediaTime()
         if pendingRenderSnapshot == nil, !isDirty, !cursorRenderer.requiresContinuousFrames() {
+            view.isPaused = true
             return
         }
 
@@ -282,6 +283,7 @@ extension MetalTerminalRenderer {
                 self.pendingRenderSnapshot = self.latestSnapshot
                 self.forceFullUploadForPendingSnapshot = true
                 self.isDirty = true
+                self.configuredMTKView?.isPaused = false
             }
         }
     }

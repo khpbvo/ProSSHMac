@@ -1,5 +1,6 @@
 // Extracted from MetalTerminalRenderer.swift
 import Metal
+import MetalKit
 
 extension MetalTerminalRenderer {
 
@@ -46,6 +47,8 @@ extension MetalTerminalRenderer {
             blinkEnabled: cursorBlinkEnabled
         )
         isDirty = true
+        configuredMTKView?.isPaused = false
+        updateCursorBlinkLoop()
     }
 
     func applyPendingSnapshotIfNeeded() {

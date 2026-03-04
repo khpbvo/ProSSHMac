@@ -969,3 +969,38 @@ Build: SUCCEEDED.
 
 ### Next
 Phase 4: Cursor animation decoupling — replace continuous MTKView display-link with Timer-driven blink, `isPaused = true` when idle.
+
+---
+
+## 2026-03-04 — Issue #11 Phase 4: Cursor Animation Decoupling
+
+**Feature spec:** `docs/Issue11.md`
+**Phase:** 4 of 5
+
+### What changed
+Decoupled cursor blink animation from the MTKView display link. Previously, `requiresContinuousFrames()` returned `true` whenever cursor blink was enabled, keeping the display link running at 60–120fps continuously. Now:
+
+- `CursorRenderer.requiresContinuousFrames()` only returns `true` during position interpolation (lerp). Blink no longer keeps the display link alive.
+- `MetalTerminalRenderer+DrawLoop.swift`: early-exit guard now sets `view.isPaused = true` to stop the display link when idle. Background glyph rasterization completion unpauses the view.
+- `MetalTerminalRenderer+ViewConfiguration.swift`: new `startCursorBlinkLoopIfNeeded()`, `stopCursorBlinkLoop()`, `updateCursorBlinkLoop()` methods manage a `Task`-based ~15fps blink loop. `setPaused()` now starts/stops the blink loop on external pause/unpause.
+- `MetalTerminalRenderer+SnapshotUpdate.swift`: snapshot arrival unpauses the view and syncs the blink loop to new cursor state.
+- `MetalTerminalRenderer.swift`: added `cursorBlinkTask` property.
+
+**Expected performance impact:**
+- Idle terminal with blink: ~15fps (was 60–120fps)
+- Idle terminal without blink: 0fps, fully paused (was 60–120fps)
+- Active output: unchanged (60–120fps)
+
+### Files modified
+- `ProSSHMac/Terminal/Renderer/CursorRenderer.swift`
+- `ProSSHMac/Terminal/Renderer/MetalTerminalRenderer.swift`
+- `ProSSHMac/Terminal/Renderer/MetalTerminalRenderer+DrawLoop.swift`
+- `ProSSHMac/Terminal/Renderer/MetalTerminalRenderer+ViewConfiguration.swift`
+- `ProSSHMac/Terminal/Renderer/MetalTerminalRenderer+SnapshotUpdate.swift`
+- `docs/Issue11.md` (Phase 4 checked off)
+
+### Build/test status
+Build: SUCCEEDED. Tests: 209 run, 2 pre-existing failures, 0 new.
+
+### Next
+Phase 5: Verification & close — Instruments trace, post-fix measurements, close issue.
