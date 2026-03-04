@@ -58,7 +58,7 @@ terminal_post_fragment
 
 ## Phased Checklist
 
-### - [ ] Phase 0: Configuration & Uniforms
+### - [x] Phase 0: Configuration & Uniforms
 
 **Goal:** Lay the data foundation — config struct, persistence, uniform field — before touching scroll behavior.
 

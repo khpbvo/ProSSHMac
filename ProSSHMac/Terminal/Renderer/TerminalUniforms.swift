@@ -228,6 +228,17 @@ struct TerminalUniformData {
 
     /// 1 when bloom intensity pulses with gradient animation, else 0.
     var bloomAnimateWithGradient: UInt32
+
+    // -- Smooth Scroll Uniforms --
+
+    /// Vertical pixel offset for sub-row smooth scrolling.
+    /// Applied in the vertex shader to shift all cell quads by a fractional amount.
+    var scrollOffsetPixels: Float
+
+    /// Padding to maintain 16-byte struct alignment.
+    var _scrollPad0: Float
+    var _scrollPad1: Float
+    var _scrollPad2: Float
 }
 
 // MARK: - TerminalUniformBuffer
@@ -449,7 +460,11 @@ final class TerminalUniformBuffer {
             bloomEnabled: bc.isEnabled ? 1 : 0,
             bloomThreshold: min(0.95, max(0.05, bc.threshold)),
             bloomIntensity: min(2, max(0, effectiveBloomIntensity)),
-            bloomAnimateWithGradient: bc.animateWithGradient ? 1 : 0
+            bloomAnimateWithGradient: bc.animateWithGradient ? 1 : 0,
+            scrollOffsetPixels: 0.0,
+            _scrollPad0: 0,
+            _scrollPad1: 0,
+            _scrollPad2: 0
         )
 
         // Copy into the Metal buffer

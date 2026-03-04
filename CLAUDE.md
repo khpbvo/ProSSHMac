@@ -235,13 +235,16 @@ All paths relative to repo root, under `ProSSHMac/`.
 | `docs/IntegrationOfNewFeats.md` | Pre-built module integration guide (TOTP 2FA, etc.) |
 | `docs/Issue11.md` | Visual jitter fix — phased checklist (Phases 0–5) |
 | `docs/TextGlow.md` | Bloom / Text Glow — **COMPLETE** (Phases 0–7) |
+| `docs/SmoothScroll.md` | Smooth Scrolling — Phase 0 complete, Phase 1 next |
 
 ---
 
 ## Next Session Plan
 
 <!-- NEXT SESSION PLAN -->
-**TextGlow is COMPLETE** (Phases 0–7). Pick the next feature from `docs/FutureFeatures.md`.
+**SmoothScroll Phase 1: SmoothScrollEngine (CPU Physics)**
 
-Context: The bloom pipeline is fully implemented — bright-pass extraction, separable Gaussian blur (H+V), additive composite in post-process pass, gradient animation coupling, settings UI, and all edge cases verified. 209 tests pass (2 pre-existing failures).
+Feature spec: `docs/SmoothScroll.md` — Phase 1.
+
+Context: Phase 0 is complete — `SmoothScrollConfiguration` config struct with UserDefaults persistence, `scrollOffsetPixels` uniform field added to both Swift and Metal structs (hardcoded to 0.0). Phase 1 builds the CPU-side animation engine (`SmoothScrollEngine.swift`) that tracks scroll state, applies spring interpolation and momentum decay. Follow the `CursorRenderer` pattern: target state, render state, `frame()` per tick, `requiresContinuousFrames()`. No GPU changes in Phase 1 — just the model + unit tests.
 <!-- /NEXT SESSION PLAN -->

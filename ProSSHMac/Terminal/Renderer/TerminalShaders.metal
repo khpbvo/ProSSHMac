@@ -151,6 +151,12 @@ struct TerminalUniforms {
     float   bloomThreshold;          // luminance cutoff (0.0–1.0)
     float   bloomIntensity;          // additive blend strength (0.0–1.5)
     uint    bloomAnimateWithGradient; // 1 = pulse with gradient animation
+
+    // -- Smooth Scroll --
+    float   scrollOffsetPixels;      // sub-pixel vertical offset for smooth scrolling
+    float   _scrollPad0;
+    float   _scrollPad1;
+    float   _scrollPad2;
 };
 
 /// Vertex-to-fragment interpolants.
