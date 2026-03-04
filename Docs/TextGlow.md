@@ -192,7 +192,7 @@ Implement a real bloom pipeline: bright-pass extraction → downsample → separ
 
 ---
 
-### - [ ] Phase 5: Gradient Animation Coupling
+### - [x] Phase 5: Gradient Animation Coupling
 
 **Goal:** Make bloom respond to the gradient background animation system.
 

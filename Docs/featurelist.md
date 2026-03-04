@@ -1173,3 +1173,25 @@ Build: SUCCEEDED. Bloom is now composited into the final frame when enabled.
 
 ### Next
 Phase 5: Gradient Animation Coupling — pulse bloom intensity/radius in sync with gradient animations, tint bloom halo toward gradient color.
+
+---
+
+## 2026-03-04 — TextGlow Phase 5: Gradient Animation Coupling
+
+### Summary
+Added two gradient-bloom coupling behaviours: (1) gradient color tinting in the shader — bloom halo picks up a gentle color cast from the gradient when both are active with `animateWithGradient`, and (2) radius pulsing for aurora/wave gradient modes — subtle cosine pulse on blur radius computed self-contained in `encodeBlurPasses()`. Intensity pulsing was already implemented in Phase 0.
+
+### Changes
+1. **`TerminalShaders.metal`**: Modified bloom composite block in `terminal_post_fragment` to add a gradient-tinted path. When `bloomAnimateWithGradient == 1 && gradientEnabled > 0.5`, uses `computeGradientColor()` to derive a `gradHint` scaled by local bloom brightness (`length(bloomColor)`), producing a proportional color tint. Plain bloom path preserved in `else` branch.
+2. **`MetalTerminalRenderer+DrawLoop.swift`**: Added `effectiveRadius` computation at top of `encodeBlurPasses()`. For aurora/wave gradient modes with `animateWithGradient`, applies `cos(elapsed * speed)` pulse (±10%) to `bloomConfiguration.radius`. Both H-pass and V-pass `BloomBlurParams` now use `effectiveRadius`.
+
+### Files modified
+- `ProSSHMac/Terminal/Renderer/TerminalShaders.metal`
+- `ProSSHMac/Terminal/Renderer/MetalTerminalRenderer+DrawLoop.swift`
+- `docs/TextGlow.md` (Phase 5 checked off)
+
+### Build/Test
+Build: SUCCEEDED.
+
+### Next
+Phase 6: Settings UI — expose bloom as a user-configurable effect in Settings with toggles and sliders.

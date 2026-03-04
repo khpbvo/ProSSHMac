@@ -243,9 +243,9 @@ All paths relative to repo root, under `ProSSHMac/`.
 <!-- NEXT SESSION PLAN -->
 **Feature:** TextGlow (Bloom / Text Glow Effect)
 **Spec:** `docs/TextGlow.md`
-**Next phase:** Phase 5 — Gradient Animation Coupling
+**Next phase:** Phase 6 — Settings UI
 
-Phase 4 is complete: `bloomBlurV` is now composited into `terminal_post_fragment` as an additive blend (texture index 2), gated by `uniforms.bloomEnabled == 1`, inserted before gradient compositing. Bloom is visually functional when `isEnabled: true`.
+Phase 5 is complete: gradient animation coupling is fully wired. Shader tints bloom halo toward gradient color when both are active with `animateWithGradient`. Radius pulses subtly for aurora/wave modes via `effectiveRadius` in `encodeBlurPasses()`. Intensity pulsing was already done in Phase 0.
 
-Phase 5 makes bloom respond to the gradient animation system. In `TerminalUniformBuffer.update()`, when `bloomAnimateWithGradient == 1 && gradientEnabled && gradientAnimationMode != .none`, pulse `effectiveBloomIntensity = bloomIntensity * (0.85 + 0.15 * sin(time * speed * 1.5))`. For aurora/wave modes, also pulse radius. In `terminal_post_fragment`, when both bloom and gradient are active with animation coupling, tint bloom halo toward the gradient's dominant color using `computeGradientColor()`.
+Phase 6 creates `UI/Settings/BloomEffectSettingsView.swift` with toggle, threshold/intensity/radius sliders, and "Animate with Gradient" toggle. Add a navigation row in `SettingsView.swift` below Scanner Effect. Follow the `GradientBackgroundSettingsView` pattern for persistence and live preview updates.
 <!-- /NEXT SESSION PLAN -->

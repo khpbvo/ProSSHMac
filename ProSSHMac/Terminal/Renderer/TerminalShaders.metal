@@ -817,7 +817,14 @@ fragment float4 terminal_post_fragment(
     // Bloom composite: additively blend the blurred glow halo before gradient compositing.
     if (uniforms.bloomEnabled == 1) {
         float3 bloomColor = bloomTexture.sample(postSampler, uv).rgb;
-        color.rgb += bloomColor * uniforms.bloomIntensity;
+        if (uniforms.bloomAnimateWithGradient == 1 && uniforms.gradientEnabled > 0.5) {
+            // Gradient-coupled: tint bloom halo toward gradient's dominant color.
+            // gradHint is scaled down to 0.25 so it adds a gentle color cast, not a full wash.
+            float3 gradHint = computeGradientColor(uv, uniforms).rgb * 0.25;
+            color.rgb += (bloomColor + gradHint * length(bloomColor)) * uniforms.bloomIntensity;
+        } else {
+            color.rgb += bloomColor * uniforms.bloomIntensity;
+        }
         color.rgb = saturate(color.rgb);
     }
 

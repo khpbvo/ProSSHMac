@@ -378,6 +378,20 @@ extension MetalTerminalRenderer {
               let blurHTex = bloomBlurH,
               let blurVTex = bloomBlurV else { return }
 
+        // Compute effective radius: subtle cosine pulse for aurora/wave gradient modes.
+        let gradientIsAnimating = gradientConfiguration.isEnabled
+            && gradientConfiguration.animationMode != .none
+        let effectiveRadius: Float
+        if bloomConfiguration.animateWithGradient && gradientIsAnimating
+            && (gradientConfiguration.animationMode == .aurora
+                || gradientConfiguration.animationMode == .wave) {
+            let elapsed = Float(uniformBuffer.currentTime)
+            effectiveRadius = bloomConfiguration.radius
+                * (0.9 + 0.1 * cos(elapsed * max(0.01, gradientConfiguration.animationSpeed)))
+        } else {
+            effectiveRadius = bloomConfiguration.radius
+        }
+
         struct BloomBlurParams {
             var texelWidth: Float
             var texelHeight: Float
@@ -390,7 +404,7 @@ extension MetalTerminalRenderer {
             texelWidth:  1.0 / Float(brightTex.width),
             texelHeight: 1.0 / Float(brightTex.height),
             horizontal:  1.0,
-            radius:      bloomConfiguration.radius
+            radius:      effectiveRadius
         )
         let hDescriptor = MTLRenderPassDescriptor()
         hDescriptor.colorAttachments[0].texture = blurHTex
@@ -411,7 +425,7 @@ extension MetalTerminalRenderer {
             texelWidth:  1.0 / Float(blurHTex.width),
             texelHeight: 1.0 / Float(blurHTex.height),
             horizontal:  0.0,
-            radius:      bloomConfiguration.radius
+            radius:      effectiveRadius
         )
         let vDescriptor = MTLRenderPassDescriptor()
         vDescriptor.colorAttachments[0].texture = blurVTex
