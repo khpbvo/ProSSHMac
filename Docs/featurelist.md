@@ -1316,3 +1316,27 @@ Build: SUCCEEDED.
 
 ### Next
 Phase 4: Edge Cases & Overscroll Behavior.
+
+---
+
+## 2026-03-04 — SmoothScroll Phase 4: Edge Cases & Overscroll Behavior
+
+### Summary
+Added bounds clamping, rubber-band overscroll, programmatic jump, resize reset, and frame-rate-independent physics to the SmoothScrollEngine.
+
+### Changes
+1. **`SmoothScrollEngine.swift`**: Added `setBounds(maxRow:)` for scroll bounds, `jumpTo(row:)` for instant programmatic scroll, `handleResize()` for resize reset. Changed `frame(cellHeight:)` → `frame(cellHeight:time:)` with frame-rate-independent physics using `pow(friction, dt*60)` and `pow(1-stiffness, dt*60)`. Rubber-band overscroll at bounds (±0.3 rows, 3× spring stiffness). Bounds-aware `extractIntegerRows()` prevents callbacks past limits.
+2. **`MetalTerminalRenderer+DrawLoop.swift`**: Pass `frameNow` as `time:` parameter to `smoothScrollEngine.frame()`.
+3. **`MetalTerminalRenderer.swift`**: Added `scrollbackBoundsProvider` closure and `scrollJumpTo(row:)` public method. `scrollDelta()` refreshes bounds before processing.
+4. **`MetalTerminalRenderer+ViewConfiguration.swift`**: Call `smoothScrollEngine.handleResize()` on grid dimension change.
+5. **`TerminalRenderingCoordinator.swift`**: Cache `scrollbackCount` per session on each scroll for synchronous bounds access. Clean up on session removal.
+6. **`SessionManager.swift`**: Expose `cachedScrollbackCount(for:)` for view-layer bounds wiring.
+7. **`MetalTerminalSessionSurface.swift`**: Added `scrollbackCountProvider` parameter, wired to renderer on appear.
+8. **`TerminalSurfaceView.swift`** / **`ExternalTerminalWindowView.swift`**: Pass `scrollbackCountProvider` closure to `MetalTerminalSessionSurface`.
+9. **`SmoothScrollEngineTests.swift`**: Updated existing tests for new `frame(cellHeight:time:)` signature. Added 7 new tests: bounds clamping (max/min), rubber-band at bounds, jumpTo state reset/bounds clamping, handleResize state reset, frame-rate independence (60Hz vs 120Hz).
+
+### Build/Test
+Build: SUCCEEDED. Tests: pre-existing test runner crash (malloc error in host app startup, unrelated to changes).
+
+### Next
+Phase 5: Settings UI.

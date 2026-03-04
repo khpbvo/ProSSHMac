@@ -37,6 +37,20 @@ final class SmoothScrollEngine {
     /// The discrete scrollback row that the terminal buffer is positioned at.
     private(set) var targetScrollRow: Int = 0
 
+    // MARK: - Bounds
+
+    /// Minimum scroll row (always 0 — top of scrollback).
+    private var minTargetRow: Int = 0
+
+    /// Maximum scroll row (scrollback count). `Int.max` means unbounded.
+    private var maxTargetRow: Int = Int.max
+
+    /// Maximum rubber-band overshoot in rows beyond bounds.
+    private let rubberBandLimit: Float = 0.3
+
+    /// Spring stiffness multiplier for rubber-band snap-back (3× normal).
+    private let rubberBandStiffnessMultiplier: Float = 3.0
+
     // MARK: - Render State
 
     /// Fractional offset in rows from the target position.
@@ -55,11 +69,44 @@ final class SmoothScrollEngine {
     /// Exponential moving average factor for velocity tracking.
     private let velocitySmoothing: Float = 0.3
 
+    // MARK: - Timing
+
+    /// Last frame timestamp for frame-rate-independent physics.
+    private var lastFrameTime: Double = 0
+
     // MARK: - Callback
 
     /// Fires when `targetScrollRow` changes by integer rows.
     /// The parameter is the signed delta (negative = scroll up, positive = scroll down).
     var onScrollLineChange: ((Int) -> Void)?
+
+    // MARK: - Bounds API
+
+    /// Set the scroll bounds. `minRow` is always 0; `maxRow` is the scrollback count.
+    func setBounds(maxRow: Int) {
+        maxTargetRow = max(0, maxRow)
+        minTargetRow = 0
+    }
+
+    // MARK: - Programmatic Scroll
+
+    /// Jump instantly to a specific scroll row. Zeros velocity/offset — no animation.
+    /// The caller is responsible for updating the grid snapshot.
+    func jumpTo(row: Int) {
+        targetScrollRow = min(max(row, minTargetRow), maxTargetRow)
+        renderOffset = 0
+        velocity = 0
+        inMomentum = false
+    }
+
+    // MARK: - Resize
+
+    /// Reset scroll animation state on terminal resize. Zeros offset/velocity.
+    func handleResize() {
+        renderOffset = 0
+        velocity = 0
+        inMomentum = false
+    }
 
     // MARK: - Public API
 
@@ -76,7 +123,7 @@ final class SmoothScrollEngine {
         // Clamp velocity
         velocity = min(max(velocity, -config.maxVelocity), config.maxVelocity)
 
-        // Extract integer row changes
+        // Extract integer row changes (with bounds clamping)
         extractIntegerRows()
     }
 
@@ -93,15 +140,32 @@ final class SmoothScrollEngine {
         velocity = 0
     }
 
-    /// Advance one render frame. Returns the pixel offset to upload to the GPU.
-    func frame(cellHeight: CGFloat) -> SmoothScrollFrame {
+    /// Advance one render frame with frame-rate-independent physics.
+    /// Returns the pixel offset to upload to the GPU.
+    ///
+    /// - Parameters:
+    ///   - cellHeight: Cell height in pixels (points × screenScale).
+    ///   - time: Current frame time from `CACurrentMediaTime()`.
+    func frame(cellHeight: CGFloat, time: Double) -> SmoothScrollFrame {
         let ch = Float(cellHeight)
+
+        // Compute delta time for frame-rate independence.
+        // Cap at 1/30s to prevent huge jumps after stalls.
+        let dt: Float
+        if lastFrameTime > 0 {
+            dt = min(Float(time - lastFrameTime), 1.0 / 30.0)
+        } else {
+            dt = 1.0 / 60.0 // assume 60fps for first frame
+        }
+        lastFrameTime = time
+
+        let atBounds = isAtBounds()
 
         if inMomentum && config.momentumEnabled {
             // Apply velocity to render offset
-            renderOffset += velocity
-            // Decay velocity
-            velocity *= config.friction
+            renderOffset += velocity * dt * 60.0
+            // Frame-rate-independent friction: velocity *= friction^(dt*60)
+            velocity *= pow(config.friction, dt * 60.0)
             // Extract integer rows during momentum
             extractIntegerRows()
             // Stop momentum when velocity is negligible
@@ -109,17 +173,37 @@ final class SmoothScrollEngine {
                 inMomentum = false
                 velocity = 0
             }
-        } else if abs(renderOffset) > snapEpsilon {
-            // Spring back to zero
-            renderOffset = CursorEffects.lerp(current: renderOffset, target: 0.0, factor: config.springStiffness)
+            // If at bounds during momentum, kill velocity to prevent fighting
+            if isAtBounds() && renderOffset != 0 {
+                velocity = 0
+                inMomentum = false
+            }
+        }
+
+        if abs(renderOffset) > snapEpsilon {
+            // Spring back to zero — frame-rate-independent lerp.
+            // At bounds with rubber-band overshoot, use stronger spring.
+            let stiffness: Float
+            if atBounds && isRubberBanding() {
+                stiffness = min(config.springStiffness * rubberBandStiffnessMultiplier, 1.0)
+            } else {
+                stiffness = config.springStiffness
+            }
+            let factor = 1.0 - pow(1.0 - stiffness, dt * 60.0)
+            renderOffset = renderOffset * (1.0 - factor)
+
             // Snap to zero when below epsilon
             if abs(renderOffset) < snapEpsilon {
                 renderOffset = 0
             }
         }
 
-        // Clamp render offset to ±1.5 rows
-        renderOffset = min(max(renderOffset, -1.5), 1.5)
+        // Clamp render offset: at bounds allow ±rubberBandLimit, otherwise ±1.5 rows
+        if atBounds {
+            renderOffset = min(max(renderOffset, -rubberBandLimit), rubberBandLimit)
+        } else {
+            renderOffset = min(max(renderOffset, -1.5), 1.5)
+        }
 
         let animating = requiresContinuousFrames()
         return SmoothScrollFrame(
@@ -140,13 +224,39 @@ final class SmoothScrollEngine {
 
     // MARK: - Internals
 
+    /// Whether the target scroll row is at one of the bounds.
+    private func isAtBounds() -> Bool {
+        targetScrollRow <= minTargetRow || targetScrollRow >= maxTargetRow
+    }
+
+    /// Whether the render offset is in rubber-band territory (past bounds).
+    private func isRubberBanding() -> Bool {
+        if targetScrollRow <= minTargetRow && renderOffset < 0 { return true }
+        if targetScrollRow >= maxTargetRow && renderOffset > 0 { return true }
+        return false
+    }
+
     /// Extract integer row changes from renderOffset and fire callback.
+    /// Clamps `targetScrollRow` to `[minTargetRow, maxTargetRow]`.
     private func extractIntegerRows() {
         if abs(renderOffset) >= 1.0 {
             let integerRows = Int(renderOffset)
-            targetScrollRow += integerRows
-            renderOffset -= Float(integerRows)
-            onScrollLineChange?(integerRows)
+            let proposedTarget = targetScrollRow + integerRows
+
+            // Clamp to bounds
+            let clampedTarget = min(max(proposedTarget, minTargetRow), maxTargetRow)
+            let actualDelta = clampedTarget - targetScrollRow
+
+            if actualDelta != 0 {
+                targetScrollRow = clampedTarget
+                // Remove only the consumed rows from renderOffset
+                renderOffset -= Float(actualDelta)
+                onScrollLineChange?(actualDelta)
+            } else {
+                // At bounds — absorb the integer part into renderOffset (rubber-band)
+                // but don't let it exceed rubberBandLimit
+                renderOffset = min(max(renderOffset, -rubberBandLimit), rubberBandLimit)
+            }
         }
     }
 }

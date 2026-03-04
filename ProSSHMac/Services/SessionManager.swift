@@ -598,6 +598,10 @@ final class SessionManager: ObservableObject {
         renderingCoordinator.isScrolledBack(sessionID: sessionID)
     }
 
+    func cachedScrollbackCount(for sessionID: UUID) -> Int {
+        renderingCoordinator.cachedScrollbackCountBySessionID[sessionID] ?? 0
+    }
+
     func gridSnapshot(for sessionID: UUID) -> GridSnapshot? {
         renderingCoordinator.gridSnapshot(for: sessionID)
     }

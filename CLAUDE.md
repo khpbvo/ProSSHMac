@@ -235,22 +235,22 @@ All paths relative to repo root, under `ProSSHMac/`.
 | `docs/IntegrationOfNewFeats.md` | Pre-built module integration guide (TOTP 2FA, etc.) |
 | `docs/Issue11.md` | Visual jitter fix — phased checklist (Phases 0–5) |
 | `docs/TextGlow.md` | Bloom / Text Glow — **COMPLETE** (Phases 0–7) |
-| `docs/SmoothScroll.md` | Smooth Scrolling — Phases 0–3 complete, Phase 4 next |
+| `docs/SmoothScroll.md` | Smooth Scrolling — Phases 0–4 complete, Phase 5 next |
 
 ---
 
 ## Next Session Plan
 
 <!-- NEXT SESSION PLAN -->
-**SmoothScroll Phase 4: Edge Cases & Overscroll Behavior**
+**SmoothScroll Phase 5: Settings UI**
 
-Feature spec: `docs/SmoothScroll.md` — Phase 4.
+Feature spec: `docs/SmoothScroll.md` — Phase 5.
 
-Context: Phases 0–3 complete. The full pipeline is wired: trackpad scroll events → `SmoothScrollEngine` (CPU physics) → `scrollOffsetPixels` uniform → vertex shader sub-pixel offset. Display link stays alive during momentum/spring-back. Legacy integer accumulation fallback when smooth scroll disabled.
+Context: Phases 0–4 complete. Full pipeline wired with bounds clamping, rubber-band overscroll, programmatic jump, resize reset, and frame-rate-independent physics. The engine now accepts `time:` parameter for dt-based physics.
 
-Phase 4 handles edge cases:
-- Top/bottom clamping: `setBounds(minRow:maxRow:)` to prevent scrolling past scrollback limits
-- Rubber band overscroll: allow ±0.3 rows past bounds with 3× spring stiffness
-- Programmatic scroll: `jumpTo(row:)` for instant snaps (new output, search navigation)
-- No animation for programmatic scrolls — only user-initiated scrolls animate
+Phase 5 tasks:
+- Create `UI/Settings/SmoothScrollSettingsView.swift` (follow BloomEffectSettingsView pattern)
+- Add row in `SettingsView.swift` Terminal section
+- Toggles: enable/disable, momentum. Sliders: spring stiffness, friction, max velocity
+- Reload config at scroll gesture start (not every frame)
 <!-- /NEXT SESSION PLAN -->

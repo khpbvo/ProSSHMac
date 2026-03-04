@@ -70,6 +70,7 @@ extension MetalTerminalRenderer {
 
                 // Notify the cell buffer of the new dimensions.
                 cellBuffer.resize(columns: newColumns, rows: newRows)
+                smoothScrollEngine.handleResize()
                 onGridSizeChange?(newColumns, newRows)
                 isDirty = true
             }

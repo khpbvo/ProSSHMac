@@ -255,7 +255,7 @@ terminal_post_fragment
 
 ---
 
-### - [ ] Phase 4: Edge Cases & Overscroll Behavior
+### - [x] Phase 4: Edge Cases & Overscroll Behavior
 
 **Goal:** Handle all the tricky edge cases that make smooth scrolling feel polished vs janky.
 

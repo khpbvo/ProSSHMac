@@ -122,7 +122,10 @@ struct ExternalTerminalWindowView: View {
                 },
                 isFocused: true,
                 isLocalSession: session.isLocal,
-                selectionCoordinator: selectionCoordinator
+                selectionCoordinator: selectionCoordinator,
+                scrollbackCountProvider: {
+                    sessionManager.cachedScrollbackCount(for: session.id)
+                }
             )
             .id(session.id)
             .background(surfaceBackgroundColor, in: RoundedRectangle(cornerRadius: 10))

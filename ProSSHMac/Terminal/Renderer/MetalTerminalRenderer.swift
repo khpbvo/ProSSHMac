@@ -165,11 +165,24 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     /// Current smooth scroll configuration.
     var smoothScrollConfiguration = SmoothScrollConfiguration.load()
 
+    /// Optional closure providing current scrollback count for bounds clamping.
+    /// Set by the view layer to bridge scrollback info from the session engine.
+    var scrollbackBoundsProvider: (() -> Int)?
+
     /// Feed a raw scroll delta (in points) to the smooth scroll engine.
     func scrollDelta(_ deltaPoints: CGFloat) {
+        // Refresh bounds from the session engine before processing delta.
+        if let maxRow = scrollbackBoundsProvider?() {
+            smoothScrollEngine.setBounds(maxRow: maxRow)
+        }
         smoothScrollEngine.scrollDelta(deltaPoints, cellHeight: cellHeight)
         // Wake the display link so the next frame picks up the offset.
         configuredMTKView?.isPaused = false
+    }
+
+    /// Jump the scroll engine to a specific row instantly (no animation).
+    func scrollJumpTo(row: Int) {
+        smoothScrollEngine.jumpTo(row: row)
     }
 
     /// Called when the trackpad gesture ends — start momentum decay.

@@ -13,6 +13,8 @@ import os.signpost
     var pendingSnapshotPublishTasksBySessionID: [UUID: Task<Void, Never>] = [:]
     /// Per-session scroll offset (0 = live view, >0 = scrolled back N lines).
     var scrollOffsetBySessionID: [UUID: Int] = [:]
+    /// Cached scrollback count per session, updated on each scroll for bounds clamping.
+    var cachedScrollbackCountBySessionID: [UUID: Int] = [:]
     /// Throttles expensive visible-text extraction/publishing during heavy output.
     var lastShellBufferPublishAtBySessionID: [UUID: Date] = [:]
     /// Tracks last bell event time per session for throughput mode rate-limiting.
@@ -70,6 +72,7 @@ import os.signpost
         lastShellBufferPublishAtBySessionID.removeValue(forKey: sessionID)
         lastBellTimeBySessionID.removeValue(forKey: sessionID)
         scrollOffsetBySessionID.removeValue(forKey: sessionID)
+        cachedScrollbackCountBySessionID.removeValue(forKey: sessionID)
         gridSnapshotsBySessionID.removeValue(forKey: sessionID)
         burstCountBySessionID.removeValue(forKey: sessionID)
         burstWindowStartBySessionID.removeValue(forKey: sessionID)
@@ -135,6 +138,7 @@ import os.signpost
         Task { @MainActor [weak self] in
             guard let self, let manager = self.manager else { return }
             let maxOffset = await engine.scrollbackCount
+            self.cachedScrollbackCountBySessionID[sessionID] = maxOffset
             let newOffset = max(0, min(current + delta, maxOffset))
             self.scrollOffsetBySessionID[sessionID] = newOffset
             let snapshot = await engine.snapshot(scrollOffset: newOffset)

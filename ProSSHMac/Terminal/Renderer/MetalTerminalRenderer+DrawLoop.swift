@@ -70,7 +70,7 @@ extension MetalTerminalRenderer {
 
         // Update uniforms for this frame via the TerminalUniformBuffer.
         let cursorFrame = cursorRenderer.frame(at: frameNow)
-        let scrollFrame = smoothScrollEngine.frame(cellHeight: cellHeight * screenScale)
+        let scrollFrame = smoothScrollEngine.frame(cellHeight: cellHeight * screenScale, time: frameNow)
         let frameDelta = max(0, uniformBuffer.currentTime - previousUniformTime)
         let phosphorBlend = (postProcessingReady && hasCapturedPreviousFrame)
             ? CRTEffect.phosphorBlend(

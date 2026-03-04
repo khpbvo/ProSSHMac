@@ -21,6 +21,8 @@ struct MetalTerminalSessionSurface: View {
     var isFocused: Bool = true
     var isLocalSession: Bool = false
     var selectionCoordinator: TerminalSelectionCoordinator?
+    /// Provides current scrollback count for scroll bounds clamping.
+    var scrollbackCountProvider: (() -> Int)?
 
     @StateObject private var model = MetalTerminalSurfaceModel()
 
@@ -49,6 +51,7 @@ struct MetalTerminalSessionSurface: View {
                 )
                 .onAppear {
                     model.renderer?.isLocalSession = isLocalSession
+                    model.renderer?.scrollbackBoundsProvider = scrollbackCountProvider
                     model.apply(snapshot: snapshotProvider())
                     model.setRendererPaused(false)
                     model.updateFPS(isFocused: isFocused)

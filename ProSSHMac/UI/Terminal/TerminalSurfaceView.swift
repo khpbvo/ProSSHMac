@@ -169,7 +169,10 @@ struct TerminalSurfaceView: View {
             },
             isFocused: isFocused,
             isLocalSession: session.isLocal,
-            selectionCoordinator: selectionCoordinator
+            selectionCoordinator: selectionCoordinator,
+            scrollbackCountProvider: {
+                sessionManager.cachedScrollbackCount(for: session.id)
+            }
         )
         .id(session.id)
         .frame(minHeight: 220, maxHeight: .infinity)
