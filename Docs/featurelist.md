@@ -1244,3 +1244,40 @@ Fixed Metal Validation Layer issue: bloom texture slot 2 was left unbound when b
 
 ### Build/Test
 Build: SUCCEEDED. Tests: 209 executed, 2 failures (0 unexpected) — pre-existing baseline.
+
+---
+
+## 2026-03-04 — SmoothScroll Phase 0: Configuration & Uniforms
+
+### Summary
+Laid data foundation for smooth scrolling: `SmoothScrollConfiguration` config struct with UserDefaults persistence, `scrollOffsetPixels` uniform field added to both Swift (`TerminalUniformData`) and Metal (`TerminalUniforms`) structs. Hardcoded to 0.0 — no visual change yet.
+
+### Changes
+- `Terminal/Effects/SmoothScrollConfiguration.swift`: New config struct with isEnabled, springStiffness, friction, momentumEnabled, maxVelocity. Load/save via UserDefaults.
+- `Terminal/Renderer/TerminalUniforms.swift`: Added `scrollOffsetPixels: Float` to `TerminalUniformData`.
+- `Terminal/Renderer/TerminalShaders.metal`: Added `float scrollOffsetPixels` to Metal `TerminalUniforms` struct.
+
+### Build/Test
+Build: SUCCEEDED.
+
+---
+
+## 2026-03-04 — SmoothScroll Phase 1: SmoothScrollEngine (CPU Physics)
+
+### Summary
+Built CPU-side animation engine for smooth scrolling. `SmoothScrollEngine` tracks scroll state, accumulates raw deltas into fractional row offsets, fires integer row change callbacks, applies spring interpolation and momentum decay. Follows `CursorRenderer` pattern (target → render state per frame, lerp, `requiresContinuousFrames()`). No GPU changes — model + unit tests only.
+
+### Changes
+1. **`Terminal/Renderer/SmoothScrollEngine.swift`** (new): Physics engine with `scrollDelta()`, `beginMomentum()`, `endMomentum()`, `frame()`, `requiresContinuousFrames()`, `onScrollLineChange` callback. Velocity tracking via EMA, spring-back via `CursorEffects.lerp`, momentum decay via friction multiplier, ±1.5 row clamp.
+2. **`ProSSHMacTests/SmoothScrollEngineTests.swift`** (new): 10 unit tests covering row extraction, negative direction, fractional remainder, momentum decay convergence, spring-back convergence, velocity clamping, continuous frames states, config reload, zero cell height guard, endMomentum.
+
+### Files modified
+- `ProSSHMac/Terminal/Renderer/SmoothScrollEngine.swift` (new, 152L)
+- `ProSSHMacTests/SmoothScrollEngineTests.swift` (new, 195L)
+- `docs/SmoothScroll.md` (Phase 1 checked off)
+
+### Build/Test
+Build: SUCCEEDED. Tests: 20 pass, 0 fail, pre-existing host app malloc crash (unrelated baseline).
+
+### Next
+Phase 2: Vertex Shader Integration — apply `scrollOffsetPixels` in `terminal_vertex` for sub-pixel Y-shift.

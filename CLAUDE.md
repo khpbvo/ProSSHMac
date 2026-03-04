@@ -235,16 +235,22 @@ All paths relative to repo root, under `ProSSHMac/`.
 | `docs/IntegrationOfNewFeats.md` | Pre-built module integration guide (TOTP 2FA, etc.) |
 | `docs/Issue11.md` | Visual jitter fix — phased checklist (Phases 0–5) |
 | `docs/TextGlow.md` | Bloom / Text Glow — **COMPLETE** (Phases 0–7) |
-| `docs/SmoothScroll.md` | Smooth Scrolling — Phase 0 complete, Phase 1 next |
+| `docs/SmoothScroll.md` | Smooth Scrolling — Phases 0–1 complete, Phase 2 next |
 
 ---
 
 ## Next Session Plan
 
 <!-- NEXT SESSION PLAN -->
-**SmoothScroll Phase 1: SmoothScrollEngine (CPU Physics)**
+**SmoothScroll Phase 2: Vertex Shader Integration**
 
-Feature spec: `docs/SmoothScroll.md` — Phase 1.
+Feature spec: `docs/SmoothScroll.md` — Phase 2.
 
-Context: Phase 0 is complete — `SmoothScrollConfiguration` config struct with UserDefaults persistence, `scrollOffsetPixels` uniform field added to both Swift and Metal structs (hardcoded to 0.0). Phase 1 builds the CPU-side animation engine (`SmoothScrollEngine.swift`) that tracks scroll state, applies spring interpolation and momentum decay. Follow the `CursorRenderer` pattern: target state, render state, `frame()` per tick, `requiresContinuousFrames()`. No GPU changes in Phase 1 — just the model + unit tests.
+Context: Phases 0–1 are complete. Phase 0 added `scrollOffsetPixels` to both Swift (`TerminalUniformData`) and Metal (`TerminalUniforms`) structs (hardcoded to 0.0). Phase 1 built `SmoothScrollEngine.swift` — CPU-side physics engine with `scrollDelta()`, `beginMomentum()`, `endMomentum()`, `frame()`, `requiresContinuousFrames()`, `onScrollLineChange` callback. Uses `CursorEffects.lerp` for spring-back, EMA velocity tracking, momentum decay via friction.
+
+Phase 2 applies `scrollOffsetPixels` in the vertex shader (`terminal_vertex`) so GPU shifts all cell quads vertically by the sub-pixel offset. Key decisions from spec:
+- Apply offset to `pixelPos.y` BEFORE NDC conversion (not in NDC space)
+- Also offset `cursorOrigin.y` by `scrollOffsetPixels` in fragment shader (Option A)
+- Post-process (bloom, CRT) operates on already-shifted scene texture — no adjustment needed
+- Verify with hardcoded test offset (e.g., `cellSize.y * 0.5`) before wiring to engine
 <!-- /NEXT SESSION PLAN -->

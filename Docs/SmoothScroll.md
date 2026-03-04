@@ -86,7 +86,7 @@ terminal_post_fragment
 
 ---
 
-### - [ ] Phase 1: SmoothScrollEngine (CPU Physics)
+### - [x] Phase 1: SmoothScrollEngine (CPU Physics)
 
 **Goal:** Build the animation engine that tracks scroll state, applies spring interpolation and momentum decay. No GPU changes yet — just the model.
 
