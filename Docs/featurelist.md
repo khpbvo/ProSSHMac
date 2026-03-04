@@ -1297,3 +1297,22 @@ Build: SUCCEEDED.
 
 ### Next
 Phase 3: Wire SmoothScrollEngine into MetalTerminalRenderer — connect scroll events to engine, feed engine output into uniforms, drive display-link for momentum frames.
+
+---
+
+## 2026-03-04 — SmoothScroll Phase 3: Wire Scroll Events Through Engine
+
+### Summary
+Connected SmoothScrollEngine to the Metal render pipeline. Raw trackpad scroll events now feed through the physics engine, which produces sub-pixel offsets uploaded to the GPU each frame. The display link stays alive during scroll animation (momentum, spring-back). Legacy integer accumulation preserved as fallback when smooth scroll is disabled.
+
+### Changes
+1. **`MetalTerminalRenderer.swift`**: Added `smoothScrollEngine`, `smoothScrollConfiguration`, and public `scrollDelta()`, `scrollMomentumBegan()`, `scrollMomentumEnded()` methods. `scrollDelta()` also wakes the display link.
+2. **`MetalTerminalRenderer+DrawLoop.swift`**: Added `smoothScrollEngine.requiresContinuousFrames()` to early-exit pause check. Call `smoothScrollEngine.frame(cellHeight:)` each draw tick. Pass `scrollFrame.offsetPixels` to `uniformBuffer.update()`.
+3. **`TerminalUniforms.swift`**: Added `scrollOffsetPixels` parameter to `update()`, replacing the hardcoded `0.0`.
+4. **`TerminalMetalView.swift`**: Added `weak var renderer` to `TerminalMetalContainerView`. Rewrote `scrollWheel` with smooth-scroll path (feeds engine) and legacy fallback. Wired `onScrollLineChange` → `onScroll` for integer row changes.
+
+### Build/Test
+Build: SUCCEEDED.
+
+### Next
+Phase 4: Edge Cases & Overscroll Behavior.

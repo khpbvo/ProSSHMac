@@ -14,7 +14,7 @@ extension MetalTerminalRenderer {
     /// - Parameter view: The MTKView requesting a draw.
     func draw(in view: MTKView) {
         let frameNow = CACurrentMediaTime()
-        if pendingRenderSnapshot == nil, !isDirty, !cursorRenderer.requiresContinuousFrames() {
+        if pendingRenderSnapshot == nil, !isDirty, !cursorRenderer.requiresContinuousFrames(), !smoothScrollEngine.requiresContinuousFrames() {
             view.isPaused = true
             return
         }
@@ -70,6 +70,7 @@ extension MetalTerminalRenderer {
 
         // Update uniforms for this frame via the TerminalUniformBuffer.
         let cursorFrame = cursorRenderer.frame(at: frameNow)
+        let scrollFrame = smoothScrollEngine.frame(cellHeight: cellHeight * screenScale)
         let frameDelta = max(0, uniformBuffer.currentTime - previousUniformTime)
         let phosphorBlend = (postProcessingReady && hasCapturedPreviousFrame)
             ? CRTEffect.phosphorBlend(
@@ -104,7 +105,8 @@ extension MetalTerminalRenderer {
             solidBackgroundConfig: solidBackgroundConfiguration,
             scannerConfig: scannerConfiguration,
             bloomConfig: bloomConfiguration,
-            isLocalSession: isLocalSession
+            isLocalSession: isLocalSession,
+            scrollOffsetPixels: scrollFrame.offsetPixels
         )
         previousUniformTime = uniformBuffer.currentTime
 

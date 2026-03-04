@@ -354,7 +354,8 @@ final class TerminalUniformBuffer {
         solidBackgroundConfig: SolidBackgroundConfiguration? = nil,
         scannerConfig: ScannerEffectConfiguration? = nil,
         bloomConfig: BloomEffectConfiguration? = nil,
-        isLocalSession: Bool = false
+        isLocalSession: Bool = false,
+        scrollOffsetPixels: Float = 0.0
     ) {
         // B.7.2: Track animation time
         let now = CACurrentMediaTime()
@@ -461,7 +462,7 @@ final class TerminalUniformBuffer {
             bloomThreshold: min(0.95, max(0.05, bc.threshold)),
             bloomIntensity: min(2, max(0, effectiveBloomIntensity)),
             bloomAnimateWithGradient: bc.animateWithGradient ? 1 : 0,
-            scrollOffsetPixels: 0.0,
+            scrollOffsetPixels: scrollOffsetPixels,
             _scrollPad0: 0,
             _scrollPad1: 0,
             _scrollPad2: 0

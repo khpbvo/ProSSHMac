@@ -57,6 +57,10 @@ struct TerminalMetalView: NSViewRepresentable {
 
         container.onScroll = onScroll
         container.cellHeight = renderer.currentCellHeight
+        container.renderer = renderer
+        renderer.smoothScrollEngine.onScrollLineChange = { [weak container] lines in
+            container?.onScroll?(lines)
+        }
         container.setBackgroundOpacity(backgroundOpacity)
         return container
     }
@@ -66,6 +70,10 @@ struct TerminalMetalView: NSViewRepresentable {
         renderer.onGridSizeChange = onTerminalResize
         nsView.onScroll = onScroll
         nsView.cellHeight = renderer.currentCellHeight
+        nsView.renderer = renderer
+        renderer.smoothScrollEngine.onScrollLineChange = { [weak nsView] lines in
+            nsView?.onScroll?(lines)
+        }
         nsView.setBackgroundOpacity(backgroundOpacity)
     }
 
@@ -118,6 +126,7 @@ final class TerminalMetalContainerView: NSView {
     let metalView = MTKView(frame: .zero)
     var onScroll: ((Int) -> Void)?
     var cellHeight: CGFloat = 16
+    weak var renderer: MetalTerminalRenderer?
     private var accumulatedScrollY: CGFloat = 0
 
     override init(frame frameRect: NSRect) {
@@ -159,18 +168,27 @@ final class TerminalMetalContainerView: NSView {
 
     override func scrollWheel(with event: NSEvent) {
         guard cellHeight > 0 else { return }
-        // scrollingDeltaY: positive = scroll up (fingers move down), negative = scroll down
-        accumulatedScrollY += event.scrollingDeltaY
-        let lineThreshold = cellHeight
-        let lines = Int(accumulatedScrollY / lineThreshold)
-        if lines != 0 {
-            // Positive lines = scroll up = scrollback
-            onScroll?(lines)
-            accumulatedScrollY -= CGFloat(lines) * lineThreshold
-        }
-        // Reset accumulator at end of momentum scroll
-        if event.phase == .ended || event.momentumPhase == .ended {
-            accumulatedScrollY = 0
+
+        if let renderer, renderer.smoothScrollConfiguration.isEnabled {
+            // Smooth scroll: feed raw delta to physics engine
+            renderer.scrollDelta(event.scrollingDeltaY)
+            if event.phase == .ended {
+                renderer.scrollMomentumBegan()
+            }
+            if event.momentumPhase == .ended {
+                renderer.scrollMomentumEnded()
+            }
+        } else {
+            // Legacy integer accumulation fallback
+            accumulatedScrollY += event.scrollingDeltaY
+            let lines = Int(accumulatedScrollY / cellHeight)
+            if lines != 0 {
+                onScroll?(lines)
+                accumulatedScrollY -= CGFloat(lines) * cellHeight
+            }
+            if event.phase == .ended || event.momentumPhase == .ended {
+                accumulatedScrollY = 0
+            }
         }
     }
 }

@@ -157,6 +157,31 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     /// rate rather than a fixed value.
     var usesNativeRefreshRate: Bool = false
 
+    // MARK: - Smooth Scroll
+
+    /// CPU-side physics engine for smooth scrolling.
+    let smoothScrollEngine = SmoothScrollEngine()
+
+    /// Current smooth scroll configuration.
+    var smoothScrollConfiguration = SmoothScrollConfiguration.load()
+
+    /// Feed a raw scroll delta (in points) to the smooth scroll engine.
+    func scrollDelta(_ deltaPoints: CGFloat) {
+        smoothScrollEngine.scrollDelta(deltaPoints, cellHeight: cellHeight)
+        // Wake the display link so the next frame picks up the offset.
+        configuredMTKView?.isPaused = false
+    }
+
+    /// Called when the trackpad gesture ends — start momentum decay.
+    func scrollMomentumBegan() {
+        smoothScrollEngine.beginMomentum()
+    }
+
+    /// Called when the momentum phase ends — stop momentum.
+    func scrollMomentumEnded() {
+        smoothScrollEngine.endMomentum()
+    }
+
     // MARK: - In-Flight Buffering (B.8.7)
 
     /// Semaphore with value 2 to match the double-buffered CellBuffer.

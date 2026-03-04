@@ -235,23 +235,22 @@ All paths relative to repo root, under `ProSSHMac/`.
 | `docs/IntegrationOfNewFeats.md` | Pre-built module integration guide (TOTP 2FA, etc.) |
 | `docs/Issue11.md` | Visual jitter fix — phased checklist (Phases 0–5) |
 | `docs/TextGlow.md` | Bloom / Text Glow — **COMPLETE** (Phases 0–7) |
-| `docs/SmoothScroll.md` | Smooth Scrolling — Phases 0–2 complete, Phase 3 next |
+| `docs/SmoothScroll.md` | Smooth Scrolling — Phases 0–3 complete, Phase 4 next |
 
 ---
 
 ## Next Session Plan
 
 <!-- NEXT SESSION PLAN -->
-**SmoothScroll Phase 3: Wire Scroll Events Through Engine**
+**SmoothScroll Phase 4: Edge Cases & Overscroll Behavior**
 
-Feature spec: `docs/SmoothScroll.md` — Phase 3.
+Feature spec: `docs/SmoothScroll.md` — Phase 4.
 
-Context: Phases 0–2 are complete. Phase 0 added `scrollOffsetPixels` to Swift/Metal uniform structs. Phase 1 built `SmoothScrollEngine` (CPU physics). Phase 2 added `pixelPos.y += uniforms.scrollOffsetPixels` in the vertex shader — GPU now shifts all cell quads by the sub-pixel offset. Fragment shader unchanged (cursor/glow use unscrolled `cellPixelPos`).
+Context: Phases 0–3 complete. The full pipeline is wired: trackpad scroll events → `SmoothScrollEngine` (CPU physics) → `scrollOffsetPixels` uniform → vertex shader sub-pixel offset. Display link stays alive during momentum/spring-back. Legacy integer accumulation fallback when smooth scroll disabled.
 
-Phase 3 wires the engine into the renderer: replace integer-line scroll accumulation in `TerminalMetalContainerView.scrollWheel()` with `SmoothScrollEngine`, feed engine output into `scrollOffsetPixels` uniform, and drive display-link for momentum frames. Key tasks from spec:
-- Add `SmoothScrollEngine` instance to `MetalTerminalRenderer`
-- Route `scrollWheel` deltas through `engine.scrollDelta()`
-- In draw loop: call `engine.frame()`, write `scrollOffsetPixels` into uniforms
-- Use `requiresContinuousFrames()` to keep display-link alive during momentum
-- `onScrollLineChange` callback triggers integer grid scroll (existing logic)
+Phase 4 handles edge cases:
+- Top/bottom clamping: `setBounds(minRow:maxRow:)` to prevent scrolling past scrollback limits
+- Rubber band overscroll: allow ±0.3 rows past bounds with 3× spring stiffness
+- Programmatic scroll: `jumpTo(row:)` for instant snaps (new output, search navigation)
+- No animation for programmatic scrolls — only user-initiated scrolls animate
 <!-- /NEXT SESSION PLAN -->

@@ -206,7 +206,7 @@ terminal_post_fragment
 
 ---
 
-### - [ ] Phase 3: Wire Scroll Events Through Engine
+### - [x] Phase 3: Wire Scroll Events Through Engine
 
 **Goal:** Replace the integer-line accumulation in `TerminalMetalContainerView.scrollWheel()` with `SmoothScrollEngine`, connecting raw NSEvent deltas to the GPU offset.
 
