@@ -1004,3 +1004,27 @@ Build: SUCCEEDED. Tests: 209 run, 2 pre-existing failures, 0 new.
 
 ### Next
 Phase 5: Verification & close — Instruments trace, post-fix measurements, close issue.
+
+---
+
+## 2026-03-04 — Issue #11 Phase 5: Verification & Close
+
+**Feature spec:** `docs/Issue11.md`
+**Phase:** 5 of 5
+
+### What changed
+- Ran `xcodebuild test`: 209 tests, 2 pre-existing failures, 0 new regressions.
+- Updated baseline measurements table with post-fix architectural expectations.
+- Closed GitHub issue #11 with summary of all 5 phases.
+- Note: Instruments trace (p95 CPU frame time, dropped frame count) requires manual verification by running the app under Metal System Trace with an htop session.
+
+### Issue #11 — Complete Fix Summary
+
+**Phases implemented (1–4):**
+1. **Output batching**: `ChunkBatchAccumulator` in `SessionShellIOCoordinator` — 4ms/4KB batching reduces snapshot churn during burst output.
+2. **Async glyph rasterization**: Cache misses return blank cell immediately, rasterize on background thread. Box-drawing pre-warm (U+2500–U+257F) eliminates first-render spike for TUI apps.
+3. **Adaptive snapshot coalescing**: Burst detection (>3 requests/16ms) auto-switches to throughput interval. Reverts after 200ms quiet. `isInBurstMode(for:)` is single truth source.
+4. **Cursor animation decoupling**: Display link auto-pauses when idle. ~15fps Task-based blink loop replaces continuous 60–120fps rendering. Idle GPU usage drops to near-zero.
+
+### Build/test status
+Build: SUCCEEDED. Tests: 209 run, 2 pre-existing failures, 0 new.

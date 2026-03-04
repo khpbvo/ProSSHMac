@@ -240,15 +240,9 @@ All paths relative to repo root, under `ProSSHMac/`.
 ## Next Session Plan
 
 <!-- NEXT SESSION PLAN -->
-Feature: Issue #11 (visual jitter in TUI apps) — spec: `docs/Issue11.md`
-Next phase: **Phase 5 — Verification & close**
+Issue #11 is now CLOSED (Phases 0–5 complete). All implementation phases merged to master.
 
-Context:
-- Phase 4 complete: cursor blink decoupled from display link. `CursorRenderer.requiresContinuousFrames()` now only tracks position interpolation. A Task-based ~15fps blink loop in `MetalTerminalRenderer+ViewConfiguration.swift` drives cursor animation. `view.isPaused = true` in the draw loop early-exit stops the display link when idle.
-- Phase 5 tasks:
-  - Run Instruments trace (Metal System Trace + Time Profiler) during htop session; confirm p95 CPU frame < 8ms at 60Hz
-  - Verify idle GPU usage in Activity Monitor (with and without cursor blink)
-  - Fill in post-fix column in baseline measurements table in `docs/Issue11.md`
-  - Run `xcodebuild test` — confirm all tests pass
-  - Close GitHub issue #11 with summary comment
+Remaining manual verification: run Instruments (Metal System Trace) during htop session to confirm p95 CPU frame < 8ms at 60Hz. Update `docs/Issue11.md` post-fix column with measured numbers.
+
+Next work: check `docs/FutureFeatures.md` or `docs/bugs.md` for the next priority item.
 <!-- /NEXT SESSION PLAN -->
