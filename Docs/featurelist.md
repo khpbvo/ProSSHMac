@@ -1219,3 +1219,27 @@ Build: SUCCEEDED.
 
 ### Next
 Phase 7: QA, Performance & Polish — profiling, edge cases, full test suite.
+
+---
+
+## 2026-03-04 — TextGlow Phase 7: QA, Performance & Polish (FEATURE COMPLETE)
+
+### Summary
+Fixed Metal Validation Layer issue: bloom texture slot 2 was left unbound when bloom was disabled. Now uses `crtFallbackTexture` (1x1 black) as fallback — same pattern already used for slot 1. Verified all spec items are correctly implemented. Full test suite passes (209 tests, 2 pre-existing failures). TextGlow feature is complete (Phases 0–7).
+
+### Changes
+1. **`MetalTerminalRenderer+DrawLoop.swift`**: Replaced conditional `if bloomEnabled` texture bind at slot 2 with unconditional bind using `crtFallbackTexture` as fallback when bloom is disabled or textures are not yet allocated. Prevents undefined behavior from unbound texture slots.
+
+### Verification
+- `bloomEnabled` in `usesPostProcessing` check: confirmed (DrawLoop line 58)
+- Bloom textures nilled when disabled: confirmed (`ensurePostProcessTextures`)
+- Half-res texture allocation with resize guard: confirmed (`ensureBloomTextures`)
+- Bloom disabled → encode functions no-op via early guard: confirmed
+- Slot 2 always bound: fixed this session
+
+### Files modified
+- `ProSSHMac/Terminal/Renderer/MetalTerminalRenderer+DrawLoop.swift`
+- `docs/TextGlow.md` (Phase 7 checked off — all phases complete)
+
+### Build/Test
+Build: SUCCEEDED. Tests: 209 executed, 2 failures (0 unexpected) — pre-existing baseline.

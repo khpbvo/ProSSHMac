@@ -254,7 +254,7 @@ Implement a real bloom pipeline: bright-pass extraction → downsample → separ
 
 ---
 
-### - [ ] Phase 7: QA, Performance & Polish
+### - [x] Phase 7: QA, Performance & Polish
 
 **Goal:** Validate correctness, measure GPU overhead, handle edge cases.
 

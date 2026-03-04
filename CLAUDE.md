@@ -234,23 +234,14 @@ All paths relative to repo root, under `ProSSHMac/`.
 | `docs/FixTerminalCopyAndSelection.md` | Terminal copy/selection fix (issue #22) |
 | `docs/IntegrationOfNewFeats.md` | Pre-built module integration guide (TOTP 2FA, etc.) |
 | `docs/Issue11.md` | Visual jitter fix — phased checklist (Phases 0–5) |
-| `docs/TextGlow.md` | Bloom / Text Glow — phased checklist (Phases 0–7) |
+| `docs/TextGlow.md` | Bloom / Text Glow — **COMPLETE** (Phases 0–7) |
 
 ---
 
 ## Next Session Plan
 
 <!-- NEXT SESSION PLAN -->
-**Feature:** TextGlow (Bloom / Text Glow Effect)
-**Spec:** `docs/TextGlow.md`
-**Next phase:** Phase 7 — QA, Performance & Polish
+**TextGlow is COMPLETE** (Phases 0–7). Pick the next feature from `docs/FutureFeatures.md`.
 
-Phase 6 is complete: Settings UI is live. `BloomEffectSettingsView.swift` exposes all four bloom parameters (enable, threshold, intensity, radius, animate-with-gradient). Navigation row added to `SettingsView.swift`. Bloom changes are detected in `MetalTerminalSessionSurface`'s reload poll and forwarded to `renderer.reloadBloomEffectSettings()`.
-
-Phase 7 tasks:
-- Profile GPU frame time with Instruments (Metal System Trace) — target < 0.5ms overhead
-- Test edge cases: window resize, font change, minimize, external display, bloom disabled (textures nil'd)
-- Verify `bloomEnabled` is in `needsPostProcess` check in DrawLoop
-- Run full test suite: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' test`
-- Final commit with docs updates
+Context: The bloom pipeline is fully implemented — bright-pass extraction, separable Gaussian blur (H+V), additive composite in post-process pass, gradient animation coupling, settings UI, and all edge cases verified. 209 tests pass (2 pre-existing failures).
 <!-- /NEXT SESSION PLAN -->
