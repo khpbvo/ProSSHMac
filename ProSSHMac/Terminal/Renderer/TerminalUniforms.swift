@@ -214,6 +214,20 @@ struct TerminalUniformData {
     /// Padding to maintain 16-byte alignment.
     var _scannerPad0: Float
     var _scannerPad1: Float
+
+    // -- Bloom Effect Uniforms --
+
+    /// 1 when bloom glow is enabled, else 0.
+    var bloomEnabled: UInt32
+
+    /// Luminance threshold above which pixels contribute to bloom (0.0–1.0).
+    var bloomThreshold: Float
+
+    /// Additive blend strength of the bloom halo (0.0–1.5).
+    var bloomIntensity: Float
+
+    /// 1 when bloom intensity pulses with gradient animation, else 0.
+    var bloomAnimateWithGradient: UInt32
 }
 
 // MARK: - TerminalUniformBuffer
@@ -328,6 +342,7 @@ final class TerminalUniformBuffer {
         gradientConfig: GradientBackgroundConfiguration? = nil,
         solidBackgroundConfig: SolidBackgroundConfiguration? = nil,
         scannerConfig: ScannerEffectConfiguration? = nil,
+        bloomConfig: BloomEffectConfiguration? = nil,
         isLocalSession: Bool = false
     ) {
         // B.7.2: Track animation time
@@ -363,6 +378,13 @@ final class TerminalUniformBuffer {
             let user = ProcessInfo.processInfo.environment["USER"] ?? NSUserName()
             return Float(user.count)
         }()
+
+        // Resolve bloom configuration.
+        let bc = bloomConfig ?? BloomEffectConfiguration.default
+        let gradientIsAnimating = gc.isEnabled && gc.animationMode != .none
+        let effectiveBloomIntensity: Float = (bc.animateWithGradient && gradientIsAnimating)
+            ? bc.intensity * (0.85 + 0.15 * sinf(elapsed * max(0.01, gc.animationSpeed) * 1.5))
+            : bc.intensity
 
         // Assemble the uniform struct
         var uniforms = TerminalUniformData(
@@ -423,7 +445,11 @@ final class TerminalUniformBuffer {
             scannerUsernameLen: usernameLen,
             scannerTrailLength: min(0.5, max(0, sc.trailLength)),
             _scannerPad0: 0,
-            _scannerPad1: 0
+            _scannerPad1: 0,
+            bloomEnabled: bc.isEnabled ? 1 : 0,
+            bloomThreshold: min(0.95, max(0.05, bc.threshold)),
+            bloomIntensity: min(2, max(0, effectiveBloomIntensity)),
+            bloomAnimateWithGradient: bc.animateWithGradient ? 1 : 0
         )
 
         // Copy into the Metal buffer

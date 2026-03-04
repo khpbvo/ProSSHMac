@@ -1028,3 +1028,101 @@ Phase 5: Verification & close — Instruments trace, post-fix measurements, clos
 
 ### Build/test status
 Build: SUCCEEDED. Tests: 209 run, 2 pre-existing failures, 0 new.
+
+---
+
+## 2026-03-04 — TextGlow (Bloom / Text Glow Effect) — Feature Start
+
+**Feature spec created:** `docs/TextGlow.md`
+
+**Goal:** Add a GPU multi-pass bloom effect to the Metal terminal renderer. Bright terminal text (bold colors, ANSI bright palette) gets a soft glow halo. The bloom optionally pulses with the gradient background animation system.
+
+**Pipeline:** bright-pass extraction → half-res downsample → separable Gaussian blur (H + V) → additive composite into post-process pass.
+
+**Phases planned (0–7):**
+- Phase 0: Configuration & Uniforms
+- Phase 1: Textures & Pipeline States
+- Phase 2: Bright-Pass Shader
+- Phase 3: Separable Gaussian Blur (H + V Passes)
+- Phase 4: Composite Bloom into Post-Process Pass
+- Phase 5: Gradient Animation Coupling
+- Phase 6: Settings UI
+- Phase 7: QA, Performance & Polish
+
+**Files affected:** `TerminalShaders.metal`, `MetalTerminalRenderer.swift`, `MetalTerminalRenderer+PostProcessing.swift`, `MetalTerminalRenderer+DrawLoop.swift`, `TerminalUniforms.swift`, new `BloomEffect.swift`, new `BloomEffectSettingsView.swift`, `SettingsView.swift`
+
+No code changes this session — spec only.
+
+---
+
+## 2026-03-04 — TextGlow Phase 0: Configuration & Uniforms
+
+**Feature spec:** `docs/TextGlow.md`
+**Phase:** 0 of 7
+
+### What changed
+- Created `ProSSHMac/Terminal/Effects/BloomEffect.swift`: `BloomEffectConfiguration` struct (Codable, Sendable, Equatable) with `isEnabled`, `threshold`, `intensity`, `radius`, `animateWithGradient` fields. UserDefaults persistence via `load()`/`save()` with key `"terminal.effects.bloom"`. Follows `ScannerEffectConfiguration` pattern.
+- Edited `ProSSHMac/Terminal/Renderer/TerminalUniforms.swift`:
+  - Added 4 bloom fields to `TerminalUniformData`: `bloomEnabled` (UInt32), `bloomThreshold` (Float), `bloomIntensity` (Float), `bloomAnimateWithGradient` (UInt32). 16-byte aligned after scanner block.
+  - Added `bloomConfig: BloomEffectConfiguration? = nil` parameter to `TerminalUniformBuffer.update()`.
+  - Bloom config resolution with gradient-coupled intensity pulsing via `sinf()`.
+  - Bloom fields wired into struct literal with clamped ranges.
+
+### Files modified
+- `ProSSHMac/Terminal/Effects/BloomEffect.swift` (new)
+- `ProSSHMac/Terminal/Renderer/TerminalUniforms.swift`
+- `docs/TextGlow.md` (Phase 0 checked off)
+
+### Build/test status
+Build: SUCCEEDED. No visual change — data foundation only.
+
+### Next
+Phase 1: Textures & Pipeline States — allocate half-res GPU textures, create stub shader entry points.
+
+---
+
+## 2026-03-04 — TextGlow Phase 1: Textures & Pipeline States
+
+**Feature spec:** `docs/TextGlow.md`
+**Phase:** 1 of 7
+
+### What changed
+- `ProSSHMac/Terminal/Renderer/TerminalShaders.metal`: Added 4 stub shader functions at end of file — `bloom_bright_vertex`, `bloom_bright_fragment`, `bloom_blur_vertex`, `bloom_blur_fragment`. All use existing `PostVertexOut` struct. Fragment stubs return black (`float4(0,0,0,1)`). Full-screen triangle vertex pattern matches `terminal_post_vertex`.
+- `ProSSHMac/Terminal/Renderer/MetalTerminalRenderer.swift`: Added 6 stored properties (bloom section): `bloomConfiguration`, `bloomBrightPipeline`, `bloomBlurHPipeline`, `bloomBlurVPipeline`, `bloomBrightTexture`, `bloomBlurH`, `bloomBlurV`. Created 3 pipeline states in `init()` after post-process pipeline — bright pipeline and shared blur pipeline (H/V use same PSO; direction via uniform in Phase 3). Uses `try?` for graceful failure.
+- `ProSSHMac/Terminal/Renderer/MetalTerminalRenderer+PostProcessing.swift`: Added `reloadBloomEffectSettings()`, `ensureBloomTextures(width:height:)`, and private `makeBloomHalfResTexture(width:height:)`. Bloom textures allocated at half resolution when enabled, nil'd out when disabled. Called from `ensurePostProcessTextures()`.
+- `ProSSHMac/Terminal/Renderer/MetalTerminalRenderer+DrawLoop.swift`: Added `bloomConfiguration.isEnabled` to `usesPostProcessing` guard so bloom forces the post-process path active.
+
+### Files modified
+- `ProSSHMac/Terminal/Renderer/TerminalShaders.metal`
+- `ProSSHMac/Terminal/Renderer/MetalTerminalRenderer.swift`
+- `ProSSHMac/Terminal/Renderer/MetalTerminalRenderer+PostProcessing.swift`
+- `ProSSHMac/Terminal/Renderer/MetalTerminalRenderer+DrawLoop.swift`
+- `docs/TextGlow.md` (Phase 1 checked off)
+
+### Build/test status
+Build: SUCCEEDED. No visual change — resource allocation only (bloom disabled by default).
+
+### Next
+Phase 2: Bright-Pass Shader — implement `bloom_bright_fragment` to extract luminant pixels, encode bright-pass render pass in DrawLoop.
+
+---
+
+## 2026-03-04 — TextGlow Phase 2: Bright-Pass Shader
+
+**Feature spec:** `docs/TextGlow.md`
+**Phase:** 2 of 7
+
+### Changes
+- `ProSSHMac/Terminal/Renderer/TerminalShaders.metal`: Added 4 bloom fields (`bloomEnabled`, `bloomThreshold`, `bloomIntensity`, `bloomAnimateWithGradient`) to Metal `TerminalUniforms` struct — matches Swift `TerminalUniformData` byte layout. Replaced `bloom_bright_fragment` stub with full implementation: samples `postProcessTexture` via linear sampler, computes Rec.709 luminance, extracts pixels above `bloomThreshold` using smooth knee function (squared for sharper cutoff), outputs `color.rgb * bright`.
+- `ProSSHMac/Terminal/Renderer/MetalTerminalRenderer+DrawLoop.swift`: Passed `bloomConfig: bloomConfiguration` to `uniformBuffer.update()` (was previously defaulting to `nil`). Added `encodeBrightPass(commandBuffer:sceneTexture:)` private method that creates a render pass targeting `bloomBrightTexture` (half-res), binds the scene texture and uniform buffer, draws a full-screen triangle via `bloomBrightPipeline`. Called after scene encoding and before post-process pass in `draw(in:)`.
+
+### Files modified
+- `ProSSHMac/Terminal/Renderer/TerminalShaders.metal`
+- `ProSSHMac/Terminal/Renderer/MetalTerminalRenderer+DrawLoop.swift`
+- `docs/TextGlow.md` (Phase 2 checked off)
+
+### Build/Test
+Build: SUCCEEDED. No visual change — bloom compositing into the final image is Phase 4.
+
+### Next
+Phase 3: Separable Gaussian Blur (H + V Passes) — implement `bloom_blur_fragment` with 13-tap kernel, add blur uniform fields, encode H+V passes in DrawLoop.

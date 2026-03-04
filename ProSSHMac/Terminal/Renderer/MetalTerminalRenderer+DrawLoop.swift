@@ -55,6 +55,7 @@ extension MetalTerminalRenderer {
             || gradientConfiguration.isEnabled
             || solidBackgroundConfiguration.isEnabled
             || scannerActive
+            || bloomConfiguration.isEnabled
         if usesPostProcessing {
             ensurePostProcessTextures(for: drawableSize)
         }
@@ -102,6 +103,7 @@ extension MetalTerminalRenderer {
             gradientConfig: gradientConfiguration,
             solidBackgroundConfig: solidBackgroundConfiguration,
             scannerConfig: scannerConfiguration,
+            bloomConfig: bloomConfiguration,
             isLocalSession: isLocalSession
         )
         previousUniformTime = uniformBuffer.currentTime
@@ -123,6 +125,9 @@ extension MetalTerminalRenderer {
             sceneEncoder.label = "TerminalSceneEncoder"
             drawCalls += encodeTerminalScenePass(sceneEncoder, drawableSize: drawableSize)
             sceneEncoder.endEncoding()
+
+            // Bloom bright-pass: extract luminant pixels → bloomBrightTexture (half-res)
+            encodeBrightPass(commandBuffer: commandBuffer, sceneTexture: sceneTexture)
 
             guard let postEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: drawableRenderPassDescriptor) else {
                 inflightSemaphore.signal()
@@ -333,5 +338,29 @@ extension MetalTerminalRenderer {
             instanceCount: instanceCount
         )
         return 1
+    }
+
+    // MARK: - Bloom Bright-Pass Encoding
+
+    private func encodeBrightPass(
+        commandBuffer: MTLCommandBuffer,
+        sceneTexture: MTLTexture
+    ) {
+        guard bloomConfiguration.isEnabled,
+              let pipeline = bloomBrightPipeline,
+              let target = bloomBrightTexture else { return }
+
+        let descriptor = MTLRenderPassDescriptor()
+        descriptor.colorAttachments[0].texture = target
+        descriptor.colorAttachments[0].loadAction = .dontCare
+        descriptor.colorAttachments[0].storeAction = .store
+
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) else { return }
+        encoder.label = "BloomBrightPass"
+        encoder.setRenderPipelineState(pipeline)
+        encoder.setFragmentTexture(sceneTexture, index: 0)
+        encoder.setFragmentBuffer(uniformBuffer.buffer, offset: 0, index: 1)
+        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        encoder.endEncoding()
     }
 }

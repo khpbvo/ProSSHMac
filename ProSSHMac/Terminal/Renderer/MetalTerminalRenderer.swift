@@ -204,6 +204,29 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     /// Scanner effect is only active for local sessions.
     var isLocalSession: Bool = false
 
+    // MARK: - Bloom Effect
+
+    /// Runtime bloom effect configuration (default disabled).
+    var bloomConfiguration: BloomEffectConfiguration = BloomEffectConfiguration.load()
+
+    /// Bloom pipeline: extracts luminant pixels into bloomBrightTexture.
+    var bloomBrightPipeline: MTLRenderPipelineState?
+
+    /// Bloom pipeline: Gaussian blur pass (used for both H and V).
+    var bloomBlurHPipeline: MTLRenderPipelineState?
+
+    /// Bloom pipeline: same object as bloomBlurHPipeline; direction controlled by uniform in Phase 3.
+    var bloomBlurVPipeline: MTLRenderPipelineState?
+
+    /// Intermediate texture: bright-pass extraction output (half resolution).
+    var bloomBrightTexture: MTLTexture?
+
+    /// Intermediate texture: horizontal blur output (half resolution).
+    var bloomBlurH: MTLTexture?
+
+    /// Intermediate texture: vertical blur output / final bloom halo (half resolution).
+    var bloomBlurV: MTLTexture?
+
     /// Previous frame color texture for phosphor afterglow sampling.
     var previousFrameTexture: MTLTexture?
 
@@ -305,6 +328,29 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
             self.postProcessPipelineState = try device.makeRenderPipelineState(descriptor: postPipelineDescriptor)
         } catch {
             fatalError("MetalTerminalRenderer: failed to create post-process pipeline state: \(error)")
+        }
+
+        // Bloom pipelines (stub shaders in Phase 1; implemented in Phase 2–3).
+        if let brightVertex = library.makeFunction(name: "bloom_bright_vertex"),
+           let brightFragment = library.makeFunction(name: "bloom_bright_fragment") {
+            let brightDesc = MTLRenderPipelineDescriptor()
+            brightDesc.label = "BloomBrightPipeline"
+            brightDesc.vertexFunction = brightVertex
+            brightDesc.fragmentFunction = brightFragment
+            brightDesc.colorAttachments[0].pixelFormat = .bgra8Unorm
+            self.bloomBrightPipeline = try? device.makeRenderPipelineState(descriptor: brightDesc)
+        }
+
+        if let blurVertex = library.makeFunction(name: "bloom_blur_vertex"),
+           let blurFragment = library.makeFunction(name: "bloom_blur_fragment") {
+            let blurDesc = MTLRenderPipelineDescriptor()
+            blurDesc.label = "BloomBlurPipeline"
+            blurDesc.vertexFunction = blurVertex
+            blurDesc.fragmentFunction = blurFragment
+            blurDesc.colorAttachments[0].pixelFormat = .bgra8Unorm
+            let blurPipeline = try? device.makeRenderPipelineState(descriptor: blurDesc)
+            self.bloomBlurHPipeline = blurPipeline
+            self.bloomBlurVPipeline = blurPipeline  // same pipeline; direction via uniform in Phase 3
         }
 
         // Initialize cell dimensions synchronously from the font manager.

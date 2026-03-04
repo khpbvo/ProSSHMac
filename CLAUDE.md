@@ -234,15 +234,16 @@ All paths relative to repo root, under `ProSSHMac/`.
 | `docs/FixTerminalCopyAndSelection.md` | Terminal copy/selection fix (issue #22) |
 | `docs/IntegrationOfNewFeats.md` | Pre-built module integration guide (TOTP 2FA, etc.) |
 | `docs/Issue11.md` | Visual jitter fix — phased checklist (Phases 0–5) |
+| `docs/TextGlow.md` | Bloom / Text Glow — phased checklist (Phases 0–7) |
 
 ---
 
 ## Next Session Plan
 
 <!-- NEXT SESSION PLAN -->
-Issue #11 is now CLOSED (Phases 0–5 complete). All implementation phases merged to master.
+**Feature:** TextGlow (Bloom / Text Glow Effect)
+**Spec:** `docs/TextGlow.md`
+**Next phase:** Phase 3 — Separable Gaussian Blur (H + V Passes)
 
-Remaining manual verification: run Instruments (Metal System Trace) during htop session to confirm p95 CPU frame < 8ms at 60Hz. Update `docs/Issue11.md` post-fix column with measured numbers.
-
-Next work: check `docs/FutureFeatures.md` or `docs/bugs.md` for the next priority item.
+Phase 3 implements the two-pass Gaussian blur. In `TerminalShaders.metal`, implement `bloom_blur_fragment` with a 13-tap separable kernel (weights array, direction controlled by a uniform `bloomBlurHorizontal`). Add `bloomTexelWidth`, `bloomTexelHeight`, `bloomBlurHorizontal`, `bloomRadius` to both `TerminalUniformData` (Swift) and `TerminalUniforms` (Metal). In `MetalTerminalRenderer+DrawLoop.swift`, add `encodeBlurPasses(commandBuffer:)` that runs H-pass (bright→blurH) then V-pass (blurH→blurV). Phase 2 is complete: bright-pass shader extracts luminant pixels, `encodeBrightPass` wired into draw loop, bloom uniform fields present in both Swift and Metal structs.
 <!-- /NEXT SESSION PLAN -->

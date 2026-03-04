@@ -145,6 +145,12 @@ struct TerminalUniforms {
     float  scannerTrailLength;        // trailing tail length
     float  _scannerPad0;             // alignment padding
     float  _scannerPad1;             // alignment padding
+
+    // -- Bloom Effect Uniforms --
+    uint    bloomEnabled;            // 1 = bloom active
+    float   bloomThreshold;          // luminance cutoff (0.0–1.0)
+    float   bloomIntensity;          // additive blend strength (0.0–1.5)
+    uint    bloomAnimateWithGradient; // 1 = pulse with gradient animation
 };
 
 /// Vertex-to-fragment interpolants.
@@ -904,4 +910,59 @@ fragment float4 terminal_post_fragment(
 
     color.a = 1.0;
     return color;
+}
+
+// MARK: - Bloom Effect Passes (Phase 1 stubs — black output until Phase 2–3)
+
+vertex PostVertexOut bloom_bright_vertex(uint vid [[vertex_id]]) {
+    float2 positions[3] = {
+        float2(-1.0, -1.0),
+        float2( 3.0, -1.0),
+        float2(-1.0,  3.0)
+    };
+    float2 uvs[3] = {
+        float2(0.0, 1.0),
+        float2(2.0, 1.0),
+        float2(0.0, -1.0)
+    };
+    PostVertexOut out;
+    out.position = float4(positions[vid], 0.0, 1.0);
+    out.uv = uvs[vid];
+    return out;
+}
+
+fragment float4 bloom_bright_fragment(
+    PostVertexOut in [[stage_in]],
+    texture2d<float> sceneTexture [[texture(0)]],
+    constant TerminalUniforms &uniforms [[buffer(1)]]
+) {
+    constexpr sampler s(mag_filter::linear, min_filter::linear, address::clamp_to_edge);
+    float4 color = sceneTexture.sample(s, in.uv);
+    float lum = dot(color.rgb, float3(0.2126, 0.7152, 0.0722));
+    // Smooth knee: extract above threshold, square for sharper cutoff
+    float bright = max(0.0f, lum - uniforms.bloomThreshold)
+                   / max(0.001f, 1.0f - uniforms.bloomThreshold);
+    bright = bright * bright;
+    return float4(color.rgb * bright, 1.0);
+}
+
+vertex PostVertexOut bloom_blur_vertex(uint vid [[vertex_id]]) {
+    float2 positions[3] = {
+        float2(-1.0, -1.0),
+        float2( 3.0, -1.0),
+        float2(-1.0,  3.0)
+    };
+    float2 uvs[3] = {
+        float2(0.0, 1.0),
+        float2(2.0, 1.0),
+        float2(0.0, -1.0)
+    };
+    PostVertexOut out;
+    out.position = float4(positions[vid], 0.0, 1.0);
+    out.uv = uvs[vid];
+    return out;
+}
+
+fragment float4 bloom_blur_fragment(PostVertexOut in [[stage_in]]) {
+    return float4(0.0, 0.0, 0.0, 1.0);
 }

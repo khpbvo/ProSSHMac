@@ -65,6 +65,43 @@ extension MetalTerminalRenderer {
         isDirty = true
     }
 
+    // MARK: - Bloom Effect
+
+    /// Reload bloom effect settings from persisted UserDefaults.
+    func reloadBloomEffectSettings() {
+        bloomConfiguration = BloomEffectConfiguration.load()
+        isDirty = true
+    }
+
+    /// Ensure half-resolution bloom intermediate textures exist and match drawable size.
+    func ensureBloomTextures(width: Int, height: Int) {
+        let bw = max(1, width / 2)
+        let bh = max(1, height / 2)
+
+        if bloomBrightTexture?.width != bw || bloomBrightTexture?.height != bh {
+            bloomBrightTexture = makeBloomHalfResTexture(width: bw, height: bh)
+        }
+        if bloomBlurH?.width != bw || bloomBlurH?.height != bh {
+            bloomBlurH = makeBloomHalfResTexture(width: bw, height: bh)
+        }
+        if bloomBlurV?.width != bw || bloomBlurV?.height != bh {
+            bloomBlurV = makeBloomHalfResTexture(width: bw, height: bh)
+        }
+    }
+
+    private func makeBloomHalfResTexture(width: Int, height: Int) -> MTLTexture? {
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm,
+            width: width,
+            height: height,
+            mipmapped: false
+        )
+        descriptor.usage = [.renderTarget, .shaderRead]
+        descriptor.storageMode = .private
+        descriptor.resourceOptions = .storageModePrivate
+        return device.makeTexture(descriptor: descriptor)
+    }
+
     /// Current gradient background configuration (read-only).
     var currentGradientConfiguration: GradientBackgroundConfiguration {
         gradientConfiguration
@@ -107,6 +144,14 @@ extension MetalTerminalRenderer {
 
         if postProcessTexture?.width != width || postProcessTexture?.height != height {
             postProcessTexture = makePostProcessTexture(width: width, height: height)
+        }
+
+        if bloomConfiguration.isEnabled {
+            ensureBloomTextures(width: width, height: height)
+        } else {
+            bloomBrightTexture = nil
+            bloomBlurH = nil
+            bloomBlurV = nil
         }
     }
 
