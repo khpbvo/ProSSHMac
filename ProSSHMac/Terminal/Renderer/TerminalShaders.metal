@@ -793,6 +793,7 @@ fragment float4 terminal_post_fragment(
     PostVertexOut in [[stage_in]],
     texture2d<float> sceneTexture [[texture(0)]],
     texture2d<float> previousFrame [[texture(1)]],
+    texture2d<float> bloomTexture [[texture(2)]],
     constant TerminalUniforms &uniforms [[buffer(1)]]
 ) {
     constexpr sampler postSampler(
@@ -812,6 +813,13 @@ fragment float4 terminal_post_fragment(
     }
 
     float4 color = sceneTexture.sample(postSampler, uv);
+
+    // Bloom composite: additively blend the blurred glow halo before gradient compositing.
+    if (uniforms.bloomEnabled == 1) {
+        float3 bloomColor = bloomTexture.sample(postSampler, uv).rgb;
+        color.rgb += bloomColor * uniforms.bloomIntensity;
+        color.rgb = saturate(color.rgb);
+    }
 
     // Gradient background: paint gradient, then composite terminal on top.
     // The default terminal background is black (0,0,0). We treat near-black

@@ -1151,3 +1151,25 @@ Build: SUCCEEDED. No visual change — compositing `bloomBlurV` into the final i
 
 ### Next
 Phase 4: Composite Bloom into Post-Process Pass — bind `bloomBlurV` as texture(2) in `terminal_post_fragment`, additive blend with `bloomIntensity`. First visible bloom result.
+
+---
+
+## 2026-03-04 — TextGlow Phase 4: Composite Bloom into Post-Process Pass
+
+### Summary
+Wired `bloomBlurV` into the final post-process pass as an additive blend. This is the first visible result of the bloom pipeline — bright terminal text now gets a soft glow halo when bloom is enabled.
+
+### Changes
+1. **`TerminalShaders.metal`**: Added `bloomTexture [[texture(2)]]` parameter to `terminal_post_fragment`. Inserted bloom composite block (sample + additive blend + saturate) after scene sample and before gradient compositing, gated by `uniforms.bloomEnabled == 1`.
+2. **`MetalTerminalRenderer+DrawLoop.swift`**: Bound `bloomBlurV` at texture index 2 in the post-process encoder, guarded by `bloomConfiguration.isEnabled`.
+
+### Files modified
+- `ProSSHMac/Terminal/Renderer/TerminalShaders.metal`
+- `ProSSHMac/Terminal/Renderer/MetalTerminalRenderer+DrawLoop.swift`
+- `docs/TextGlow.md` (Phase 4 checked off)
+
+### Build/Test
+Build: SUCCEEDED. Bloom is now composited into the final frame when enabled.
+
+### Next
+Phase 5: Gradient Animation Coupling — pulse bloom intensity/radius in sync with gradient animations, tint bloom halo toward gradient color.

@@ -159,6 +159,9 @@ extension MetalTerminalRenderer {
             postEncoder.setFragmentBuffer(uniformBuffer.buffer, offset: 0, index: 1)
             postEncoder.setFragmentTexture(sceneTexture, index: 0)
             postEncoder.setFragmentTexture(previousFrameTexture ?? crtFallbackTexture, index: 1)
+            if bloomConfiguration.isEnabled, let bloomTex = bloomBlurV {
+                postEncoder.setFragmentTexture(bloomTex, index: 2)
+            }
             postEncoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
             postEncoder.endEncoding()
             drawCalls += 1

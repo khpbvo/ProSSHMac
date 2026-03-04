@@ -168,7 +168,7 @@ Implement a real bloom pipeline: bright-pass extraction → downsample → separ
 
 ---
 
-### - [ ] Phase 4: Composite Bloom into Post-Process Pass
+### - [x] Phase 4: Composite Bloom into Post-Process Pass
 
 **Goal:** Additively blend `bloomBlurV` into the final frame. First visible result.
 

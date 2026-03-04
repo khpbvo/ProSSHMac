@@ -243,7 +243,9 @@ All paths relative to repo root, under `ProSSHMac/`.
 <!-- NEXT SESSION PLAN -->
 **Feature:** TextGlow (Bloom / Text Glow Effect)
 **Spec:** `docs/TextGlow.md`
-**Next phase:** Phase 4 — Composite Bloom into Post-Process Pass
+**Next phase:** Phase 5 — Gradient Animation Coupling
 
-Phase 4 is the first visible result. In `TerminalShaders.metal`, modify `terminal_post_fragment` to accept `bloomBlurV` as `texture2d<float> bloomTexture [[texture(2)]]`. After sampling the scene, additively blend `bloomTexture.sample(s, uv).rgb * uniforms.bloomIntensity` into `color.rgb` (before gradient compositing). In `MetalTerminalRenderer+DrawLoop.swift`, bind `bloomBlurV` (or `crtFallbackTexture` when bloom is off) as fragment texture index 2 on the post-process encoder. Temporarily enable bloom by default to test visually — run `htop` or `ls --color` and verify bright text has a soft glow halo. Phase 3 is complete: `bloom_blur_fragment` implements 13-tap separable Gaussian via `setFragmentBytes` push constants, `encodeBlurPasses` runs H+V passes sequentially.
+Phase 4 is complete: `bloomBlurV` is now composited into `terminal_post_fragment` as an additive blend (texture index 2), gated by `uniforms.bloomEnabled == 1`, inserted before gradient compositing. Bloom is visually functional when `isEnabled: true`.
+
+Phase 5 makes bloom respond to the gradient animation system. In `TerminalUniformBuffer.update()`, when `bloomAnimateWithGradient == 1 && gradientEnabled && gradientAnimationMode != .none`, pulse `effectiveBloomIntensity = bloomIntensity * (0.85 + 0.15 * sin(time * speed * 1.5))`. For aurora/wave modes, also pulse radius. In `terminal_post_fragment`, when both bloom and gradient are active with animation coupling, tint bloom halo toward the gradient's dominant color using `computeGradientColor()`.
 <!-- /NEXT SESSION PLAN -->
