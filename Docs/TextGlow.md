@@ -217,7 +217,7 @@ Implement a real bloom pipeline: bright-pass extraction → downsample → separ
 
 ---
 
-### - [ ] Phase 6: Settings UI
+### - [x] Phase 6: Settings UI
 
 **Goal:** Expose bloom as a user-configurable effect in Settings, consistent with existing effects UX.
 

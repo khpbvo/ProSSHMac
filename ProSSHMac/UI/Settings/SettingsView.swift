@@ -105,6 +105,20 @@ struct SettingsView: View {
                     }
 
                     NavigationLink {
+                        BloomEffectSettingsView()
+                    } label: {
+                        HStack {
+                            Label("Text Glow (Bloom)", systemImage: "sparkles")
+                            Spacer()
+                            if BloomEffectConfiguration.load().isEnabled {
+                                Text("On")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.cyan)
+                            }
+                        }
+                    }
+
+                    NavigationLink {
                         PromptAppearanceSettingsView()
                     } label: {
                         HStack {

@@ -167,6 +167,7 @@ final class MetalTerminalSurfaceModel: ObservableObject {
     private var cachedGradientConfiguration: GradientBackgroundConfiguration
     private var cachedSolidBackgroundConfiguration: SolidBackgroundConfiguration
     private var cachedScannerConfiguration: ScannerEffectConfiguration
+    private var cachedBloomConfiguration: BloomEffectConfiguration
     private var cachedCRTEffectEnabled: Bool
 
     /// Observer token for UserDefaults change notifications.
@@ -188,6 +189,7 @@ final class MetalTerminalSurfaceModel: ObservableObject {
         self.cachedGradientConfiguration = GradientBackgroundConfiguration.load()
         self.cachedSolidBackgroundConfiguration = SolidBackgroundConfiguration.load()
         self.cachedScannerConfiguration = ScannerEffectConfiguration.load()
+        self.cachedBloomConfiguration = BloomEffectConfiguration.load()
         self.cachedCRTEffectEnabled = CRTEffect.loadEnabledFromDefaults()
 
         if let device = MTLCreateSystemDefaultDevice() {
@@ -328,6 +330,12 @@ final class MetalTerminalSurfaceModel: ObservableObject {
         if scannerConfiguration != cachedScannerConfiguration {
             cachedScannerConfiguration = scannerConfiguration
             renderer.reloadScannerEffectSettings()
+        }
+
+        let bloomConfiguration = BloomEffectConfiguration.load()
+        if bloomConfiguration != cachedBloomConfiguration {
+            cachedBloomConfiguration = bloomConfiguration
+            renderer.reloadBloomEffectSettings()
         }
     }
 

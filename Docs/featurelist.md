@@ -1195,3 +1195,27 @@ Build: SUCCEEDED.
 
 ### Next
 Phase 6: Settings UI — expose bloom as a user-configurable effect in Settings with toggles and sliders.
+
+---
+
+## 2026-03-04 — TextGlow Phase 6: Settings UI
+
+### Summary
+Created `BloomEffectSettingsView.swift` with master toggle, threshold/intensity/radius sliders, and gradient coupling toggle. Added "Text Glow (Bloom)" navigation row to `SettingsView.swift` after Scanner Effect. Wired bloom configuration change detection into `MetalTerminalSessionSurface`'s `reloadRendererSettingsIfNeeded()` poll loop so settings changes take effect immediately.
+
+### Changes
+1. **`UI/Settings/BloomEffectSettingsView.swift`** (NEW): Settings view with enable toggle, threshold slider (10–90%), intensity slider (0–150%), radius slider (0.5–3.0x), and "Pulse with Gradient Animation" toggle. Uses `SettingsCard` and `LabeledSlider` from `GradientBackgroundSettingsView`. Cyan tint accent. Apply/Cancel toolbar.
+2. **`UI/Settings/SettingsView.swift`**: Added NavigationLink for "Text Glow (Bloom)" with sparkles icon and cyan "On" indicator between Scanner Effect and Prompt Colors rows.
+3. **`UI/Terminal/MetalTerminalSessionSurface.swift`**: Added `cachedBloomConfiguration` property, initialized in `init()`, and bloom change detection block in `reloadRendererSettingsIfNeeded()` calling existing `renderer.reloadBloomEffectSettings()`.
+
+### Files modified
+- `ProSSHMac/UI/Settings/BloomEffectSettingsView.swift` (NEW)
+- `ProSSHMac/UI/Settings/SettingsView.swift`
+- `ProSSHMac/UI/Terminal/MetalTerminalSessionSurface.swift`
+- `docs/TextGlow.md` (Phase 6 checked off)
+
+### Build/Test
+Build: SUCCEEDED.
+
+### Next
+Phase 7: QA, Performance & Polish — profiling, edge cases, full test suite.

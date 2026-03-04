@@ -243,9 +243,14 @@ All paths relative to repo root, under `ProSSHMac/`.
 <!-- NEXT SESSION PLAN -->
 **Feature:** TextGlow (Bloom / Text Glow Effect)
 **Spec:** `docs/TextGlow.md`
-**Next phase:** Phase 6 — Settings UI
+**Next phase:** Phase 7 — QA, Performance & Polish
 
-Phase 5 is complete: gradient animation coupling is fully wired. Shader tints bloom halo toward gradient color when both are active with `animateWithGradient`. Radius pulses subtly for aurora/wave modes via `effectiveRadius` in `encodeBlurPasses()`. Intensity pulsing was already done in Phase 0.
+Phase 6 is complete: Settings UI is live. `BloomEffectSettingsView.swift` exposes all four bloom parameters (enable, threshold, intensity, radius, animate-with-gradient). Navigation row added to `SettingsView.swift`. Bloom changes are detected in `MetalTerminalSessionSurface`'s reload poll and forwarded to `renderer.reloadBloomEffectSettings()`.
 
-Phase 6 creates `UI/Settings/BloomEffectSettingsView.swift` with toggle, threshold/intensity/radius sliders, and "Animate with Gradient" toggle. Add a navigation row in `SettingsView.swift` below Scanner Effect. Follow the `GradientBackgroundSettingsView` pattern for persistence and live preview updates.
+Phase 7 tasks:
+- Profile GPU frame time with Instruments (Metal System Trace) — target < 0.5ms overhead
+- Test edge cases: window resize, font change, minimize, external display, bloom disabled (textures nil'd)
+- Verify `bloomEnabled` is in `needsPostProcess` check in DrawLoop
+- Run full test suite: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' test`
+- Final commit with docs updates
 <!-- /NEXT SESSION PLAN -->
