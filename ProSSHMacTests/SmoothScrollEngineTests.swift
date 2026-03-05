@@ -310,6 +310,37 @@ final class SmoothScrollEngineTests: XCTestCase {
         XCTAssertEqual(engine.targetScrollRow, 0, "jumpTo should clamp to minRow")
     }
 
+    func testJumpToSameRowPreservesAnimationState() {
+        let engine = SmoothScrollEngine()
+        engine.setBounds(maxRow: 50)
+
+        engine.scrollDelta(10.0, cellHeight: cellHeight) // 0.5 rows
+        XCTAssertTrue(engine.requiresContinuousFrames(), "Fractional scroll should animate")
+
+        engine.jumpTo(row: 0)
+
+        let frame = engine.frame(cellHeight: cellHeight, time: 1.0)
+        XCTAssertGreaterThan(abs(frame.offsetPixels), 0.01,
+                             "Same-row sync should preserve fractional offset")
+        XCTAssertTrue(frame.isAnimating, "Same-row sync should keep smooth scrolling alive")
+    }
+
+    func testJumpToDifferentRowStillResetsAnimationState() {
+        let engine = SmoothScrollEngine()
+        engine.setBounds(maxRow: 50)
+
+        engine.scrollDelta(10.0, cellHeight: cellHeight) // 0.5 rows
+        XCTAssertTrue(engine.requiresContinuousFrames(), "Fractional scroll should animate")
+
+        engine.jumpTo(row: 5)
+
+        let frame = engine.frame(cellHeight: cellHeight, time: 1.0)
+        XCTAssertEqual(engine.targetScrollRow, 5, "Different-row sync should update target row")
+        XCTAssertEqual(frame.offsetPixels, 0.0, accuracy: 0.01,
+                       "Different-row sync should clear fractional offset")
+        XCTAssertFalse(frame.isAnimating, "Different-row sync should stop animation")
+    }
+
     // MARK: - Phase 4: handleResize
 
     func testHandleResizeResetsState() {

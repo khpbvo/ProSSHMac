@@ -100,7 +100,12 @@ final class SmoothScrollEngine {
     /// Jump instantly to a specific scroll row. Zeros velocity/offset — no animation.
     /// The caller is responsible for updating the grid snapshot.
     func jumpTo(row: Int) {
-        targetScrollRow = min(max(row, minTargetRow), maxTargetRow)
+        let clampedRow = min(max(row, minTargetRow), maxTargetRow)
+        // Snapshot publishes frequently re-assert the current scroll row.
+        // Treat same-row sync as a no-op so in-flight smooth scrolling
+        // keeps its fractional offset and momentum instead of snapping.
+        guard clampedRow != targetScrollRow else { return }
+        targetScrollRow = clampedRow
         renderOffset = 0
         velocity = 0
         inMomentum = false
