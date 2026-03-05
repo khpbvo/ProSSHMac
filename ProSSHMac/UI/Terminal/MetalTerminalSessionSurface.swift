@@ -23,6 +23,8 @@ struct MetalTerminalSessionSurface: View {
     var selectionCoordinator: TerminalSelectionCoordinator?
     /// Provides current scrollback count for scroll bounds clamping.
     var scrollbackCountProvider: (() -> Int)?
+    /// Provides current scroll offset row so smooth-scroll engine can stay in sync.
+    var scrollOffsetProvider: (() -> Int)?
 
     @StateObject private var model = MetalTerminalSurfaceModel()
 
@@ -52,6 +54,9 @@ struct MetalTerminalSessionSurface: View {
                 .onAppear {
                     model.renderer?.isLocalSession = isLocalSession
                     model.renderer?.scrollbackBoundsProvider = scrollbackCountProvider
+                    if let scrollOffsetProvider {
+                        model.renderer?.scrollJumpTo(row: scrollOffsetProvider())
+                    }
                     model.apply(snapshot: snapshotProvider())
                     model.setRendererPaused(false)
                     model.updateFPS(isFocused: isFocused)
@@ -70,6 +75,9 @@ struct MetalTerminalSessionSurface: View {
                     selectionCoordinator?.unregister(sessionID: sessionID)
                 }
                 .onChange(of: snapshotNonce) { _, _ in
+                    if let scrollOffsetProvider {
+                        model.renderer?.scrollJumpTo(row: scrollOffsetProvider())
+                    }
                     model.apply(snapshot: snapshotProvider())
                 }
                 .onChange(of: isFocused) { _, newValue in

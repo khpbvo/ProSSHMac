@@ -125,6 +125,9 @@ struct ExternalTerminalWindowView: View {
                 selectionCoordinator: selectionCoordinator,
                 scrollbackCountProvider: {
                     sessionManager.cachedScrollbackCount(for: session.id)
+                },
+                scrollOffsetProvider: {
+                    sessionManager.scrollStateBySessionID[session.id]?.scrollOffset ?? 0
                 }
             )
             .id(session.id)

@@ -13,6 +13,9 @@ import os.signpost
     var pendingSnapshotPublishTasksBySessionID: [UUID: Task<Void, Never>] = [:]
     /// Per-session scroll offset (0 = live view, >0 = scrolled back N lines).
     var scrollOffsetBySessionID: [UUID: Int] = [:]
+    /// Whether incoming output should preserve the current scrolled-back viewport.
+    /// Enabled when user scrolls up, disabled when user scrolls toward live output.
+    var preserveScrollAnchorBySessionID: [UUID: Bool] = [:]
     /// Cached scrollback count per session, updated on each scroll for bounds clamping.
     var cachedScrollbackCountBySessionID: [UUID: Int] = [:]
     /// Throttles expensive visible-text extraction/publishing during heavy output.
@@ -72,6 +75,7 @@ import os.signpost
         lastShellBufferPublishAtBySessionID.removeValue(forKey: sessionID)
         lastBellTimeBySessionID.removeValue(forKey: sessionID)
         scrollOffsetBySessionID.removeValue(forKey: sessionID)
+        preserveScrollAnchorBySessionID.removeValue(forKey: sessionID)
         cachedScrollbackCountBySessionID.removeValue(forKey: sessionID)
         gridSnapshotsBySessionID.removeValue(forKey: sessionID)
         burstCountBySessionID.removeValue(forKey: sessionID)
@@ -135,13 +139,22 @@ import os.signpost
 
     func scrollTerminal(sessionID: UUID, delta: Int) {
         guard let manager, let engine = manager.engines[sessionID] else { return }
-        let current = scrollOffsetBySessionID[sessionID, default: 0]
         Task { @MainActor [weak self] in
             guard let self, let manager = self.manager else { return }
+            let current = self.scrollOffsetBySessionID[sessionID, default: 0]
             let maxOffset = await engine.scrollbackCount
             self.cachedScrollbackCountBySessionID[sessionID] = maxOffset
             let newOffset = max(0, min(current + delta, maxOffset))
             self.scrollOffsetBySessionID[sessionID] = newOffset
+            if newOffset == 0 {
+                self.preserveScrollAnchorBySessionID[sessionID] = false
+            } else if delta > 0 {
+                // Scrolling up means "hold this viewport while output arrives".
+                self.preserveScrollAnchorBySessionID[sessionID] = true
+            } else if delta < 0 {
+                // Scrolling down means user is heading toward live output.
+                self.preserveScrollAnchorBySessionID[sessionID] = false
+            }
             let snapshot = await engine.snapshot(scrollOffset: newOffset)
             self.gridSnapshotsBySessionID[sessionID] = snapshot
             manager.gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
@@ -156,7 +169,15 @@ import os.signpost
             let maxOffset = await engine.scrollbackCount
             self.cachedScrollbackCountBySessionID[sessionID] = maxOffset
             let clampedRow = max(0, min(row, maxOffset))
+            let previousOffset = self.scrollOffsetBySessionID[sessionID, default: 0]
             self.scrollOffsetBySessionID[sessionID] = clampedRow
+            if clampedRow == 0 {
+                self.preserveScrollAnchorBySessionID[sessionID] = false
+            } else if clampedRow > previousOffset {
+                self.preserveScrollAnchorBySessionID[sessionID] = true
+            } else if clampedRow < previousOffset {
+                self.preserveScrollAnchorBySessionID[sessionID] = false
+            }
             let snapshot = await engine.snapshot(scrollOffset: clampedRow)
             self.gridSnapshotsBySessionID[sessionID] = snapshot
             manager.gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
@@ -167,6 +188,7 @@ import os.signpost
     func scrollToBottom(sessionID: UUID) {
         guard let manager, let engine = manager.engines[sessionID] else { return }
         scrollOffsetBySessionID[sessionID] = 0
+        preserveScrollAnchorBySessionID[sessionID] = false
         Task { @MainActor [weak self] in
             guard let self, let manager = self.manager else { return }
             let snapshot = await engine.snapshot()
@@ -225,6 +247,7 @@ import os.signpost
         snapshotOverride: GridSnapshot
     ) async {
         scrollOffsetBySessionID[sessionID] = 0
+        preserveScrollAnchorBySessionID[sessionID] = false
         cancelPendingSnapshotPublish(for: sessionID)
         await publishGridState(
             for: sessionID,
@@ -237,12 +260,6 @@ import os.signpost
         sessionID: UUID,
         engine: TerminalEngine
     ) {
-        let wasScrolled = (scrollOffsetBySessionID[sessionID] ?? 0) > 0
-        scrollOffsetBySessionID[sessionID] = 0
-        if wasScrolled {
-            let scrollbackCount = cachedScrollbackCountBySessionID[sessionID] ?? 0
-            publishScrollState(sessionID: sessionID, scrollOffset: 0, scrollbackCount: scrollbackCount)
-        }
         scheduleCoalescedGridPublish(for: sessionID, engine: engine)
     }
 
@@ -280,20 +297,32 @@ import os.signpost
         }
         #endif
 
+        let previousScrollbackCount = cachedScrollbackCountBySessionID[sessionID] ?? 0
+        let scrollbackCount = await engine.scrollbackCount
+        var currentOffset = scrollOffsetBySessionID[sessionID] ?? 0
+        let shouldPreserveAnchor = preserveScrollAnchorBySessionID[sessionID, default: currentOffset > 0]
+        if shouldPreserveAnchor, currentOffset > 0, scrollbackCount > previousScrollbackCount {
+            // Keep the same visible viewport while new lines append below.
+            currentOffset += (scrollbackCount - previousScrollbackCount)
+        }
+        currentOffset = max(0, min(currentOffset, scrollbackCount))
+        scrollOffsetBySessionID[sessionID] = currentOffset
+        if currentOffset == 0 {
+            preserveScrollAnchorBySessionID[sessionID] = false
+        }
+        cachedScrollbackCountBySessionID[sessionID] = scrollbackCount
+
         let snapshot: GridSnapshot
         if let snapshotOverride {
             snapshot = snapshotOverride
+        } else if currentOffset > 0 {
+            snapshot = await engine.snapshot(scrollOffset: currentOffset)
         } else {
             snapshot = await engine.snapshot()
         }
         gridSnapshotsBySessionID[sessionID] = snapshot
         manager.gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
 
-        // Proactively cache scrollback count so the smooth scroll bounds
-        // provider has valid data before the first user scroll event.
-        let scrollbackCount = await engine.scrollbackCount
-        cachedScrollbackCountBySessionID[sessionID] = scrollbackCount
-        let currentOffset = scrollOffsetBySessionID[sessionID] ?? 0
         publishScrollState(sessionID: sessionID, scrollOffset: currentOffset, scrollbackCount: scrollbackCount)
 
         if shouldPublishShellBuffer(for: sessionID) {

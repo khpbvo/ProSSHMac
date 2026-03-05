@@ -15,6 +15,9 @@ struct TerminalScrollbarView: View {
     private let trackInset: CGFloat = 4
     private let thumbWidth: CGFloat = 3
     private let minThumbHeight: CGFloat = 18
+    /// Keep hit-testing constrained to the trailing edge so wheel events
+    /// in the terminal body still reach the renderer.
+    private let interactionWidth: CGFloat = 18
 
     @State private var thumbOpacity: Double = 0
     @State private var hideTask: Task<Void, Never>?
@@ -75,6 +78,7 @@ struct TerminalScrollbarView: View {
                 .animation(.easeOut(duration: 0.16), value: thumbOpacity)
                 .animation(.easeOut(duration: 0.1), value: isDragging)
         }
+        .frame(width: interactionWidth)
         .allowsHitTesting(shouldShow)
         .onChange(of: scrollState) { _, _ in
             guard shouldShow else {
