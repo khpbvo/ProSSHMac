@@ -293,7 +293,7 @@ terminal_post_fragment
 
 ---
 
-### - [ ] Phase 5: Settings UI
+### - [x] Phase 5: Settings UI
 
 **Goal:** Expose smooth scrolling as a user-configurable feature in Settings, consistent with existing effects UX.
 
@@ -332,7 +332,7 @@ terminal_post_fragment
 
 ---
 
-### - [ ] Phase 6: QA, Performance & Polish
+### - [x] Phase 6: QA, Performance & Polish
 
 **Goal:** Validate correctness, measure CPU overhead, handle edge cases, tune defaults.
 

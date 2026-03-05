@@ -18,6 +18,10 @@ extension MetalTerminalRenderer {
     ///
     /// - Parameter snapshot: The grid snapshot to render.
     func updateSnapshot(_ snapshot: GridSnapshot) {
+        // Reset scroll state on alt-screen buffer transitions (e.g. entering/exiting vim)
+        if let prev = latestSnapshot, prev.usingAlternateBuffer != snapshot.usingAlternateBuffer {
+            smoothScrollEngine.handleResize()
+        }
         latestSnapshot = snapshot
         let renderSnapshot: GridSnapshot
         if selectionRenderer.needsProjection() {
@@ -66,7 +70,8 @@ extension MetalTerminalRenderer {
                 cursorVisible: snapshot.cursorVisible,
                 cursorStyle: snapshot.cursorStyle,
                 columns: snapshot.columns,
-                rows: snapshot.rows
+                rows: snapshot.rows,
+                usingAlternateBuffer: snapshot.usingAlternateBuffer
             )
         } else {
             uploadSnapshot = snapshot

@@ -1340,3 +1340,89 @@ Build: SUCCEEDED. Tests: pre-existing test runner crash (malloc error in host ap
 
 ### Next
 Phase 5: Settings UI.
+
+---
+
+## 2026-03-04 — SmoothScroll Phase 5: Settings UI
+
+### Summary
+Added user-facing settings UI for smooth scrolling, following the existing effect settings pattern (Bloom, Gradient, Scanner). Users can now enable/disable smooth scrolling and tune physics parameters (spring stiffness, friction, max velocity, momentum) from Settings → Terminal.
+
+### Files Modified
+1. **`UI/Settings/SmoothScrollSettingsView.swift`** (NEW): Settings view with master toggle, momentum toggle, and sliders for spring stiffness, friction, and max velocity. Uses `SettingsCard` and `LabeledSlider` components. Mint tint color. Save on Apply only.
+2. **`UI/Settings/SettingsView.swift`**: Added NavigationLink row for "Smooth Scrolling" in Terminal section, after Matrix Screensaver. Shows On/Off indicator with mint color.
+3. **`Terminal/Renderer/MetalTerminalRenderer+PostProcessing.swift`**: Added `reloadSmoothScrollSettings()` method that reloads configuration and pushes it to the engine.
+4. **`UI/Terminal/MetalTerminalSessionSurface.swift`**: Added `cachedSmoothScrollConfiguration` property to `MetalTerminalSurfaceModel`. Reload branch in `reloadRendererSettingsIfNeeded()` detects config changes and calls renderer reload.
+
+### Build/Test
+Build: SUCCEEDED.
+
+### Next
+Phase 6: QA, Performance & Polish.
+
+## 2026-03-04 — SmoothScroll Phase 6: QA, Performance & Polish
+
+### Summary
+Final polish phase for smooth scrolling. Added accessibility reduce-motion support, discrete mouse wheel handling, and alt-screen buffer transition detection.
+
+### Changes
+1. **`SmoothScrollEngine.swift`**: Added `import AppKit`. Config initializer and `reloadConfiguration()` now check `NSWorkspace.shared.accessibilityDisplayShouldReduceMotion` — when reduce-motion is enabled, `config.isEnabled` is overridden to `false`, causing the engine to act as pass-through.
+2. **`TerminalMetalView.swift`**: `scrollWheel()` smooth-scroll branch now checks `event.hasPreciseScrollingDeltas`. Trackpad (precise) feeds raw delta; discrete mouse uses fixed 3-row step (`direction * cellHeight * 3`). Momentum phases only fire for trackpad events.
+3. **`GridSnapshot.swift`**: Added `let usingAlternateBuffer: Bool` field to track alt-screen state.
+4. **`TerminalGrid+Snapshot.swift`**: Both `snapshot()` and `snapshot(scrollOffset:)` now pass `usingAlternateBuffer` to `GridSnapshot`.
+5. **`MetalTerminalRenderer+SnapshotUpdate.swift`**: `updateSnapshot()` detects alt-screen transitions and calls `smoothScrollEngine.handleResize()` to zero offset/velocity/momentum.
+6. **`SelectionRenderer.swift`**: Both `GridSnapshot` constructors updated with `usingAlternateBuffer: snapshot.usingAlternateBuffer`.
+7. **`RendererStressHarness.swift`**: `GridSnapshot` constructor updated with `usingAlternateBuffer: false`.
+
+### Files Modified
+- `ProSSHMac/Terminal/Renderer/SmoothScrollEngine.swift`
+- `ProSSHMac/Terminal/Renderer/TerminalMetalView.swift`
+- `ProSSHMac/Terminal/Grid/GridSnapshot.swift`
+- `ProSSHMac/Terminal/Grid/TerminalGrid+Snapshot.swift`
+- `ProSSHMac/Terminal/Renderer/MetalTerminalRenderer+SnapshotUpdate.swift`
+- `ProSSHMac/Terminal/Renderer/SelectionRenderer.swift`
+- `ProSSHMac/Terminal/Renderer/RendererStressHarness.swift`
+- `Docs/SmoothScroll.md` (Phase 6 checked off)
+- `Docs/featurelist.md` (this entry)
+- `CLAUDE.md` (next session plan updated)
+
+### Build/Test
+Build: SUCCEEDED.
+
+### Next
+SmoothScroll feature complete. All 6 phases done.
+
+---
+
+## 2026-03-04 — Fix Smooth Scroll Bug + Terminal Scrollbar
+
+### Summary
+Fixed smooth scrolling race condition where first scroll event returned maxRow=0 (cache miss).
+Added Metal terminal scrollbar overlay with auto-hide and drag-to-scroll interaction.
+
+### Changes
+
+**Bug fix — scroll bounds cache miss:**
+- `TerminalRenderingCoordinator.publishGridState()`: proactively populate `cachedScrollbackCountBySessionID` on every output chunk
+- `TerminalRenderingCoordinator.resizeTerminal()`: populate cache after resize snapshot
+
+**Scrollbar feature:**
+- New `TerminalScrollState` struct (scrollOffset, scrollbackCount, visibleRows)
+- `SessionManager.scrollStateBySessionID` `@Published` property for reactive UI
+- `SessionManager.scrollToRow()` for absolute scroll positioning (scrollbar drag)
+- `TerminalRenderingCoordinator.scrollToRow()` implementation
+- `TerminalRenderingCoordinator.publishScrollState()` called from scrollTerminal, scrollToBottom, scheduleParsedChunkPublish, publishGridState
+- New `TerminalScrollbarView.swift` — auto-hiding capsule scrollbar with drag gesture
+- Scrollbar wired into `TerminalSurfaceView.metalTerminalBuffer()` and `ExternalTerminalWindowView.terminalSurface()`
+
+### Files Modified
+- `Services/TerminalRenderingCoordinator.swift` (scroll bug fix + scroll state publishing + scrollToRow)
+- `Services/SessionManager.swift` (TerminalScrollState struct, scrollStateBySessionID, scrollToRow, cleanup)
+- `UI/Terminal/TerminalScrollbarView.swift` (NEW)
+- `UI/Terminal/TerminalSurfaceView.swift` (scrollbar overlay)
+- `UI/Terminal/ExternalTerminalWindowView.swift` (scrollbar overlay)
+- `Docs/featurelist.md` (this entry)
+- `CLAUDE.md` (next session plan updated)
+
+### Build/Test
+Build: SUCCEEDED. Tests: 209 executed, 2 failures (0 unexpected — pre-existing baseline).

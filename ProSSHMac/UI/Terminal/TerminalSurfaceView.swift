@@ -188,6 +188,12 @@ struct TerminalSurfaceView: View {
                 .fill(Color.white.opacity(bellEffect.flashOpacity))
                 .allowsHitTesting(false)
         }
+        .overlay(alignment: .trailing) {
+            TerminalScrollbarView(
+                sessionID: session.id,
+                sessionManager: sessionManager
+            )
+        }
         .overlay {
             mouseInputOverlay(for: session, contentPadding: 0)
         }

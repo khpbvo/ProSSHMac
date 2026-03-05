@@ -171,6 +171,7 @@ final class MetalTerminalSurfaceModel: ObservableObject {
     private var cachedSolidBackgroundConfiguration: SolidBackgroundConfiguration
     private var cachedScannerConfiguration: ScannerEffectConfiguration
     private var cachedBloomConfiguration: BloomEffectConfiguration
+    private var cachedSmoothScrollConfiguration: SmoothScrollConfiguration
     private var cachedCRTEffectEnabled: Bool
 
     /// Observer token for UserDefaults change notifications.
@@ -193,6 +194,7 @@ final class MetalTerminalSurfaceModel: ObservableObject {
         self.cachedSolidBackgroundConfiguration = SolidBackgroundConfiguration.load()
         self.cachedScannerConfiguration = ScannerEffectConfiguration.load()
         self.cachedBloomConfiguration = BloomEffectConfiguration.load()
+        self.cachedSmoothScrollConfiguration = SmoothScrollConfiguration.load()
         self.cachedCRTEffectEnabled = CRTEffect.loadEnabledFromDefaults()
 
         if let device = MTLCreateSystemDefaultDevice() {
@@ -339,6 +341,12 @@ final class MetalTerminalSurfaceModel: ObservableObject {
         if bloomConfiguration != cachedBloomConfiguration {
             cachedBloomConfiguration = bloomConfiguration
             renderer.reloadBloomEffectSettings()
+        }
+
+        let smoothScrollConfiguration = SmoothScrollConfiguration.load()
+        if smoothScrollConfiguration != cachedSmoothScrollConfiguration {
+            cachedSmoothScrollConfiguration = smoothScrollConfiguration
+            renderer.reloadSmoothScrollSettings()
         }
     }
 

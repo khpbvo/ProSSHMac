@@ -235,22 +235,29 @@ All paths relative to repo root, under `ProSSHMac/`.
 | `docs/IntegrationOfNewFeats.md` | Pre-built module integration guide (TOTP 2FA, etc.) |
 | `docs/Issue11.md` | Visual jitter fix — phased checklist (Phases 0–5) |
 | `docs/TextGlow.md` | Bloom / Text Glow — **COMPLETE** (Phases 0–7) |
-| `docs/SmoothScroll.md` | Smooth Scrolling — Phases 0–4 complete, Phase 5 next |
+| `docs/SmoothScroll.md` | Smooth Scrolling — **COMPLETE** (Phases 0–6) |
 
 ---
 
 ## Next Session Plan
 
 <!-- NEXT SESSION PLAN -->
-**SmoothScroll Phase 5: Settings UI**
+**Smooth scroll bug fixed + terminal scrollbar added.**
 
-Feature spec: `docs/SmoothScroll.md` — Phase 5.
+Completed:
+- Fixed race condition: `cachedScrollbackCountBySessionID` now populated proactively in `publishGridState()` and `resizeTerminal()`
+- Added `TerminalScrollbarView` with auto-hide, drag-to-scroll, absolute positioning via `scrollToRow()`
+- `TerminalScrollState` published reactively from `TerminalRenderingCoordinator`
 
-Context: Phases 0–4 complete. Full pipeline wired with bounds clamping, rubber-band overscroll, programmatic jump, resize reset, and frame-rate-independent physics. The engine now accepts `time:` parameter for dt-based physics.
+Manual QA needed:
+- Open terminal, generate scrollback (`seq 1 1000`), scroll with trackpad — should scroll smoothly
+- Scrollbar thumb appears on scroll, fades after ~1s
+- Drag scrollbar thumb — terminal scrolls to corresponding position
+- New output while scrolled back — scroll resets, scrollbar updates
+- External terminal window (pop-out) scrollbar works too
 
-Phase 5 tasks:
-- Create `UI/Settings/SmoothScrollSettingsView.swift` (follow BloomEffectSettingsView pattern)
-- Add row in `SettingsView.swift` Terminal section
-- Toggles: enable/disable, momentum. Sliders: spring stiffness, friction, max velocity
-- Reload config at scroll gesture start (not every frame)
+Possible next steps:
+- Pick next feature from `docs/FutureFeatures.md`
+- Address bugs from `docs/bugs.md`
+- Performance profiling of smooth scroll (manual Instruments pass)
 <!-- /NEXT SESSION PLAN -->

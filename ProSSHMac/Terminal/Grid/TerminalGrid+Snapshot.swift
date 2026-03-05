@@ -120,7 +120,8 @@ extension TerminalGrid {
             cursorVisible: cursor.visible,
             cursorStyle: cursor.style,
             columns: columns,
-            rows: rows
+            rows: rows,
+            usingAlternateBuffer: usingAlternateBuffer
         )
         if useSnapshotBufferA {
             snapshotBufferA = buffer
@@ -263,7 +264,8 @@ extension TerminalGrid {
             cursorVisible: cursor.visible && clampedOffset == 0,
             cursorStyle: cursor.style,
             columns: columns,
-            rows: rows
+            rows: rows,
+            usingAlternateBuffer: usingAlternateBuffer
         )
     }
 

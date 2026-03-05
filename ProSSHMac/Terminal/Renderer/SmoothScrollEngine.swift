@@ -6,6 +6,7 @@
 // Follows the CursorRenderer pattern: target state → interpolated render state per frame.
 
 import Foundation
+import AppKit
 
 // MARK: - SmoothScrollFrame
 
@@ -30,7 +31,13 @@ final class SmoothScrollEngine {
 
     // MARK: - Configuration
 
-    private var config = SmoothScrollConfiguration.default
+    private var config: SmoothScrollConfiguration = {
+        var cfg = SmoothScrollConfiguration.default
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            cfg.isEnabled = false
+        }
+        return cfg
+    }()
 
     // MARK: - Target State
 
@@ -220,6 +227,9 @@ final class SmoothScrollEngine {
     /// Reload configuration (call at start of each scroll gesture).
     func reloadConfiguration(_ newConfig: SmoothScrollConfiguration) {
         config = newConfig
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            config.isEnabled = false
+        }
     }
 
     // MARK: - Internals

@@ -73,6 +73,15 @@ extension MetalTerminalRenderer {
         isDirty = true
     }
 
+    // MARK: - Smooth Scroll
+
+    /// Reload smooth scroll settings from persisted UserDefaults.
+    func reloadSmoothScrollSettings() {
+        smoothScrollConfiguration = SmoothScrollConfiguration.load()
+        smoothScrollEngine.reloadConfiguration(smoothScrollConfiguration)
+        isDirty = true
+    }
+
     /// Ensure half-resolution bloom intermediate textures exist and match drawable size.
     func ensureBloomTextures(width: Int, height: Int) {
         let bw = max(1, width / 2)

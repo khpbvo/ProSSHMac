@@ -103,7 +103,8 @@ final class SelectionRenderer {
                 cursorVisible: snapshot.cursorVisible,
                 cursorStyle: snapshot.cursorStyle,
                 columns: snapshot.columns,
-                rows: snapshot.rows
+                rows: snapshot.rows,
+                usingAlternateBuffer: snapshot.usingAlternateBuffer
             )
         }
 
@@ -155,7 +156,8 @@ final class SelectionRenderer {
             cursorVisible: snapshot.cursorVisible,
             cursorStyle: snapshot.cursorStyle,
             columns: snapshot.columns,
-            rows: snapshot.rows
+            rows: snapshot.rows,
+            usingAlternateBuffer: snapshot.usingAlternateBuffer
         )
     }
 

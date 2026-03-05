@@ -171,12 +171,22 @@ final class TerminalMetalContainerView: NSView {
 
         if let renderer, renderer.smoothScrollConfiguration.isEnabled {
             // Smooth scroll: feed raw delta to physics engine
-            renderer.scrollDelta(event.scrollingDeltaY)
-            if event.phase == .ended {
-                renderer.scrollMomentumBegan()
+            if event.hasPreciseScrollingDeltas {
+                // Trackpad: feed raw continuous delta
+                renderer.scrollDelta(event.scrollingDeltaY)
+            } else {
+                // Discrete mouse wheel: use fixed 3-row step
+                let direction: CGFloat = event.scrollingDeltaY > 0 ? 1 : (event.scrollingDeltaY < 0 ? -1 : 0)
+                renderer.scrollDelta(direction * cellHeight * 3)
             }
-            if event.momentumPhase == .ended {
-                renderer.scrollMomentumEnded()
+            // Momentum phases only apply to trackpad (precise) events
+            if event.hasPreciseScrollingDeltas {
+                if event.phase == .ended {
+                    renderer.scrollMomentumBegan()
+                }
+                if event.momentumPhase == .ended {
+                    renderer.scrollMomentumEnded()
+                }
             }
         } else {
             // Legacy integer accumulation fallback

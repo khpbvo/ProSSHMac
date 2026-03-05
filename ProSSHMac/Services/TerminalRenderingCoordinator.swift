@@ -98,6 +98,7 @@ import os.signpost
             let snapshot = await engine.snapshot()
             gridSnapshotsBySessionID[sessionID] = snapshot
             manager.gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
+            cachedScrollbackCountBySessionID[sessionID] = await engine.scrollbackCount
         }
 
         pendingResizeTasks[sessionID]?.cancel()
@@ -144,6 +145,22 @@ import os.signpost
             let snapshot = await engine.snapshot(scrollOffset: newOffset)
             self.gridSnapshotsBySessionID[sessionID] = snapshot
             manager.gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
+            self.publishScrollState(sessionID: sessionID, scrollOffset: newOffset, scrollbackCount: maxOffset)
+        }
+    }
+
+    func scrollToRow(sessionID: UUID, row: Int) {
+        guard let manager, let engine = manager.engines[sessionID] else { return }
+        Task { @MainActor [weak self] in
+            guard let self, let manager = self.manager else { return }
+            let maxOffset = await engine.scrollbackCount
+            self.cachedScrollbackCountBySessionID[sessionID] = maxOffset
+            let clampedRow = max(0, min(row, maxOffset))
+            self.scrollOffsetBySessionID[sessionID] = clampedRow
+            let snapshot = await engine.snapshot(scrollOffset: clampedRow)
+            self.gridSnapshotsBySessionID[sessionID] = snapshot
+            manager.gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
+            self.publishScrollState(sessionID: sessionID, scrollOffset: clampedRow, scrollbackCount: maxOffset)
         }
     }
 
@@ -155,6 +172,8 @@ import os.signpost
             let snapshot = await engine.snapshot()
             self.gridSnapshotsBySessionID[sessionID] = snapshot
             manager.gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
+            let scrollbackCount = self.cachedScrollbackCountBySessionID[sessionID] ?? 0
+            self.publishScrollState(sessionID: sessionID, scrollOffset: 0, scrollbackCount: scrollbackCount)
         }
     }
 
@@ -218,7 +237,12 @@ import os.signpost
         sessionID: UUID,
         engine: TerminalEngine
     ) {
+        let wasScrolled = (scrollOffsetBySessionID[sessionID] ?? 0) > 0
         scrollOffsetBySessionID[sessionID] = 0
+        if wasScrolled {
+            let scrollbackCount = cachedScrollbackCountBySessionID[sessionID] ?? 0
+            publishScrollState(sessionID: sessionID, scrollOffset: 0, scrollbackCount: scrollbackCount)
+        }
         scheduleCoalescedGridPublish(for: sessionID, engine: engine)
     }
 
@@ -265,6 +289,13 @@ import os.signpost
         gridSnapshotsBySessionID[sessionID] = snapshot
         manager.gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
 
+        // Proactively cache scrollback count so the smooth scroll bounds
+        // provider has valid data before the first user scroll event.
+        let scrollbackCount = await engine.scrollbackCount
+        cachedScrollbackCountBySessionID[sessionID] = scrollbackCount
+        let currentOffset = scrollOffsetBySessionID[sessionID] ?? 0
+        publishScrollState(sessionID: sessionID, scrollOffset: currentOffset, scrollbackCount: scrollbackCount)
+
         if shouldPublishShellBuffer(for: sessionID) {
             let visibleLines = await engine.visibleText()
             manager.shellBuffers[sessionID] = visibleLines
@@ -302,6 +333,18 @@ import os.signpost
         if !cwd.isEmpty {
             manager.workingDirectoryBySessionID[sessionID] = cwd
         }
+    }
+
+    // MARK: - Scroll state publishing
+
+    private func publishScrollState(sessionID: UUID, scrollOffset: Int, scrollbackCount: Int) {
+        guard let manager else { return }
+        let visibleRows = desiredPTYBySessionID[sessionID]?.rows ?? PTYConfiguration.default.rows
+        manager.scrollStateBySessionID[sessionID] = TerminalScrollState(
+            scrollOffset: scrollOffset,
+            scrollbackCount: scrollbackCount,
+            visibleRows: visibleRows
+        )
     }
 
     // MARK: - Private helpers

@@ -133,6 +133,12 @@ struct ExternalTerminalWindowView: View {
                 RoundedRectangle(cornerRadius: 10)
                     .stroke(surfaceBorderColor, lineWidth: 1)
             )
+            .overlay(alignment: .trailing) {
+                TerminalScrollbarView(
+                    sessionID: session.id,
+                    sessionManager: sessionManager
+                )
+            }
             .overlay {
                 DirectTerminalInputCaptureView(
                     isEnabled: session.state == .connected,

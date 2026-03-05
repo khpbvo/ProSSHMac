@@ -91,7 +91,8 @@ enum RendererStressHarness {
             cursorVisible: true,
             cursorStyle: .block,
             columns: columns,
-            rows: rows
+            rows: rows,
+            usingAlternateBuffer: false
         )
     }
 }

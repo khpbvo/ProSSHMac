@@ -75,4 +75,7 @@ nonisolated struct GridSnapshot: Sendable {
 
     /// Grid row count.
     let rows: Int
+
+    /// Whether the grid is using the alternate screen buffer (vim, htop, etc.).
+    let usingAlternateBuffer: Bool
 }

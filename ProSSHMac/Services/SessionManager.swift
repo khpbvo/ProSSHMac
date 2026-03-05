@@ -3,6 +3,13 @@ import Foundation
 import Combine
 import Network
 
+/// Reactive scroll position state for the terminal scrollbar overlay.
+struct TerminalScrollState: Equatable {
+    var scrollOffset: Int = 0
+    var scrollbackCount: Int = 0
+    var visibleRows: Int = 24
+}
+
 enum SessionConnectionError: LocalizedError {
     case hostVerificationRequired(KnownHostVerificationChallenge)
     case hostKeyAlgorithmMismatch(host: String, expected: [String], presented: String)
@@ -35,6 +42,7 @@ final class SessionManager: ObservableObject {
     @Published var bytesSentBySessionID: [UUID: Int64] = [:]
     @Published var latestCompletedCommandBlockBySessionID: [UUID: CommandBlock] = [:]
     @Published var commandCompletionNonceBySessionID: [UUID: Int] = [:]
+    @Published var scrollStateBySessionID: [UUID: TerminalScrollState] = [:]
 
     let transport: any SSHTransporting
     private let knownHostsStore: any KnownHostsStoreProtocol
@@ -598,6 +606,10 @@ final class SessionManager: ObservableObject {
         renderingCoordinator.isScrolledBack(sessionID: sessionID)
     }
 
+    func scrollToRow(sessionID: UUID, row: Int) {
+        renderingCoordinator.scrollToRow(sessionID: sessionID, row: row)
+    }
+
     func cachedScrollbackCount(for sessionID: UUID) -> Int {
         renderingCoordinator.cachedScrollbackCountBySessionID[sessionID] ?? 0
     }
@@ -864,6 +876,7 @@ final class SessionManager: ObservableObject {
         latestCompletedCommandBlockBySessionID.removeValue(forKey: sessionID)
         commandCompletionNonceBySessionID.removeValue(forKey: sessionID)
         latestPublishedCommandBlockIDBySessionID.removeValue(forKey: sessionID)
+        scrollStateBySessionID.removeValue(forKey: sessionID)
     }
 
     func publishCommandCompletion(_ block: CommandBlock) {

@@ -149,6 +149,24 @@ struct SettingsView: View {
                         }
                     }
 
+                    NavigationLink {
+                        SmoothScrollSettingsView()
+                    } label: {
+                        HStack {
+                            Label("Smooth Scrolling", systemImage: "scroll")
+                            Spacer()
+                            if SmoothScrollConfiguration.load().isEnabled {
+                                Text("On")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.mint)
+                            } else {
+                                Text("Off")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
                             Text("Background Opacity")
