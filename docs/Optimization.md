@@ -262,10 +262,12 @@ reduced visual responsiveness (frame rate) in exchange for higher data throughpu
 
 ### Glyph Pipeline
 
-- [ ] **`GlyphCache.Node` is a class (heap allocation)** — `GlyphCache.swift:51`
+- [x] **`GlyphCache.Node` is a class (heap allocation)** — `GlyphCache.swift:51`
   Every new cache entry heap-allocates a linked list Node.
   **Fix:** Use a flat array-based LRU with integer indices. Dictionary maps
   `GlyphKey → Int` (index into the flat array). Eliminates per-entry heap allocations.
+  **Done:** `GlyphCache` now uses a `Slot` struct in `ContiguousArray<Slot>` with integer-indexed
+  prev/next links and a `freeList` for slot recycling. Zero per-entry heap allocations.
 
 - [x] **`GlyphCache.insert` clears `lastEvictedKeys` every time** — `GlyphCache.swift:134`
   `lastEvictedKeys.removeAll(keepingCapacity: true)` on every cache miss. The evicted keys

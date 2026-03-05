@@ -74,6 +74,10 @@ final class GlyphCache {
     /// Least recently used slot index.
     private var tailIndex: Int
 
+    /// Called when an entry is evicted from the cache (LRU overflow).
+    /// The atlas uses this to reclaim the evicted glyph's region.
+    var onEvict: ((AtlasEntry) -> Void)?
+
     // MARK: - Initialization
 
     /// Create a glyph cache with the specified maximum capacity.
@@ -133,7 +137,9 @@ final class GlyphCache {
         // Evict exactly one LRU entry when at capacity, then reuse the slot.
         if map.count >= maxCapacity, tailIndex != Self.noIndex {
             let lruIndex = tailIndex
+            let evictedEntry = slots[lruIndex].entry
             map.removeValue(forKey: slots[lruIndex].key)
+            onEvict?(evictedEntry)
             detach(lruIndex)
 
             slots[lruIndex].key = key

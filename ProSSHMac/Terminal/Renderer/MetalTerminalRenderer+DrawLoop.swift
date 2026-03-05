@@ -14,7 +14,7 @@ extension MetalTerminalRenderer {
     /// - Parameter view: The MTKView requesting a draw.
     func draw(in view: MTKView) {
         let frameNow = CACurrentMediaTime()
-        if pendingRenderSnapshot == nil, !isDirty, !cursorRenderer.requiresContinuousFrames(), !smoothScrollEngine.requiresContinuousFrames() {
+        if pendingRenderSnapshot == nil, !isDirty, !requiresContinuousFrames() {
             view.isPaused = true
             return
         }
@@ -245,30 +245,21 @@ extension MetalTerminalRenderer {
         let ch = Int(ceil(cellHeight * scale))
         guard cw > 0, ch > 0 else { return }
 
-        // Capture Sendable scalars only — CTFont is not Sendable, so recreate on background thread.
+        // Ensure font cache is current, then capture the Sendable font set for the background task.
         rebuildRasterFontCacheIfNeeded(scale: scale)
-        let fontName = rasterFontName
-        let clampedScale = max(scale, 1.0)
-        let scaledFontSize = rasterFontSize * clampedScale
+        guard let fontSet = cachedRasterFontSet else { return }
 
         glyphRasterTask = Task.detached(priority: .userInitiated) { [weak self] in
-            // Reconstruct CTFont variants on the background thread from Sendable values.
-            let base = CTFontCreateWithName(fontName as CFString, scaledFontSize, nil)
-            let boldFont: CTFont = CTFontCreateCopyWithSymbolicTraits(
-                base, scaledFontSize, nil, .boldTrait, .boldTrait) ?? base
-            let italicFont: CTFont = CTFontCreateCopyWithSymbolicTraits(
-                base, scaledFontSize, nil, .italicTrait, .italicTrait) ?? base
-            let boldItalicTraits: CTFontSymbolicTraits = [.boldTrait, .italicTrait]
-            let boldItalicFont: CTFont = CTFontCreateCopyWithSymbolicTraits(
-                base, scaledFontSize, nil, boldItalicTraits, boldItalicTraits) ?? base
+            // Local rasterizer instance — scratch buffer reused across all keys in this batch.
+            let rasterizer = GlyphRasterizer()
 
             var results: [(GlyphKey, RasterizedGlyph)] = []
             for key in keys {
                 if Task.isCancelled { break }
                 if let rasterized = MetalTerminalRenderer.rasterizeGlyphForBackground(
                     key: key, cellWidth: cw, cellHeight: ch,
-                    regularFont: base, boldFont: boldFont,
-                    italicFont: italicFont, boldItalicFont: boldItalicFont
+                    fontSet: fontSet,
+                    rasterizer: rasterizer
                 ) {
                     results.append((key, rasterized))
                 }
@@ -294,7 +285,7 @@ extension MetalTerminalRenderer {
                 self.pendingRenderSnapshot = self.latestSnapshot
                 self.forceFullUploadForPendingSnapshot = true
                 self.isDirty = true
-                self.configuredMTKView?.isPaused = false
+                self.requestFrame()
             }
         }
     }

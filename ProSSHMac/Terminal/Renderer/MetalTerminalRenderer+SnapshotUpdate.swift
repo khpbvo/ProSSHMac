@@ -51,7 +51,7 @@ extension MetalTerminalRenderer {
             blinkEnabled: cursorBlinkEnabled
         )
         isDirty = true
-        configuredMTKView?.isPaused = false
+        requestFrame()
         updateCursorBlinkLoop()
     }
 
@@ -77,10 +77,7 @@ extension MetalTerminalRenderer {
             uploadSnapshot = snapshot
         }
 
-        cellBuffer.update(from: uploadSnapshot) { [weak self] cell -> UInt32 in
-            guard let self else { return Self.noGlyphIndex }
-            return self.resolveGlyphIndex(for: cell)
-        }
+        cellBuffer.update(from: uploadSnapshot, resolver: self)
         cellBuffer.swapBuffers()
     }
 }

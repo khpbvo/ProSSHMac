@@ -44,7 +44,10 @@ Each Claude Code session implements exactly one phase from a feature spec.
 - If a phase is too large for one context window, split it into sub-phases in the feature spec.
 
 **End of session — do ALL of these before the final commit:**
-1. Tests pass: `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' test`
+1. Build passes and **targeted tests** pass (only test suites relevant to the changed code):
+   `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`
+   `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' test -only-testing:ProSSHMacTests/<TestClassName>`
+   Full test suite (`test` without `-only-testing`) is only needed before major releases or cross-cutting refactors.
 2. Check off completed phase in `docs/<FeatureName>.md`
 3. Append dated entry to `docs/featurelist.md` (what changed, files modified, build/test status)
 4. Update this `CLAUDE.md` if architecture, conventions, key files, or gotchas changed
@@ -242,22 +245,18 @@ All paths relative to repo root, under `ProSSHMac/`.
 ## Next Session Plan
 
 <!-- NEXT SESSION PLAN -->
-**Smooth scroll bug fixed + terminal scrollbar added.**
+**All OptimizeP2 and OptimizeP3 phases complete.**
 
-Completed:
-- Fixed race condition: `cachedScrollbackCountBySessionID` now populated proactively in `publishGridState()` and `resizeTerminal()`
-- Added `TerminalScrollbarView` with auto-hide, drag-to-scroll, absolute positioning via `scrollToRow()`
-- `TerminalScrollState` published reactively from `TerminalRenderingCoordinator`
+Completed today:
+- P3 Phase 4: Blur optimization — hide `NSVisualEffectView` when fully opaque
+- P3 Phases 1, 2, 3, 5, 6, 7: Marked as already done (previously implemented or negligible impact)
 
-Manual QA needed:
-- Open terminal, generate scrollback (`seq 1 1000`), scroll with trackpad — should scroll smoothly
-- Scrollbar thumb appears on scroll, fades after ~1s
-- Drag scrollbar thumb — terminal scrolls to corresponding position
-- New output while scrolled back — scroll resets, scrollbar updates
-- External terminal window (pop-out) scrollbar works too
+Next steps:
+- Pick from `docs/bugs.md` (68-bug audit) or `docs/FutureFeatures.md` (feature roadmap)
+- Consider running full benchmark suite to capture post-optimization numbers
 
-Possible next steps:
-- Pick next feature from `docs/FutureFeatures.md`
-- Address bugs from `docs/bugs.md`
-- Performance profiling of smooth scroll (manual Instruments pass)
+Manual QA for blur optimization:
+- Set background opacity to 100% — verify no blur GPU usage
+- Set background opacity to 80% — verify blur effect renders correctly
+- Toggle opacity back to 100% — verify blur hides again
 <!-- /NEXT SESSION PLAN -->

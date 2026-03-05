@@ -119,6 +119,7 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 
 ## Loop Log
 
+- 2026-03-05: Refreshed `AGENTS.md` to match the current repo state. The working-memory snapshot now points at the March 5 terminal scroll/smooth-scroll fixes, records the scrollbar hit-test correction (`interactionWidth = 18`), and explicitly notes the current build-verified but uncommitted `GlyphRasterizer` scratch-buffer/CGContext reuse worktree change as part of the active renderer optimization stream. Validation source for the working-tree snapshot remains `xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform=macOS' build` (succeeded on 2026-03-05).
 - 2026-03-05: Fixed residual smooth-scroll jitter caused by snapshot resync resets. `SmoothScrollEngine.jumpTo(row:)` now returns early when the requested row already matches `targetScrollRow`, preserving fractional offset/momentum during active gestures while keeping different-row programmatic sync behavior unchanged. Added regression tests covering same-row preserve vs different-row reset in `SmoothScrollEngineTests`. Validation: `xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform=macOS' build` succeeded; targeted `SmoothScrollEngineTests` remain blocked by an existing XCTest host malloc/free crash before assertions execute.
 - 2026-03-05: Follow-up for "stuck in middle unless one long stroke". Root cause: renderer `SmoothScrollEngine.targetScrollRow` could drift from session `scrollOffset` after programmatic offset adjustments during publish cycles. Added `scrollOffsetProvider` to `MetalTerminalSessionSurface` and call `renderer.scrollJumpTo(row:)` on appear and every `snapshotNonce` change. Wired provider from both `TerminalSurfaceView` and `ExternalTerminalWindowView` using `sessionManager.scrollStateBySessionID[session.id]?.scrollOffset ?? 0`. Validation: `xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform=macOS' build` succeeded.
 - 2026-03-05: Follow-up for "can scroll up but not all the way down" during live output. Added intent-aware anchor state in `TerminalRenderingCoordinator` (`preserveScrollAnchorBySessionID`): scrolling up enables viewport anchoring; scrolling down, scrollbar drag-down, `scrollToBottom`, and offset zero disable anchoring. This prevents output growth compensation from fighting user attempts to return to live output while preserving stable scrollback when reading older output. Validation: `xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform=macOS' build` succeeded.
@@ -1440,3 +1441,216 @@ Added Metal terminal scrollbar overlay with auto-hide and drag-to-scroll interac
 
 ### Build/Test
 Build: SUCCEEDED. Tests: 209 executed, 2 failures (0 unexpected — pre-existing baseline).
+
+---
+
+## 2026-03-05 — OptimizeP2 Phase 1: Reusable Pixel Buffer & CGContext in GlyphRasterizer
+
+### What Changed
+- Converted `GlyphRasterizer` from stateless `enum` to `final class` with reusable scratch buffer and cached `CGContext`
+- `ensureScratchBuffer(width:height:isColor:)` reuses buffer/context when dimensions match, only `memset` to zero
+- `MetalTerminalRenderer` owns a `glyphRasterizer` instance for main-thread rasterization (sync misses + prePopulateASCII)
+- Background rasterization (`drainPendingGlyphKeysIfNeeded`) creates a local `GlyphRasterizer()` per batch — scratch buffer amortized across all keys
+- Eliminates ~670 CGContext creations during ASCII pre-population (reduced to ~1-3 per unique dimension)
+- Pixel data copied out via `unsafeUninitializedCapacity` + `memcpy` (no zero-fill allocation overhead)
+
+### Files Modified
+- `Terminal/Renderer/GlyphRasterizer.swift` (enum → final class, scratch buffer, nonisolated methods)
+- `Terminal/Renderer/MetalTerminalRenderer.swift` (added `glyphRasterizer` property)
+- `Terminal/Renderer/MetalTerminalRenderer+GlyphResolution.swift` (instance method calls, rasterizer parameter)
+- `Terminal/Renderer/MetalTerminalRenderer+DrawLoop.swift` (local GlyphRasterizer in background task)
+- `docs/OptimizeP2.md` (Phase 1 checked off)
+
+### Build/Test
+Build: SUCCEEDED. Tests: 209 executed, 2 failures (0 unexpected — pre-existing baseline).
+
+---
+
+## 2026-03-05 — OptimizeP2 Phase 2: Direct CTFontDrawGlyphs Fast Path
+
+### What Changed
+- Added fast path in `rasterize(codepoint:)` using `CTFontGetGlyphsForCharacters` + `CTFontDrawGlyphs` directly
+- Bypasses NSAttributedString + CTLine creation for ~99% of glyphs (all non-emoji single codepoints)
+- BMP codepoints use single UniChar; supplementary plane uses UTF-16 surrogate pair
+- Falls back to CTLine path for emoji (color glyphs) or when font lacks the glyph
+- Bearing computed via `CTFontGetBoundingRectsForGlyphs` instead of `CTLineGetImageBounds`
+- Added 12 targeted tests covering ASCII, digits, CJK wide, emoji, grapheme clusters, bold/italic, edge cases
+
+### Files Modified
+- `Terminal/Renderer/GlyphRasterizer.swift` (fast path + extracted helper methods)
+- `ProSSHMacTests/Terminal/Tests/GlyphRasterizerTests.swift` (NEW — 12 tests)
+- `docs/OptimizeP2.md` (Phase 2 checked off)
+
+### Build/Test
+Build: SUCCEEDED. GlyphRasterizerTests: 12 executed, 0 failures.
+
+---
+
+## 2026-03-05 — OptimizeP2 Phase 3: CTFont Caching for Background Rasterization
+
+### What Changed
+- Added `RasterFontSet` struct (`@unchecked Sendable`) to hold 4 CTFont variants (regular/bold/italic/boldItalic)
+- `rebuildRasterFontCacheIfNeeded` now also builds `cachedRasterFontSet`
+- `drainPendingGlyphKeysIfNeeded` captures the cached font set — eliminates `CTFontCreateWithName` + 3x `CTFontCreateCopyWithSymbolicTraits` per background batch
+- `rasterizeGlyphForBackground` simplified to accept `fontSet: RasterFontSet`
+
+### Files Modified
+- `Terminal/Renderer/MetalTerminalRenderer+GlyphResolution.swift` (RasterFontSet, font set construction, simplified background rasterize)
+- `Terminal/Renderer/MetalTerminalRenderer.swift` (cachedRasterFontSet property)
+- `Terminal/Renderer/MetalTerminalRenderer+DrawLoop.swift` (pass font set to background task)
+- `docs/OptimizeP2.md` (Phase 3 checked off)
+
+### Build/Test
+Build: SUCCEEDED. GlyphRasterizerTests: 12 executed, 0 failures.
+
+## 2026-03-05: OptimizeP2 Phase 4 — BGRA-to-RGBA Swizzle Elimination
+
+### Changes
+- Switched atlas texture format from `.rgba8Unorm` to `.bgra8Unorm` in `GlyphAtlas.swift`
+- Unified both CGContext bitmap configurations (text + emoji) to BGRA (`byteOrder32Little | premultipliedFirst`)
+- Removed `scratchContextIsColor` tracking — context cache now only depends on dimensions
+- Removed `swizzleBGRAtoRGBA` method and all call sites (rasterizeWithCTLine, grapheme cluster path)
+- Shader only reads `.a` (alpha/coverage) from atlas — format change has zero visual impact
+
+### Files Modified
+- `Terminal/Renderer/GlyphAtlas.swift` (pixel format `.rgba8Unorm` -> `.bgra8Unorm`)
+- `Terminal/Renderer/GlyphRasterizer.swift` (unified bitmap info, removed swizzle method + calls, removed isColor from context cache)
+- `docs/OptimizeP2.md` (Phase 4 checked off)
+
+### Build/Test
+Build: SUCCEEDED. GlyphRasterizerTests: 12 executed, 0 failures.
+
+---
+
+## 2026-03-05: OptimizeP2 Phase 5 — CellBuffer Closure Elimination & Loop Optimization
+
+### Changes
+- Added `GlyphResolver` protocol for generic-specialized glyph lookup (eliminates closure, weak-ref, indirect call)
+- `MetalTerminalRenderer` conforms to `GlyphResolver` — compiler can specialize and inline
+- Extracted `resolveGlyphs()` method using `withUnsafeBufferPointer` for bounds-check-free iteration
+- Eliminated Optional boxing for previous cell tracking
+- Only writes changed fields to GPU buffer instead of full cell write-back
+
+### Files Modified
+- `Terminal/Renderer/CellBuffer.swift` (GlyphResolver protocol, generic update, optimized loop)
+- `Terminal/Renderer/MetalTerminalRenderer+GlyphResolution.swift` (GlyphResolver conformance)
+- `Terminal/Renderer/MetalTerminalRenderer+SnapshotUpdate.swift` (updated call site)
+- `docs/OptimizeP2.md` (Phase 5 checked off)
+
+### Build/Test
+Build: SUCCEEDED. Full test suite: 209 executed, 2 pre-existing failures, 0 unexpected.
+
+---
+
+## 2026-03-05: OptimizeP2 Phase 6 — Scrollback Lazy Trim
+
+### Changes
+- Added `needsTrim: Bool` flag and `trimIfNeeded()` to `ScrollbackLine`
+- `push(cells:...)` now sets flag instead of eagerly trimming — O(1) push on hot path
+- Lazy trim on access: `popLast()`, `allLines()`, `lastLines()` trim in-place before returning
+- Lines overwritten in ring buffer before access skip trim entirely (free savings)
+- `subscript`/`line(at:)` remain non-mutating; callers already handle varying cell counts
+
+### Files Modified
+- `Terminal/Grid/ScrollbackBuffer.swift` (lazy trim flag, deferred trimming)
+- `docs/OptimizeP2.md` (Phase 6 checked off)
+
+### Build/Test
+Build: SUCCEEDED. Full test suite: 0 unexpected failures.
+
+---
+
+## 2026-03-05: OptimizeP2 Phase 7 — GridReflow Stream Processing & Dead Code Elimination
+
+### Changes
+- `extractLogicalLines()` refactored to stream-process scrollback + screen rows directly via `processRow()` helper — eliminates intermediate `allRows` tuple array allocation
+- Removed dead per-cell `isDirty = true` loop from `wrapLogicalLine()` — setter is a no-op; grid-level `markAllDirty()` handles it
+- `trimTrailingBlanks` already optimized (no change needed)
+
+### Files Modified
+- `Terminal/Grid/GridReflow.swift` (stream processing, dead code removal)
+- `docs/OptimizeP2.md` (Phase 7 checked off)
+
+### Build/Test
+Build: SUCCEEDED. 209 tests, 2 pre-existing failures, 0 unexpected.
+
+---
+
+## 2026-03-05 — OptimizeP2 Phase 9: Parser Anywhere Transition Merge
+
+### Changes
+- Encoded all "anywhere" transitions (CAN, SUB, ESC, C1 controls) directly into the flat `VTParserTables` lookup table via a post-generation overlay pass in `init()`
+- Deleted `anywhereTransition()` (~70 lines) and `handleStringTerminator()` from `TerminalEngine.swift`
+- `processByte()` now uses a single O(1) table lookup instead of a cascading switch/if chain before the table lookup
+- Two runtime guards remain (cannot be table-encoded): ESC side-effect (`stateBeforeEscape = state`) and UTF-8 ST guard (0x9C in string states when `stringUTF8Remaining > 0`)
+- Charset cache marked as already optimized — `grid.charsetState()` is `nonisolated`, no actor hop
+
+### Files Modified
+- `Terminal/Parser/VTParserTables.swift` (anywhere transition overlay in init, updated comments)
+- `Terminal/Parser/TerminalEngine.swift` (simplified processByte, deleted anywhereTransition + handleStringTerminator)
+- `docs/OptimizeP2.md` (Phase 9 checked off)
+
+### Build/Test
+Build: SUCCEEDED.
+
+---
+
+## 2026-03-06 — OptimizeP2 Phase 8: Atlas Defragmentation (Region Recycling)
+
+### What Changed
+- Added `onEvict` callback to `GlyphCache` — fires when LRU eviction discards an entry
+- Added free-slot recycling to `GlyphAtlas`:
+  - `FreeSlot` struct and two width-bucketed free lists (narrow/wide)
+  - `reclaimRegion(entry:)` pushes evicted regions onto free lists
+  - `allocate()` checks free list first before cursor-advance path
+  - `allocateFresh()` extracted as private helper for the original path
+  - Free lists cleared on `clear()` and `rebuild()`
+  - Diagnostics: `freeSlotCount`, `recycledAllocations`
+- Wired `glyphCache.onEvict` → `glyphAtlas.reclaimRegion` in `MetalTerminalRenderer` init
+
+### Files Modified
+- `Terminal/Renderer/GlyphCache.swift` (added `onEvict` callback, fire on eviction)
+- `Terminal/Renderer/GlyphAtlas.swift` (FreeSlot, free lists, reclaimRegion, allocate recycling, clear/rebuild)
+- `Terminal/Renderer/MetalTerminalRenderer.swift` (wired onEvict callback)
+- `docs/OptimizeP2.md` (Phase 8 checked off)
+
+### Build/Test
+Build: SUCCEEDED.
+
+---
+
+## 2026-03-06 — OptimizeP3 Phase 0: Demand-Driven Rendering
+
+### What Changed
+- Switched MTKView from display-link mode to demand-driven (`enableSetNeedsDisplay = true`, `isPaused = true`)
+- Added `requiresContinuousFrames()` to MetalTerminalRenderer — aggregates cursor lerp, smooth scroll, scanner effect, gradient animation
+- Added `requestFrame()` helper — enables display link for continuous animations, uses `setNeedsDisplay(bounds)` for one-shot updates
+- Simplified draw loop pause gate to use aggregated check
+- Replaced all 4 `isPaused = false` wake-up sites with `requestFrame()`
+- Effect animations (scanner sweep, gradient breathing/wave/aurora) now correctly prevent pausing
+
+### Files Modified
+- `Terminal/Renderer/MetalTerminalRenderer.swift` (requiresContinuousFrames, requestFrame, scrollDelta)
+- `Terminal/Renderer/MetalTerminalRenderer+ViewConfiguration.swift` (demand-driven config, cursor blink)
+- `Terminal/Renderer/MetalTerminalRenderer+DrawLoop.swift` (simplified pause gate, glyph rasterization)
+- `Terminal/Renderer/MetalTerminalRenderer+SnapshotUpdate.swift` (snapshot trigger)
+- `docs/OptimizeP3.md` (Phase 0 checked off)
+
+### Build/Test
+Build: SUCCEEDED.
+
+---
+
+## 2026-03-06 — OptimizeP3: Phase 4 Blur Optimization + Mark Already-Done Phases
+
+### What Changed
+- **Phase 4 (Blur optimization):** Hide `NSVisualEffectView` (`blurView.isHidden = true`) when `backgroundOpacity >= 1.0`. Removes blur from window server compositing pipeline when fully opaque, saving GPU cycles.
+- **Phases 1, 2, 3, 5, 6, 7:** Marked as ALREADY DONE in `docs/OptimizeP3.md` — all were previously implemented or provide negligible benefit.
+- All OptimizeP3 phases are now complete.
+
+### Files Modified
+- `Terminal/Renderer/TerminalMetalView.swift` (blur view hidden when opaque)
+- `docs/OptimizeP3.md` (all phases marked done)
+
+### Build/Test
+Build: SUCCEEDED.

@@ -69,6 +69,25 @@ final class GlyphAtlas {
     /// Atlas page dimension (width = height = kAtlasPageSize).
     let pageSize: Int
 
+    // MARK: - Free Slot Recycling
+
+    /// A recycled atlas region from an evicted glyph.
+    private struct FreeSlot {
+        let page: UInt8
+        let x: UInt16
+        let y: UInt16
+        let width: UInt8
+    }
+
+    /// Free slots from evicted narrow (1-cell) glyphs.
+    private var freeNarrowSlots: [FreeSlot] = []
+
+    /// Free slots from evicted wide (2-cell) glyphs.
+    private var freeWideSlots: [FreeSlot] = []
+
+    /// Number of allocations that reused a recycled slot.
+    private(set) var recycledAllocations: Int = 0
+
     // MARK: - Initialization
 
     /// Creates a new glyph atlas.
@@ -121,7 +140,7 @@ final class GlyphAtlas {
         guard pages.count < kMaxAtlasPages else { return nil }
 
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .rgba8Unorm,
+            pixelFormat: .bgra8Unorm,
             width: pageSize,
             height: pageSize,
             mipmapped: false
@@ -140,6 +159,28 @@ final class GlyphAtlas {
         return page
     }
 
+    /// Total number of free slots available for recycling.
+    var freeSlotCount: Int {
+        freeNarrowSlots.count + freeWideSlots.count
+    }
+
+    /// Reclaims an evicted glyph's atlas region for future reuse.
+    ///
+    /// - Parameter entry: The `AtlasEntry` of the evicted glyph.
+    func reclaimRegion(entry: AtlasEntry) {
+        let slot = FreeSlot(
+            page: entry.atlasPage,
+            x: entry.x,
+            y: entry.y,
+            width: entry.width
+        )
+        if entry.width > UInt8(clamping: cellWidth) {
+            freeWideSlots.append(slot)
+        } else {
+            freeNarrowSlots.append(slot)
+        }
+    }
+
     // MARK: - Glyph Allocation
 
     /// Allocates space in the atlas for a glyph, uploads pixel data, and
@@ -147,6 +188,7 @@ final class GlyphAtlas {
     ///
     /// The glyph is placed at the next available slot using row-major packing.
     /// If the current page is full, a new page is allocated automatically.
+    /// Recycled slots from evicted glyphs are preferred when available.
     ///
     /// - Parameters:
     ///   - width: Width of the glyph bitmap in pixels.
@@ -167,6 +209,55 @@ final class GlyphAtlas {
         guard width > 0, height > 0 else { return nil }
         guard width <= pageSize, height <= pageSize else { return nil }
 
+        // Try to recycle a free slot from a previously evicted glyph.
+        let freeSlot: FreeSlot?
+        if width > cellWidth, let slot = freeWideSlots.popLast() {
+            freeSlot = slot
+        } else if width <= cellWidth, let slot = freeNarrowSlots.popLast() {
+            freeSlot = slot
+        } else {
+            freeSlot = nil
+        }
+
+        if let slot = freeSlot {
+            let pageIndex = Int(slot.page)
+            guard pageIndex < pages.count else {
+                // Page was removed (e.g., after clear/rebuild) — fall through.
+                return allocateFresh(width: width, height: height, pixelData: pixelData, bearingX: bearingX, bearingY: bearingY)
+            }
+
+            uploadRegion(
+                page: pageIndex,
+                x: Int(slot.x),
+                y: Int(slot.y),
+                width: width,
+                height: height,
+                data: pixelData
+            )
+
+            recycledAllocations += 1
+
+            return AtlasEntry(
+                atlasPage: slot.page,
+                x: slot.x,
+                y: slot.y,
+                width: UInt8(clamping: width),
+                bearingX: bearingX,
+                bearingY: bearingY
+            )
+        }
+
+        return allocateFresh(width: width, height: height, pixelData: pixelData, bearingX: bearingX, bearingY: bearingY)
+    }
+
+    /// Cursor-advance allocation path (original row-major packing).
+    private func allocateFresh(
+        width: Int,
+        height: Int,
+        pixelData: UnsafeRawPointer,
+        bearingX: Int8,
+        bearingY: Int8
+    ) -> AtlasEntry? {
         // Ensure we have at least one page.
         if pages.isEmpty {
             guard allocatePage() != nil else { return nil }
@@ -304,6 +395,8 @@ final class GlyphAtlas {
         nextX = 0
         nextY = 0
         rowHeight = cellHeight
+        freeNarrowSlots.removeAll(keepingCapacity: true)
+        freeWideSlots.removeAll(keepingCapacity: true)
         // Drop all pages except the first to reclaim memory.
         if pages.count > 1 {
             pages.removeSubrange(1...)
@@ -327,9 +420,11 @@ final class GlyphAtlas {
         // Release all existing pages.
         pages.removeAll()
 
-        // Reset packing cursor.
+        // Reset packing cursor and free lists.
         nextX = 0
         nextY = 0
+        freeNarrowSlots.removeAll(keepingCapacity: true)
+        freeWideSlots.removeAll(keepingCapacity: true)
 
         // Allocate a fresh first page.
         allocatePage()

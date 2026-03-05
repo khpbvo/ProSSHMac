@@ -95,9 +95,11 @@ extension MetalTerminalRenderer {
         // Dark terminal background.
         view.clearColor = MTLClearColor(red: 0.0, green: 0.0, blue: 0.0, alpha: 1.0)
 
-        // Enable display link driven rendering.
-        view.isPaused = false
-        view.enableSetNeedsDisplay = false
+        // Demand-driven rendering: view stays paused by default.
+        // requestFrame() triggers individual redraws or enables the display link
+        // for continuous animations (cursor lerp, smooth scroll, effects).
+        view.isPaused = true
+        view.enableSetNeedsDisplay = true
         selectionRenderer.refreshSelectionColorFromSystemAccent()
     }
 
@@ -149,7 +151,7 @@ extension MetalTerminalRenderer {
                 try? await Task.sleep(for: .milliseconds(67)) // ~15fps
                 guard !Task.isCancelled, let self else { break }
                 self.isDirty = true
-                self.configuredMTKView?.isPaused = false
+                self.requestFrame()
             }
         }
     }

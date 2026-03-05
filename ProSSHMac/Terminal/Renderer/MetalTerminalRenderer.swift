@@ -77,6 +77,9 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     /// Font manager providing fonts and cell dimensions.
     let fontManager: FontManager
 
+    /// Reusable glyph rasterizer for main-thread rasterization (cache pre-population, sync misses).
+    let glyphRasterizer = GlyphRasterizer()
+
     /// Cursor animation and styling state.
     let cursorRenderer = CursorRenderer()
 
@@ -119,6 +122,10 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     var cachedRasterBoldFont: CTFont?
     var cachedRasterItalicFont: CTFont?
     var cachedRasterBoldItalicFont: CTFont?
+
+    /// Snapshot of the four cached CTFont variants for passing to background tasks.
+    /// CTFont is immutable and thread-safe but not marked Sendable, so we use @unchecked Sendable.
+    var cachedRasterFontSet: RasterFontSet?
 
     /// Screen scale factor for Retina rendering (e.g., 2.0 on Retina displays).
     /// Glyphs are rasterized at this multiple of point dimensions for crisp text.
@@ -169,6 +176,27 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     /// Set by the view layer to bridge scrollback info from the session engine.
     var scrollbackBoundsProvider: (() -> Int)?
 
+    // MARK: - Demand-Driven Rendering
+
+    /// Whether any continuous animation requires the display link to stay active.
+    func requiresContinuousFrames() -> Bool {
+        if cursorRenderer.requiresContinuousFrames() { return true }
+        if smoothScrollEngine.requiresContinuousFrames() { return true }
+        if scannerConfiguration.isEnabled && isLocalSession { return true }
+        if gradientConfiguration.isEnabled && gradientConfiguration.animationMode != .none { return true }
+        return false
+    }
+
+    /// Request a redraw. Enables the display link for continuous animations,
+    /// or triggers a single-frame `setNeedsDisplay` for one-shot updates.
+    func requestFrame() {
+        if requiresContinuousFrames() {
+            configuredMTKView?.isPaused = false
+        } else if let view = configuredMTKView {
+            view.setNeedsDisplay(view.bounds)
+        }
+    }
+
     /// Feed a raw scroll delta (in points) to the smooth scroll engine.
     func scrollDelta(_ deltaPoints: CGFloat) {
         // Refresh bounds from the session engine before processing delta.
@@ -176,8 +204,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
             smoothScrollEngine.setBounds(maxRow: maxRow)
         }
         smoothScrollEngine.scrollDelta(deltaPoints, cellHeight: cellHeight)
-        // Wake the display link so the next frame picks up the offset.
-        configuredMTKView?.isPaused = false
+        requestFrame()
     }
 
     /// Jump the scroll engine to a specific row instantly (no animation).
@@ -419,6 +446,11 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         self.uniformBuffer = ub
 
         super.init()
+
+        // Wire eviction callback so the atlas can recycle freed regions.
+        glyphCache.onEvict = { [weak self] entry in
+            self?.glyphAtlas.reclaimRegion(entry: entry)
+        }
 
         // Pre-populate ASCII glyphs asynchronously.
         Task { [weak self] in

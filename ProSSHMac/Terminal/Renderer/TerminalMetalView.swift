@@ -163,7 +163,9 @@ final class TerminalMetalContainerView: NSView {
     }
 
     func setBackgroundOpacity(_ opacity: CGFloat) {
-        blurView.alphaValue = min(max(opacity, 0), 1)
+        let clamped = min(max(opacity, 0), 1)
+        blurView.alphaValue = clamped
+        blurView.isHidden = clamped >= 1.0
     }
 
     override func scrollWheel(with event: NSEvent) {

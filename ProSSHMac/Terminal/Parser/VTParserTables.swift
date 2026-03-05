@@ -57,6 +57,48 @@ nonisolated struct VTParserTables: Sendable {
                 flat[base + byte] = UInt16(t.action.rawValue) << 8 | UInt16(t.nextState.rawValue)
             }
         }
+
+        // Post-generation pass: overlay "anywhere" transitions directly into
+        // the flat table so processByte() needs only a single O(1) lookup.
+        @inline(__always)
+        func pack(_ action: ParserAction, _ next: ParserState) -> UInt16 {
+            UInt16(action.rawValue) << 8 | UInt16(next.rawValue)
+        }
+
+        // CAN (0x18), SUB (0x1A), ESC (0x1B) — apply to ALL 14 states
+        for state in VTParserTables.allStates {
+            let base = Int(state.rawValue) * 256
+            flat[base + 0x18] = pack(.none, .ground)    // CAN
+            flat[base + 0x1A] = pack(.execute, .ground)  // SUB
+            flat[base + 0x1B] = pack(.clear, .escape)    // ESC
+        }
+
+        // C1 controls — non-string states only
+        let nonStringStates: [ParserState] = [
+            .ground, .escape, .escapeIntermediate,
+            .csiEntry, .csiParam, .csiIntermediate, .csiIgnore,
+            .dcsEntry, .dcsParam, .dcsIntermediate, .dcsIgnore
+        ]
+        for state in nonStringStates {
+            let base = Int(state.rawValue) * 256
+            flat[base + 0x84] = pack(.execute, .ground)       // IND
+            flat[base + 0x85] = pack(.execute, .ground)       // NEL
+            flat[base + 0x88] = pack(.execute, .ground)       // HTS
+            flat[base + 0x8D] = pack(.execute, .ground)       // RI
+            flat[base + 0x90] = pack(.clear, .dcsEntry)        // DCS
+            flat[base + 0x98] = pack(.none, .sosPmApcString)   // SOS
+            flat[base + 0x9B] = pack(.clear, .csiEntry)        // CSI
+            flat[base + 0x9C] = pack(.none, .ground)           // ST
+            flat[base + 0x9D] = pack(.oscStart, .oscString)    // OSC
+            flat[base + 0x9E] = pack(.none, .sosPmApcString)   // PM
+            flat[base + 0x9F] = pack(.none, .sosPmApcString)   // APC
+        }
+
+        // String state ST (0x9C) — per-state termination action
+        flat[Int(ParserState.oscString.rawValue) * 256 + 0x9C] = pack(.oscEnd, .ground)
+        flat[Int(ParserState.dcsPassthrough.rawValue) * 256 + 0x9C] = pack(.dcsUnhook, .ground)
+        // sosPmApcString 0x9C already → .none, .ground (from generateSosPmApc)
+
         self.flatTable = flat
     }
 
@@ -305,8 +347,8 @@ nonisolated struct VTParserTables: Sendable {
         // Printable: dcsPut
         set(&table, range: 0x20...0x7E, action: .dcsPut, next: .dcsPassthrough)
         set(&table, byte: 0x7F, action: .none, next: .dcsPassthrough)
-        // 0x80-0x9F: Collect for UTF-8 support. Actual C1 controls (ST etc.)
-        // are intercepted by anywhereTransition before reaching this table.
+        // 0x80-0x9F: Collect as UTF-8 support. The post-generation overlay
+        // in init() overwrites 0x9C (ST) with the correct termination entry.
         set(&table, range: 0x80...0x9F, action: .dcsPut, next: .dcsPassthrough)
         // High bytes: pass through
         set(&table, range: 0xA0...0xFF, action: .dcsPut, next: .dcsPassthrough)
@@ -335,8 +377,8 @@ nonisolated struct VTParserTables: Sendable {
         // Printable bytes are collected
         set(&table, range: 0x20...0x7F, action: .oscPut, next: .oscString)
         // 0x80-0x9F: Collect as part of the OSC string to support UTF-8
-        // continuation bytes (0x80-0xBF). Actual C1 controls (ST, CSI, etc.)
-        // are intercepted by anywhereTransition before reaching this table.
+        // continuation bytes. The post-generation overlay in init() overwrites
+        // 0x9C (ST) with the correct termination entry.
         set(&table, range: 0x80...0x9F, action: .oscPut, next: .oscString)
         // High bytes also collected (UTF-8 in OSC strings)
         set(&table, range: 0xA0...0xFF, action: .oscPut, next: .oscString)

@@ -22,6 +22,9 @@ nonisolated struct ScrollbackLine: Sendable {
     /// nil when no cells in this line had multi-codepoint graphemes.
     var graphemeOverrides: [Int: String]?
 
+    /// Whether trailing blanks still need to be trimmed (lazy trimming).
+    var needsTrim: Bool = false
+
     /// Create a scrollback line from a row of cells.
     init(cells: [TerminalCell], isWrapped: Bool = false, graphemeOverrides: [Int: String]? = nil) {
         self.cells = cells
@@ -62,6 +65,13 @@ nonisolated struct ScrollbackLine: Sendable {
             cells.removeAll(keepingCapacity: true)
             graphemeOverrides = nil
         }
+    }
+
+    /// Trim trailing blanks only if the line hasn't been trimmed yet.
+    mutating func trimIfNeeded() {
+        guard needsTrim else { return }
+        trimTrailingBlanks()
+        needsTrim = false
     }
 }
 
@@ -117,7 +127,7 @@ nonisolated struct ScrollbackBuffer: Sendable {
     /// Push a row of cells as a new scrollback line.
     mutating func push(cells: [TerminalCell], isWrapped: Bool = false, graphemeOverrides: [Int: String]? = nil) {
         var line = ScrollbackLine(cells: cells, isWrapped: isWrapped, graphemeOverrides: graphemeOverrides)
-        line.trimTrailingBlanks()
+        line.needsTrim = true
         push(line)
     }
 
@@ -167,6 +177,7 @@ nonisolated struct ScrollbackBuffer: Sendable {
         guard count > 0 else { return nil }
 
         let lastIndex = (head + count - 1) % storage.count
+        storage[lastIndex].trimIfNeeded()
         let line = storage[lastIndex]
         count -= 1
 
@@ -189,8 +200,13 @@ nonisolated struct ScrollbackBuffer: Sendable {
     // MARK: - Bulk Operations
 
     /// Return all lines as an array, ordered from oldest to newest.
-    func allLines() -> [ScrollbackLine] {
+    mutating func allLines() -> [ScrollbackLine] {
         guard count > 0, !storage.isEmpty else { return [] }
+
+        // Trim in-place before returning
+        for i in 0..<storage.count {
+            storage[i].trimIfNeeded()
+        }
 
         var result: [ScrollbackLine] = []
         result.reserveCapacity(count)
@@ -209,14 +225,16 @@ nonisolated struct ScrollbackBuffer: Sendable {
     }
 
     /// Return the last `n` lines (most recent), ordered oldest to newest.
-    func lastLines(_ n: Int) -> [ScrollbackLine] {
+    mutating func lastLines(_ n: Int) -> [ScrollbackLine] {
         let take = min(max(n, 0), count)
         guard take > 0 else { return [] }
         var result = [ScrollbackLine]()
         result.reserveCapacity(take)
         let start = count - take
         for i in start..<count {
-            result.append(self[i])
+            let storageIndex = (head + i) % storage.count
+            storage[storageIndex].trimIfNeeded()
+            result.append(storage[storageIndex])
         }
         return result
     }

@@ -232,11 +232,12 @@ actor TerminalEngine {
     // MARK: - Core State Machine (A.8.1, A.8.2)
 
     /// Process a single byte through the state machine.
+    /// All anywhere transitions (CAN, SUB, ESC, C1 controls) are encoded
+    /// directly in the flat lookup table — no separate branch cascade needed.
     private func processByte(_ byte: UInt8) async {
         // UTF-8 continuation bytes go to the UTF-8 decoder when active
         if utf8Remaining > 0 {
             if byte & 0xC0 == 0x80 {
-                // Valid continuation byte
                 utf8Buffer.append(byte)
                 utf8Remaining -= 1
                 if utf8Remaining == 0 {
@@ -250,90 +251,26 @@ actor TerminalEngine {
             }
         }
 
-        // Anywhere transitions: CAN, SUB, ESC, and C1 controls
-        // These override the current state regardless.
-        if let anywhereResult = anywhereTransition(byte) {
-            await executeAction(anywhereResult.action, byte: byte)
-            state = anywhereResult.nextState
-            return
+        // Side-effect: remember state before ESC for 7-bit ST detection
+        if byte == 0x1B {
+            stateBeforeEscape = state
         }
 
-        // State-specific transition
+        // Guard: in string states, 0x9C may be a UTF-8 continuation byte
+        // rather than a real C1 ST. Skip the table lookup if mid-sequence.
+        if byte == 0x9C && stringUTF8Remaining > 0 {
+            switch state {
+            case .oscString, .dcsPassthrough, .sosPmApcString:
+                return
+            default:
+                break
+            }
+        }
+
+        // Single O(1) table lookup — includes all anywhere transitions
         let transition = stateTransition(state: state, byte: byte)
         await executeAction(transition.action, byte: byte)
         state = transition.nextState
-    }
-
-    // MARK: - Anywhere Transitions
-
-    /// Transitions that apply in any state (CAN, SUB, ESC, C1 controls).
-    /// Returns nil if the byte doesn't trigger an anywhere transition.
-    private func anywhereTransition(_ byte: UInt8) -> Transition? {
-        // CAN, SUB, ESC are valid in ALL states (7-bit, no UTF-8 conflict)
-        switch byte {
-        case C0.CAN.rawValue: // 0x18 — Cancel
-            return Transition(.none, .ground)
-
-        case C0.SUB.rawValue: // 0x1A — Substitute
-            return Transition(.execute, .ground)
-
-        case C0.ESC.rawValue: // 0x1B — Escape
-            stateBeforeEscape = state
-            return Transition(.clear, .escape)
-
-        default:
-            break
-        }
-
-        // In string-collecting states (OSC, DCS passthrough, SOS/PM/APC),
-        // bytes 0x80-0x9F must NOT be interpreted as C1 controls — they are
-        // UTF-8 continuation bytes within the string payload. Only ST (0x9C)
-        // is recognized to terminate the string. Without this guard, a UTF-8
-        // character whose encoding contains e.g. 0x84 (IND) or 0x90 (DCS)
-        // would abort the string mid-sequence, leaking remaining bytes as
-        // visible text on screen.
-        switch state {
-        case .oscString, .dcsPassthrough, .sosPmApcString:
-            if byte == C1.ST.rawValue { // 0x9C — terminate the string
-                // In UTF-8 mode, 0x9C can be a continuation byte (e.g. "✳").
-                // Only treat it as ST when we're not in the middle of a
-                // multibyte sequence.
-                if stringUTF8Remaining > 0 {
-                    return nil
-                }
-                return handleStringTerminator()
-            }
-            return nil
-        default:
-            break
-        }
-
-        // C1 control characters (8-bit) — only in non-string states
-        switch byte {
-        case C1.CSI.rawValue: // 0x9B — CSI
-            return Transition(.clear, .csiEntry)
-
-        case C1.OSC.rawValue: // 0x9D — OSC
-            return Transition(.oscStart, .oscString)
-
-        case C1.DCS.rawValue: // 0x90 — DCS
-            return Transition(.clear, .dcsEntry)
-
-        case C1.ST.rawValue: // 0x9C — ST (String Terminator)
-            return handleStringTerminator()
-
-        case C1.SOS.rawValue, C1.PM.rawValue, C1.APC.rawValue:
-            return Transition(.none, .sosPmApcString)
-
-        // Other C1 that map to ESC sequences
-        case C1.IND.rawValue:  return Transition(.execute, .ground)
-        case C1.NEL.rawValue:  return Transition(.execute, .ground)
-        case C1.HTS.rawValue:  return Transition(.execute, .ground)
-        case C1.RI.rawValue:   return Transition(.execute, .ground)
-
-        default:
-            return nil
-        }
     }
 
     // MARK: - State Transition Table (Precomputed)
@@ -349,19 +286,6 @@ actor TerminalEngine {
         let action = ParserAction(rawValue: UInt8(packed >> 8)) ?? .none
         let nextState = ParserState(rawValue: UInt8(packed & 0xFF)) ?? .ground
         return Transition(action, nextState)
-    }
-
-    // MARK: - String Terminator Helper
-
-    private func handleStringTerminator() -> Transition {
-        switch state {
-        case .oscString:
-            return Transition(.oscEnd, .ground)
-        case .dcsPassthrough:
-            return Transition(.dcsUnhook, .ground)
-        default:
-            return Transition(.none, .ground)
-        }
     }
 
     // MARK: - Action Execution

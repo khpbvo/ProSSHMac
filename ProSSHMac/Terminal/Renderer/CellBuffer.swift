@@ -28,6 +28,15 @@ private let kNoGlyphIndex: UInt32 = 0xFFFF_FFFF
 private let kCellBufferSignpostLog = OSLog(subsystem: "com.prossh", category: "TerminalPerf")
 #endif
 
+// MARK: - GlyphResolver Protocol
+
+/// Protocol for resolving glyph atlas indices from cell data.
+/// Used as a generic constraint on `CellBuffer.update` to enable
+/// compiler specialization and inlining (eliminates closure overhead).
+protocol GlyphResolver {
+    func resolveGlyphIndex(for cell: CellInstance) -> UInt32
+}
+
 // MARK: - CellBuffer
 
 /// Manages a pair of double-buffered MTLBuffers for streaming cell instance
@@ -136,24 +145,19 @@ final class CellBuffer {
 
     /// Updates the current write buffer with cell data from a grid snapshot.
     ///
-    /// For each cell in the snapshot, the `glyphLookup` closure is called to
-    /// resolve the glyph atlas index. Wide characters (wideChar attribute set)
-    /// are handled specially: the primary cell receives the resolved glyph index,
-    /// and the continuation cell (width=0) receives glyphIndex=0 with matching
-    /// foreground/background colors.
+    /// For each cell in the snapshot, the resolver is called to look up the
+    /// glyph atlas index. Wide characters (wideChar attribute set) are handled
+    /// specially: the primary cell receives the resolved glyph index, and the
+    /// continuation cell receives `kNoGlyphIndex` with matching colors.
     ///
-    /// If the snapshot provides a `dirtyRange`, only that contiguous range of
-    /// cells is re-uploaded to the buffer, avoiding a full copy. If the grid
-    /// dimensions changed since the last update, a full copy is always performed
-    /// regardless of the dirty range.
+    /// Uses a generic `GlyphResolver` constraint instead of a closure so the
+    /// compiler can specialize and inline the glyph lookup (no weak-ref check,
+    /// no indirect call, no closure allocation).
     ///
     /// - Parameters:
     ///   - snapshot: The immutable grid snapshot to upload.
-    ///   - glyphLookup: Closure that maps a `CellInstance` to its glyph atlas
-    ///     index (UInt32). The closure receives the cell as populated by the
-    ///     grid (with row, col, colors, attributes) and should return the
-    ///     atlas glyph index for rendering.
-    func update(from snapshot: GridSnapshot, glyphLookup: (CellInstance) -> UInt32) {
+    ///   - resolver: Object that resolves glyph atlas indices for cells.
+    func update<R: GlyphResolver>(from snapshot: GridSnapshot, resolver: R) {
         #if DEBUG
         let signpostID = OSSignpostID(log: kCellBufferSignpostLog)
         os_signpost(.begin, log: kCellBufferSignpostLog, name: "CellBufferUpdate", signpostID: signpostID)
@@ -215,37 +219,58 @@ final class CellBuffer {
 
         // Copy dirty slice first, then resolve glyphs in a second pass.
         copyCells(from: snapshot, range: effectiveRange, to: dst)
-        var previousSnapshotCell: CellInstance? = effectiveRange.lowerBound > 0
-            ? snapshot.cells[effectiveRange.lowerBound - 1]
-            : nil
-        for i in effectiveRange {
-            var cell = dst[i]
-            let isContinuation: Bool
-            if let previous = previousSnapshotCell {
-                let previousIsWide = (previous.attributes & CellAttributes.wideChar.rawValue) != 0
-                let currentIsWide = (cell.attributes & CellAttributes.wideChar.rawValue) != 0
-                isContinuation = previousIsWide && previous.row == cell.row && !currentIsWide
-            } else {
-                isContinuation = false
-            }
+        resolveGlyphs(from: snapshot, range: effectiveRange, dst: dst, resolver: resolver)
+    }
 
-            if isContinuation {
-                // Continuation cell: no glyph, preserve colors from primary.
-                cell.glyphIndex = kNoGlyphIndex
-                if i > 0 {
-                    let primary = snapshot.cells[i - 1]
-                    cell.fgColor = primary.fgColor
-                    cell.bgColor = primary.bgColor
+    /// Second pass over the dirty range: resolve glyph indices and handle
+    /// wide-character continuation cells. Reads from the snapshot's contiguous
+    /// buffer pointer to avoid bounds-checked subscript overhead.
+    private func resolveGlyphs<R: GlyphResolver>(
+        from snapshot: GridSnapshot,
+        range: Range<Int>,
+        dst: UnsafeMutablePointer<CellInstance>,
+        resolver: R
+    ) {
+        snapshot.cells.withUnsafeBufferPointer { src in
+            guard let srcBase = src.baseAddress else { return }
+            let wideCharBit = CellAttributes.wideChar.rawValue
+
+            // Track previous cell without Optional boxing.
+            var hasPrevious = range.lowerBound > 0
+            var previousCell = hasPrevious ? srcBase[range.lowerBound - 1] : CellInstance(
+                row: 0, col: 0, glyphIndex: 0, fgColor: 0, bgColor: 0,
+                underlineColor: 0, attributes: 0, flags: 0, underlineStyle: 0
+            )
+
+            for i in range {
+                let cell = srcBase[i]
+                let isContinuation: Bool
+                if hasPrevious {
+                    let previousIsWide = (previousCell.attributes & wideCharBit) != 0
+                    let currentIsWide = (cell.attributes & wideCharBit) != 0
+                    isContinuation = previousIsWide && previousCell.row == cell.row && !currentIsWide
+                } else {
+                    isContinuation = false
                 }
-            } else if cell.glyphIndex == 0 {
-                // Empty/NUL cells should not sample atlas texel (0,0).
-                cell.glyphIndex = kNoGlyphIndex
-            } else {
-                cell.glyphIndex = glyphLookup(cell)
-            }
 
-            dst[i] = cell
-            previousSnapshotCell = snapshot.cells[i]
+                if isContinuation {
+                    // Continuation cell: no glyph, preserve colors from primary.
+                    dst[i].glyphIndex = kNoGlyphIndex
+                    if i > 0 {
+                        let primary = srcBase[i - 1]
+                        dst[i].fgColor = primary.fgColor
+                        dst[i].bgColor = primary.bgColor
+                    }
+                } else if cell.glyphIndex == 0 {
+                    // Empty/NUL cells should not sample atlas texel (0,0).
+                    dst[i].glyphIndex = kNoGlyphIndex
+                } else {
+                    dst[i].glyphIndex = resolver.resolveGlyphIndex(for: cell)
+                }
+
+                previousCell = cell
+                hasPrevious = true
+            }
         }
     }
 

@@ -3,7 +3,17 @@ import Metal
 import CoreText
 import AppKit
 
-extension MetalTerminalRenderer {
+/// Immutable snapshot of the four CTFont variants (regular, bold, italic, bold-italic)
+/// for passing to background rasterization tasks.
+/// CTFont is immutable and thread-safe but not marked Sendable by Apple.
+struct RasterFontSet: @unchecked Sendable {
+    nonisolated(unsafe) let regular: CTFont
+    nonisolated(unsafe) let bold: CTFont
+    nonisolated(unsafe) let italic: CTFont
+    nonisolated(unsafe) let boldItalic: CTFont
+}
+
+extension MetalTerminalRenderer: GlyphResolver {
 
     // MARK: - Glyph Resolution
 
@@ -41,7 +51,7 @@ extension MetalTerminalRenderer {
         // system font — e.g. Apple Color Emoji for emoji, PingFang for CJK.
         let renderFont = Self.resolveRenderFont(for: scalar, primaryFont: variantFont)
 
-        let rasterized = GlyphRasterizer.rasterize(
+        let rasterized = glyphRasterizer.rasterize(
             codepoint: scalar,
             font: renderFont,
             cellWidth: cw,
@@ -106,6 +116,13 @@ extension MetalTerminalRenderer {
         cachedRasterFontName = rasterFontName
         cachedRasterFontSize = scaledFontSize
         cachedRasterScale = clampedScale
+
+        cachedRasterFontSet = RasterFontSet(
+            regular: cachedRasterRegularFont!,
+            bold: cachedRasterBoldFont!,
+            italic: cachedRasterItalicFont!,
+            boldItalic: cachedRasterBoldItalicFont!
+        )
     }
 
     /// Resolve the best font for rendering a specific Unicode scalar.
@@ -215,19 +232,17 @@ extension MetalTerminalRenderer {
         key: GlyphKey,
         cellWidth cw: Int,
         cellHeight ch: Int,
-        regularFont: CTFont,
-        boldFont: CTFont?,
-        italicFont: CTFont?,
-        boldItalicFont: CTFont?
+        fontSet: RasterFontSet,
+        rasterizer: GlyphRasterizer
     ) -> RasterizedGlyph? {
         guard let scalar = Unicode.Scalar(key.codepoint) else { return nil }
         let variantFont: CTFont
-        if key.bold && key.italic      { variantFont = boldItalicFont ?? regularFont }
-        else if key.bold               { variantFont = boldFont ?? regularFont }
-        else if key.italic             { variantFont = italicFont ?? regularFont }
-        else                           { variantFont = regularFont }
+        if key.bold && key.italic      { variantFont = fontSet.boldItalic }
+        else if key.bold               { variantFont = fontSet.bold }
+        else if key.italic             { variantFont = fontSet.italic }
+        else                           { variantFont = fontSet.regular }
         let renderFont = resolveRenderFont(for: scalar, primaryFont: variantFont)
-        let rasterized = GlyphRasterizer.rasterize(
+        let rasterized = rasterizer.rasterize(
             codepoint: scalar, font: renderFont, cellWidth: cw, cellHeight: ch
         )
         guard rasterized.width > 0, rasterized.height > 0, !rasterized.pixelData.isEmpty else {

@@ -3,14 +3,15 @@
 //
 // Rasterizes individual glyphs into pixel buffers for upload to a Metal texture atlas.
 //
-// Uses CoreText (CTFont/CTLine) to render Unicode codepoints into RGBA bitmaps.
+// Uses CoreText (CTFont/CTLine) to render Unicode codepoints into BGRA bitmaps.
 // Handles three rendering paths:
-//   1. Normal text glyphs -- rendered as white-on-transparent RGBA (shader applies color)
-//   2. Color emoji -- rendered as premultiplied BGRA (Apple Color Emoji produces BGRA)
+//   1. Normal text glyphs -- rendered as white-on-transparent BGRA (shader applies color)
+//   2. Color emoji -- rendered as premultiplied BGRA (Apple Color Emoji produces BGRA natively)
 //   3. Wide characters (CJK) -- rasterized into a buffer that is 2x the standard cell width
 //
-// The rasterizer is stateless: pure function from (font + codepoint + cell dimensions) to pixels.
-// Thread-safe for concurrent use from any isolation domain.
+// Each caller owns a GlyphRasterizer instance whose scratch buffer and CGContext are
+// reused across rasterize() calls, eliminating per-glyph heap allocations and expensive
+// CoreGraphics context creation during cache pre-population and background rasterization.
 
 import CoreText
 import CoreGraphics
@@ -21,9 +22,8 @@ import Foundation
 /// The result of rasterizing a single glyph. Contains the pixel data and metrics
 /// needed by GlyphAtlas to place the glyph into the texture atlas.
 struct RasterizedGlyph: Sendable {
-    /// Raw pixel data in RGBA premultiplied alpha format (4 bytes per pixel).
-    /// For color emoji, the source is BGRA; the rasterizer swizzles to RGBA for
-    /// uniform Metal texture format.
+    /// Raw pixel data in BGRA premultiplied alpha format (4 bytes per pixel).
+    /// Both text and color emoji use the same BGRA layout (`.bgra8Unorm` atlas).
     let pixelData: [UInt8]
 
     /// Width of the rasterized bitmap in pixels.
@@ -62,13 +62,84 @@ struct RasterizedGlyph: Sendable {
 
 // MARK: - GlyphRasterizer
 
-/// Stateless glyph rasterizer. Renders Unicode codepoints into pixel buffers
-/// suitable for upload to a Metal texture atlas.
+/// Glyph rasterizer with a reusable scratch buffer and cached CGContext.
+/// Each caller site should own or create a GlyphRasterizer instance to amortize
+/// buffer allocations across multiple rasterize() calls.
 ///
-/// All methods are static and thread-safe. No instance state is required
-/// because rasterization is a pure function of its inputs.
-enum GlyphRasterizer {
+/// Not thread-safe — each thread/task should use its own instance.
+/// All methods are nonisolated to allow use from any isolation domain.
+final class GlyphRasterizer: @unchecked Sendable {
     private nonisolated static let deviceRGBColorSpace = CGColorSpaceCreateDeviceRGB()
+
+    // MARK: - Scratch Buffer State
+
+    private nonisolated(unsafe) var scratchBuffer: UnsafeMutableRawPointer?
+    private nonisolated(unsafe) var scratchBufferSize: Int = 0
+    private nonisolated(unsafe) var scratchContext: CGContext?
+    private nonisolated(unsafe) var scratchContextWidth: Int = 0
+    private nonisolated(unsafe) var scratchContextHeight: Int = 0
+
+    nonisolated init() {}
+
+    deinit {
+        if let buffer = scratchBuffer {
+            buffer.deallocate()
+        }
+    }
+
+    // MARK: - Scratch Buffer Management
+
+    private nonisolated func ensureScratchBuffer(width: Int, height: Int) -> CGContext? {
+        let bytesPerPixel = 4
+        let bytesPerRow = width * bytesPerPixel
+        let bufferSize = bytesPerRow * height
+
+        // Reuse existing context if dimensions match
+        if let ctx = scratchContext,
+           scratchContextWidth == width,
+           scratchContextHeight == height,
+           scratchBufferSize >= bufferSize,
+           let buffer = scratchBuffer {
+            // Zero-fill the reused buffer
+            memset(buffer, 0, bufferSize)
+            return ctx
+        }
+
+        // Need to (re)allocate
+        if let oldBuffer = scratchBuffer {
+            oldBuffer.deallocate()
+        }
+
+        let buffer = UnsafeMutableRawPointer.allocate(byteCount: bufferSize, alignment: 16)
+        memset(buffer, 0, bufferSize)
+        scratchBuffer = buffer
+        scratchBufferSize = bufferSize
+
+        let colorSpace = Self.deviceRGBColorSpace
+        // Unified BGRA format for both text and color emoji — matches .bgra8Unorm atlas
+        let bitmapInfo: UInt32 = CGBitmapInfo.byteOrder32Little.rawValue
+            | CGImageAlphaInfo.premultipliedFirst.rawValue
+
+        guard let ctx = CGContext(
+            data: buffer,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: bytesPerRow,
+            space: colorSpace,
+            bitmapInfo: bitmapInfo
+        ) else {
+            scratchContext = nil
+            scratchContextWidth = 0
+            scratchContextHeight = 0
+            return nil
+        }
+
+        scratchContext = ctx
+        scratchContextWidth = width
+        scratchContextHeight = height
+        return ctx
+    }
 
     // MARK: - B.2.1 Primary Rasterization Entry Point
 
@@ -80,19 +151,15 @@ enum GlyphRasterizer {
     ///   - cellWidth: Width of a single terminal cell in pixels (from FontManager).
     ///   - cellHeight: Height of a single terminal cell in pixels (from FontManager).
     /// - Returns: A `RasterizedGlyph` containing the rendered pixel data and metrics.
-    nonisolated static func rasterize(
+    nonisolated func rasterize(
         codepoint: UnicodeScalar,
         font: CTFont,
         cellWidth: Int,
         cellHeight: Int
     ) -> RasterizedGlyph {
-        // Determine if this codepoint is a color glyph (emoji)
-        let isColor = isColorGlyph(codepoint: codepoint, font: font)
+        let isColor = Self.isColorGlyph(codepoint: codepoint, font: font)
+        let isWide = Self.isWideCharacter(codepoint: codepoint)
 
-        // Determine if this is a wide character (CJK, fullwidth, etc.)
-        let isWide = isWideCharacter(codepoint: codepoint)
-
-        // B.2.4: Wide characters get double-width rasterization buffer
         let rasterWidth = isWide ? cellWidth * 2 : cellWidth
         let rasterHeight = cellHeight
 
@@ -100,7 +167,128 @@ enum GlyphRasterizer {
             return .empty
         }
 
-        // Use CTLine path for glyph positioning to avoid clipping on overhanging glyphs (e.g. "f").
+        // Fast path: for non-emoji single codepoints, use CTFontDrawGlyphs directly.
+        // This bypasses NSAttributedString + CTLine creation overhead (~99% of glyphs).
+        if !isColor {
+            let v = codepoint.value
+            var glyphs: [CGGlyph]
+            var found: Bool
+
+            if v <= 0xFFFF {
+                // BMP: single UniChar
+                var char = UniChar(v)
+                var glyph: CGGlyph = 0
+                found = CTFontGetGlyphsForCharacters(font, &char, &glyph, 1)
+                glyphs = [glyph]
+            } else {
+                // Supplementary: UTF-16 surrogate pair
+                let hi = UniChar(0xD800 + ((v - 0x10000) >> 10))
+                let lo = UniChar(0xDC00 + ((v - 0x10000) & 0x3FF))
+                var chars: [UniChar] = [hi, lo]
+                var glyphPair: [CGGlyph] = [0, 0]
+                found = CTFontGetGlyphsForCharacters(font, &chars, &glyphPair, 2)
+                glyphs = [glyphPair[0]]
+            }
+
+            if found && glyphs[0] != 0 {
+                return rasterizeWithDirectDraw(
+                    glyph: glyphs[0], font: font,
+                    rasterWidth: rasterWidth, rasterHeight: rasterHeight,
+                    isWide: isWide
+                )
+            }
+            // Fall through to CTLine path if font doesn't have the glyph
+        }
+
+        // Slow path: CTLine-based rendering for emoji and fallback cases.
+        return rasterizeWithCTLine(
+            codepoint: codepoint, font: font,
+            rasterWidth: rasterWidth, rasterHeight: rasterHeight,
+            isColor: isColor, isWide: isWide
+        )
+    }
+
+    // MARK: - Fast Path: Direct CTFontDrawGlyphs
+
+    /// Rasterize a single glyph using CTFontDrawGlyphs — no NSAttributedString or CTLine overhead.
+    private nonisolated func rasterizeWithDirectDraw(
+        glyph: CGGlyph,
+        font: CTFont,
+        rasterWidth: Int,
+        rasterHeight: Int,
+        isWide: Bool
+    ) -> RasterizedGlyph {
+        let fontAscent = CTFontGetAscent(font)
+        let fontDescent = CTFontGetDescent(font)
+        let fontHeight = fontAscent + fontDescent
+        let penY: CGFloat
+        if fontHeight > 0 {
+            let verticalOffset = (CGFloat(rasterHeight) - fontHeight) / 2.0
+            penY = verticalOffset + fontDescent
+        } else {
+            penY = fontDescent
+        }
+
+        guard let context = ensureScratchBuffer(width: rasterWidth, height: rasterHeight) else {
+            return .empty
+        }
+
+        context.setAllowsAntialiasing(true)
+        context.setShouldAntialias(true)
+        context.setFillColor(CGColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 1.0))
+        context.setShouldSmoothFonts(true)
+        context.setShouldSubpixelPositionFonts(true)
+        context.setShouldSubpixelQuantizeFonts(false)
+
+        var glyphBuf = glyph
+        var position = CGPoint(x: 0, y: penY)
+        CTFontDrawGlyphs(font, &glyphBuf, &position, 1, context)
+
+        // Compute bearing from glyph bounding rect
+        var boundingRect = CGRect.zero
+        CTFontGetBoundingRectsForGlyphs(font, .default, &glyphBuf, &boundingRect, 1)
+
+        let bearingX: Int
+        let bearingY: Int
+        if boundingRect.isEmpty {
+            bearingX = 0
+            bearingY = 0
+        } else {
+            bearingX = Int(floor(boundingRect.origin.x))
+            bearingY = Int(ceil(boundingRect.origin.y + boundingRect.size.height))
+        }
+
+        // Copy pixel data out
+        let bytesPerPixel = 4
+        let bufferSize = rasterWidth * bytesPerPixel * rasterHeight
+        guard let buffer = scratchBuffer else { return .empty }
+        let pixelData = [UInt8](unsafeUninitializedCapacity: bufferSize) { destPtr, initializedCount in
+            memcpy(destPtr.baseAddress!, buffer, bufferSize)
+            initializedCount = bufferSize
+        }
+
+        return RasterizedGlyph(
+            pixelData: pixelData,
+            width: rasterWidth,
+            height: rasterHeight,
+            bearingX: bearingX,
+            bearingY: bearingY,
+            isColor: false,
+            isWide: isWide
+        )
+    }
+
+    // MARK: - Slow Path: CTLine-based Rendering
+
+    /// Rasterize using NSAttributedString + CTLine. Used for color emoji and fallback cases.
+    private nonisolated func rasterizeWithCTLine(
+        codepoint: UnicodeScalar,
+        font: CTFont,
+        rasterWidth: Int,
+        rasterHeight: Int,
+        isColor: Bool,
+        isWide: Bool
+    ) -> RasterizedGlyph {
         let string = String(codepoint)
         let attributes: [NSAttributedString.Key: Any] = [
             NSAttributedString.Key(kCTFontAttributeName as String): font,
@@ -110,91 +298,50 @@ enum GlyphRasterizer {
         let line = CTLineCreateWithAttributedString(attrString)
         let imageBounds = CTLineGetImageBounds(line, nil)
 
-        // Terminal cells are fixed-advance slots; draw at the cell origin.
-        let penX: CGFloat = 0
-
-        // Vertically position so the baseline sits at the correct place within the cell
-        // Baseline is positioned so that ascent fills from top and descent fills at bottom
         let fontAscent = CTFontGetAscent(font)
         let fontDescent = CTFontGetDescent(font)
         let fontHeight = fontAscent + fontDescent
         let penY: CGFloat
         if fontHeight > 0 {
-            // Center the font metrics vertically, then place baseline accordingly
             let verticalOffset = (CGFloat(rasterHeight) - fontHeight) / 2.0
             penY = verticalOffset + fontDescent
         } else {
             penY = fontDescent
         }
 
-        // Allocate pixel buffer
-        let bytesPerPixel = 4
-        let bytesPerRow = rasterWidth * bytesPerPixel
-        let bufferSize = bytesPerRow * rasterHeight
-        var pixelBuffer = [UInt8](repeating: 0, count: bufferSize)
-
-        // B.2.3: Choose color space and bitmap info based on glyph type
-        let colorSpace: CGColorSpace
-        let bitmapInfo: UInt32
-
-        if isColor {
-            // Color emoji: Apple renders these in BGRA premultiplied alpha
-            // We render in BGRA and then swizzle to RGBA for Metal
-            colorSpace = deviceRGBColorSpace
-            bitmapInfo = CGBitmapInfo.byteOrder32Little.rawValue
-                | CGImageAlphaInfo.premultipliedFirst.rawValue
-        } else {
-            // Normal text: render as white text on transparent background
-            // The shader will apply the actual foreground color using alpha as coverage
-            colorSpace = deviceRGBColorSpace
-            bitmapInfo = CGBitmapInfo.byteOrder32Big.rawValue
-                | CGImageAlphaInfo.premultipliedLast.rawValue
-        }
-
-        // Create bitmap context
-        guard let context = CGContext(
-            data: &pixelBuffer,
-            width: rasterWidth,
-            height: rasterHeight,
-            bitsPerComponent: 8,
-            bytesPerRow: bytesPerRow,
-            space: colorSpace,
-            bitmapInfo: bitmapInfo
-        ) else {
+        guard let context = ensureScratchBuffer(width: rasterWidth, height: rasterHeight) else {
             return .empty
         }
 
-        // Configure context
         context.setAllowsAntialiasing(true)
         context.setShouldAntialias(true)
 
         if isColor {
-            // Color emoji: no need to set fill color, the glyphs carry their own color
             context.setShouldSmoothFonts(false)
         } else {
-            // Normal text: draw white glyphs; shader multiplies by foreground color
             context.setFillColor(CGColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 1.0))
             context.setShouldSmoothFonts(true)
-            // B.2.2: Enable subpixel positioning for sharper text
             context.setShouldSubpixelPositionFonts(true)
             context.setShouldSubpixelQuantizeFonts(false)
         }
 
-        // Set the text drawing position
-        context.textPosition = CGPoint(x: penX, y: penY)
-
-        // Draw the glyph
+        context.textPosition = CGPoint(x: 0, y: penY)
         CTLineDraw(line, context)
 
-        // B.2.3: For BGRA rendering (color emoji), swizzle to RGBA
-        if isColor {
-            swizzleBGRAtoRGBA(&pixelBuffer, count: bufferSize)
+        let bytesPerPixel = 4
+        let bufferSize = rasterWidth * bytesPerPixel * rasterHeight
+        let pixelData: [UInt8]
+        if let buffer = scratchBuffer {
+            pixelData = [UInt8](unsafeUninitializedCapacity: bufferSize) { destPtr, initializedCount in
+                memcpy(destPtr.baseAddress!, buffer, bufferSize)
+                initializedCount = bufferSize
+            }
+        } else {
+            return .empty
         }
 
-        // Compute bearing values from image bounds relative to pen position
         let bearingX: Int
         let bearingY: Int
-
         if imageBounds.isEmpty {
             bearingX = 0
             bearingY = 0
@@ -204,7 +351,7 @@ enum GlyphRasterizer {
         }
 
         return RasterizedGlyph(
-            pixelData: pixelBuffer,
+            pixelData: pixelData,
             width: rasterWidth,
             height: rasterHeight,
             bearingX: bearingX,
@@ -216,35 +363,18 @@ enum GlyphRasterizer {
 
     // MARK: - B.2.3 Color Emoji Detection
 
-    /// Determine whether a codepoint should be rendered as a color glyph.
-    ///
-    /// Detection strategy:
-    /// 1. Check if the font has the `kCTFontColorGlyphsTrait` trait (sbix/COLR/CBDT table)
-    /// 2. Check common emoji Unicode ranges
-    /// 3. For ambiguous codepoints, attempt to resolve with Apple Color Emoji font
-    ///
-    /// - Parameters:
-    ///   - codepoint: The Unicode scalar value to check.
-    ///   - font: The CTFont being used for rendering.
-    /// - Returns: True if the codepoint should be rendered as a color (emoji) glyph.
     private nonisolated static func isColorGlyph(codepoint: UnicodeScalar, font: CTFont) -> Bool {
-        // Fast path: check if the codepoint falls in well-known emoji ranges
         if isEmojiCodepoint(codepoint) {
             return true
         }
 
-        // Check if the font itself reports color glyph support via traits
         let traits = CTFontGetSymbolicTraits(font)
         let hasColorGlyphs = traits.contains(.traitColorGlyphs)
 
         if hasColorGlyphs {
-            // The font has color tables. Check if this specific codepoint
-            // maps to a glyph in the font (not all codepoints in a color font
-            // are necessarily color glyphs).
             var glyph: CGGlyph = 0
             var char = UInt16(truncatingIfNeeded: codepoint.value)
 
-            // For BMP codepoints, use direct lookup
             if codepoint.value <= 0xFFFF {
                 let found = CTFontGetGlyphsForCharacters(font, &char, &glyph, 1)
                 return found && glyph != 0
@@ -254,62 +384,21 @@ enum GlyphRasterizer {
         return false
     }
 
-    /// Check if a Unicode scalar value falls within well-known emoji ranges.
-    ///
-    /// This covers the majority of emoji without needing to query the font.
-    /// Includes pictographs, emoticons, symbols, flags, and modifier sequences.
     private nonisolated static func isEmojiCodepoint(_ scalar: UnicodeScalar) -> Bool {
         UnicodeClassification.isEmojiScalar(scalar)
     }
 
     // MARK: - B.2.4 Wide Character Detection
 
-    /// Determine if a codepoint is a wide (double-width) character.
-    /// Delegates to `CharacterWidth.isWide(_:)` for consistency with the grid.
     private nonisolated static func isWideCharacter(codepoint: UnicodeScalar) -> Bool {
         CharacterWidth.isWide(codepoint)
-    }
-
-    // MARK: - BGRA to RGBA Swizzle
-
-    /// Swizzle pixel data from BGRA byte order to RGBA byte order in-place.
-    ///
-    /// Apple Color Emoji renders in BGRA premultiplied alpha format (byte order
-    /// 32-little with premultiplied-first alpha). Metal textures expect RGBA, so
-    /// we swap the red and blue channels.
-    ///
-    /// - Parameters:
-    ///   - buffer: The pixel buffer to swizzle in-place.
-    ///   - count: Total number of bytes in the buffer.
-    private nonisolated static func swizzleBGRAtoRGBA(_ buffer: inout [UInt8], count: Int) {
-        let pixelCount = count / 4
-        buffer.withUnsafeMutableBytes { raw in
-            let words = raw.bindMemory(to: UInt32.self)
-            guard pixelCount <= words.count else { return }
-            for i in 0..<pixelCount {
-                let value = words[i] // BGRA bytes in memory => 0xAARRGGBB on little-endian
-                words[i] = (value & 0xFF00_FF00) | ((value & 0x00FF_0000) >> 16) | ((value & 0x0000_00FF) << 16)
-            }
-        }
     }
 
     // MARK: - Grapheme Cluster Rasterization
 
     /// Rasterize a full grapheme cluster (which may contain multiple codepoints)
     /// into a pixel buffer.
-    ///
-    /// This is useful for complex emoji sequences (flag pairs, skin tone modifiers,
-    /// ZWJ sequences) and combining character sequences that cannot be represented
-    /// as a single `UnicodeScalar`.
-    ///
-    /// - Parameters:
-    ///   - graphemeCluster: The string containing the grapheme cluster to rasterize.
-    ///   - font: The CTFont to use for rendering.
-    ///   - cellWidth: Width of a single terminal cell in pixels.
-    ///   - cellHeight: Height of a single terminal cell in pixels.
-    ///   - isWide: Whether this grapheme occupies two terminal cells.
-    /// - Returns: A `RasterizedGlyph` containing the rendered pixel data and metrics.
-    static func rasterize(
+    nonisolated func rasterize(
         graphemeCluster: String,
         font: CTFont,
         cellWidth: Int,
@@ -320,7 +409,6 @@ enum GlyphRasterizer {
             return .empty
         }
 
-        // For single-scalar strings, delegate to the codepoint-based path
         let scalars = graphemeCluster.unicodeScalars
         if scalars.count == 1, let scalar = scalars.first {
             return rasterize(
@@ -331,9 +419,7 @@ enum GlyphRasterizer {
             )
         }
 
-        // Multi-scalar grapheme cluster (emoji sequences, combining marks, etc.)
-        // These are almost always color emoji sequences
-        let isColor = graphemeCluster.unicodeScalars.contains { isEmojiCodepoint($0) }
+        let isColor = graphemeCluster.unicodeScalars.contains { Self.isEmojiCodepoint($0) }
 
         let rasterWidth = isWide ? cellWidth * 2 : cellWidth
         let rasterHeight = cellHeight
@@ -342,7 +428,6 @@ enum GlyphRasterizer {
             return .empty
         }
 
-        // Create attributed string
         let attributes: [NSAttributedString.Key: Any] = [
             NSAttributedString.Key(kCTFontAttributeName as String): font,
             NSAttributedString.Key(kCTForegroundColorFromContextAttributeName as String): true
@@ -350,9 +435,7 @@ enum GlyphRasterizer {
         let attrString = NSAttributedString(string: graphemeCluster, attributes: attributes)
         let line = CTLineCreateWithAttributedString(attrString)
 
-        // Terminal cells are fixed-advance slots; draw at the cell origin.
         let penX: CGFloat = 0
-
         let fontAscent = CTFontGetAscent(font)
         let fontDescent = CTFontGetDescent(font)
         let fontHeight = fontAscent + fontDescent
@@ -364,37 +447,10 @@ enum GlyphRasterizer {
             penY = fontDescent
         }
 
-        // Allocate pixel buffer
-        let bytesPerPixel = 4
-        let bytesPerRow = rasterWidth * bytesPerPixel
-        let bufferSize = bytesPerRow * rasterHeight
-        var pixelBuffer = [UInt8](repeating: 0, count: bufferSize)
-
-        // Set up color space and bitmap info
-        let colorSpace = deviceRGBColorSpace
-        let bitmapInfo: UInt32
-
-        if isColor {
-            bitmapInfo = CGBitmapInfo.byteOrder32Little.rawValue
-                | CGImageAlphaInfo.premultipliedFirst.rawValue
-        } else {
-            bitmapInfo = CGBitmapInfo.byteOrder32Big.rawValue
-                | CGImageAlphaInfo.premultipliedLast.rawValue
-        }
-
-        guard let context = CGContext(
-            data: &pixelBuffer,
-            width: rasterWidth,
-            height: rasterHeight,
-            bitsPerComponent: 8,
-            bytesPerRow: bytesPerRow,
-            space: colorSpace,
-            bitmapInfo: bitmapInfo
-        ) else {
+        guard let context = ensureScratchBuffer(width: rasterWidth, height: rasterHeight) else {
             return .empty
         }
 
-        // Configure context
         context.setAllowsAntialiasing(true)
         context.setShouldAntialias(true)
 
@@ -410,8 +466,17 @@ enum GlyphRasterizer {
         context.textPosition = CGPoint(x: penX, y: penY)
         CTLineDraw(line, context)
 
-        if isColor {
-            swizzleBGRAtoRGBA(&pixelBuffer, count: bufferSize)
+        // Copy pixel data out of scratch buffer
+        let bytesPerPixel = 4
+        let bufferSize = rasterWidth * bytesPerPixel * rasterHeight
+        let pixelData: [UInt8]
+        if let buffer = scratchBuffer {
+            pixelData = [UInt8](unsafeUninitializedCapacity: bufferSize) { destPtr, initializedCount in
+                memcpy(destPtr.baseAddress!, buffer, bufferSize)
+                initializedCount = bufferSize
+            }
+        } else {
+            return .empty
         }
 
         let imageBounds = CTLineGetImageBounds(line, nil)
@@ -427,7 +492,7 @@ enum GlyphRasterizer {
         }
 
         return RasterizedGlyph(
-            pixelData: pixelBuffer,
+            pixelData: pixelData,
             width: rasterWidth,
             height: rasterHeight,
             bearingX: bearingX,

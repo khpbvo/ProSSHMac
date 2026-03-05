@@ -181,54 +181,26 @@ nonisolated enum GridReflow {
 
     /// Combine scrollback + screen rows into logical lines by joining
     /// consecutive physical rows linked by the `.wrapped` attribute.
+    /// Stream-processes rows directly without an intermediate array.
     private static func extractLogicalLines(
         scrollback: ScrollbackBuffer,
         screenRows: [[TerminalCell]],
         columns: Int
     ) -> [LogicalLine] {
-        var allRows = [(cells: [TerminalCell], isWrapped: Bool)]()
-
-        // Add scrollback rows
-        for i in 0..<scrollback.count {
-            let line = scrollback[i]
-            allRows.append((cells: line.cells, isWrapped: line.isWrapped))
-        }
-
-        // Add screen rows, checking the previous row for the wrapped attribute
-        for (i, row) in screenRows.enumerated() {
-            let isWrapped: Bool
-            if i == 0 {
-                // First screen row: check if the last scrollback row was wrapped
-                if let lastScrollback = allRows.last {
-                    isWrapped = lastScrollback.cells.last.map {
-                        $0.attributes.contains(.wrapped)
-                    } ?? false
-                } else {
-                    isWrapped = false
-                }
-            } else {
-                isWrapped = screenRows[i - 1].last.map {
-                    $0.attributes.contains(.wrapped)
-                } ?? false
-            }
-            allRows.append((cells: row, isWrapped: isWrapped))
-        }
-
-        // Now group into logical lines
         var logicalLines = [LogicalLine]()
         var currentCells = [TerminalCell]()
         var startsWrapped = false
+        var rowIndex = 0
+        var prevRowCells: [TerminalCell]?
 
-        for (idx, physRow) in allRows.enumerated() {
-            let rowCells = padOrTrim(physRow.cells, toWidth: columns)
+        // Helper to process one physical row
+        func processRow(cells: [TerminalCell], isWrapped: Bool) {
+            let rowCells = padOrTrim(cells, toWidth: columns)
 
-            if idx > 0 && physRow.isWrapped {
-                // This row is a continuation of the previous line
+            if rowIndex > 0 && isWrapped {
                 currentCells.append(contentsOf: rowCells)
             } else {
-                // Start a new logical line
-                if idx > 0 || !currentCells.isEmpty {
-                    // Flush previous logical line
+                if rowIndex > 0 || !currentCells.isEmpty {
                     if !currentCells.isEmpty {
                         logicalLines.append(LogicalLine(
                             cells: trimTrailingBlanks(currentCells),
@@ -237,11 +209,32 @@ nonisolated enum GridReflow {
                     }
                 }
                 currentCells = Array(rowCells)
-                startsWrapped = physRow.isWrapped
+                startsWrapped = isWrapped
             }
 
-            // If this row's last cell has the wrapped flag, the NEXT row continues
-            // (handled by checking isWrapped on the next iteration)
+            prevRowCells = cells
+            rowIndex += 1
+        }
+
+        // Stream scrollback rows
+        for i in 0..<scrollback.count {
+            let line = scrollback[i]
+            processRow(cells: line.cells, isWrapped: line.isWrapped)
+        }
+
+        // Stream screen rows
+        for (i, row) in screenRows.enumerated() {
+            let isWrapped: Bool
+            if i == 0 {
+                isWrapped = prevRowCells?.last.map {
+                    $0.attributes.contains(.wrapped)
+                } ?? false
+            } else {
+                isWrapped = screenRows[i - 1].last.map {
+                    $0.attributes.contains(.wrapped)
+                } ?? false
+            }
+            processRow(cells: row, isWrapped: isWrapped)
         }
 
         // Flush the last logical line
@@ -291,11 +284,6 @@ nonisolated enum GridReflow {
             // Mark as wrapped if there's more content after this row
             if end < cells.count {
                 row[width - 1].attributes.insert(.wrapped)
-            }
-
-            // Mark all cells dirty
-            for i in 0..<row.count {
-                row[i].isDirty = true
             }
 
             rows.append(row)
