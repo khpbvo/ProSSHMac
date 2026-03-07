@@ -93,6 +93,81 @@ final class SessionManagerRenderingPathTests: XCTestCase {
     }
 
     @MainActor
+    func testInactiveRenderingDefersPublishUntilResume() async {
+        let manager = SessionManager(
+            transport: MockSSHTransport(),
+            knownHostsStore: InMemoryKnownHostsStore()
+        )
+        await manager.injectScreenshotSessions()
+
+        guard let session = manager.sessions.first,
+              let engine = manager.engines[session.id] else {
+            XCTFail("Expected an injected session with an engine")
+            return
+        }
+
+        let baselineNonce = manager.gridSnapshotNonceBySessionID[session.id, default: -1]
+        let marker = "PROSSH_INACTIVE_RENDER_\(UUID().uuidString.prefix(8))"
+
+        manager.applicationDidBecomeInactive()
+        _ = await engine.feed(Data(("\r\n\(marker)\r\n").utf8))
+        manager.renderingCoordinator.scheduleParsedChunkPublish(sessionID: session.id, engine: engine)
+
+        try? await Task.sleep(for: .milliseconds(60))
+
+        XCTAssertEqual(manager.gridSnapshotNonceBySessionID[session.id, default: -1], baselineNonce)
+        XCTAssertFalse(manager.shellBuffers[session.id, default: []].joined(separator: "\n").contains(marker))
+
+        await manager.renderingCoordinator.applicationDidBecomeActive()
+        await waitForNonceIncrement(manager: manager, sessionID: session.id, baseline: baselineNonce)
+
+        XCTAssertEqual(manager.gridSnapshotNonceBySessionID[session.id, default: -1], baselineNonce + 1)
+        XCTAssertTrue(manager.shellBuffers[session.id, default: []].joined(separator: "\n").contains(marker))
+    }
+
+    @MainActor
+    func testInactiveRenderingCollapsesMultipleDeferredPublishesIntoSingleCatchUp() async {
+        let manager = SessionManager(
+            transport: MockSSHTransport(),
+            knownHostsStore: InMemoryKnownHostsStore()
+        )
+        await manager.injectScreenshotSessions()
+
+        guard let session = manager.sessions.first,
+              let engine = manager.engines[session.id] else {
+            XCTFail("Expected an injected session with an engine")
+            return
+        }
+
+        let baselineNonce = manager.gridSnapshotNonceBySessionID[session.id, default: -1]
+        let markerA = "PROSSH_DEFERRED_A_\(UUID().uuidString.prefix(6))"
+        let markerB = "PROSSH_DEFERRED_B_\(UUID().uuidString.prefix(6))"
+
+        manager.applicationDidBecomeInactive()
+        _ = await engine.feed(Data(("\r\n\(markerA)\r\n").utf8))
+        manager.renderingCoordinator.scheduleParsedChunkPublish(sessionID: session.id, engine: engine)
+        _ = await engine.feed(Data(("\r\n\(markerB)\r\n").utf8))
+        manager.renderingCoordinator.scheduleParsedChunkPublish(sessionID: session.id, engine: engine)
+
+        try? await Task.sleep(for: .milliseconds(60))
+        XCTAssertEqual(manager.gridSnapshotNonceBySessionID[session.id, default: -1], baselineNonce)
+
+        await manager.renderingCoordinator.applicationDidBecomeActive()
+        await waitForNonceIncrement(manager: manager, sessionID: session.id, baseline: baselineNonce)
+
+        let catchUpNonce = manager.gridSnapshotNonceBySessionID[session.id, default: -1]
+        XCTAssertEqual(catchUpNonce, baselineNonce + 1)
+
+        try? await Task.sleep(for: .milliseconds(80))
+
+        XCTAssertEqual(manager.gridSnapshotNonceBySessionID[session.id, default: -1], catchUpNonce)
+
+        let shellBufferText = manager.shellBuffers[session.id, default: []].joined(separator: "\n")
+        XCTAssertTrue(shellBufferText.contains(markerA))
+        XCTAssertTrue(shellBufferText.contains(markerB))
+    }
+
+    @MainActor
     private func waitForNonceIncrement(
         manager: SessionManager,
         sessionID: UUID,

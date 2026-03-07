@@ -243,11 +243,19 @@ final class SessionManager: ObservableObject {
     }
 
     func applicationDidEnterBackground() {
+        renderingCoordinator.applicationDidBecomeInactive()
         reconnectCoordinator.applicationDidEnterBackground()
     }
 
     func applicationDidBecomeActive() {
         reconnectCoordinator.applicationDidBecomeActive()
+        Task { @MainActor [weak self] in
+            await self?.renderingCoordinator.applicationDidBecomeActive()
+        }
+    }
+
+    func applicationDidBecomeInactive() {
+        renderingCoordinator.applicationDidBecomeInactive()
     }
 
     private func connect(

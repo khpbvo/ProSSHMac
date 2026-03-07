@@ -28,7 +28,7 @@ struct ProSSHMacApp: App {
                     case .background:
                         dependencies.sessionManager.applicationDidEnterBackground()
                     case .inactive:
-                        break
+                        dependencies.sessionManager.applicationDidBecomeInactive()
                     @unknown default:
                         break
                     }

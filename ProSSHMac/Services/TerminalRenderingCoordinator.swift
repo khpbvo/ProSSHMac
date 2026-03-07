@@ -33,6 +33,14 @@ import os.signpost
     private var autoBurstModeBySessionID: [UUID: Bool] = [:]
     /// Pending revert task — fires 200ms after the last publish request.
     private var burstRevertTasksBySessionID: [UUID: Task<Void, Never>] = [:]
+    /// When true, parsed output continues updating terminal state but UI snapshot publishes are deferred.
+    private var isPublishingSuspended = false
+    /// Sessions that received output while publishing was suspended and need one catch-up publish on resume.
+    private var suspendedDirtySessionIDs: Set<UUID> = []
+    /// Tracks sessions currently inside publishGridState so follow-up requests can collapse to latest state only.
+    private var publishInFlightSessionIDs: Set<UUID> = []
+    /// Sticky bit for "another publish is needed after the current one finishes".
+    private var followUpPublishRequestedSessionIDs: Set<UUID> = []
 
     private let shellBufferPublishInterval: TimeInterval = 1.0 / 30.0
     private let throughputShellBufferPublishInterval: TimeInterval = 1.0 / 5.0
@@ -83,6 +91,42 @@ import os.signpost
         autoBurstModeBySessionID.removeValue(forKey: sessionID)
         burstRevertTasksBySessionID[sessionID]?.cancel()
         burstRevertTasksBySessionID.removeValue(forKey: sessionID)
+        suspendedDirtySessionIDs.remove(sessionID)
+        publishInFlightSessionIDs.remove(sessionID)
+        followUpPublishRequestedSessionIDs.remove(sessionID)
+    }
+
+    // MARK: - App lifecycle
+
+    func applicationDidBecomeInactive() {
+        guard !isPublishingSuspended else { return }
+        isPublishingSuspended = true
+
+        for sessionID in pendingSnapshotPublishTasksBySessionID.keys {
+            suspendedDirtySessionIDs.insert(sessionID)
+        }
+
+        for sessionID in Array(pendingSnapshotPublishTasksBySessionID.keys) {
+            cancelPendingSnapshotPublish(for: sessionID)
+        }
+
+        resetBurstState()
+    }
+
+    func applicationDidBecomeActive() async {
+        let wasSuspended = isPublishingSuspended
+        isPublishingSuspended = false
+        resetBurstState()
+
+        guard wasSuspended, let manager else { return }
+        let sessionIDs = Array(suspendedDirtySessionIDs)
+        suspendedDirtySessionIDs.removeAll()
+
+        for sessionID in sessionIDs {
+            guard let engine = manager.engines[sessionID] else { continue }
+            lastShellBufferPublishAtBySessionID.removeValue(forKey: sessionID)
+            await publishLatestGridState(for: sessionID, engine: engine)
+        }
     }
 
     // MARK: - Resize
@@ -249,7 +293,7 @@ import os.signpost
         scrollOffsetBySessionID[sessionID] = 0
         preserveScrollAnchorBySessionID[sessionID] = false
         cancelPendingSnapshotPublish(for: sessionID)
-        await publishGridState(
+        await publishLatestGridState(
             for: sessionID,
             engine: engine,
             snapshotOverride: snapshotOverride
@@ -267,11 +311,27 @@ import os.signpost
         for sessionID: UUID,
         engine: TerminalEngine
     ) async {
-        guard pendingSnapshotPublishTasksBySessionID[sessionID] != nil else {
+        if isPublishingSuspended {
+            suspendedDirtySessionIDs.insert(sessionID)
+            cancelPendingSnapshotPublish(for: sessionID)
             return
         }
+
+        let hasPendingTask = pendingSnapshotPublishTasksBySessionID[sessionID] != nil
+        let hasFollowUpRequest = followUpPublishRequestedSessionIDs.contains(sessionID)
+        let publishIsInFlight = publishInFlightSessionIDs.contains(sessionID)
+
+        guard hasPendingTask || hasFollowUpRequest || publishIsInFlight else {
+            return
+        }
+
+        if publishIsInFlight {
+            followUpPublishRequestedSessionIDs.insert(sessionID)
+            return
+        }
+
         cancelPendingSnapshotPublish(for: sessionID)
-        await publishGridState(for: sessionID, engine: engine)
+        await publishLatestGridState(for: sessionID, engine: engine)
     }
 
     func publishGridState(
@@ -418,6 +478,17 @@ import os.signpost
         }
     }
 
+    private func resetBurstState() {
+        burstCountBySessionID.removeAll()
+        burstWindowStartBySessionID.removeAll()
+        autoBurstModeBySessionID.removeAll()
+
+        for task in burstRevertTasksBySessionID.values {
+            task.cancel()
+        }
+        burstRevertTasksBySessionID.removeAll()
+    }
+
     private func cancelPendingSnapshotPublish(for sessionID: UUID) {
         pendingSnapshotPublishTasksBySessionID[sessionID]?.cancel()
         pendingSnapshotPublishTasksBySessionID.removeValue(forKey: sessionID)
@@ -427,9 +498,19 @@ import os.signpost
         for sessionID: UUID,
         engine: TerminalEngine
     ) {
+        if isPublishingSuspended {
+            suspendedDirtySessionIDs.insert(sessionID)
+            return
+        }
+
         updateBurstState(for: sessionID)
 
         guard pendingSnapshotPublishTasksBySessionID[sessionID] == nil else {
+            return
+        }
+
+        if publishInFlightSessionIDs.contains(sessionID) {
+            followUpPublishRequestedSessionIDs.insert(sessionID)
             return
         }
 
@@ -441,7 +522,38 @@ import os.signpost
             try? await Task.sleep(for: interval)
             guard !Task.isCancelled else { return }
             self.pendingSnapshotPublishTasksBySessionID.removeValue(forKey: sessionID)
-            await self.publishGridState(for: sessionID, engine: engine)
+            await self.publishLatestGridState(for: sessionID, engine: engine)
+        }
+    }
+
+    private func publishLatestGridState(
+        for sessionID: UUID,
+        engine: TerminalEngine,
+        snapshotOverride: GridSnapshot? = nil
+    ) async {
+        if isPublishingSuspended {
+            suspendedDirtySessionIDs.insert(sessionID)
+            return
+        }
+
+        if publishInFlightSessionIDs.contains(sessionID) {
+            followUpPublishRequestedSessionIDs.insert(sessionID)
+            return
+        }
+
+        publishInFlightSessionIDs.insert(sessionID)
+        defer {
+            publishInFlightSessionIDs.remove(sessionID)
+        }
+
+        await publishGridState(for: sessionID, engine: engine, snapshotOverride: snapshotOverride)
+
+        if followUpPublishRequestedSessionIDs.remove(sessionID) != nil {
+            if isPublishingSuspended {
+                suspendedDirtySessionIDs.insert(sessionID)
+            } else {
+                await publishLatestGridState(for: sessionID, engine: engine)
+            }
         }
     }
 
