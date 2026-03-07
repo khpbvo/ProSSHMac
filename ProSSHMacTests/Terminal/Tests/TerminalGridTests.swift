@@ -750,6 +750,25 @@ final class TerminalGridTests: XCTestCase {
         XCTAssertEqual(snapshotText(snapshot, row: 5, startCol: 0, count: 1), "F")
     }
 
+    func testPartialScrollRegionMarksEntireDirtyRangeForSnapshot() async {
+        for (row, marker) in ["A", "B", "C", "D", "E", "F"].enumerated() {
+            await grid.moveCursorTo(row: row, col: 0)
+            await grid.printCharacter(marker)
+        }
+
+        _ = await grid.snapshot()
+
+        await grid.setScrollRegion(top: 1, bottom: 4)
+        await grid.scrollUp(lines: 1)
+
+        let snapshot = await grid.snapshot()
+        XCTAssertEqual(snapshot.dirtyRange, 80..<(5 * 80))
+        XCTAssertEqual(snapshotText(snapshot, row: 1, startCol: 0, count: 1), "C")
+        XCTAssertEqual(snapshotText(snapshot, row: 2, startCol: 0, count: 1), "D")
+        XCTAssertEqual(snapshotText(snapshot, row: 3, startCol: 0, count: 1), "E")
+        XCTAssertEqual(snapshotText(snapshot, row: 4, startCol: 0, count: 1), " ")
+    }
+
     // MARK: - Repeat Last Character
 
     func testRepeatLastCharacter() async {

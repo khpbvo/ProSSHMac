@@ -52,8 +52,7 @@ extension TerminalGrid {
         }
 
         if lines > 0 {
-            markDirty(row: scrollTop)
-            markDirty(row: scrollBottom)
+            markDirty(rows: scrollTop...scrollBottom)
         }
     }
 
@@ -92,8 +91,7 @@ extension TerminalGrid {
         }
 
         if lines > 0 {
-            markDirty(row: scrollTop)
-            markDirty(row: scrollBottom)
+            markDirty(rows: scrollTop...scrollBottom)
         }
     }
 

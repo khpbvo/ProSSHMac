@@ -167,6 +167,9 @@ struct TerminalSurfaceView: View {
             onScroll: { delta in
                 sessionManager.scrollTerminal(sessionID: session.id, delta: delta)
             },
+            allowsViewportScrollingProvider: {
+                !(sessionManager.gridSnapshot(for: session.id)?.usingAlternateBuffer ?? false)
+            },
             isFocused: isFocused,
             isLocalSession: session.isLocal,
             selectionCoordinator: selectionCoordinator,

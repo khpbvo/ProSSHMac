@@ -18,6 +18,7 @@ struct MetalTerminalSessionSurface: View {
     let onTap: ((CGPoint) -> Void)?
     var onTerminalResize: ((Int, Int) -> Void)?
     var onScroll: ((Int) -> Void)?
+    var allowsViewportScrollingProvider: (() -> Bool)?
     var isFocused: Bool = true
     var isLocalSession: Bool = false
     var selectionCoordinator: TerminalSelectionCoordinator?
@@ -47,6 +48,7 @@ struct MetalTerminalSessionSurface: View {
                         model.handleTripleTap(at: point)
                     },
                     onScroll: onScroll,
+                    allowsViewportScrolling: allowsViewportScrollingProvider,
                     accessibilityLabel: "Terminal \(sessionID.uuidString.prefix(6))",
                     accessibilityHint: "Interactive SSH terminal",
                     backgroundOpacityPercent: backgroundOpacityPercent

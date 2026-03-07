@@ -212,6 +212,18 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         smoothScrollEngine.jumpTo(row: row)
     }
 
+    /// Called when a direct scroll gesture begins.
+    func scrollGestureBegan() {
+        smoothScrollEngine.beginGesture()
+        requestFrame()
+    }
+
+    /// Called when a direct scroll gesture ends.
+    func scrollGestureEnded() {
+        smoothScrollEngine.endGesture()
+        requestFrame()
+    }
+
     /// Called when the trackpad gesture ends — start momentum decay.
     func scrollMomentumBegan() {
         smoothScrollEngine.beginMomentum()

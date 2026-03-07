@@ -56,6 +56,14 @@ extension TerminalGrid {
         dirtyRowMax = max(dirtyRowMax, row)
     }
 
+    /// Mark a contiguous row range as dirty.
+    nonisolated func markDirty(rows range: ClosedRange<Int>) {
+        guard !range.isEmpty else { return }
+        hasDirtyCells = true
+        dirtyRowMin = min(dirtyRowMin, range.lowerBound)
+        dirtyRowMax = max(dirtyRowMax, range.upperBound)
+    }
+
     /// Mark all rows as dirty (used after buffer switch, full reset, resize).
     nonisolated func markAllDirty() {
         hasDirtyCells = true

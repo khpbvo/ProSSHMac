@@ -23,6 +23,10 @@ struct TerminalMetalView: NSViewRepresentable {
     var onTripleTap: ((CGPoint) -> Void)?
     /// Called when user scrolls (positive = up/scrollback, negative = down/toward live).
     var onScroll: ((Int) -> Void)?
+    /// Whether emulator viewport scrolling is currently allowed.
+    /// Alternate-screen TUIs should disable this and either ignore the wheel
+    /// or handle it through mouse reporting overlays instead.
+    var allowsViewportScrolling: (() -> Bool)? = nil
     var accessibilityLabel: String = "Terminal"
     var accessibilityHint: String = "Interactive SSH terminal"
     var backgroundOpacityPercent: Double = TransparencyManager.defaultBackgroundOpacityPercent
@@ -56,6 +60,7 @@ struct TerminalMetalView: NSViewRepresentable {
         mtkView.addGestureRecognizer(pan)
 
         container.onScroll = onScroll
+        container.allowsViewportScrolling = allowsViewportScrolling
         container.cellHeight = renderer.currentCellHeight
         container.renderer = renderer
         renderer.smoothScrollEngine.onScrollLineChange = { [weak container] lines in
@@ -69,6 +74,7 @@ struct TerminalMetalView: NSViewRepresentable {
         context.coordinator.parent = self
         renderer.onGridSizeChange = onTerminalResize
         nsView.onScroll = onScroll
+        nsView.allowsViewportScrolling = allowsViewportScrolling
         nsView.cellHeight = renderer.currentCellHeight
         nsView.renderer = renderer
         renderer.smoothScrollEngine.onScrollLineChange = { [weak nsView] lines in
@@ -125,9 +131,11 @@ final class TerminalMetalContainerView: NSView {
     let blurView = NSVisualEffectView(frame: .zero)
     let metalView = MTKView(frame: .zero)
     var onScroll: ((Int) -> Void)?
+    var allowsViewportScrolling: (() -> Bool)?
     var cellHeight: CGFloat = 16
     weak var renderer: MetalTerminalRenderer?
     private var accumulatedScrollY: CGFloat = 0
+    private var preciseScrollGestureActive = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -170,25 +178,19 @@ final class TerminalMetalContainerView: NSView {
 
     override func scrollWheel(with event: NSEvent) {
         guard cellHeight > 0 else { return }
+        guard allowsViewportScrolling?() ?? true else {
+            renderer?.scrollGestureEnded()
+            renderer?.scrollMomentumEnded()
+            return
+        }
 
         if let renderer, renderer.smoothScrollConfiguration.isEnabled {
-            // Smooth scroll: feed raw delta to physics engine
             if event.hasPreciseScrollingDeltas {
-                // Trackpad: feed raw continuous delta
-                renderer.scrollDelta(event.scrollingDeltaY)
+                handlePreciseScroll(event, renderer: renderer)
             } else {
                 // Discrete mouse wheel: use fixed 3-row step
                 let direction: CGFloat = event.scrollingDeltaY > 0 ? 1 : (event.scrollingDeltaY < 0 ? -1 : 0)
                 renderer.scrollDelta(direction * cellHeight * 3)
-            }
-            // Momentum phases only apply to trackpad (precise) events
-            if event.hasPreciseScrollingDeltas {
-                if event.phase == .ended {
-                    renderer.scrollMomentumBegan()
-                }
-                if event.momentumPhase == .ended {
-                    renderer.scrollMomentumEnded()
-                }
             }
         } else {
             // Legacy integer accumulation fallback
@@ -201,6 +203,38 @@ final class TerminalMetalContainerView: NSView {
             if event.phase == .ended || event.momentumPhase == .ended {
                 accumulatedScrollY = 0
             }
+        }
+    }
+
+    private func handlePreciseScroll(_ event: NSEvent, renderer: MetalTerminalRenderer) {
+        let phase = event.phase
+        let momentumPhase = event.momentumPhase
+
+        let directGestureEvent = momentumPhase.isEmpty
+        if directGestureEvent && !preciseScrollGestureActive {
+            renderer.reloadSmoothScrollSettings()
+            renderer.scrollGestureBegan()
+            preciseScrollGestureActive = true
+        }
+
+        renderer.scrollDelta(event.scrollingDeltaY)
+
+        if directGestureEvent && (phase == .ended || phase == .cancelled) {
+            renderer.scrollGestureEnded()
+            preciseScrollGestureActive = false
+            if phase == .ended {
+                renderer.scrollMomentumBegan()
+            }
+        }
+
+        if momentumPhase == .began {
+            if preciseScrollGestureActive {
+                renderer.scrollGestureEnded()
+                preciseScrollGestureActive = false
+            }
+            renderer.scrollMomentumBegan()
+        } else if momentumPhase == .ended || momentumPhase == .cancelled {
+            renderer.scrollMomentumEnded()
         }
     }
 }

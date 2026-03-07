@@ -70,6 +70,10 @@ final class SmoothScrollEngine {
     /// Whether a momentum phase is active (trackpad released with velocity).
     private var inMomentum: Bool = false
 
+    /// Whether a direct scroll gesture is actively delivering deltas.
+    /// While true, fractional input must not be spring-snapped away between events.
+    private var inGesture = false
+
     /// Snap threshold — same as CursorRenderer.
     private let snapEpsilon: Float = 0.001
 
@@ -118,9 +122,21 @@ final class SmoothScrollEngine {
         renderOffset = 0
         velocity = 0
         inMomentum = false
+        inGesture = false
     }
 
     // MARK: - Public API
+
+    /// Marks the start of a direct scroll gesture.
+    func beginGesture() {
+        inGesture = true
+        inMomentum = false
+    }
+
+    /// Marks the end of a direct scroll gesture.
+    func endGesture() {
+        inGesture = false
+    }
 
     /// Feed a raw scroll delta from NSEvent (in points, not rows).
     func scrollDelta(_ deltaPoints: CGFloat, cellHeight: CGFloat) {
@@ -192,7 +208,7 @@ final class SmoothScrollEngine {
             }
         }
 
-        if abs(renderOffset) > snapEpsilon {
+        if !inGesture && abs(renderOffset) > snapEpsilon {
             // Spring back to zero — frame-rate-independent lerp.
             // At bounds with rubber-band overshoot, use stronger spring.
             let stiffness: Float
@@ -226,7 +242,7 @@ final class SmoothScrollEngine {
 
     /// Whether continuous frame updates are needed (animation in progress).
     func requiresContinuousFrames() -> Bool {
-        inMomentum || abs(renderOffset) > snapEpsilon
+        inGesture || inMomentum || abs(renderOffset) > snapEpsilon
     }
 
     /// Reload configuration (call at start of each scroll gesture).

@@ -46,6 +46,23 @@ final class SmoothScrollEngineTests: XCTestCase {
         XCTAssertEqual(engine.targetScrollRow, 1)
     }
 
+    func testSlowGestureAccumulatesAcrossFramesWithoutBleedingOff() {
+        let engine = SmoothScrollEngine()
+        var firedDeltas: [Int] = []
+        engine.onScrollLineChange = { delta in firedDeltas.append(delta) }
+
+        engine.beginGesture()
+
+        engine.scrollDelta(5.0, cellHeight: cellHeight) // 0.25 rows
+        _ = engine.frame(cellHeight: cellHeight, time: 1.0)
+        engine.scrollDelta(5.0, cellHeight: cellHeight) // total 0.50 rows
+        _ = engine.frame(cellHeight: cellHeight, time: 1.0 + 1.0 / 60.0)
+        engine.scrollDelta(10.0, cellHeight: cellHeight) // total 1.0 rows
+
+        XCTAssertEqual(firedDeltas, [1], "Slow gesture input should accumulate across frames")
+        XCTAssertEqual(engine.targetScrollRow, 1, "Slow gesture should still advance by one row")
+    }
+
     // MARK: - Momentum decay
 
     func testMomentumDecayConvergesToZero() {
@@ -92,6 +109,29 @@ final class SmoothScrollEngineTests: XCTestCase {
 
         XCTAssertEqual(lastOffset, 0.0, accuracy: 0.01, "Spring-back should converge to zero")
         XCTAssertFalse(engine.requiresContinuousFrames(), "Should not require frames after spring-back")
+    }
+
+    func testGestureEndRestoresSpringBack() {
+        let engine = SmoothScrollEngine()
+
+        engine.beginGesture()
+        engine.scrollDelta(10.0, cellHeight: cellHeight) // 0.5 rows
+
+        let activeFrame = engine.frame(cellHeight: cellHeight, time: 1.0)
+        XCTAssertGreaterThan(abs(activeFrame.offsetPixels), 0.01, "Active gesture should preserve fractional offset")
+
+        engine.endGesture()
+
+        var lastOffset = activeFrame.offsetPixels
+        var time = 1.0
+        for _ in 0..<200 {
+            time += 1.0 / 60.0
+            let frame = engine.frame(cellHeight: cellHeight, time: time)
+            lastOffset = frame.offsetPixels
+            if !frame.isAnimating { break }
+        }
+
+        XCTAssertEqual(lastOffset, 0.0, accuracy: 0.01, "Offset should spring back after gesture ends")
     }
 
     // MARK: - Velocity clamping

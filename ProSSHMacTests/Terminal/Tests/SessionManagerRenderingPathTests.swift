@@ -168,6 +168,36 @@ final class SessionManagerRenderingPathTests: XCTestCase {
     }
 
     @MainActor
+    func testAlternateBufferDisablesViewportScrollbackStateAndScrollRequests() async {
+        let manager = SessionManager(
+            transport: MockSSHTransport(),
+            knownHostsStore: InMemoryKnownHostsStore()
+        )
+        await manager.injectScreenshotSessions()
+
+        guard let session = manager.sessions.first,
+              let engine = manager.engines[session.id] else {
+            XCTFail("Expected an injected session with an engine")
+            return
+        }
+
+        _ = await engine.feed(Data("\u{1B}[?1049h".utf8))
+        await manager.renderingCoordinator.publishGridState(for: session.id, engine: engine)
+
+        let stateInAlt = manager.scrollStateBySessionID[session.id]
+        XCTAssertEqual(stateInAlt?.scrollOffset, 0)
+        XCTAssertEqual(stateInAlt?.scrollbackCount, 0)
+
+        let baselineNonce = manager.gridSnapshotNonceBySessionID[session.id, default: -1]
+        manager.scrollTerminal(sessionID: session.id, delta: 6)
+        try? await Task.sleep(for: .milliseconds(40))
+
+        XCTAssertEqual(manager.gridSnapshotNonceBySessionID[session.id, default: -1], baselineNonce)
+        XCTAssertEqual(manager.scrollStateBySessionID[session.id]?.scrollOffset, 0)
+        XCTAssertEqual(manager.scrollStateBySessionID[session.id]?.scrollbackCount, 0)
+    }
+
+    @MainActor
     private func waitForNonceIncrement(
         manager: SessionManager,
         sessionID: UUID,

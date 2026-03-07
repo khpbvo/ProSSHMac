@@ -120,6 +120,9 @@ struct ExternalTerminalWindowView: View {
                 onScroll: { delta in
                     sessionManager.scrollTerminal(sessionID: session.id, delta: delta)
                 },
+                allowsViewportScrollingProvider: {
+                    !(sessionManager.gridSnapshot(for: session.id)?.usingAlternateBuffer ?? false)
+                },
                 isFocused: true,
                 isLocalSession: session.isLocal,
                 selectionCoordinator: selectionCoordinator,
