@@ -244,6 +244,62 @@ final class SessionManagerRenderingPathTests: XCTestCase {
     }
 
     @MainActor
+    func testAlternateBufferSustainedRedrawDoesNotForceIntermediatePublishAtFiftyMilliseconds() async {
+        let manager = SessionManager(
+            transport: MockSSHTransport(),
+            knownHostsStore: InMemoryKnownHostsStore()
+        )
+        await manager.injectScreenshotSessions()
+
+        guard let session = manager.sessions.first,
+              let engine = manager.engines[session.id] else {
+            XCTFail("Expected an injected session with an engine")
+            return
+        }
+
+        _ = await engine.feed(Data("\u{1B}[?1049h".utf8))
+        await manager.renderingCoordinator.publishGridState(for: session.id, engine: engine)
+
+        let baselineNonce = manager.gridSnapshotNonceBySessionID[session.id, default: -1]
+        let redrawFragments = [
+            "\u{1B}[2J\u{1B}[1;1HF",
+            "\u{1B}[2J\u{1B}[1;1HFR",
+            "\u{1B}[2J\u{1B}[1;1HFRA",
+            "\u{1B}[2J\u{1B}[1;1HFRAM"
+        ]
+
+        for fragment in redrawFragments {
+            _ = await engine.feed(Data(fragment.utf8))
+            await manager.renderingCoordinator.scheduleParsedChunkPublish(sessionID: session.id, engine: engine)
+            try? await Task.sleep(for: .milliseconds(20))
+            XCTAssertEqual(
+                manager.gridSnapshotNonceBySessionID[session.id, default: -1],
+                baselineNonce,
+                "Long alternate-buffer redraw bursts should keep coalescing instead of forcing a publish after ~50ms."
+            )
+        }
+
+        _ = await engine.feed(Data("\u{1B}[2J\u{1B}[1;1HFRAME DONE".utf8))
+        await manager.renderingCoordinator.scheduleParsedChunkPublish(sessionID: session.id, engine: engine)
+
+        try? await Task.sleep(for: .milliseconds(12))
+        XCTAssertEqual(
+            manager.gridSnapshotNonceBySessionID[session.id, default: -1],
+            baselineNonce,
+            "The completed frame should still wait for the quiescent debounce before publishing."
+        )
+
+        await waitForNonceIncrement(manager: manager, sessionID: session.id, baseline: baselineNonce)
+
+        guard let snapshot = manager.gridSnapshot(for: session.id) else {
+            XCTFail("Expected a published snapshot after the sustained redraw settled.")
+            return
+        }
+
+        XCTAssertEqual(snapshotText(snapshot, row: 0, startCol: 0, count: 10), "FRAME DONE")
+    }
+
+    @MainActor
     func testSemanticPromptRedrawPublishesOnlyAfterQuiescentWindow() async {
         let manager = SessionManager(
             transport: MockSSHTransport(),

@@ -37,6 +37,10 @@ constant uint CURSOR_BAR       = 2;
 
 /// Sentinel glyph index value meaning "no glyph".
 constant uint GLYPH_INDEX_NONE = 0xFFFFFFFFu;
+constant uint GLYPH_COORD_MASK = 0x3FFFu;
+constant uint GLYPH_Y_SHIFT = 14u;
+constant uint GLYPH_PAGE_SHIFT = 28u;
+constant uint MAX_ATLAS_PAGES = 16u;
 
 /// Decoration geometry constants.
 constant float UNDERLINE_THICKNESS  = 1.0;
@@ -70,7 +74,7 @@ constant float GLOW_STRENGTH = 0.12;  // max glow alpha
 struct CellInstance {
     ushort  row;            // grid row
     ushort  col;            // grid column
-    uint    glyphIndex;     // atlas position: upper 16 bits = Y, lower 16 bits = X
+    uint    glyphIndex;     // atlas position: [page:4][y:14][x:14]
     uint    fgColor;        // packed RGBA (R in high byte)
     uint    bgColor;        // packed RGBA (R in high byte)
     uint    underlineColor; // packed RGBA for underline (0 = use fgColor)
@@ -168,6 +172,7 @@ struct VertexOut {
     uint   bgColor;                // packed bg RGBA
     uint   underlineColor;         // packed underline RGBA (0 = use fg)
     uint   glyphIndex;             // packed atlas position or GLYPH_INDEX_NONE
+    uint   atlasPage;              // atlas texture page index
     uint   attributes;             // attribute bitfield
     uint8_t flags;                 // cell flags
     uint8_t underlineStyle;        // underline style enum
@@ -249,9 +254,8 @@ vertex VertexOut terminal_vertex(
     if (cell.glyphIndex == GLYPH_INDEX_NONE) {
         uv = float2(0.0, 0.0);
     } else {
-        // glyphIndex encodes atlas pixel position: upper 16 bits = Y, lower 16 bits = X.
-        float atlasX = float(cell.glyphIndex & 0xFFFF);
-        float atlasY = float((cell.glyphIndex >> 16) & 0xFFFF);
+        float atlasX = float(cell.glyphIndex & GLYPH_COORD_MASK);
+        float atlasY = float((cell.glyphIndex >> GLYPH_Y_SHIFT) & GLYPH_COORD_MASK);
 
         float2 uvOrigin = float2(atlasX, atlasY) / uniforms.atlasSize;
         float2 uvSize   = uniforms.cellSize / uniforms.atlasSize;
@@ -267,6 +271,7 @@ vertex VertexOut terminal_vertex(
     out.bgColor        = cell.bgColor;
     out.underlineColor = cell.underlineColor;
     out.glyphIndex     = cell.glyphIndex;
+    out.atlasPage      = (cell.glyphIndex >> GLYPH_PAGE_SHIFT) & 0x0Fu;
     out.attributes     = uint(cell.attributes);
     out.flags          = cell.flags;
     out.underlineStyle = cell.underlineStyle;
@@ -283,8 +288,8 @@ vertex VertexOut terminal_vertex(
 /// selection overlay, and text decorations.
 fragment float4 terminal_fragment(
     VertexOut in [[stage_in]],
-    texture2d<float> atlas [[texture(0)]],
-    texture2d<float> previousFrame [[texture(1)]],
+    array<texture2d<float>, MAX_ATLAS_PAGES> atlasPages [[texture(0)]],
+    texture2d<float> previousFrame [[texture(MAX_ATLAS_PAGES)]],
     constant TerminalUniforms &uniforms [[buffer(1)]]
 ) {
     // -------------------------------------------------------------------
@@ -359,7 +364,8 @@ fragment float4 terminal_fragment(
 
     float glyphAlpha = 0.0;
     if (in.glyphIndex != GLYPH_INDEX_NONE) {
-        float4 glyphSample = atlas.sample(atlasSampler, in.uv);
+        uint atlasPage = min(in.atlasPage, MAX_ATLAS_PAGES - 1u);
+        float4 glyphSample = atlasPages[atlasPage].sample(atlasSampler, in.uv);
         glyphAlpha = glyphSample.a;
     }
 

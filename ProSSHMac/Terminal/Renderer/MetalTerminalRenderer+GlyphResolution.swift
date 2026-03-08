@@ -13,6 +13,30 @@ struct RasterFontSet: @unchecked Sendable {
     nonisolated(unsafe) let boldItalic: CTFont
 }
 
+enum GlyphIndexPacking {
+    private static let coordinateMask: UInt32 = 0x3FFF
+    private static let yShift: UInt32 = 14
+    private static let pageShift: UInt32 = 28
+
+    static func pack(_ entry: AtlasEntry) -> UInt32 {
+        let page = UInt32(entry.atlasPage & 0x0F) << pageShift
+        let y = (UInt32(entry.y) & coordinateMask) << yShift
+        let x = UInt32(entry.x) & coordinateMask
+        return page | y | x
+    }
+
+    static func unpack(_ packed: UInt32) -> (atlasPage: UInt8, x: UInt16, y: UInt16)? {
+        guard packed != MetalTerminalRenderer.noGlyphIndex else {
+            return nil
+        }
+
+        let atlasPage = UInt8((packed >> pageShift) & 0x0F)
+        let y = UInt16((packed >> yShift) & coordinateMask)
+        let x = UInt16(packed & coordinateMask)
+        return (atlasPage: atlasPage, x: x, y: y)
+    }
+}
+
 extension MetalTerminalRenderer: GlyphResolver {
 
     // MARK: - Glyph Resolution
@@ -146,6 +170,16 @@ extension MetalTerminalRenderer: GlyphResolver {
     ) -> CTFont {
         let scalarValue = scalar.value
 
+        // Block-element glyphs are used by TUIs such as Claude Code to build
+        // prompt art. Some primary monospace fonts technically "contain" these
+        // codepoints but render them with poor/stylized geometry. Prefer a
+        // stable Menlo fallback for this range when available.
+        if isBlockElementRange(scalarValue),
+           let blockFont = preferredBlockElementFont(matching: primaryFont),
+           fontContainsGlyph(blockFont, scalar: scalar) {
+            return blockFont
+        }
+
         // For emoji codepoints, always prefer the system emoji font.
         // Monospace fonts (SF Mono, Menlo, etc.) often have placeholder glyphs
         // for emoji that pass CTFontGetGlyphsForCharacters but render as "?".
@@ -195,6 +229,33 @@ extension MetalTerminalRenderer: GlyphResolver {
         UnicodeClassification.isEmojiCodepoint(v)
     }
 
+    nonisolated static func isBlockElementRange(_ v: UInt32) -> Bool {
+        (0x2580...0x259F).contains(v)
+    }
+
+    nonisolated static func preferredBlockElementFont(matching primaryFont: CTFont) -> CTFont? {
+        let size = CTFontGetSize(primaryFont)
+        let menlo = CTFontCreateWithName("Menlo" as CFString, size, nil)
+        let resolvedFamily = CTFontCopyFamilyName(menlo) as String
+        guard resolvedFamily.caseInsensitiveCompare("Menlo") == .orderedSame else {
+            return nil
+        }
+        return menlo
+    }
+
+    nonisolated static func fontContainsGlyph(_ font: CTFont, scalar: Unicode.Scalar) -> Bool {
+        let scalarValue = scalar.value
+        if scalarValue <= 0xFFFF {
+            var char = UInt16(truncatingIfNeeded: scalarValue)
+            var glyph: CGGlyph = 0
+            return CTFontGetGlyphsForCharacters(font, &char, &glyph, 1) && glyph != 0
+        }
+
+        let utf16 = Array(String(scalar).utf16)
+        var glyphs = [CGGlyph](repeating: 0, count: utf16.count)
+        return CTFontGetGlyphsForCharacters(font, utf16, &glyphs, utf16.count) && glyphs[0] != 0
+    }
+
     func resolveGlyphIndex(for cell: CellInstance) -> UInt32 {
         let attributes = CellAttributes(rawValue: cell.attributes)
         let bold = attributes.contains(.bold)
@@ -215,15 +276,9 @@ extension MetalTerminalRenderer: GlyphResolver {
     }
 
     /// Pack an AtlasEntry into a UInt32 for the shader.
-    /// Matches the Metal shader's decoding:
-    ///   atlasX = float(glyphIndex & 0xFFFF)
-    ///   atlasY = float((glyphIndex >> 16) & 0xFFFF)
-    ///
-    /// Layout: [y:16][x:16] — upper 16 bits = Y pixel position, lower 16 bits = X pixel position.
+    /// Layout: [page:4][y:14][x:14].
     func packAtlasEntry(_ entry: AtlasEntry) -> UInt32 {
-        let x = UInt32(entry.x) & 0xFFFF
-        let y = UInt32(entry.y) & 0xFFFF
-        return (y << 16) | x
+        GlyphIndexPacking.pack(entry)
     }
 
     /// Pure CPU glyph rasterization — safe to call from any thread.

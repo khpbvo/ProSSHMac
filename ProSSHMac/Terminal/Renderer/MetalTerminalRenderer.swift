@@ -38,8 +38,8 @@ import simd
 /// ## Buffer Bindings
 /// - buffer(0): CellInstance array (from CellBuffer)
 /// - buffer(1): TerminalUniforms
-/// - texture(0): Glyph atlas texture (page 0)
-/// - texture(1): Previous-frame color texture (CRT phosphor afterglow)
+/// - texture(0...15): Glyph atlas texture pages
+/// - texture(16): Previous-frame color texture (CRT phosphor afterglow)
 final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
 
     /// Sentinel glyph index meaning "no glyph".
@@ -112,6 +112,15 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
 
     /// Font name used for glyph rasterization, synced from FontManager.
     var rasterFontName: String = "SF Mono"
+
+    /// True once the async font-manager sync has populated real font metrics.
+    /// Prevents early glyph misses from rasterizing against placeholder startup state.
+    var isFontStateReady: Bool = false
+
+    /// Monotonic generation for font/atlas state. Background glyph raster jobs
+    /// capture this and drop their results if the renderer has since rebuilt
+    /// fonts or the glyph atlas.
+    var glyphRasterGeneration: UInt64 = 0
 
     /// Cached CTFont variants for glyph miss rasterization.
     /// Rebuilt only when font name/size/scale changes.

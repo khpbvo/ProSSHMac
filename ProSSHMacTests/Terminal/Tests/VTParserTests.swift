@@ -135,6 +135,22 @@ final class VTParserTests: XCTestCase {
         XCTAssertEqual(pos.col, 14)
     }
 
+    func testClaudeCodeSplashLayoutUsesExpectedBlockCharacters() async {
+        await feed(
+            "\u{1B}[?2026h\r\n"
+            + "\u{1B}[1C▐▛███▜▌\u{1B}[3CClaude\u{1B}[1CCode\u{1B}[1Cv2.1.71\r\n"
+            + "▝▜█████▛▘\u{1B}[2CHaiku\u{1B}[1C4.5\u{1B}[1C·\u{1B}[1CClaude\u{1B}[1CAPI\r\n"
+            + "\u{1B}[2C▘▘\u{1B}[1C▝▝\u{1B}[4C~/Documents/ClaudeAssistant\r\n"
+            + "\u{1B}[?2026l"
+        )
+
+        let lines = await grid.visibleText()
+        XCTAssertTrue(lines.count >= 3)
+        XCTAssertEqual(lines[1], " ▐▛███▜▌   Claude Code v2.1.71")
+        XCTAssertEqual(lines[2], "▝▜█████▛▘  Haiku 4.5 · Claude API")
+        XCTAssertEqual(lines[3], "  ▘▘ ▝▝    ~/Documents/ClaudeAssistant")
+    }
+
     func testCHA_CursorHorizontalAbsolute() async {
         await feed("\u{1B}[15G") // CHA to column 15
         let pos = await grid.cursorPosition()

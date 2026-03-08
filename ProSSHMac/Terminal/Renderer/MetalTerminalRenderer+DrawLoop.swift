@@ -235,10 +235,11 @@ extension MetalTerminalRenderer {
     /// background rasterization task. New misses during an in-flight task accumulate
     /// in `pendingGlyphKeys` and are processed on the next pass (triggered by `isDirty = true`).
     private func drainPendingGlyphKeysIfNeeded() {
-        guard !pendingGlyphKeys.isEmpty, glyphRasterTask == nil else { return }
+        guard isFontStateReady, !pendingGlyphKeys.isEmpty, glyphRasterTask == nil else { return }
 
         let keys = pendingGlyphKeys
         pendingGlyphKeys.removeAll()
+        let generation = glyphRasterGeneration
 
         let scale = screenScale
         let cw = Int(ceil(cellWidth * scale))
@@ -266,6 +267,13 @@ extension MetalTerminalRenderer {
             }
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
+                guard generation == self.glyphRasterGeneration else {
+                    self.glyphRasterTask = nil
+                    if !self.pendingGlyphKeys.isEmpty {
+                        self.requestFrame()
+                    }
+                    return
+                }
                 for (key, rasterized) in results {
                     guard !self.glyphCache.contains(key) else { continue }
                     let entry = rasterized.pixelData.withUnsafeBufferPointer { ptr -> AtlasEntry? in
@@ -320,10 +328,15 @@ extension MetalTerminalRenderer {
         renderEncoder.setVertexBuffer(uniformBuffer.buffer, offset: 0, index: 1)
         renderEncoder.setFragmentBuffer(uniformBuffer.buffer, offset: 0, index: 1)
 
-        if let atlasTexture = glyphAtlas.texture(forPage: 0) {
-            renderEncoder.setFragmentTexture(atlasTexture, index: 0)
-        }
-        renderEncoder.setFragmentTexture(previousFrameTexture ?? crtFallbackTexture, index: 1)
+        let atlasTextures = (0..<GlyphAtlas.maxPageCount).map { glyphAtlas.texture(forPage: $0) }
+        renderEncoder.setFragmentTextures(
+            atlasTextures,
+            range: 0..<GlyphAtlas.maxPageCount
+        )
+        renderEncoder.setFragmentTexture(
+            previousFrameTexture ?? crtFallbackTexture,
+            index: GlyphAtlas.maxPageCount
+        )
 
         let instanceCount = cellBuffer.cellCount
         guard instanceCount > 0 else { return 0 }

@@ -213,4 +213,69 @@ final class GlyphRasterizerTests: XCTestCase {
         )
         XCTAssertTrue(result.pixelData.contains(where: { $0 != 0 }))
     }
+
+    func testBlockElementRasterizationIsFontIndependent() {
+        let blockScalar = UnicodeScalar(0x259B)!
+        let alternateFont = CTFontCreateWithName("Helvetica" as CFString, 28, nil)
+
+        let menloResult = rasterizer.rasterize(
+            codepoint: blockScalar,
+            font: font,
+            cellWidth: cellWidth,
+            cellHeight: cellHeight
+        )
+        let helveticaResult = rasterizer.rasterize(
+            codepoint: blockScalar,
+            font: alternateFont,
+            cellWidth: cellWidth,
+            cellHeight: cellHeight
+        )
+
+        XCTAssertEqual(menloResult.pixelData, helveticaResult.pixelData)
+        XCTAssertFalse(menloResult.isColor)
+        XCTAssertFalse(menloResult.isWide)
+    }
+
+    func testQuadrantBlockElementOccupiesExpectedCells() {
+        let result = rasterizer.rasterize(
+            codepoint: UnicodeScalar(0x259B)!,
+            font: font,
+            cellWidth: cellWidth,
+            cellHeight: cellHeight
+        )
+
+        XCTAssertGreaterThan(alphaSum(in: result, xRange: 0..<cellWidth / 2, yRange: 0..<cellHeight / 2), 0)
+        XCTAssertGreaterThan(alphaSum(in: result, xRange: cellWidth / 2..<cellWidth, yRange: 0..<cellHeight / 2), 0)
+        XCTAssertGreaterThan(alphaSum(in: result, xRange: 0..<cellWidth / 2, yRange: cellHeight / 2..<cellHeight), 0)
+        XCTAssertEqual(alphaSum(in: result, xRange: cellWidth / 2..<cellWidth, yRange: cellHeight / 2..<cellHeight), 0)
+    }
+
+    func testRightHalfBlockElementLeavesLeftHalfEmpty() {
+        let result = rasterizer.rasterize(
+            codepoint: UnicodeScalar(0x2590)!,
+            font: font,
+            cellWidth: cellWidth,
+            cellHeight: cellHeight
+        )
+
+        XCTAssertEqual(alphaSum(in: result, xRange: 0..<cellWidth / 2, yRange: 0..<cellHeight), 0)
+        XCTAssertGreaterThan(alphaSum(in: result, xRange: cellWidth / 2..<cellWidth, yRange: 0..<cellHeight), 0)
+    }
+
+    private func alphaSum(in glyph: RasterizedGlyph, xRange: Range<Int>, yRange: Range<Int>) -> Int {
+        guard glyph.width > 0, glyph.height > 0 else { return 0 }
+
+        let clampedX = max(0, xRange.lowerBound)..<min(glyph.width, xRange.upperBound)
+        let clampedY = max(0, yRange.lowerBound)..<min(glyph.height, yRange.upperBound)
+        guard !clampedX.isEmpty, !clampedY.isEmpty else { return 0 }
+
+        var total = 0
+        for y in clampedY {
+            for x in clampedX {
+                let offset = ((y * glyph.width) + x) * 4
+                total += Int(glyph.pixelData[offset + 3])
+            }
+        }
+        return total
+    }
 }

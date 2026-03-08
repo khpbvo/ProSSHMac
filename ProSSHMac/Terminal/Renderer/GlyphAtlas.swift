@@ -2,7 +2,7 @@
 // ProSSHV2
 //
 // Metal texture atlas for glyph storage.
-// Manages one or more MTLTexture pages (each 2048x2048, .rgba8Unorm)
+// Manages one or more MTLTexture pages (each 2048x2048, .bgra8Unorm)
 // with row-major glyph packing. The atlas is the backing store for
 // rasterized glyphs — the GlyphCache maps GlyphKeys to AtlasEntry
 // positions within these textures.
@@ -33,7 +33,7 @@ private struct AtlasPage {
 /// Manages a multi-page Metal texture atlas for glyph storage.
 ///
 /// Glyphs are packed in row-major order within each page. All pages use
-/// `.rgba8Unorm` pixel format so text glyphs and color emoji can coexist
+/// `.bgra8Unorm` pixel format so text glyphs and color emoji can coexist
 /// on the same page. The shader distinguishes between them at render time.
 ///
 /// Usage:
@@ -42,6 +42,7 @@ private struct AtlasPage {
 /// 3. The returned `AtlasEntry` contains the UV coordinates for the shader.
 /// 4. On font change, call `rebuild(cellWidth:cellHeight:device:)` to reset.
 final class GlyphAtlas {
+    static let maxPageCount = kMaxAtlasPages
 
     // MARK: - Properties
 
@@ -114,7 +115,7 @@ final class GlyphAtlas {
 
     /// Estimated memory usage (bytes) of allocated atlas textures.
     ///
-    /// Uses RGBA8 layout: 4 bytes per pixel.
+    /// Uses BGRA8 layout: 4 bytes per pixel.
     var estimatedMemoryBytes: Int {
         pageCount * pageSize * pageSize * 4
     }
@@ -194,7 +195,7 @@ final class GlyphAtlas {
     ///   - width: Width of the glyph bitmap in pixels.
     ///            For standard glyphs this is `cellWidth`; for wide glyphs, `2 * cellWidth`.
     ///   - height: Height of the glyph bitmap in pixels (typically `cellHeight`).
-    ///   - pixelData: Raw pixel data in RGBA8 format. Must contain exactly
+    ///   - pixelData: Raw pixel data in BGRA8 format. Must contain exactly
     ///                `width * height * 4` bytes.
     ///   - bearingX: Horizontal bearing offset for glyph positioning.
     ///   - bearingY: Vertical bearing offset (baseline) for glyph positioning.
@@ -317,7 +318,7 @@ final class GlyphAtlas {
     /// Uploads raw pixel data to a specific region of an atlas page texture.
     ///
     /// Uses `MTLTexture.replace(region:mipmapLevel:withBytes:bytesPerRow:)` for
-    /// the upload. The data must be in RGBA8 format (4 bytes per pixel).
+    /// the upload. The data must be in BGRA8 format (4 bytes per pixel).
     ///
     /// - Parameters:
     ///   - page: Zero-based page index.
@@ -325,7 +326,7 @@ final class GlyphAtlas {
     ///   - y: Y origin of the region in pixels.
     ///   - width: Width of the region in pixels.
     ///   - height: Height of the region in pixels.
-    ///   - data: Raw RGBA8 pixel data. Must contain at least `width * height * 4` bytes.
+    ///   - data: Raw BGRA8 pixel data. Must contain at least `width * height * 4` bytes.
     func uploadRegion(
         page: Int,
         x: Int,
@@ -342,7 +343,7 @@ final class GlyphAtlas {
             size: MTLSize(width: width, height: height, depth: 1)
         )
 
-        let bytesPerPixel = 4 // RGBA8
+        let bytesPerPixel = 4 // BGRA8
         let bytesPerRow = width * bytesPerPixel
 
         texture.replace(

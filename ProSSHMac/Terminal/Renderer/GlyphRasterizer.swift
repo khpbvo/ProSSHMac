@@ -157,6 +157,14 @@ final class GlyphRasterizer: @unchecked Sendable {
         cellWidth: Int,
         cellHeight: Int
     ) -> RasterizedGlyph {
+        if Self.isBlockElement(codepoint) {
+            return rasterizeBlockElement(
+                codepoint: codepoint,
+                cellWidth: cellWidth,
+                cellHeight: cellHeight
+            )
+        }
+
         let isColor = Self.isColorGlyph(codepoint: codepoint, font: font)
         let isWide = Self.isWideCharacter(codepoint: codepoint)
 
@@ -205,6 +213,114 @@ final class GlyphRasterizer: @unchecked Sendable {
             codepoint: codepoint, font: font,
             rasterWidth: rasterWidth, rasterHeight: rasterHeight,
             isColor: isColor, isWide: isWide
+        )
+    }
+
+    private nonisolated func rasterizeBlockElement(
+        codepoint: UnicodeScalar,
+        cellWidth: Int,
+        cellHeight: Int
+    ) -> RasterizedGlyph {
+        guard cellWidth > 0, cellHeight > 0,
+              let context = ensureScratchBuffer(width: cellWidth, height: cellHeight),
+              let buffer = scratchBuffer else {
+            return .empty
+        }
+
+        let byteCount = cellWidth * cellHeight * 4
+        memset(buffer, 0, byteCount)
+        context.clear(CGRect(x: 0, y: 0, width: cellWidth, height: cellHeight))
+
+        let pixelBuffer = UnsafeMutableBufferPointer(
+            start: buffer.assumingMemoryBound(to: UInt8.self),
+            count: byteCount
+        )
+
+        func fillRect(
+            xStartUnits: Int,
+            xEndUnits: Int,
+            xDivisions: Int,
+            yStartUnits: Int,
+            yEndUnits: Int,
+            yDivisions: Int,
+            alpha: UInt8 = 0xFF
+        ) {
+            let minX = scaledBoundary(xStartUnits, total: cellWidth, divisions: xDivisions)
+            let maxX = scaledBoundary(xEndUnits, total: cellWidth, divisions: xDivisions)
+            let minY = scaledBoundary(yStartUnits, total: cellHeight, divisions: yDivisions)
+            let maxY = scaledBoundary(yEndUnits, total: cellHeight, divisions: yDivisions)
+            fillBlockPixels(
+                pixelBuffer,
+                width: cellWidth,
+                height: cellHeight,
+                minX: minX,
+                maxX: maxX,
+                minY: minY,
+                maxY: maxY,
+                alpha: alpha
+            )
+        }
+
+        switch codepoint.value {
+        case 0x2580: fillRect(xStartUnits: 0, xEndUnits: 8, xDivisions: 8, yStartUnits: 0, yEndUnits: 4, yDivisions: 8)
+        case 0x2581: fillRect(xStartUnits: 0, xEndUnits: 8, xDivisions: 8, yStartUnits: 7, yEndUnits: 8, yDivisions: 8)
+        case 0x2582: fillRect(xStartUnits: 0, xEndUnits: 8, xDivisions: 8, yStartUnits: 6, yEndUnits: 8, yDivisions: 8)
+        case 0x2583: fillRect(xStartUnits: 0, xEndUnits: 8, xDivisions: 8, yStartUnits: 5, yEndUnits: 8, yDivisions: 8)
+        case 0x2584: fillRect(xStartUnits: 0, xEndUnits: 8, xDivisions: 8, yStartUnits: 4, yEndUnits: 8, yDivisions: 8)
+        case 0x2585: fillRect(xStartUnits: 0, xEndUnits: 8, xDivisions: 8, yStartUnits: 3, yEndUnits: 8, yDivisions: 8)
+        case 0x2586: fillRect(xStartUnits: 0, xEndUnits: 8, xDivisions: 8, yStartUnits: 2, yEndUnits: 8, yDivisions: 8)
+        case 0x2587: fillRect(xStartUnits: 0, xEndUnits: 8, xDivisions: 8, yStartUnits: 1, yEndUnits: 8, yDivisions: 8)
+        case 0x2588: fillRect(xStartUnits: 0, xEndUnits: 8, xDivisions: 8, yStartUnits: 0, yEndUnits: 8, yDivisions: 8)
+        case 0x2589: fillRect(xStartUnits: 0, xEndUnits: 7, xDivisions: 8, yStartUnits: 0, yEndUnits: 8, yDivisions: 8)
+        case 0x258A: fillRect(xStartUnits: 0, xEndUnits: 6, xDivisions: 8, yStartUnits: 0, yEndUnits: 8, yDivisions: 8)
+        case 0x258B: fillRect(xStartUnits: 0, xEndUnits: 5, xDivisions: 8, yStartUnits: 0, yEndUnits: 8, yDivisions: 8)
+        case 0x258C: fillRect(xStartUnits: 0, xEndUnits: 4, xDivisions: 8, yStartUnits: 0, yEndUnits: 8, yDivisions: 8)
+        case 0x258D: fillRect(xStartUnits: 0, xEndUnits: 3, xDivisions: 8, yStartUnits: 0, yEndUnits: 8, yDivisions: 8)
+        case 0x258E: fillRect(xStartUnits: 0, xEndUnits: 2, xDivisions: 8, yStartUnits: 0, yEndUnits: 8, yDivisions: 8)
+        case 0x258F: fillRect(xStartUnits: 0, xEndUnits: 1, xDivisions: 8, yStartUnits: 0, yEndUnits: 8, yDivisions: 8)
+        case 0x2590: fillRect(xStartUnits: 4, xEndUnits: 8, xDivisions: 8, yStartUnits: 0, yEndUnits: 8, yDivisions: 8)
+        case 0x2591: fillRect(xStartUnits: 0, xEndUnits: 8, xDivisions: 8, yStartUnits: 0, yEndUnits: 8, yDivisions: 8, alpha: 0x40)
+        case 0x2592: fillRect(xStartUnits: 0, xEndUnits: 8, xDivisions: 8, yStartUnits: 0, yEndUnits: 8, yDivisions: 8, alpha: 0x80)
+        case 0x2593: fillRect(xStartUnits: 0, xEndUnits: 8, xDivisions: 8, yStartUnits: 0, yEndUnits: 8, yDivisions: 8, alpha: 0xC0)
+        case 0x2594: fillRect(xStartUnits: 0, xEndUnits: 8, xDivisions: 8, yStartUnits: 0, yEndUnits: 1, yDivisions: 8)
+        case 0x2595: fillRect(xStartUnits: 7, xEndUnits: 8, xDivisions: 8, yStartUnits: 0, yEndUnits: 8, yDivisions: 8)
+        case 0x2596:
+            fillQuadrants(pixelBuffer, width: cellWidth, height: cellHeight, mask: Self.quadrantBottomLeft)
+        case 0x2597:
+            fillQuadrants(pixelBuffer, width: cellWidth, height: cellHeight, mask: Self.quadrantBottomRight)
+        case 0x2598:
+            fillQuadrants(pixelBuffer, width: cellWidth, height: cellHeight, mask: Self.quadrantTopLeft)
+        case 0x2599:
+            fillQuadrants(pixelBuffer, width: cellWidth, height: cellHeight, mask: Self.quadrantTopLeft | Self.quadrantBottomLeft | Self.quadrantBottomRight)
+        case 0x259A:
+            fillQuadrants(pixelBuffer, width: cellWidth, height: cellHeight, mask: Self.quadrantTopLeft | Self.quadrantBottomRight)
+        case 0x259B:
+            fillQuadrants(pixelBuffer, width: cellWidth, height: cellHeight, mask: Self.quadrantTopLeft | Self.quadrantTopRight | Self.quadrantBottomLeft)
+        case 0x259C:
+            fillQuadrants(pixelBuffer, width: cellWidth, height: cellHeight, mask: Self.quadrantTopLeft | Self.quadrantTopRight | Self.quadrantBottomRight)
+        case 0x259D:
+            fillQuadrants(pixelBuffer, width: cellWidth, height: cellHeight, mask: Self.quadrantTopRight)
+        case 0x259E:
+            fillQuadrants(pixelBuffer, width: cellWidth, height: cellHeight, mask: Self.quadrantTopRight | Self.quadrantBottomLeft | Self.quadrantBottomRight)
+        case 0x259F:
+            fillQuadrants(pixelBuffer, width: cellWidth, height: cellHeight, mask: Self.quadrantTopRight | Self.quadrantBottomLeft)
+        default:
+            break
+        }
+
+        let pixelData = [UInt8](unsafeUninitializedCapacity: byteCount) { destPtr, initializedCount in
+            memcpy(destPtr.baseAddress!, buffer, byteCount)
+            initializedCount = byteCount
+        }
+
+        return RasterizedGlyph(
+            pixelData: pixelData,
+            width: cellWidth,
+            height: cellHeight,
+            bearingX: 0,
+            bearingY: 0,
+            isColor: false,
+            isWide: false
         )
     }
 
@@ -390,8 +506,69 @@ final class GlyphRasterizer: @unchecked Sendable {
 
     // MARK: - B.2.4 Wide Character Detection
 
+    private nonisolated static func isBlockElement(_ scalar: UnicodeScalar) -> Bool {
+        (0x2580...0x259F).contains(scalar.value)
+    }
+
     private nonisolated static func isWideCharacter(codepoint: UnicodeScalar) -> Bool {
         CharacterWidth.isWide(codepoint)
+    }
+
+    private nonisolated static let quadrantTopLeft = 1 << 0
+    private nonisolated static let quadrantTopRight = 1 << 1
+    private nonisolated static let quadrantBottomLeft = 1 << 2
+    private nonisolated static let quadrantBottomRight = 1 << 3
+
+    private nonisolated func fillQuadrants(
+        _ pixelBuffer: UnsafeMutableBufferPointer<UInt8>,
+        width: Int,
+        height: Int,
+        mask: Int
+    ) {
+        let xMid = scaledBoundary(1, total: width, divisions: 2)
+        let yMid = scaledBoundary(1, total: height, divisions: 2)
+
+        if (mask & Self.quadrantTopLeft) != 0 {
+            fillBlockPixels(pixelBuffer, width: width, height: height, minX: 0, maxX: xMid, minY: 0, maxY: yMid)
+        }
+        if (mask & Self.quadrantTopRight) != 0 {
+            fillBlockPixels(pixelBuffer, width: width, height: height, minX: xMid, maxX: width, minY: 0, maxY: yMid)
+        }
+        if (mask & Self.quadrantBottomLeft) != 0 {
+            fillBlockPixels(pixelBuffer, width: width, height: height, minX: 0, maxX: xMid, minY: yMid, maxY: height)
+        }
+        if (mask & Self.quadrantBottomRight) != 0 {
+            fillBlockPixels(pixelBuffer, width: width, height: height, minX: xMid, maxX: width, minY: yMid, maxY: height)
+        }
+    }
+
+    private nonisolated func scaledBoundary(_ value: Int, total: Int, divisions: Int) -> Int {
+        guard divisions > 0 else { return 0 }
+        let scaled = (Double(value) * Double(total) / Double(divisions)).rounded()
+        return min(max(Int(scaled), 0), total)
+    }
+
+    private nonisolated func fillBlockPixels(
+        _ pixelBuffer: UnsafeMutableBufferPointer<UInt8>,
+        width: Int,
+        height: Int,
+        minX: Int,
+        maxX: Int,
+        minY: Int,
+        maxY: Int,
+        alpha: UInt8 = 0xFF
+    ) {
+        guard width > 0, height > 0, minX < maxX, minY < maxY else { return }
+
+        for y in minY..<maxY {
+            for x in minX..<maxX {
+                let offset = ((y * width) + x) * 4
+                pixelBuffer[offset + 0] = alpha
+                pixelBuffer[offset + 1] = alpha
+                pixelBuffer[offset + 2] = alpha
+                pixelBuffer[offset + 3] = alpha
+            }
+        }
     }
 
     // MARK: - Grapheme Cluster Rasterization

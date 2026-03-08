@@ -5,6 +5,16 @@ import os.signpost
 #endif
 
 @MainActor final class TerminalRenderingCoordinator {
+    private enum PublishDebounceMode {
+        case none
+        case alternateBuffer
+        case promptRedraw
+
+        var requiresDebounce: Bool {
+            self != .none
+        }
+    }
+
     weak var manager: SessionManager?
 
     // MARK: - Private rendering state (all moved from SessionManager)
@@ -50,8 +60,10 @@ import os.signpost
     private let throughputShellBufferPublishInterval: TimeInterval = 1.0 / 5.0
     private let snapshotPublishInterval: Duration = .milliseconds(8)
     private let throughputSnapshotPublishInterval: Duration = .milliseconds(16)
-    private let alternateScreenSnapshotPublishInterval: Duration = .milliseconds(24)
-    private let alternateScreenMaxPublishDeferral: TimeInterval = 0.050
+    private let alternateBufferSnapshotPublishInterval: Duration = .milliseconds(24)
+    private let promptRedrawSnapshotPublishInterval: Duration = .milliseconds(24)
+    private let alternateBufferMaxPublishDeferral: TimeInterval = 0.150
+    private let promptRedrawMaxPublishDeferral: TimeInterval = 0.050
     private let burstWindowDuration: TimeInterval = 0.016  // 16ms
     private let burstThreshold = 3                         // requests within window to activate
     private let burstRevertDelay: Duration = .milliseconds(200)
@@ -328,12 +340,18 @@ import os.signpost
         sessionID: UUID,
         engine: TerminalEngine
     ) async {
-        let prefersQuiescentFramePublish =
-            (await engine.usingAlternateBuffer) || promptRedrawPendingSessionIDs.contains(sessionID)
+        let debounceMode: PublishDebounceMode
+        if await engine.usingAlternateBuffer {
+            debounceMode = .alternateBuffer
+        } else if promptRedrawPendingSessionIDs.contains(sessionID) {
+            debounceMode = .promptRedraw
+        } else {
+            debounceMode = .none
+        }
         scheduleCoalescedGridPublish(
             for: sessionID,
             engine: engine,
-            prefersDebounce: prefersQuiescentFramePublish
+            debounceMode: debounceMode
         )
     }
 
@@ -551,7 +569,7 @@ import os.signpost
     private func scheduleCoalescedGridPublish(
         for sessionID: UUID,
         engine: TerminalEngine,
-        prefersDebounce: Bool
+        debounceMode: PublishDebounceMode
     ) {
         if isPublishingSuspended {
             suspendedDirtySessionIDs.insert(sessionID)
@@ -569,12 +587,12 @@ import os.signpost
         let firstScheduledAt = pendingSnapshotPublishStartedAtBySessionID[sessionID] ?? now
 
         if let existingTask = pendingSnapshotPublishTasksBySessionID[sessionID] {
-            guard prefersDebounce else {
+            guard debounceMode.requiresDebounce else {
                 return
             }
 
             let pendingAge = now.timeIntervalSince(firstScheduledAt)
-            guard pendingAge < alternateScreenMaxPublishDeferral else {
+            guard pendingAge < maxPublishDeferral(for: debounceMode) else {
                 return
             }
 
@@ -587,8 +605,8 @@ import os.signpost
         pendingSnapshotPublishTasksBySessionID[sessionID] = Task { @MainActor [weak self] in
             guard let self else { return }
             let interval: Duration
-            if prefersDebounce {
-                interval = self.alternateScreenSnapshotPublishInterval
+            if debounceMode.requiresDebounce {
+                interval = self.publishInterval(for: debounceMode)
             } else {
                 interval = self.isInBurstMode(for: sessionID)
                     ? self.throughputSnapshotPublishInterval
@@ -645,5 +663,27 @@ import os.signpost
         }
         lastShellBufferPublishAtBySessionID[sessionID] = now
         return true
+    }
+
+    private func publishInterval(for debounceMode: PublishDebounceMode) -> Duration {
+        switch debounceMode {
+        case .none:
+            return snapshotPublishInterval
+        case .alternateBuffer:
+            return alternateBufferSnapshotPublishInterval
+        case .promptRedraw:
+            return promptRedrawSnapshotPublishInterval
+        }
+    }
+
+    private func maxPublishDeferral(for debounceMode: PublishDebounceMode) -> TimeInterval {
+        switch debounceMode {
+        case .none:
+            return 0
+        case .alternateBuffer:
+            return alternateBufferMaxPublishDeferral
+        case .promptRedraw:
+            return promptRedrawMaxPublishDeferral
+        }
     }
 }

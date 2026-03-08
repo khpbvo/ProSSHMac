@@ -9,6 +9,11 @@ extension MetalTerminalRenderer {
     /// Fetches actual cell dimensions from the FontManager actor and
     /// pre-populates the glyph cache with ASCII characters.
     func initializeFontMetricsAndPrepopulate() async {
+        glyphRasterGeneration &+= 1
+        isFontStateReady = false
+        glyphRasterTask?.cancel()
+        pendingGlyphKeys.removeAll()
+
         let dims = await fontManager.currentCellDimensions()
         let fontSize = await fontManager.effectiveFontSize
         let fontName = await fontManager.fontName
@@ -44,6 +49,8 @@ extension MetalTerminalRenderer {
             guard let self else { return nil }
             return self.rasterizeAndUpload(key: key)
         }
+
+        isFontStateReady = true
 
         // Force grid recalculation with the new cell dimensions.
         recalculateGridDimensions()
@@ -99,6 +106,11 @@ extension MetalTerminalRenderer {
     }
 
     func reloadFontStateFromManager() async {
+        glyphRasterGeneration &+= 1
+        isFontStateReady = false
+        glyphRasterTask?.cancel()
+        pendingGlyphKeys.removeAll()
+
         let dims = await fontManager.currentCellDimensions()
         let fontSize = await fontManager.effectiveFontSize
         let fontName = await fontManager.fontName
@@ -127,6 +139,8 @@ extension MetalTerminalRenderer {
             guard let self else { return nil }
             return self.rasterizeAndUpload(key: key)
         }
+
+        isFontStateReady = true
 
         // Recalculate grid with new cell dimensions.
         self.recalculateGridDimensions()
