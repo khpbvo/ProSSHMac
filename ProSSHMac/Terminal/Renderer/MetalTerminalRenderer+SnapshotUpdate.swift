@@ -71,7 +71,8 @@ extension MetalTerminalRenderer {
                 cursorStyle: snapshot.cursorStyle,
                 columns: snapshot.columns,
                 rows: snapshot.rows,
-                usingAlternateBuffer: snapshot.usingAlternateBuffer
+                usingAlternateBuffer: snapshot.usingAlternateBuffer,
+                graphemeOverrides: snapshot.graphemeOverrides
             )
         } else {
             uploadSnapshot = snapshot

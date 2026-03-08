@@ -76,6 +76,7 @@ nonisolated struct CellAttributes: OptionSet, Sendable, Hashable {
     static let wideChar      = CellAttributes(rawValue: 1 << 9)
     static let wrapped       = CellAttributes(rawValue: 1 << 10) // Line was auto-wrapped
     static let overline      = CellAttributes(rawValue: 1 << 11)
+    static let wideContinuation = CellAttributes(rawValue: 1 << 12)
 }
 
 // MARK: - TerminalCell (Packed 20-byte layout)

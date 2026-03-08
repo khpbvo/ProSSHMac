@@ -78,4 +78,8 @@ nonisolated struct GridSnapshot: Sendable {
 
     /// Whether the grid is using the alternate screen buffer (vim, htop, etc.).
     let usingAlternateBuffer: Bool
+
+    /// Original grapheme clusters for cells whose visible text cannot be
+    /// reconstructed from `glyphIndex` alone.
+    let graphemeOverrides: [Int: String]?
 }

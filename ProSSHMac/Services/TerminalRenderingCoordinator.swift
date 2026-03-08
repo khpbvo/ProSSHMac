@@ -502,7 +502,8 @@ import os.signpost
                 cursorStyle: snapshot.cursorStyle,
                 columns: snapshot.columns,
                 rows: snapshot.rows,
-                usingAlternateBuffer: snapshot.usingAlternateBuffer
+                usingAlternateBuffer: snapshot.usingAlternateBuffer,
+                graphemeOverrides: snapshot.graphemeOverrides
             )
             if snapshotOverride == nil {
                 forceFullSnapshotNextPublishBySessionID.remove(sessionID)

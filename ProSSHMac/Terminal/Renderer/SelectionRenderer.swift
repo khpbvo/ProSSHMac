@@ -104,7 +104,8 @@ final class SelectionRenderer {
                 cursorStyle: snapshot.cursorStyle,
                 columns: snapshot.columns,
                 rows: snapshot.rows,
-                usingAlternateBuffer: snapshot.usingAlternateBuffer
+                usingAlternateBuffer: snapshot.usingAlternateBuffer,
+                graphemeOverrides: snapshot.graphemeOverrides
             )
         }
 
@@ -157,7 +158,8 @@ final class SelectionRenderer {
             cursorStyle: snapshot.cursorStyle,
             columns: snapshot.columns,
             rows: snapshot.rows,
-            usingAlternateBuffer: snapshot.usingAlternateBuffer
+            usingAlternateBuffer: snapshot.usingAlternateBuffer,
+            graphemeOverrides: snapshot.graphemeOverrides
         )
     }
 

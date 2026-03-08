@@ -92,7 +92,8 @@ enum RendererStressHarness {
             cursorStyle: .block,
             columns: columns,
             rows: rows,
-            usingAlternateBuffer: false
+            usingAlternateBuffer: false,
+            graphemeOverrides: nil
         )
     }
 }

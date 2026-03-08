@@ -44,63 +44,7 @@ extension MetalTerminalRenderer {
     func selectedText() -> String? {
         guard let selection = selectionRenderer.selection,
               let snapshot = latestSnapshot else { return nil }
-
-        let cols = snapshot.columns
-        let rows = snapshot.rows
-        guard cols > 0, rows > 0 else { return nil }
-
-        // Normalize start/end ordering
-        let startLinear = selection.start.row * cols + selection.start.col
-        let endLinear = selection.end.row * cols + selection.end.col
-        let (selStart, selEnd) = startLinear <= endLinear
-            ? (selection.start, selection.end)
-            : (selection.end, selection.start)
-
-        // Expand word/line boundaries
-        var expanded = TerminalSelection(start: selStart, end: selEnd, type: selection.type)
-        if selection.type == .line {
-            expanded.start.col = 0
-            expanded.end.col = cols - 1
-        }
-
-        var result = ""
-        for row in expanded.start.row...expanded.end.row {
-            let left = (row == expanded.start.row) ? expanded.start.col : 0
-            let right = (row == expanded.end.row) ? expanded.end.col : (cols - 1)
-
-            var lineChars: [Character] = []
-            var skipNext = false
-            for col in left...right {
-                let idx = row * cols + col
-                guard idx >= 0 && idx < snapshot.cells.count else { continue }
-
-                if skipNext {
-                    skipNext = false
-                    continue
-                }
-
-                let cell = snapshot.cells[idx]
-                let isWide = (cell.attributes & CellAttributes.wideChar.rawValue) != 0
-                if isWide { skipNext = true }
-
-                let codepoint = cell.glyphIndex
-                if codepoint == 0 {
-                    lineChars.append(" ")
-                } else if let scalar = Unicode.Scalar(codepoint) {
-                    lineChars.append(Character(scalar))
-                }
-            }
-
-            // Trim trailing spaces for each line
-            while lineChars.last == " " { lineChars.removeLast() }
-            result += String(lineChars)
-
-            if row < expanded.end.row {
-                result += "\n"
-            }
-        }
-
-        return result.isEmpty ? nil : result
+        return TerminalSelectionTextExtractor.selectedText(from: snapshot, selection: selection)
     }
 
     /// Convert a point position (in the MTKView's coordinate space) to a grid cell.
@@ -116,5 +60,125 @@ extension MetalTerminalRenderer {
         let row = Int(flippedY / cellHeight)
 
         return SelectionPoint(row: max(0, row), col: max(0, col))
+    }
+}
+
+enum TerminalSelectionTextExtractor {
+    static func selectedText(from snapshot: GridSnapshot, selection: TerminalSelection) -> String? {
+        let cols = snapshot.columns
+        let rows = snapshot.rows
+        guard cols > 0, rows > 0 else { return nil }
+
+        let expanded = normalizedSelection(selection, in: snapshot)
+
+        var result = ""
+        for row in expanded.start.row...expanded.end.row {
+            let left = (row == expanded.start.row) ? expanded.start.col : 0
+            let right = (row == expanded.end.row) ? expanded.end.col : (cols - 1)
+
+            var line = ""
+            for col in left...right {
+                let idx = row * cols + col
+                guard idx >= 0 && idx < snapshot.cells.count else { continue }
+
+                let cell = snapshot.cells[idx]
+                let attributes = CellAttributes(rawValue: cell.attributes)
+                if attributes.contains(.wideContinuation) {
+                    continue
+                }
+
+                line.append(textForCell(at: idx, in: snapshot) ?? " ")
+            }
+
+            if let lastNonSpace = line.lastIndex(where: { $0 != " " }) {
+                result += String(line[...lastNonSpace])
+            }
+
+            if row < expanded.end.row {
+                result += "\n"
+            }
+        }
+
+        return result.isEmpty ? nil : result
+    }
+
+    private static func normalizedSelection(
+        _ selection: TerminalSelection,
+        in snapshot: GridSnapshot
+    ) -> TerminalSelection {
+        var normalized = selection
+        normalized.start = clampedSelectionPoint(normalized.start, in: snapshot)
+        normalized.end = clampedSelectionPoint(normalized.end, in: snapshot)
+
+        let startLinear = normalized.start.row * snapshot.columns + normalized.start.col
+        let endLinear = normalized.end.row * snapshot.columns + normalized.end.col
+        if startLinear > endLinear {
+            swap(&normalized.start, &normalized.end)
+        }
+
+        switch normalized.type {
+        case .character:
+            return normalized
+        case .line:
+            normalized.start.col = 0
+            normalized.end.col = snapshot.columns - 1
+            return normalized
+        case .word:
+            normalized.start = expandWordBoundaryLeft(from: normalized.start, in: snapshot)
+            normalized.end = expandWordBoundaryRight(from: normalized.end, in: snapshot)
+            return normalized
+        }
+    }
+
+    private static func clampedSelectionPoint(_ point: SelectionPoint, in snapshot: GridSnapshot) -> SelectionPoint {
+        SelectionPoint(
+            row: min(max(0, point.row), max(0, snapshot.rows - 1)),
+            col: min(max(0, point.col), max(0, snapshot.columns - 1))
+        )
+    }
+
+    private static func expandWordBoundaryLeft(from point: SelectionPoint, in snapshot: GridSnapshot) -> SelectionPoint {
+        var col = point.col
+        while col > 0 {
+            let idx = point.row * snapshot.columns + (col - 1)
+            guard idx >= 0 && idx < snapshot.cells.count else { break }
+            guard isWordCell(snapshot.cells[idx], index: idx, in: snapshot) else { break }
+            col -= 1
+        }
+        return SelectionPoint(row: point.row, col: col)
+    }
+
+    private static func expandWordBoundaryRight(from point: SelectionPoint, in snapshot: GridSnapshot) -> SelectionPoint {
+        var col = point.col
+        let maxCol = max(0, snapshot.columns - 1)
+        while col < maxCol {
+            let idx = point.row * snapshot.columns + (col + 1)
+            guard idx >= 0 && idx < snapshot.cells.count else { break }
+            guard isWordCell(snapshot.cells[idx], index: idx, in: snapshot) else { break }
+            col += 1
+        }
+        return SelectionPoint(row: point.row, col: col)
+    }
+
+    private static func isWordCell(_ cell: CellInstance, index: Int, in snapshot: GridSnapshot) -> Bool {
+        if let grapheme = snapshot.graphemeOverrides?[index], !grapheme.isEmpty {
+            return true
+        }
+        if cell.glyphIndex != 0 {
+            return true
+        }
+        let attributes = CellAttributes(rawValue: cell.attributes)
+        return attributes.contains(.wideChar) || attributes.contains(.wideContinuation)
+    }
+
+    private static func textForCell(at index: Int, in snapshot: GridSnapshot) -> String? {
+        if let grapheme = snapshot.graphemeOverrides?[index], !grapheme.isEmpty {
+            return grapheme
+        }
+
+        let codepoint = snapshot.cells[index].glyphIndex
+        guard codepoint != 0 else { return nil }
+        guard let scalar = Unicode.Scalar(codepoint) else { return "\u{FFFD}" }
+        return String(scalar)
     }
 }

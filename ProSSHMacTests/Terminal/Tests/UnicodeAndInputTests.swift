@@ -620,4 +620,93 @@ final class BracketedPasteTest: IntegrationTestBase {
     }
 }
 
+final class TerminalSelectionCopyTests: XCTestCase {
+
+    func testSelectedTextUsesGraphemeOverridesAndSkipsWideContinuationCells() {
+        let snapshot = GridSnapshot(
+            cells: ContiguousArray([
+                makeCell(row: 0, col: 0, glyphIndex: UnicodeScalar("A").value),
+                makeCell(row: 0, col: 1, glyphIndex: 0x4E2D, attributes: .wideChar),
+                makeCell(row: 0, col: 2, glyphIndex: 0, attributes: .wideContinuation),
+                makeCell(row: 0, col: 3, glyphIndex: 0),
+                makeCell(row: 0, col: 4, glyphIndex: UnicodeScalar("B").value)
+            ]),
+            dirtyRange: 0..<5,
+            cursorRow: 0,
+            cursorCol: 0,
+            cursorVisible: true,
+            cursorStyle: .block,
+            columns: 5,
+            rows: 1,
+            usingAlternateBuffer: false,
+            graphemeOverrides: [3: "👨‍👩‍👧"]
+        )
+        let selection = TerminalSelection(
+            start: SelectionPoint(row: 0, col: 0),
+            end: SelectionPoint(row: 0, col: 4),
+            type: .character
+        )
+
+        XCTAssertEqual(
+            TerminalSelectionTextExtractor.selectedText(from: snapshot, selection: selection),
+            "A中👨‍👩‍👧B"
+        )
+    }
+
+    func testSelectedTextClampsOutOfBoundsSelectionAndExpandsWordSelection() {
+        let snapshot = GridSnapshot(
+            cells: ContiguousArray([
+                makeCell(row: 0, col: 0, glyphIndex: UnicodeScalar("c").value),
+                makeCell(row: 0, col: 1, glyphIndex: UnicodeScalar("o").value),
+                makeCell(row: 0, col: 2, glyphIndex: UnicodeScalar("p").value),
+                makeCell(row: 0, col: 3, glyphIndex: UnicodeScalar("y").value),
+                makeCell(row: 0, col: 4, glyphIndex: 0),
+                makeCell(row: 1, col: 0, glyphIndex: UnicodeScalar("o").value),
+                makeCell(row: 1, col: 1, glyphIndex: UnicodeScalar("k").value),
+                makeCell(row: 1, col: 2, glyphIndex: 0),
+                makeCell(row: 1, col: 3, glyphIndex: 0),
+                makeCell(row: 1, col: 4, glyphIndex: 0)
+            ]),
+            dirtyRange: 0..<10,
+            cursorRow: 0,
+            cursorCol: 0,
+            cursorVisible: true,
+            cursorStyle: .block,
+            columns: 5,
+            rows: 2,
+            usingAlternateBuffer: false,
+            graphemeOverrides: nil
+        )
+        let selection = TerminalSelection(
+            start: SelectionPoint(row: 0, col: 2),
+            end: SelectionPoint(row: 99, col: 99),
+            type: .word
+        )
+
+        XCTAssertEqual(
+            TerminalSelectionTextExtractor.selectedText(from: snapshot, selection: selection),
+            "copy\nok"
+        )
+    }
+
+    private func makeCell(
+        row: Int,
+        col: Int,
+        glyphIndex: UInt32,
+        attributes: CellAttributes = []
+    ) -> CellInstance {
+        CellInstance(
+            row: UInt16(row),
+            col: UInt16(col),
+            glyphIndex: glyphIndex,
+            fgColor: 0,
+            bgColor: 0,
+            underlineColor: 0,
+            attributes: attributes.rawValue,
+            flags: 0,
+            underlineStyle: 0
+        )
+    }
+}
+
 #endif

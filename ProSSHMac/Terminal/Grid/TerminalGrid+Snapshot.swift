@@ -37,6 +37,7 @@ extension TerminalGrid {
         let dirtyMin = dirtyRowMin
         let dirtyMax = dirtyRowMax
         let totalCells = rows * columns
+        let wideContinuationBit = CellAttributes.wideContinuation.rawValue
 
         var buffer = ContiguousArray<CellInstance>()
         if useSnapshotBufferA {
@@ -53,16 +54,29 @@ extension TerminalGrid {
         }
 
         var idx = 0
+        var graphemeOverrides: [Int: String]?
         for row in 0..<rows {
             let physicalRowIndex = physicalRow(row, base: rowBase)
             let rowIsDirty = hasDirtyRange && row >= dirtyMin && row <= dirtyMax
             for col in 0..<columns {
                 let cell = activeCells[physicalRowIndex][col]
                 let isCursor = (row == cursor.row && col == cursor.col && cursor.visible)
+                let hasGraphemeOverride = (cell.codepoint & GraphemeSideTable.sentinel) != 0
 
                 var flags: UInt8 = 0
                 if rowIsDirty { flags |= CellInstance.flagDirty }
                 if isCursor { flags |= CellInstance.flagCursor }
+
+                var attributes = cell.attributes.rawValue
+                if cell.width == 0 {
+                    attributes |= wideContinuationBit
+                }
+                if hasGraphemeOverride, let grapheme = graphemeSideTable.resolve(cell.codepoint) {
+                    if graphemeOverrides == nil {
+                        graphemeOverrides = [:]
+                    }
+                    graphemeOverrides?[idx] = grapheme
+                }
 
                 buffer[idx] = CellInstance(
                     row: UInt16(row),
@@ -71,7 +85,7 @@ extension TerminalGrid {
                     fgColor: cell.fgPackedRGBA,
                     bgColor: cell.bgPackedRGBA,
                     underlineColor: cell.underlinePackedRGBA,
-                    attributes: cell.attributes.rawValue,
+                    attributes: attributes,
                     flags: flags,
                     underlineStyle: cell.underlineStyle.rawValue
                 )
@@ -95,7 +109,8 @@ extension TerminalGrid {
             cursorStyle: cursor.style,
             columns: columns,
             rows: rows,
-            usingAlternateBuffer: usingAlternateBuffer
+            usingAlternateBuffer: usingAlternateBuffer,
+            graphemeOverrides: graphemeOverrides
         )
         if useSnapshotBufferA {
             snapshotBufferA = buffer
@@ -162,11 +177,13 @@ extension TerminalGrid {
         // Clamp offset to available scrollback
         let clampedOffset = min(scrollOffset, scrollback.count)
         let totalCells = rows * columns
+        let wideContinuationBit = CellAttributes.wideContinuation.rawValue
 
         // Scrollback snapshots are less frequent (only during scroll-back viewing),
         // so we use a simple ContiguousArray without the double-buffer optimization.
         var cellInstances = ContiguousArray<CellInstance>()
         cellInstances.reserveCapacity(totalCells)
+        var graphemeOverrides: [Int: String]?
 
         for displayRow in 0..<rows {
             // Which logical row does this display row map to?
@@ -192,9 +209,19 @@ extension TerminalGrid {
                         // boldIsBright was pre-applied at write-time
                         fgPacked = cell.fgPackedRGBA
                         bgPacked = cell.bgPackedRGBA
-                        attrs = cell.attributes.rawValue
+                        var resolvedAttrs = cell.attributes.rawValue
+                        if cell.width == 0 {
+                            resolvedAttrs |= wideContinuationBit
+                        }
+                        attrs = resolvedAttrs
                         ulColorPacked = cell.underlinePackedRGBA
                         ulStyle = cell.underlineStyle.rawValue
+                        if let grapheme = scrollLine.graphemeOverrides?[col] {
+                            if graphemeOverrides == nil {
+                                graphemeOverrides = [:]
+                            }
+                            graphemeOverrides?[displayRow * columns + col] = grapheme
+                        }
                     } else {
                         codepoint = 0
                         fgPacked = 0
@@ -231,6 +258,17 @@ extension TerminalGrid {
 
                     // boldIsBright was pre-applied at write-time
                     let fgPacked = cell.fgPackedRGBA
+                    var attributes = cell.attributes.rawValue
+                    if cell.width == 0 {
+                        attributes |= wideContinuationBit
+                    }
+                    if (cell.codepoint & GraphemeSideTable.sentinel) != 0,
+                       let grapheme = graphemeSideTable.resolve(cell.codepoint) {
+                        if graphemeOverrides == nil {
+                            graphemeOverrides = [:]
+                        }
+                        graphemeOverrides?[displayRow * columns + col] = grapheme
+                    }
 
                     cellInstances.append(CellInstance(
                         row: UInt16(displayRow),
@@ -239,7 +277,7 @@ extension TerminalGrid {
                         fgColor: fgPacked,
                         bgColor: cell.bgPackedRGBA,
                         underlineColor: cell.underlinePackedRGBA,
-                        attributes: cell.attributes.rawValue,
+                        attributes: attributes,
                         flags: flags,
                         underlineStyle: cell.underlineStyle.rawValue
                     ))
@@ -256,7 +294,8 @@ extension TerminalGrid {
             cursorStyle: cursor.style,
             columns: columns,
             rows: rows,
-            usingAlternateBuffer: usingAlternateBuffer
+            usingAlternateBuffer: usingAlternateBuffer,
+            graphemeOverrides: graphemeOverrides
         )
     }
 
