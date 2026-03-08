@@ -751,7 +751,7 @@ final class TerminalGridTests: XCTestCase {
     }
 
     func testPartialScrollRegionMarksEntireDirtyRangeForSnapshot() async {
-        for (row, marker) in ["A", "B", "C", "D", "E", "F"].enumerated() {
+        for (row, marker) in ["A", "B", "C", "D", "E", "F"].map({ Character($0) }).enumerated() {
             await grid.moveCursorTo(row: row, col: 0)
             await grid.printCharacter(marker)
         }
@@ -1001,7 +1001,7 @@ final class TerminalGridTests: XCTestCase {
             guard idx >= 0, idx < snapshot.cells.count else { continue }
             let cp = snapshot.cells[idx].glyphIndex
             if cp == 0 {
-                out.append(" ")
+                out.append(contentsOf: " ")
             } else if let scalar = UnicodeScalar(cp) {
                 out.append(Character(scalar))
             }

@@ -11,6 +11,8 @@ import os.signpost
 
     var gridSnapshotsBySessionID: [UUID: GridSnapshot] = [:]
     var pendingSnapshotPublishTasksBySessionID: [UUID: Task<Void, Never>] = [:]
+    /// First-scheduled timestamp for the current pending publish, used to cap debounce deferral.
+    private var pendingSnapshotPublishStartedAtBySessionID: [UUID: Date] = [:]
     /// Per-session scroll offset (0 = live view, >0 = scrolled back N lines).
     var scrollOffsetBySessionID: [UUID: Int] = [:]
     /// Whether incoming output should preserve the current scrolled-back viewport.
@@ -41,11 +43,15 @@ import os.signpost
     private var publishInFlightSessionIDs: Set<UUID> = []
     /// Sticky bit for "another publish is needed after the current one finishes".
     private var followUpPublishRequestedSessionIDs: Set<UUID> = []
+    /// Sessions currently redrawing a shell prompt after OSC 133 prompt/command-end markers.
+    private var promptRedrawPendingSessionIDs: Set<UUID> = []
 
     private let shellBufferPublishInterval: TimeInterval = 1.0 / 30.0
     private let throughputShellBufferPublishInterval: TimeInterval = 1.0 / 5.0
     private let snapshotPublishInterval: Duration = .milliseconds(8)
     private let throughputSnapshotPublishInterval: Duration = .milliseconds(16)
+    private let alternateScreenSnapshotPublishInterval: Duration = .milliseconds(24)
+    private let alternateScreenMaxPublishDeferral: TimeInterval = 0.050
     private let burstWindowDuration: TimeInterval = 0.016  // 16ms
     private let burstThreshold = 3                         // requests within window to activate
     private let burstRevertDelay: Duration = .milliseconds(200)
@@ -82,6 +88,7 @@ import os.signpost
         desiredPTYBySessionID.removeValue(forKey: sessionID)
         lastShellBufferPublishAtBySessionID.removeValue(forKey: sessionID)
         lastBellTimeBySessionID.removeValue(forKey: sessionID)
+        pendingSnapshotPublishStartedAtBySessionID.removeValue(forKey: sessionID)
         scrollOffsetBySessionID.removeValue(forKey: sessionID)
         preserveScrollAnchorBySessionID.removeValue(forKey: sessionID)
         cachedScrollbackCountBySessionID.removeValue(forKey: sessionID)
@@ -94,6 +101,7 @@ import os.signpost
         suspendedDirtySessionIDs.remove(sessionID)
         publishInFlightSessionIDs.remove(sessionID)
         followUpPublishRequestedSessionIDs.remove(sessionID)
+        promptRedrawPendingSessionIDs.remove(sessionID)
     }
 
     // MARK: - App lifecycle
@@ -319,8 +327,25 @@ import os.signpost
     func scheduleParsedChunkPublish(
         sessionID: UUID,
         engine: TerminalEngine
-    ) {
-        scheduleCoalescedGridPublish(for: sessionID, engine: engine)
+    ) async {
+        let prefersQuiescentFramePublish =
+            (await engine.usingAlternateBuffer) || promptRedrawPendingSessionIDs.contains(sessionID)
+        scheduleCoalescedGridPublish(
+            for: sessionID,
+            engine: engine,
+            prefersDebounce: prefersQuiescentFramePublish
+        )
+    }
+
+    func noteSemanticPromptEvent(sessionID: UUID, event: SemanticPromptEvent) {
+        switch event {
+        case .promptStart, .commandEnd:
+            promptRedrawPendingSessionIDs.insert(sessionID)
+        case .commandStart:
+            promptRedrawPendingSessionIDs.remove(sessionID)
+        case .promptEnd:
+            break
+        }
     }
 
     func flushPendingSnapshotPublishIfNeeded(
@@ -520,11 +545,13 @@ import os.signpost
     private func cancelPendingSnapshotPublish(for sessionID: UUID) {
         pendingSnapshotPublishTasksBySessionID[sessionID]?.cancel()
         pendingSnapshotPublishTasksBySessionID.removeValue(forKey: sessionID)
+        pendingSnapshotPublishStartedAtBySessionID.removeValue(forKey: sessionID)
     }
 
     private func scheduleCoalescedGridPublish(
         for sessionID: UUID,
-        engine: TerminalEngine
+        engine: TerminalEngine,
+        prefersDebounce: Bool
     ) {
         if isPublishingSuspended {
             suspendedDirtySessionIDs.insert(sessionID)
@@ -533,23 +560,44 @@ import os.signpost
 
         updateBurstState(for: sessionID)
 
-        guard pendingSnapshotPublishTasksBySessionID[sessionID] == nil else {
-            return
-        }
-
         if publishInFlightSessionIDs.contains(sessionID) {
             followUpPublishRequestedSessionIDs.insert(sessionID)
             return
         }
 
+        let now = Date()
+        let firstScheduledAt = pendingSnapshotPublishStartedAtBySessionID[sessionID] ?? now
+
+        if let existingTask = pendingSnapshotPublishTasksBySessionID[sessionID] {
+            guard prefersDebounce else {
+                return
+            }
+
+            let pendingAge = now.timeIntervalSince(firstScheduledAt)
+            guard pendingAge < alternateScreenMaxPublishDeferral else {
+                return
+            }
+
+            existingTask.cancel()
+            pendingSnapshotPublishTasksBySessionID.removeValue(forKey: sessionID)
+        }
+
+        pendingSnapshotPublishStartedAtBySessionID[sessionID] = firstScheduledAt
+
         pendingSnapshotPublishTasksBySessionID[sessionID] = Task { @MainActor [weak self] in
             guard let self else { return }
-            let interval = self.isInBurstMode(for: sessionID)
-                ? self.throughputSnapshotPublishInterval
-                : self.snapshotPublishInterval
+            let interval: Duration
+            if prefersDebounce {
+                interval = self.alternateScreenSnapshotPublishInterval
+            } else {
+                interval = self.isInBurstMode(for: sessionID)
+                    ? self.throughputSnapshotPublishInterval
+                    : self.snapshotPublishInterval
+            }
             try? await Task.sleep(for: interval)
             guard !Task.isCancelled else { return }
             self.pendingSnapshotPublishTasksBySessionID.removeValue(forKey: sessionID)
+            self.pendingSnapshotPublishStartedAtBySessionID.removeValue(forKey: sessionID)
             await self.publishLatestGridState(for: sessionID, engine: engine)
         }
     }
@@ -583,6 +631,8 @@ import os.signpost
                 await publishLatestGridState(for: sessionID, engine: engine)
             }
         }
+
+        promptRedrawPendingSessionIDs.remove(sessionID)
     }
 
     private func shouldPublishShellBuffer(for sessionID: UUID, now: Date = .now) -> Bool {

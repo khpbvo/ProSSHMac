@@ -771,6 +771,7 @@ final class SessionManager: ObservableObject {
             shellIntegration: shellIntegration
         )
         await engine.setSemanticPromptEventHandler { [weak self] event in
+            await self?.renderingCoordinator.noteSemanticPromptEvent(sessionID: session.id, event: event)
             let completedBlock = await historyIndex.recordSemanticEvent(
                 sessionID: session.id,
                 event: event

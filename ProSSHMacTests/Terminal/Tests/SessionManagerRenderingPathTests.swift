@@ -111,7 +111,7 @@ final class SessionManagerRenderingPathTests: XCTestCase {
 
         manager.applicationDidBecomeInactive()
         _ = await engine.feed(Data(("\r\n\(marker)\r\n").utf8))
-        manager.renderingCoordinator.scheduleParsedChunkPublish(sessionID: session.id, engine: engine)
+        await manager.renderingCoordinator.scheduleParsedChunkPublish(sessionID: session.id, engine: engine)
 
         try? await Task.sleep(for: .milliseconds(60))
 
@@ -145,9 +145,9 @@ final class SessionManagerRenderingPathTests: XCTestCase {
 
         manager.applicationDidBecomeInactive()
         _ = await engine.feed(Data(("\r\n\(markerA)\r\n").utf8))
-        manager.renderingCoordinator.scheduleParsedChunkPublish(sessionID: session.id, engine: engine)
+        await manager.renderingCoordinator.scheduleParsedChunkPublish(sessionID: session.id, engine: engine)
         _ = await engine.feed(Data(("\r\n\(markerB)\r\n").utf8))
-        manager.renderingCoordinator.scheduleParsedChunkPublish(sessionID: session.id, engine: engine)
+        await manager.renderingCoordinator.scheduleParsedChunkPublish(sessionID: session.id, engine: engine)
 
         try? await Task.sleep(for: .milliseconds(60))
         XCTAssertEqual(manager.gridSnapshotNonceBySessionID[session.id, default: -1], baselineNonce)
@@ -198,6 +198,139 @@ final class SessionManagerRenderingPathTests: XCTestCase {
     }
 
     @MainActor
+    func testAlternateBufferSplitRedrawPublishesOnlyAfterQuiescentWindow() async {
+        let manager = SessionManager(
+            transport: MockSSHTransport(),
+            knownHostsStore: InMemoryKnownHostsStore()
+        )
+        await manager.injectScreenshotSessions()
+
+        guard let session = manager.sessions.first,
+              let engine = manager.engines[session.id] else {
+            XCTFail("Expected an injected session with an engine")
+            return
+        }
+
+        _ = await engine.feed(Data("\u{1B}[?1049h\u{1B}[2J\u{1B}[1;1HHEL".utf8))
+
+        let baselineNonce = manager.gridSnapshotNonceBySessionID[session.id, default: -1]
+        await manager.renderingCoordinator.scheduleParsedChunkPublish(sessionID: session.id, engine: engine)
+
+        try? await Task.sleep(for: .milliseconds(12))
+        XCTAssertEqual(
+            manager.gridSnapshotNonceBySessionID[session.id, default: -1],
+            baselineNonce,
+            "Alternate-screen redraw should not publish the partial frame immediately."
+        )
+
+        _ = await engine.feed(Data("LO".utf8))
+        await manager.renderingCoordinator.scheduleParsedChunkPublish(sessionID: session.id, engine: engine)
+
+        try? await Task.sleep(for: .milliseconds(12))
+        XCTAssertEqual(
+            manager.gridSnapshotNonceBySessionID[session.id, default: -1],
+            baselineNonce,
+            "Rescheduling within the quiescent window should keep waiting for the completed frame."
+        )
+
+        await waitForNonceIncrement(manager: manager, sessionID: session.id, baseline: baselineNonce)
+
+        guard let snapshot = manager.gridSnapshot(for: session.id) else {
+            XCTFail("Expected a published snapshot after the quiescent window.")
+            return
+        }
+
+        XCTAssertEqual(snapshotText(snapshot, row: 0, startCol: 0, count: 5), "HELLO")
+    }
+
+    @MainActor
+    func testSemanticPromptRedrawPublishesOnlyAfterQuiescentWindow() async {
+        let manager = SessionManager(
+            transport: MockSSHTransport(),
+            knownHostsStore: InMemoryKnownHostsStore()
+        )
+        await manager.injectScreenshotSessions()
+
+        guard let session = manager.sessions.first,
+              let engine = manager.engines[session.id] else {
+            XCTFail("Expected an injected session with an engine")
+            return
+        }
+
+        let promptRow = await engine.cursor.row
+        await manager.renderingCoordinator.noteSemanticPromptEvent(sessionID: session.id, event: .commandEnd(exitCode: 0))
+
+        _ = await engine.feed(Data("\rPROM".utf8))
+
+        let baselineNonce = manager.gridSnapshotNonceBySessionID[session.id, default: -1]
+        await manager.renderingCoordinator.scheduleParsedChunkPublish(sessionID: session.id, engine: engine)
+
+        try? await Task.sleep(for: .milliseconds(12))
+        XCTAssertEqual(
+            manager.gridSnapshotNonceBySessionID[session.id, default: -1],
+            baselineNonce,
+            "Prompt redraw should wait for the quiescent window instead of showing an intermediate line."
+        )
+
+        _ = await engine.feed(Data("PT".utf8))
+        await manager.renderingCoordinator.scheduleParsedChunkPublish(sessionID: session.id, engine: engine)
+
+        try? await Task.sleep(for: .milliseconds(12))
+        XCTAssertEqual(
+            manager.gridSnapshotNonceBySessionID[session.id, default: -1],
+            baselineNonce,
+            "Rescheduling within the prompt redraw window should still suppress the partial frame."
+        )
+
+        await waitForNonceIncrement(manager: manager, sessionID: session.id, baseline: baselineNonce)
+
+        guard let snapshot = manager.gridSnapshot(for: session.id) else {
+            XCTFail("Expected a published snapshot after the prompt redraw settled.")
+            return
+        }
+
+        XCTAssertEqual(snapshotText(snapshot, row: promptRow, startCol: 0, count: 6), "PROMPT")
+    }
+
+    @MainActor
+    func testSemanticPromptEventsArmQuiescentPublishBeforeScheduling() async {
+        let manager = SessionManager(
+            transport: MockSSHTransport(),
+            knownHostsStore: InMemoryKnownHostsStore()
+        )
+        await manager.injectScreenshotSessions()
+
+        guard let session = manager.sessions.first,
+              let engine = manager.engines[session.id] else {
+            XCTFail("Expected an injected session with an engine")
+            return
+        }
+
+        let baselineNonce = manager.gridSnapshotNonceBySessionID[session.id, default: -1]
+        _ = await engine.feed(Data("\u{1B}]133;D;0\u{07}\u{1B}]133;A\u{07}\r\u{1B}[J".utf8))
+        let promptRow = await engine.cursor.row
+        await manager.renderingCoordinator.scheduleParsedChunkPublish(sessionID: session.id, engine: engine)
+
+        try? await Task.sleep(for: .milliseconds(12))
+        XCTAssertEqual(
+            manager.gridSnapshotNonceBySessionID[session.id, default: -1],
+            baselineNonce,
+            "Scheduling immediately after OSC 133 prompt markers should already be inside the prompt quiescent window."
+        )
+
+        _ = await engine.feed(Data("PROMPT".utf8))
+        await manager.renderingCoordinator.scheduleParsedChunkPublish(sessionID: session.id, engine: engine)
+        await waitForNonceIncrement(manager: manager, sessionID: session.id, baseline: baselineNonce)
+
+        guard let snapshot = manager.gridSnapshot(for: session.id) else {
+            XCTFail("Expected a published snapshot after the prompt redraw settled.")
+            return
+        }
+
+        XCTAssertEqual(snapshotText(snapshot, row: promptRow, startCol: 0, count: 6), "PROMPT")
+    }
+
+    @MainActor
     private func waitForNonceIncrement(
         manager: SessionManager,
         sessionID: UUID,
@@ -230,6 +363,26 @@ final class SessionManagerRenderingPathTests: XCTestCase {
         }
 
         return manager.shellBuffers[sessionID, default: []].joined(separator: "\n").contains(text)
+    }
+
+    private func snapshotText(
+        _ snapshot: GridSnapshot,
+        row: Int,
+        startCol: Int,
+        count: Int
+    ) -> String {
+        var out = ""
+        for col in startCol..<(startCol + count) {
+            let idx = row * snapshot.columns + col
+            guard idx >= 0, idx < snapshot.cells.count else { continue }
+            let cp = snapshot.cells[idx].glyphIndex
+            if cp == 0 {
+                out.append(contentsOf: " ")
+            } else if let scalar = UnicodeScalar(cp) {
+                out.append(Character(scalar))
+            }
+        }
+        return out
     }
 }
 
