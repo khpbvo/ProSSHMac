@@ -23,10 +23,9 @@ struct TerminalMetalView: NSViewRepresentable {
     var onTripleTap: ((CGPoint) -> Void)?
     /// Called when user scrolls (positive = up/scrollback, negative = down/toward live).
     var onScroll: ((Int) -> Void)?
-    /// Whether emulator viewport scrolling is currently allowed.
-    /// Alternate-screen TUIs should disable this and either ignore the wheel
-    /// or handle it through mouse reporting overlays instead.
-    var allowsViewportScrolling: (() -> Bool)? = nil
+    /// Decide whether the current wheel event should drive emulator scrollback
+    /// instead of being left to any app-owned mouse reporting path.
+    var shouldRouteWheelToViewport: ((CGFloat) -> Bool)? = nil
     var accessibilityLabel: String = "Terminal"
     var accessibilityHint: String = "Interactive SSH terminal"
     var backgroundOpacityPercent: Double = TransparencyManager.defaultBackgroundOpacityPercent
@@ -60,7 +59,7 @@ struct TerminalMetalView: NSViewRepresentable {
         mtkView.addGestureRecognizer(pan)
 
         container.onScroll = onScroll
-        container.allowsViewportScrolling = allowsViewportScrolling
+        container.shouldRouteWheelToViewport = shouldRouteWheelToViewport
         container.cellHeight = renderer.currentCellHeight
         container.renderer = renderer
         renderer.smoothScrollEngine.onScrollLineChange = { [weak container] lines in
@@ -74,7 +73,7 @@ struct TerminalMetalView: NSViewRepresentable {
         context.coordinator.parent = self
         renderer.onGridSizeChange = onTerminalResize
         nsView.onScroll = onScroll
-        nsView.allowsViewportScrolling = allowsViewportScrolling
+        nsView.shouldRouteWheelToViewport = shouldRouteWheelToViewport
         nsView.cellHeight = renderer.currentCellHeight
         nsView.renderer = renderer
         renderer.smoothScrollEngine.onScrollLineChange = { [weak nsView] lines in
@@ -131,7 +130,7 @@ final class TerminalMetalContainerView: NSView {
     let blurView = NSVisualEffectView(frame: .zero)
     let metalView = MTKView(frame: .zero)
     var onScroll: ((Int) -> Void)?
-    var allowsViewportScrolling: (() -> Bool)?
+    var shouldRouteWheelToViewport: ((CGFloat) -> Bool)?
     var cellHeight: CGFloat = 16
     weak var renderer: MetalTerminalRenderer?
     private var accumulatedScrollY: CGFloat = 0
@@ -178,7 +177,7 @@ final class TerminalMetalContainerView: NSView {
 
     override func scrollWheel(with event: NSEvent) {
         guard cellHeight > 0 else { return }
-        guard allowsViewportScrolling?() ?? true else {
+        guard shouldRouteWheelToViewport?(event.scrollingDeltaY) ?? true else {
             renderer?.scrollGestureEnded()
             renderer?.scrollMomentumEnded()
             return

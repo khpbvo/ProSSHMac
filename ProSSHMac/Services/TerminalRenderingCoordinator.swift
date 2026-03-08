@@ -220,12 +220,6 @@ import os.signpost
         guard let manager, let engine = manager.engines[sessionID] else { return }
         Task { @MainActor [weak self] in
             guard let self, let manager = self.manager else { return }
-            guard !(await engine.usingAlternateBuffer) else {
-                self.scrollOffsetBySessionID[sessionID] = 0
-                self.preserveScrollAnchorBySessionID[sessionID] = false
-                self.publishScrollState(sessionID: sessionID, scrollOffset: 0, scrollbackCount: 0)
-                return
-            }
             let current = self.scrollOffsetBySessionID[sessionID, default: 0]
             let maxOffset = await engine.scrollbackCount
             self.cachedScrollbackCountBySessionID[sessionID] = maxOffset
@@ -251,12 +245,6 @@ import os.signpost
         guard let manager, let engine = manager.engines[sessionID] else { return }
         Task { @MainActor [weak self] in
             guard let self, let manager = self.manager else { return }
-            guard !(await engine.usingAlternateBuffer) else {
-                self.scrollOffsetBySessionID[sessionID] = 0
-                self.preserveScrollAnchorBySessionID[sessionID] = false
-                self.publishScrollState(sessionID: sessionID, scrollOffset: 0, scrollbackCount: 0)
-                return
-            }
             let maxOffset = await engine.scrollbackCount
             self.cachedScrollbackCountBySessionID[sessionID] = maxOffset
             let clampedRow = max(0, min(row, maxOffset))
@@ -282,14 +270,11 @@ import os.signpost
         preserveScrollAnchorBySessionID[sessionID] = false
         Task { @MainActor [weak self] in
             guard let self, let manager = self.manager else { return }
-            if await engine.usingAlternateBuffer {
-                self.publishScrollState(sessionID: sessionID, scrollOffset: 0, scrollbackCount: 0)
-                return
-            }
             let snapshot = await engine.snapshot()
             self.gridSnapshotsBySessionID[sessionID] = snapshot
             manager.gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
-            let scrollbackCount = self.cachedScrollbackCountBySessionID[sessionID] ?? 0
+            let scrollbackCount = await engine.scrollbackCount
+            self.cachedScrollbackCountBySessionID[sessionID] = scrollbackCount
             self.publishScrollState(sessionID: sessionID, scrollOffset: 0, scrollbackCount: scrollbackCount)
         }
     }
@@ -341,6 +326,19 @@ import os.signpost
         engine: TerminalEngine,
         snapshotOverride: GridSnapshot
     ) async {
+        await publishSyncExitSnapshots(
+            sessionID: sessionID,
+            engine: engine,
+            snapshotOverrides: [snapshotOverride]
+        )
+    }
+
+    func publishSyncExitSnapshots(
+        sessionID: UUID,
+        engine: TerminalEngine,
+        snapshotOverrides: [GridSnapshot]
+    ) async {
+        guard let latestSnapshotOverride = snapshotOverrides.last else { return }
         scrollOffsetBySessionID[sessionID] = 0
         preserveScrollAnchorBySessionID[sessionID] = false
         forceFullSnapshotNextPublishBySessionID.insert(sessionID)
@@ -348,7 +346,7 @@ import os.signpost
         await publishLatestGridState(
             for: sessionID,
             engine: engine,
-            snapshotOverride: snapshotOverride
+            snapshotOverride: latestSnapshotOverride
         )
     }
 
@@ -460,10 +458,11 @@ import os.signpost
         #endif
 
         let previousScrollbackCount = cachedScrollbackCountBySessionID[sessionID] ?? 0
+        let previousUsingAlternateBuffer = gridSnapshotsBySessionID[sessionID]?.usingAlternateBuffer ?? false
         let scrollbackCount = await engine.scrollbackCount
         let usingAlternateBuffer = await engine.usingAlternateBuffer
         var currentOffset = scrollOffsetBySessionID[sessionID] ?? 0
-        if usingAlternateBuffer {
+        if usingAlternateBuffer && !previousUsingAlternateBuffer {
             currentOffset = 0
             preserveScrollAnchorBySessionID[sessionID] = false
         }
@@ -475,7 +474,7 @@ import os.signpost
             // Keep the same visible viewport while new lines append below.
             currentOffset += (scrollbackCount - previousScrollbackCount)
         }
-        currentOffset = usingAlternateBuffer ? 0 : max(0, min(currentOffset, scrollbackCount))
+        currentOffset = max(0, min(currentOffset, scrollbackCount))
         scrollOffsetBySessionID[sessionID] = currentOffset
         if currentOffset == 0 {
             preserveScrollAnchorBySessionID[sessionID] = false
@@ -517,7 +516,7 @@ import os.signpost
         publishScrollState(
             sessionID: sessionID,
             scrollOffset: currentOffset,
-            scrollbackCount: usingAlternateBuffer ? 0 : scrollbackCount
+            scrollbackCount: scrollbackCount
         )
 
         if !usingAlternateBuffer && shouldPublishShellBuffer(for: sessionID) {

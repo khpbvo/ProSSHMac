@@ -167,8 +167,8 @@ struct TerminalSurfaceView: View {
             onScroll: { delta in
                 sessionManager.scrollTerminal(sessionID: session.id, delta: delta)
             },
-            allowsViewportScrollingProvider: {
-                !(sessionManager.gridSnapshot(for: session.id)?.usingAlternateBuffer ?? false)
+            shouldRouteWheelToViewportProvider: { deltaY in
+                shouldRouteWheelToViewport(for: session.id, deltaY: deltaY)
             },
             isFocused: isFocused,
             isLocalSession: session.isLocal,
@@ -503,6 +503,12 @@ struct TerminalSurfaceView: View {
             },
             onSendSequence: { sequence in
                 sendControl(sequence, sessionID: session.id)
+            },
+            shouldRouteWheelToViewport: { deltaY in
+                shouldRouteWheelToViewport(for: session.id, deltaY: deltaY)
+            },
+            onViewportScroll: { delta in
+                sessionManager.scrollTerminal(sessionID: session.id, delta: delta)
             }
         )
         .opacity(0.001)
@@ -540,6 +546,17 @@ struct TerminalSurfaceView: View {
 
     private func isMouseTrackingEnabled(for sessionID: UUID) -> Bool {
         inputModeSnapshot(for: sessionID).mouseTracking != .none
+    }
+
+    private func shouldRouteWheelToViewport(for sessionID: UUID, deltaY: CGFloat) -> Bool {
+        let usingAlternateBuffer = sessionManager.gridSnapshot(for: sessionID)?.usingAlternateBuffer ?? false
+        if !usingAlternateBuffer {
+            return true
+        }
+        if sessionManager.isScrolledBack(sessionID: sessionID) {
+            return true
+        }
+        return deltaY > 0
     }
 
     private func terminalCellCoordinates(from location: CGPoint, contentPadding: CGFloat = 8) -> (row: Int, col: Int)? {

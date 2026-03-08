@@ -168,6 +168,8 @@ struct MouseInputHandler: NSViewRepresentable {
     var modeSnapshot: () -> InputModeSnapshot
     var locationToCell: (CGPoint) -> (row: Int, col: Int)?
     var onSendSequence: (String) -> Void
+    var shouldRouteWheelToViewport: (CGFloat) -> Bool = { _ in false }
+    var onViewportScroll: ((Int) -> Void)? = nil
 
     func makeNSView(context: Context) -> MouseInputCaptureView {
         MouseInputCaptureView()
@@ -178,6 +180,8 @@ struct MouseInputHandler: NSViewRepresentable {
         nsView.modeSnapshot = modeSnapshot
         nsView.locationToCell = locationToCell
         nsView.onSendSequence = onSendSequence
+        nsView.shouldRouteWheelToViewport = shouldRouteWheelToViewport
+        nsView.onViewportScroll = onViewportScroll
     }
 }
 
@@ -189,6 +193,7 @@ final class MouseInputCaptureView: NSView {
             if !isEnabled {
                 activeButton = .none
                 scrollAccumulator = 0
+                viewportScrollAccumulator = 0
             }
         }
     }
@@ -197,10 +202,13 @@ final class MouseInputCaptureView: NSView {
     }
     var locationToCell: (CGPoint) -> (row: Int, col: Int)? = { _ in nil }
     var onSendSequence: (String) -> Void = { _ in }
+    var shouldRouteWheelToViewport: (CGFloat) -> Bool = { _ in false }
+    var onViewportScroll: ((Int) -> Void)?
 
     private var trackingAreaRef: NSTrackingArea?
     private var activeButton: MouseButton = .none
     private var scrollAccumulator: CGFloat = 0
+    private var viewportScrollAccumulator: CGFloat = 0
 
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
@@ -278,6 +286,11 @@ final class MouseInputCaptureView: NSView {
             return
         }
 
+        if shouldRouteWheelToViewport(event.scrollingDeltaY), let onViewportScroll {
+            routeWheelToViewport(event, onViewportScroll: onViewportScroll)
+            return
+        }
+
         let mode = modeSnapshot()
         guard mode.mouseTracking != .none else {
             super.scrollWheel(with: event)
@@ -296,6 +309,39 @@ final class MouseInputCaptureView: NSView {
                 scrollAccumulator += threshold
             }
         }
+    }
+
+    private func routeWheelToViewport(_ event: NSEvent, onViewportScroll: (Int) -> Void) {
+        let lines = consumeViewportScrollDelta(
+            event.scrollingDeltaY,
+            hasPreciseScrollingDeltas: event.hasPreciseScrollingDeltas,
+            phase: event.phase,
+            momentumPhase: event.momentumPhase
+        )
+        guard lines != 0 else { return }
+        onViewportScroll(lines)
+    }
+
+    func consumeViewportScrollDelta(
+        _ deltaY: CGFloat,
+        hasPreciseScrollingDeltas: Bool,
+        phase: NSEvent.Phase = [],
+        momentumPhase: NSEvent.Phase = []
+    ) -> Int {
+        let threshold: CGFloat = hasPreciseScrollingDeltas ? 8 : 1
+        viewportScrollAccumulator += deltaY
+
+        let lines = Int(viewportScrollAccumulator / threshold)
+        if lines != 0 {
+            viewportScrollAccumulator -= CGFloat(lines) * threshold
+        }
+
+        if phase == .ended || phase == .cancelled ||
+            momentumPhase == .ended || momentumPhase == .cancelled {
+            viewportScrollAccumulator = 0
+        }
+
+        return lines
     }
 
     private func send(kind: MouseEventKind, button: MouseButton, event: NSEvent) {

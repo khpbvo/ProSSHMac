@@ -168,7 +168,7 @@ final class SessionManagerRenderingPathTests: XCTestCase {
     }
 
     @MainActor
-    func testAlternateBufferDisablesViewportScrollbackStateAndScrollRequests() async {
+    func testAlternateBufferResetsOnEntryButAllowsViewportScrollbackAfterward() async {
         let manager = SessionManager(
             transport: MockSSHTransport(),
             knownHostsStore: InMemoryKnownHostsStore()
@@ -181,20 +181,42 @@ final class SessionManagerRenderingPathTests: XCTestCase {
             return
         }
 
+        let seededLines = (1...60)
+            .map { "ALT_SCROLL_SEED_\($0)" }
+            .joined(separator: "\r\n") + "\r\n"
+        _ = await engine.feed(Data(seededLines.utf8))
+        await manager.renderingCoordinator.publishGridState(for: session.id, engine: engine)
+
+        let preAltBaselineNonce = manager.gridSnapshotNonceBySessionID[session.id, default: -1]
+        manager.scrollTerminal(sessionID: session.id, delta: 4)
+        await waitForNonceIncrement(manager: manager, sessionID: session.id, baseline: preAltBaselineNonce)
+        XCTAssertEqual(manager.scrollStateBySessionID[session.id]?.scrollOffset, 4)
+
         _ = await engine.feed(Data("\u{1B}[?1049h".utf8))
         await manager.renderingCoordinator.publishGridState(for: session.id, engine: engine)
 
         let stateInAlt = manager.scrollStateBySessionID[session.id]
+        let altScrollbackCount = stateInAlt?.scrollbackCount ?? 0
         XCTAssertEqual(stateInAlt?.scrollOffset, 0)
-        XCTAssertEqual(stateInAlt?.scrollbackCount, 0)
+        XCTAssertGreaterThan(altScrollbackCount, 0)
 
-        let baselineNonce = manager.gridSnapshotNonceBySessionID[session.id, default: -1]
-        manager.scrollTerminal(sessionID: session.id, delta: 6)
-        try? await Task.sleep(for: .milliseconds(40))
+        let targetOffset = min(6, altScrollbackCount)
+        XCTAssertGreaterThan(targetOffset, 0)
 
-        XCTAssertEqual(manager.gridSnapshotNonceBySessionID[session.id, default: -1], baselineNonce)
-        XCTAssertEqual(manager.scrollStateBySessionID[session.id]?.scrollOffset, 0)
-        XCTAssertEqual(manager.scrollStateBySessionID[session.id]?.scrollbackCount, 0)
+        let altScrollBaselineNonce = manager.gridSnapshotNonceBySessionID[session.id, default: -1]
+        manager.scrollTerminal(sessionID: session.id, delta: targetOffset)
+        await waitForNonceIncrement(manager: manager, sessionID: session.id, baseline: altScrollBaselineNonce)
+
+        XCTAssertEqual(manager.scrollStateBySessionID[session.id]?.scrollOffset, targetOffset)
+        XCTAssertEqual(manager.scrollStateBySessionID[session.id]?.scrollbackCount, altScrollbackCount)
+
+        let liveAltBaselineNonce = manager.gridSnapshotNonceBySessionID[session.id, default: -1]
+        _ = await engine.feed(Data("ALT".utf8))
+        await manager.renderingCoordinator.publishGridState(for: session.id, engine: engine)
+
+        XCTAssertGreaterThan(manager.gridSnapshotNonceBySessionID[session.id, default: -1], liveAltBaselineNonce)
+        XCTAssertEqual(manager.scrollStateBySessionID[session.id]?.scrollOffset, targetOffset)
+        XCTAssertEqual(manager.scrollStateBySessionID[session.id]?.scrollbackCount, altScrollbackCount)
     }
 
     @MainActor
@@ -526,6 +548,51 @@ final class SessionManagerRenderingPathTests: XCTestCase {
             "OVERRIDE",
             "A sync-exit snapshot captured before later parser activity must not be replaced by a fresh live snapshot when the follow-up publish flushes."
         )
+    }
+
+    @MainActor
+    func testMultipleSyncExitSnapshotsFromOneParserBatchCollapseToLatestFrame() async {
+        let manager = SessionManager(
+            transport: MockSSHTransport(),
+            knownHostsStore: InMemoryKnownHostsStore()
+        )
+        await manager.injectScreenshotSessions()
+
+        guard let session = manager.sessions.first,
+              let engine = manager.engines[session.id] else {
+            XCTFail("Expected an injected session with an engine")
+            return
+        }
+
+        _ = await engine.feed(Data("\u{1B}[2J\u{1B}[HEARLY".utf8))
+        let earlySnapshot = await engine.snapshot()
+
+        _ = await engine.feed(Data("\u{1B}[2J\u{1B}[HLATEST".utf8))
+        let latestSnapshot = await engine.snapshot()
+
+        let baselineNonce = manager.gridSnapshotNonceBySessionID[session.id, default: -1]
+        await manager.renderingCoordinator.publishSyncExitSnapshots(
+            sessionID: session.id,
+            engine: engine,
+            snapshotOverrides: [earlySnapshot, latestSnapshot]
+        )
+
+        XCTAssertEqual(
+            manager.gridSnapshotNonceBySessionID[session.id, default: -1],
+            baselineNonce + 1,
+            "A parser batch with multiple completed sync frames should publish only the final frame instead of replaying every obsolete intermediate snapshot."
+        )
+
+        guard let publishedSnapshot = manager.gridSnapshot(for: session.id) else {
+            XCTFail("Expected a published snapshot after the coalesced sync batch.")
+            return
+        }
+
+        XCTAssertNil(
+            publishedSnapshot.dirtyRange,
+            "Coalesced sync batches should still force a full upload so earlier full-screen clears cannot leave stale rows behind."
+        )
+        XCTAssertEqual(snapshotText(publishedSnapshot, row: 0, startCol: 0, count: 6), "LATEST")
     }
 
     @MainActor

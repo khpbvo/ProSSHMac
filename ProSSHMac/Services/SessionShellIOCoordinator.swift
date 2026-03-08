@@ -200,11 +200,11 @@ enum RawShellInputSource: String {
                 )
 
                 let syncExitSnapshots = await engine.consumeSyncExitSnapshots()
-                for syncExitSnapshot in syncExitSnapshots {
-                    await self?.manager?.renderingCoordinator.publishSyncExitSnapshot(
+                if !syncExitSnapshots.isEmpty {
+                    await self?.manager?.renderingCoordinator.publishSyncExitSnapshots(
                         sessionID: sessionID,
                         engine: engine,
-                        snapshotOverride: syncExitSnapshot
+                        snapshotOverrides: syncExitSnapshots
                     )
                 }
 

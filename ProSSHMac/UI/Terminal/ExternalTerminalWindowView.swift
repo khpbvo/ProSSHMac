@@ -120,8 +120,8 @@ struct ExternalTerminalWindowView: View {
                 onScroll: { delta in
                     sessionManager.scrollTerminal(sessionID: session.id, delta: delta)
                 },
-                allowsViewportScrollingProvider: {
-                    !(sessionManager.gridSnapshot(for: session.id)?.usingAlternateBuffer ?? false)
+                shouldRouteWheelToViewportProvider: { deltaY in
+                    shouldRouteWheelToViewport(for: session.id, deltaY: deltaY)
                 },
                 isFocused: true,
                 isLocalSession: session.isLocal,
@@ -222,6 +222,17 @@ struct ExternalTerminalWindowView: View {
     private func keyEncoderOptions(for sessionID: UUID) -> KeyEncoderOptions {
         let modeSnapshot = sessionManager.inputModeSnapshotsBySessionID[sessionID] ?? .default
         return KeyEncoderOptions(applicationCursorKeys: modeSnapshot.applicationCursorKeys)
+    }
+
+    private func shouldRouteWheelToViewport(for sessionID: UUID, deltaY: CGFloat) -> Bool {
+        let usingAlternateBuffer = sessionManager.gridSnapshot(for: sessionID)?.usingAlternateBuffer ?? false
+        if !usingAlternateBuffer {
+            return true
+        }
+        if sessionManager.isScrolledBack(sessionID: sessionID) {
+            return true
+        }
+        return deltaY > 0
     }
 
     private func handleHardwareCommandShortcut(_ action: HardwareKeyCommandAction) {
