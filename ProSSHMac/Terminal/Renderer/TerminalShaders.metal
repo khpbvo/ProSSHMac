@@ -14,7 +14,7 @@ using namespace metal;
 // ---------------------------------------------------------------------------
 
 /// Attribute bit positions — must match CellAttributes in TerminalCell.swift.
-// ATTR_BOLD (1u << 0) — handled by glyph rasterizer, not used in shader
+constant uint ATTR_BOLD          = (1u << 0);
 constant uint ATTR_DIM           = (1u << 1);
 // constant uint ATTR_ITALIC     = (1u << 2);  // handled by glyph rasterizer
 constant uint ATTR_UNDERLINE     = (1u << 3);
@@ -96,6 +96,11 @@ struct TerminalUniforms {
     float  cursorVisible;  // 1.0 = app-visible (DECTCEM), 0.0 = app-hidden
     float  selectionAlpha; // selection highlight opacity
     float  dimOpacity;     // opacity multiplier for SGR dim attribute
+    float  boldTextColorEnabled; // 1.0 = override bold fg color
+    float  _boldTextColorPad0;
+    float  _boldTextColorPad1;
+    float  _boldTextColorPad2;
+    float4 boldTextColor;  // replacement fg color for bold cells
     float  glowIntensity;  // cursor glow strength scalar
     float  crtEnabled;     // 1.0 = CRT effects enabled
     float  scanlineOpacity; // scanline darkening opacity
@@ -308,6 +313,10 @@ fragment float4 terminal_fragment(
     }
 
     uint attrs = in.attributes;
+
+    if ((attrs & ATTR_BOLD) && uniforms.boldTextColorEnabled > 0.5) {
+        fg = uniforms.boldTextColor;
+    }
 
     // -------------------------------------------------------------------
     // B.5.5: Reverse attribute — swap fg and bg

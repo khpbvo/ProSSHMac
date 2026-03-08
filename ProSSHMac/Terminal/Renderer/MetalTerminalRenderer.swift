@@ -281,6 +281,11 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     /// Runtime solid background configuration (default disabled).
     var solidBackgroundConfiguration: SolidBackgroundConfiguration = SolidBackgroundConfiguration.load()
 
+    // MARK: - Text Color Overrides
+
+    /// Runtime bold-text color override configuration (default disabled).
+    var boldTextColorConfiguration: BoldTextColorConfiguration = BoldTextColorConfiguration.load()
+
     // MARK: - Scanner (Knight Rider) Effect
 
     /// Runtime scanner effect configuration (default disabled).

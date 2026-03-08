@@ -30,6 +30,8 @@ import QuartzCore
 ///     float  cursorVisible;
 ///     float  selectionAlpha;
 ///     float  dimOpacity;
+///     float  boldTextColorEnabled;
+///     float4 boldTextColor;
 ///     float  glowIntensity;
 ///     float  crtEnabled;
 ///     float  scanlineOpacity;
@@ -77,6 +79,17 @@ struct TerminalUniformData {
 
     /// Opacity multiplier for SGR dim (faint) attribute (0.0 to 1.0).
     var dimOpacity: Float
+
+    /// 1.0 when the custom bold-text color override is enabled.
+    var boldTextColorEnabled: Float
+
+    /// Padding to align boldTextColor to 16-byte boundary.
+    var _boldTextColorPad0: Float
+    var _boldTextColorPad1: Float
+    var _boldTextColorPad2: Float
+
+    /// Custom foreground color applied to bold cells when enabled.
+    var boldTextColor: SIMD4<Float>
 
     /// Cursor glow intensity scalar (0.0 to 1.0).
     var glowIntensity: Float
@@ -344,6 +357,7 @@ final class TerminalUniformBuffer {
         selectionAlpha: Float? = nil,
         selectionColor: SIMD4<Float>? = nil,
         dimOpacity: Float? = nil,
+        boldTextColorConfig: BoldTextColorConfiguration? = nil,
         crtEnabled: Bool = false,
         scanlineOpacity: Float = 0.0,
         scanlineDensity: Float = 0.0,
@@ -382,6 +396,7 @@ final class TerminalUniformBuffer {
         // Resolve gradient configuration.
         let gc = gradientConfig ?? GradientBackgroundConfiguration.default
         let solid = solidBackgroundConfig ?? SolidBackgroundConfiguration.default
+        let boldText = boldTextColorConfig ?? BoldTextColorConfiguration.default
 
         // Resolve scanner configuration.
         let sc = scannerConfig ?? ScannerEffectConfiguration.default
@@ -411,6 +426,11 @@ final class TerminalUniformBuffer {
             cursorVisible: cursorVisible ? 1.0 : 0.0,
             selectionAlpha: selectionAlpha ?? defaultSelectionAlpha,
             dimOpacity: dimOpacity ?? defaultDimOpacity,
+            boldTextColorEnabled: boldText.isEnabled ? 1.0 : 0.0,
+            _boldTextColorPad0: 0,
+            _boldTextColorPad1: 0,
+            _boldTextColorPad2: 0,
+            boldTextColor: boldText.uniformColor,
             glowIntensity: min(1, max(0, glowIntensity)),
             crtEnabled: crtEnabled ? 1.0 : 0.0,
             scanlineOpacity: min(1, max(0, scanlineOpacity)),

@@ -65,6 +65,14 @@ extension MetalTerminalRenderer {
         isDirty = true
     }
 
+    // MARK: - Bold Text Color
+
+    /// Reload bold-text color settings from persisted UserDefaults.
+    func reloadBoldTextColorSettings() {
+        boldTextColorConfiguration = BoldTextColorConfiguration.load()
+        isDirty = true
+    }
+
     // MARK: - Bloom Effect
 
     /// Reload bloom effect settings from persisted UserDefaults.

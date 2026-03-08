@@ -95,6 +95,7 @@ extension MetalTerminalRenderer {
             glowIntensity: cursorFrame.glowIntensity,
             selectionAlpha: selectionRenderer.selectionAlpha,
             selectionColor: selectionRenderer.selectionColor,
+            boldTextColorConfig: boldTextColorConfiguration,
             crtEnabled: postProcessingReady && crtConfiguration.isEnabled,
             scanlineOpacity: crtConfiguration.scanlineOpacity,
             scanlineDensity: crtConfiguration.scanlineDensity,

@@ -119,6 +119,24 @@ struct SettingsView: View {
                     }
 
                     NavigationLink {
+                        BoldTextColorSettingsView()
+                    } label: {
+                        HStack {
+                            Label("Bold Text Color", systemImage: "bold")
+                            Spacer()
+                            if BoldTextColorConfiguration.load().isEnabled {
+                                Text("Custom")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.red)
+                            } else {
+                                Text("ANSI")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+
+                    NavigationLink {
                         PromptAppearanceSettingsView()
                     } label: {
                         HStack {

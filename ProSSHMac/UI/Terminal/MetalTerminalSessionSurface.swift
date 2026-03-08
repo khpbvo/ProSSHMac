@@ -179,6 +179,7 @@ final class MetalTerminalSurfaceModel: ObservableObject {
     private var appliedFontFamily: String
     private var cachedGradientConfiguration: GradientBackgroundConfiguration
     private var cachedSolidBackgroundConfiguration: SolidBackgroundConfiguration
+    private var cachedBoldTextColorConfiguration: BoldTextColorConfiguration
     private var cachedScannerConfiguration: ScannerEffectConfiguration
     private var cachedBloomConfiguration: BloomEffectConfiguration
     private var cachedSmoothScrollConfiguration: SmoothScrollConfiguration
@@ -202,6 +203,7 @@ final class MetalTerminalSurfaceModel: ObservableObject {
         self.appliedFontFamily = initialFontFamily
         self.cachedGradientConfiguration = GradientBackgroundConfiguration.load()
         self.cachedSolidBackgroundConfiguration = SolidBackgroundConfiguration.load()
+        self.cachedBoldTextColorConfiguration = BoldTextColorConfiguration.load()
         self.cachedScannerConfiguration = ScannerEffectConfiguration.load()
         self.cachedBloomConfiguration = BloomEffectConfiguration.load()
         self.cachedSmoothScrollConfiguration = SmoothScrollConfiguration.load()
@@ -333,6 +335,12 @@ final class MetalTerminalSurfaceModel: ObservableObject {
         if solidBackgroundConfiguration != cachedSolidBackgroundConfiguration {
             cachedSolidBackgroundConfiguration = solidBackgroundConfiguration
             renderer.reloadSolidBackgroundSettings()
+        }
+
+        let boldTextColorConfiguration = BoldTextColorConfiguration.load()
+        if boldTextColorConfiguration != cachedBoldTextColorConfiguration {
+            cachedBoldTextColorConfiguration = boldTextColorConfiguration
+            renderer.reloadBoldTextColorSettings()
         }
 
         let crtEffectEnabled = CRTEffect.loadEnabledFromDefaults()
