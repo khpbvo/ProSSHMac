@@ -92,10 +92,10 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
     var applicationKeypad: Bool = false       // DECKPAM/DECKPNM
     var bracketedPasteMode: Bool = false      // Mode 2004
     var synchronizedOutput: Bool = false // Mode 2026
-    /// Snapshot captured at the moment synchronized output ended.
-    /// Used by SessionManager to show the intermediate visible frame
-    /// when sync-off and sync-on happen within a single data chunk.
-    var syncExitSnapshot: GridSnapshot?
+    /// Snapshots captured at the moment synchronized output is re-enabled.
+    /// Used by SessionManager to publish every visible frame when one parser
+    /// batch contains multiple sync-off -> draw -> sync-on windows.
+    var syncExitSnapshots: [GridSnapshot] = []
     var reverseVideo: Bool = false            // DECSCNM
     var mouseTracking: MouseTrackingMode = .none
     var mouseEncoding: MouseEncoding = .x10

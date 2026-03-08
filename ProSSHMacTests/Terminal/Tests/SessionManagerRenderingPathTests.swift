@@ -198,6 +198,49 @@ final class SessionManagerRenderingPathTests: XCTestCase {
     }
 
     @MainActor
+    func testSynchronizedOutputFallbackPublishesLiveSnapshotWithoutWaitingForSyncExit() async {
+        let manager = SessionManager(
+            transport: MockSSHTransport(),
+            knownHostsStore: InMemoryKnownHostsStore()
+        )
+        await manager.injectScreenshotSessions()
+
+        guard let session = manager.sessions.first,
+              let engine = manager.engines[session.id] else {
+            XCTFail("Expected an injected session with an engine")
+            return
+        }
+
+        _ = await engine.feed(Data("OLD".utf8))
+        await manager.renderingCoordinator.publishGridState(for: session.id, engine: engine)
+        let baselineNonce = manager.gridSnapshotNonceBySessionID[session.id, default: -1]
+
+        _ = await engine.feed(Data("\u{1B}[?2026h\u{1B}[2J\u{1B}[HLIVE".utf8))
+        let liveSyncSnapshot = await engine.liveSnapshot()
+        manager.renderingCoordinator.scheduleSynchronizedOutputFallbackPublish(
+            sessionID: session.id,
+            engine: engine,
+            snapshotOverride: liveSyncSnapshot
+        )
+
+        try? await Task.sleep(for: .milliseconds(20))
+        XCTAssertEqual(
+            manager.gridSnapshotNonceBySessionID[session.id, default: -1],
+            baselineNonce,
+            "Synchronized-output fallback should still debounce briefly before publishing."
+        )
+
+        await waitForNonceIncrement(manager: manager, sessionID: session.id, baseline: baselineNonce)
+
+        guard let snapshot = manager.gridSnapshot(for: session.id) else {
+            XCTFail("Expected a published snapshot after the synchronized-output fallback.")
+            return
+        }
+
+        XCTAssertEqual(snapshotText(snapshot, row: 0, startCol: 0, count: 4), "LIVE")
+    }
+
+    @MainActor
     func testAlternateBufferSplitRedrawPublishesOnlyAfterQuiescentWindow() async {
         let manager = SessionManager(
             transport: MockSSHTransport(),
@@ -300,6 +343,61 @@ final class SessionManagerRenderingPathTests: XCTestCase {
     }
 
     @MainActor
+    func testAlternateBufferInputModeRefreshesBeforeDebouncedPublish() async {
+        let manager = SessionManager(
+            transport: MockSSHTransport(),
+            knownHostsStore: InMemoryKnownHostsStore()
+        )
+        await manager.injectScreenshotSessions()
+
+        guard let session = manager.sessions.first,
+              let engine = manager.engines[session.id] else {
+            XCTFail("Expected an injected session with an engine")
+            return
+        }
+
+        _ = await engine.feed(Data("\u{1B}[?1049h\u{1B}[?1000h\u{1B}[?1006h".utf8))
+
+        let baselineNonce = manager.gridSnapshotNonceBySessionID[session.id, default: -1]
+        await manager.renderingCoordinator.refreshInputModeSnapshot(sessionID: session.id, engine: engine)
+        await manager.renderingCoordinator.scheduleParsedChunkPublish(sessionID: session.id, engine: engine)
+
+        XCTAssertEqual(
+            manager.gridSnapshotNonceBySessionID[session.id, default: -1],
+            baselineNonce,
+            "Alternate-buffer redraw should still be debounced."
+        )
+        XCTAssertEqual(manager.inputModeSnapshotsBySessionID[session.id]?.mouseTracking, .x10)
+        XCTAssertEqual(manager.inputModeSnapshotsBySessionID[session.id]?.mouseEncoding, .sgr)
+    }
+
+    @MainActor
+    func testAlternateBufferPublishDoesNotRewriteShellBuffer() async {
+        let manager = SessionManager(
+            transport: MockSSHTransport(),
+            knownHostsStore: InMemoryKnownHostsStore()
+        )
+        await manager.injectScreenshotSessions()
+
+        guard let session = manager.sessions.first,
+              let engine = manager.engines[session.id] else {
+            XCTFail("Expected an injected session with an engine")
+            return
+        }
+
+        manager.shellBuffers[session.id] = ["KEEP_MAIN_BUFFER"]
+
+        _ = await engine.feed(Data("\u{1B}[?1049h\u{1B}[2J\u{1B}[1;1HALT".utf8))
+        await manager.renderingCoordinator.publishGridState(for: session.id, engine: engine)
+
+        XCTAssertEqual(
+            manager.shellBuffers[session.id],
+            ["KEEP_MAIN_BUFFER"],
+            "Alternate-buffer publishes should skip shell-buffer extraction so TUI redraws stay on the fast path."
+        )
+    }
+
+    @MainActor
     func testSemanticPromptRedrawPublishesOnlyAfterQuiescentWindow() async {
         let manager = SessionManager(
             transport: MockSSHTransport(),
@@ -384,6 +482,88 @@ final class SessionManagerRenderingPathTests: XCTestCase {
         }
 
         XCTAssertEqual(snapshotText(snapshot, row: promptRow, startCol: 0, count: 6), "PROMPT")
+    }
+
+    @MainActor
+    func testSyncExitSnapshotOverrideSurvivesInFlightPublishAndWinsFollowUpFlush() async {
+        let manager = SessionManager(
+            transport: MockSSHTransport(),
+            knownHostsStore: InMemoryKnownHostsStore()
+        )
+        await manager.injectScreenshotSessions()
+
+        guard let session = manager.sessions.first,
+              let engine = manager.engines[session.id] else {
+            XCTFail("Expected an injected session with an engine")
+            return
+        }
+
+        _ = await engine.feed(Data("\u{1B}[2J\u{1B}[HOVERRIDE".utf8))
+        let syncExitSnapshot = await engine.snapshot()
+
+        _ = await engine.feed(Data("\u{1B}[2J\u{1B}[HLATEST".utf8))
+
+        manager.renderingCoordinator.testingSetPublishInFlight(sessionID: session.id, inFlight: true)
+        await manager.renderingCoordinator.publishSyncExitSnapshot(
+            sessionID: session.id,
+            engine: engine,
+            snapshotOverride: syncExitSnapshot
+        )
+        manager.renderingCoordinator.testingSetPublishInFlight(sessionID: session.id, inFlight: false)
+
+        await manager.renderingCoordinator.flushPendingSnapshotPublishIfNeeded(
+            for: session.id,
+            engine: engine
+        )
+
+        guard let publishedSnapshot = manager.gridSnapshot(for: session.id) else {
+            XCTFail("Expected a published snapshot after the follow-up flush.")
+            return
+        }
+
+        XCTAssertEqual(
+            snapshotText(publishedSnapshot, row: 0, startCol: 0, count: 8),
+            "OVERRIDE",
+            "A sync-exit snapshot captured before later parser activity must not be replaced by a fresh live snapshot when the follow-up publish flushes."
+        )
+    }
+
+    @MainActor
+    func testFirstLivePublishAfterSyncExitForcesFullSnapshotUpload() async {
+        let manager = SessionManager(
+            transport: MockSSHTransport(),
+            knownHostsStore: InMemoryKnownHostsStore()
+        )
+        await manager.injectScreenshotSessions()
+
+        guard let session = manager.sessions.first,
+              let engine = manager.engines[session.id] else {
+            XCTFail("Expected an injected session with an engine")
+            return
+        }
+
+        _ = await engine.feed(Data("\u{1B}[2J\u{1B}[HSYNCFRAME".utf8))
+        let syncExitSnapshot = await engine.snapshot()
+
+        await manager.renderingCoordinator.publishSyncExitSnapshot(
+            sessionID: session.id,
+            engine: engine,
+            snapshotOverride: syncExitSnapshot
+        )
+
+        _ = await engine.feed(Data("\u{1B}[HPOSTSYNC".utf8))
+        await manager.renderingCoordinator.publishGridState(for: session.id, engine: engine)
+
+        guard let publishedSnapshot = manager.gridSnapshot(for: session.id) else {
+            XCTFail("Expected a published snapshot after the post-sync live publish.")
+            return
+        }
+
+        XCTAssertNil(
+            publishedSnapshot.dirtyRange,
+            "The first ordinary publish after a synchronized redraw should force a full upload so stale rows from the old frame cannot survive."
+        )
+        XCTAssertEqual(snapshotText(publishedSnapshot, row: 0, startCol: 0, count: 8), "POSTSYNC")
     }
 
     @MainActor

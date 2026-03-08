@@ -9,6 +9,7 @@ import os.signpost
         case none
         case alternateBuffer
         case promptRedraw
+        case synchronizedOutput
 
         var requiresDebounce: Bool {
             self != .none
@@ -53,6 +54,15 @@ import os.signpost
     private var publishInFlightSessionIDs: Set<UUID> = []
     /// Sticky bit for "another publish is needed after the current one finishes".
     private var followUpPublishRequestedSessionIDs: Set<UUID> = []
+    /// Snapshot override that must win over a later live re-snapshot when a
+    /// publish request arrives while another publish is still in flight.
+    private var pendingSnapshotOverridesBySessionID: [UUID: GridSnapshot] = [:]
+    /// Snapshot override for a queued debounce task that should publish a
+    /// captured frame instead of re-snapshotting from the engine later.
+    private var pendingScheduledSnapshotOverridesBySessionID: [UUID: GridSnapshot] = [:]
+    /// Force the next post-sync live publish to upload a full snapshot so
+    /// stale rows from a prior synchronized frame cannot survive on the GPU.
+    private var forceFullSnapshotNextPublishBySessionID: Set<UUID> = []
     /// Sessions currently redrawing a shell prompt after OSC 133 prompt/command-end markers.
     private var promptRedrawPendingSessionIDs: Set<UUID> = []
 
@@ -62,8 +72,10 @@ import os.signpost
     private let throughputSnapshotPublishInterval: Duration = .milliseconds(16)
     private let alternateBufferSnapshotPublishInterval: Duration = .milliseconds(24)
     private let promptRedrawSnapshotPublishInterval: Duration = .milliseconds(24)
+    private let synchronizedOutputSnapshotPublishInterval: Duration = .milliseconds(40)
     private let alternateBufferMaxPublishDeferral: TimeInterval = 0.150
     private let promptRedrawMaxPublishDeferral: TimeInterval = 0.050
+    private let synchronizedOutputMaxPublishDeferral: TimeInterval = 0.250
     private let burstWindowDuration: TimeInterval = 0.016  // 16ms
     private let burstThreshold = 3                         // requests within window to activate
     private let burstRevertDelay: Duration = .milliseconds(200)
@@ -113,6 +125,9 @@ import os.signpost
         suspendedDirtySessionIDs.remove(sessionID)
         publishInFlightSessionIDs.remove(sessionID)
         followUpPublishRequestedSessionIDs.remove(sessionID)
+        pendingSnapshotOverridesBySessionID.removeValue(forKey: sessionID)
+        pendingScheduledSnapshotOverridesBySessionID.removeValue(forKey: sessionID)
+        forceFullSnapshotNextPublishBySessionID.remove(sessionID)
         promptRedrawPendingSessionIDs.remove(sessionID)
     }
 
@@ -328,12 +343,21 @@ import os.signpost
     ) async {
         scrollOffsetBySessionID[sessionID] = 0
         preserveScrollAnchorBySessionID[sessionID] = false
+        forceFullSnapshotNextPublishBySessionID.insert(sessionID)
         cancelPendingSnapshotPublish(for: sessionID)
         await publishLatestGridState(
             for: sessionID,
             engine: engine,
             snapshotOverride: snapshotOverride
         )
+    }
+
+    func refreshInputModeSnapshot(
+        sessionID: UUID,
+        engine: TerminalEngine
+    ) async {
+        guard let manager else { return }
+        manager.inputModeSnapshotsBySessionID[sessionID] = await engine.inputModeSnapshot()
     }
 
     func scheduleParsedChunkPublish(
@@ -352,6 +376,19 @@ import os.signpost
             for: sessionID,
             engine: engine,
             debounceMode: debounceMode
+        )
+    }
+
+    func scheduleSynchronizedOutputFallbackPublish(
+        sessionID: UUID,
+        engine: TerminalEngine,
+        snapshotOverride: GridSnapshot
+    ) {
+        scheduleCoalescedGridPublish(
+            for: sessionID,
+            engine: engine,
+            debounceMode: .synchronizedOutput,
+            snapshotOverride: snapshotOverride
         )
     }
 
@@ -385,12 +422,18 @@ import os.signpost
         }
 
         if publishIsInFlight {
-            followUpPublishRequestedSessionIDs.insert(sessionID)
+            requestFollowUpPublish(sessionID: sessionID)
             return
         }
 
         cancelPendingSnapshotPublish(for: sessionID)
-        await publishLatestGridState(for: sessionID, engine: engine)
+        let snapshotOverride = pendingScheduledSnapshotOverridesBySessionID.removeValue(forKey: sessionID)
+            ?? pendingSnapshotOverridesBySessionID.removeValue(forKey: sessionID)
+        await publishLatestGridState(
+            for: sessionID,
+            engine: engine,
+            snapshotOverride: snapshotOverride
+        )
     }
 
     func publishGridState(
@@ -447,7 +490,27 @@ import os.signpost
         } else {
             snapshot = await engine.snapshot()
         }
-        gridSnapshotsBySessionID[sessionID] = snapshot
+        let shouldForceFullSnapshot = forceFullSnapshotNextPublishBySessionID.contains(sessionID)
+        let publishedSnapshot: GridSnapshot
+        if shouldForceFullSnapshot {
+            publishedSnapshot = GridSnapshot(
+                cells: snapshot.cells,
+                dirtyRange: nil,
+                cursorRow: snapshot.cursorRow,
+                cursorCol: snapshot.cursorCol,
+                cursorVisible: snapshot.cursorVisible,
+                cursorStyle: snapshot.cursorStyle,
+                columns: snapshot.columns,
+                rows: snapshot.rows,
+                usingAlternateBuffer: snapshot.usingAlternateBuffer
+            )
+            if snapshotOverride == nil {
+                forceFullSnapshotNextPublishBySessionID.remove(sessionID)
+            }
+        } else {
+            publishedSnapshot = snapshot
+        }
+        gridSnapshotsBySessionID[sessionID] = publishedSnapshot
         manager.gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
 
         publishScrollState(
@@ -456,7 +519,7 @@ import os.signpost
             scrollbackCount: usingAlternateBuffer ? 0 : scrollbackCount
         )
 
-        if shouldPublishShellBuffer(for: sessionID) {
+        if !usingAlternateBuffer && shouldPublishShellBuffer(for: sessionID) {
             let visibleLines = await engine.visibleText()
             manager.shellBuffers[sessionID] = visibleLines
             if let completedBlock = await manager.terminalHistoryIndex.observeVisibleLines(
@@ -564,22 +627,28 @@ import os.signpost
         pendingSnapshotPublishTasksBySessionID[sessionID]?.cancel()
         pendingSnapshotPublishTasksBySessionID.removeValue(forKey: sessionID)
         pendingSnapshotPublishStartedAtBySessionID.removeValue(forKey: sessionID)
+        pendingScheduledSnapshotOverridesBySessionID.removeValue(forKey: sessionID)
     }
 
     private func scheduleCoalescedGridPublish(
         for sessionID: UUID,
         engine: TerminalEngine,
-        debounceMode: PublishDebounceMode
+        debounceMode: PublishDebounceMode,
+        snapshotOverride: GridSnapshot? = nil
     ) {
         if isPublishingSuspended {
             suspendedDirtySessionIDs.insert(sessionID)
             return
         }
 
+        if let snapshotOverride {
+            pendingScheduledSnapshotOverridesBySessionID[sessionID] = snapshotOverride
+        }
+
         updateBurstState(for: sessionID)
 
         if publishInFlightSessionIDs.contains(sessionID) {
-            followUpPublishRequestedSessionIDs.insert(sessionID)
+            requestFollowUpPublish(sessionID: sessionID)
             return
         }
 
@@ -616,7 +685,12 @@ import os.signpost
             guard !Task.isCancelled else { return }
             self.pendingSnapshotPublishTasksBySessionID.removeValue(forKey: sessionID)
             self.pendingSnapshotPublishStartedAtBySessionID.removeValue(forKey: sessionID)
-            await self.publishLatestGridState(for: sessionID, engine: engine)
+            let snapshotOverride = self.pendingScheduledSnapshotOverridesBySessionID.removeValue(forKey: sessionID)
+            await self.publishLatestGridState(
+                for: sessionID,
+                engine: engine,
+                snapshotOverride: snapshotOverride
+            )
         }
     }
 
@@ -631,7 +705,10 @@ import os.signpost
         }
 
         if publishInFlightSessionIDs.contains(sessionID) {
-            followUpPublishRequestedSessionIDs.insert(sessionID)
+            requestFollowUpPublish(
+                sessionID: sessionID,
+                snapshotOverride: snapshotOverride
+            )
             return
         }
 
@@ -640,13 +717,23 @@ import os.signpost
             publishInFlightSessionIDs.remove(sessionID)
         }
 
+        // Once a publish actually starts, any older stored override has either
+        // been selected explicitly for this publish or is now stale and must
+        // not be replayed by an unrelated follow-up request.
+        pendingSnapshotOverridesBySessionID.removeValue(forKey: sessionID)
+
         await publishGridState(for: sessionID, engine: engine, snapshotOverride: snapshotOverride)
 
         if followUpPublishRequestedSessionIDs.remove(sessionID) != nil {
+            let followUpSnapshotOverride = pendingSnapshotOverridesBySessionID.removeValue(forKey: sessionID)
             if isPublishingSuspended {
                 suspendedDirtySessionIDs.insert(sessionID)
             } else {
-                await publishLatestGridState(for: sessionID, engine: engine)
+                await publishLatestGridState(
+                    for: sessionID,
+                    engine: engine,
+                    snapshotOverride: followUpSnapshotOverride
+                )
             }
         }
 
@@ -673,6 +760,8 @@ import os.signpost
             return alternateBufferSnapshotPublishInterval
         case .promptRedraw:
             return promptRedrawSnapshotPublishInterval
+        case .synchronizedOutput:
+            return synchronizedOutputSnapshotPublishInterval
         }
     }
 
@@ -684,6 +773,28 @@ import os.signpost
             return alternateBufferMaxPublishDeferral
         case .promptRedraw:
             return promptRedrawMaxPublishDeferral
+        case .synchronizedOutput:
+            return synchronizedOutputMaxPublishDeferral
         }
     }
+
+    private func requestFollowUpPublish(
+        sessionID: UUID,
+        snapshotOverride: GridSnapshot? = nil
+    ) {
+        followUpPublishRequestedSessionIDs.insert(sessionID)
+        if let snapshotOverride {
+            pendingSnapshotOverridesBySessionID[sessionID] = snapshotOverride
+        }
+    }
+
+#if DEBUG
+    func testingSetPublishInFlight(sessionID: UUID, inFlight: Bool) {
+        if inFlight {
+            publishInFlightSessionIDs.insert(sessionID)
+        } else {
+            publishInFlightSessionIDs.remove(sessionID)
+        }
+    }
+#endif
 }

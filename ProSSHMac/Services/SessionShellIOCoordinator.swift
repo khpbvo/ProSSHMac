@@ -194,17 +194,30 @@ enum RawShellInputSource: String {
             for await batch in batchedStream {
                 if Task.isCancelled { break }
                 await engine.feed(batch)
+                await self?.manager?.renderingCoordinator.refreshInputModeSnapshot(
+                    sessionID: sessionID,
+                    engine: engine
+                )
 
-                if let syncExitSnap = await engine.consumeSyncExitSnapshot() {
+                let syncExitSnapshots = await engine.consumeSyncExitSnapshots()
+                for syncExitSnapshot in syncExitSnapshots {
                     await self?.manager?.renderingCoordinator.publishSyncExitSnapshot(
                         sessionID: sessionID,
                         engine: engine,
-                        snapshotOverride: syncExitSnap
+                        snapshotOverride: syncExitSnapshot
                     )
                 }
 
                 let inSyncMode = await engine.synchronizedOutput
-                if inSyncMode { continue }
+                if inSyncMode {
+                    let liveSyncSnapshot = await engine.liveSnapshot()
+                    await self?.manager?.renderingCoordinator.scheduleSynchronizedOutputFallbackPublish(
+                        sessionID: sessionID,
+                        engine: engine,
+                        snapshotOverride: liveSyncSnapshot
+                    )
+                    continue
+                }
 
                 await self?.manager?.renderingCoordinator.scheduleParsedChunkPublish(
                     sessionID: sessionID,

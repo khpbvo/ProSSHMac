@@ -686,6 +686,7 @@ actor TerminalEngine {
     // MARK: - Grid Forwarding (for SessionManager)
 
     func snapshot() -> GridSnapshot { grid.snapshot() }
+    func liveSnapshot() -> GridSnapshot { grid.liveSnapshot() }
     func snapshot(scrollOffset: Int) -> GridSnapshot { grid.snapshot(scrollOffset: scrollOffset) }
     func resize(newColumns: Int, newRows: Int) { grid.resize(newColumns: newColumns, newRows: newRows) }
     func visibleText() -> [String] { grid.visibleText() }
@@ -695,7 +696,7 @@ actor TerminalEngine {
     func setScrollRegion(top: Int, bottom: Int) { grid.setScrollRegion(top: top, bottom: bottom) }
     func disableAlternateBuffer() { grid.disableAlternateBuffer() }
     func consumeBellCount() -> Int { grid.consumeBellCount() }
-    func consumeSyncExitSnapshot() -> GridSnapshot? { grid.consumeSyncExitSnapshot() }
+    func consumeSyncExitSnapshots() -> [GridSnapshot] { grid.consumeSyncExitSnapshots() }
     func inputModeSnapshot() -> InputModeSnapshot { grid.inputModeSnapshot() }
 
     var synchronizedOutput: Bool { grid.synchronizedOutput }

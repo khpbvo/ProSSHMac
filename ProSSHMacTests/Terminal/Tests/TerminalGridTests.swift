@@ -966,7 +966,7 @@ final class TerminalGridTests: XCTestCase {
         XCTAssertEqual(snapshotText(frozen, row: 0, startCol: 0, count: 3), "NEW")
     }
 
-    func testSynchronizedOutput_ConsumeSyncExitSnapshotReturnsLatestUnsyncedFrame() async {
+    func testSynchronizedOutput_ConsumeSyncExitSnapshotsReturnsQueuedUnsyncedFrames() async {
         for ch in "OLD" {
             await grid.printCharacter(ch)
         }
@@ -982,11 +982,44 @@ final class TerminalGridTests: XCTestCase {
         }
         await grid.setSynchronizedOutput(true)
 
-        let syncExit = await grid.consumeSyncExitSnapshot()
-        XCTAssertNotNil(syncExit)
-        if let syncExit {
-            XCTAssertEqual(snapshotText(syncExit, row: 0, startCol: 0, count: 3), "NEW")
+        await grid.setSynchronizedOutput(false)
+        await grid.moveCursorTo(row: 0, col: 0)
+        await grid.eraseInLine(mode: 2)
+        for ch in "END" {
+            await grid.printCharacter(ch)
         }
+        await grid.setSynchronizedOutput(true)
+
+        let syncExitSnapshots = await grid.consumeSyncExitSnapshots()
+        XCTAssertEqual(syncExitSnapshots.count, 2)
+        XCTAssertEqual(
+            snapshotText(syncExitSnapshots[0], row: 0, startCol: 0, count: 3),
+            "NEW"
+        )
+        XCTAssertEqual(
+            snapshotText(syncExitSnapshots[1], row: 0, startCol: 0, count: 3),
+            "END"
+        )
+    }
+
+    func testSynchronizedOutput_LiveSnapshotBypassesCachedFrame() async {
+        for ch in "OLD" {
+            await grid.printCharacter(ch)
+        }
+        _ = await grid.snapshot()
+
+        await grid.setSynchronizedOutput(true)
+        await grid.moveCursorTo(row: 0, col: 0)
+        await grid.eraseInLine(mode: 2)
+        for ch in "NEW" {
+            await grid.printCharacter(ch)
+        }
+
+        let cached = await grid.snapshot()
+        XCTAssertEqual(snapshotText(cached, row: 0, startCol: 0, count: 3), "OLD")
+
+        let live = await grid.liveSnapshot()
+        XCTAssertEqual(snapshotText(live, row: 0, startCol: 0, count: 3), "NEW")
     }
 
     private func snapshotText(

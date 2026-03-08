@@ -58,12 +58,12 @@ extension TerminalGrid {
     /// unsynchronized frame so SessionManager can publish it even if the
     /// parser chunk ends in sync mode.
     ///
-    /// The sync-exit snapshot is critical for correctness: when a single
-    /// data chunk contains ESC[?2026l (end sync) followed by drawing
-    /// followed by ESC[?2026h (start sync), the SessionManager only
-    /// checks sync mode AFTER the entire chunk. Without the sync-exit
-    /// snapshot, the intermediate visible frame (between l and h) would
-    /// never be displayed, causing stale/ghost content to persist.
+    /// The sync-exit snapshots are critical for correctness: when a single
+    /// data chunk contains repeated ESC[?2026l (end sync) -> drawing ->
+    /// ESC[?2026h (start sync) windows, SessionManager only checks sync mode
+    /// after the whole batch. Without queueing every captured frame, an early
+    /// full-screen redraw can be overwritten by a later narrow footer/status
+    /// redraw before the renderer ever sees it.
     nonisolated func setSynchronizedOutput(_ enabled: Bool) {
         let wasEnabled = synchronizedOutput
         guard wasEnabled != enabled else { return }
@@ -74,7 +74,7 @@ extension TerminalGrid {
         if enabled {
             if hasDirtyCells {
                 let snap = snapshot()
-                syncExitSnapshot = snap
+                syncExitSnapshots.append(snap)
             }
             synchronizedOutput = true
             return
@@ -84,12 +84,13 @@ extension TerminalGrid {
         synchronizedOutput = false
     }
 
-    /// Consume and return the sync-exit snapshot, clearing it.
+    /// Consume and return all queued sync-exit snapshots, clearing them.
     /// Called by SessionManager after each parser feed.
-    nonisolated func consumeSyncExitSnapshot() -> GridSnapshot? {
-        guard let snap = syncExitSnapshot else { return nil }
-        syncExitSnapshot = nil
-        return snap
+    nonisolated func consumeSyncExitSnapshots() -> [GridSnapshot] {
+        guard !syncExitSnapshots.isEmpty else { return [] }
+        let snapshots = syncExitSnapshots
+        syncExitSnapshots.removeAll(keepingCapacity: true)
+        return snapshots
     }
 
     /// Set cursor visibility (DECTCEM).

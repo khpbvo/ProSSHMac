@@ -9,17 +9,8 @@ extension TerminalGrid {
 
     // MARK: - A.6.14 Grid Snapshot Generation
 
-    /// Produce an immutable snapshot of the current grid state for the renderer.
-    /// Clears dirty tracking after snapshot is taken.
-    ///
-    /// When synchronized output (mode 2026) is active, returns the previously
-    /// cached snapshot so the renderer keeps displaying the last complete frame
-    /// while the remote app is mid-update.
-    nonisolated func snapshot() -> GridSnapshot {
-        // During synchronized output, return the cached snapshot to avoid
-        // rendering partial frames. If no cached snapshot exists yet, fall
-        // through and produce one normally.
-        if synchronizedOutput, let cached = lastSnapshot {
+    nonisolated private func makeSnapshot(respectingSynchronizedOutput: Bool) -> GridSnapshot {
+        if respectingSynchronizedOutput, synchronizedOutput, let cached = lastSnapshot {
             return cached
         }
         #if DEBUG
@@ -27,14 +18,14 @@ extension TerminalGrid {
         os_signpost(
             .begin,
             log: Self.perfSignpostLog,
-            name: "GridSnapshot",
+            name: respectingSynchronizedOutput ? "GridSnapshot" : "GridSnapshotLive",
             signpostID: signpostID
         )
         defer {
             os_signpost(
                 .end,
                 log: Self.perfSignpostLog,
-                name: "GridSnapshot",
+                name: respectingSynchronizedOutput ? "GridSnapshot" : "GridSnapshotLive",
                 signpostID: signpostID
             )
         }
@@ -47,10 +38,6 @@ extension TerminalGrid {
         let dirtyMax = dirtyRowMax
         let totalCells = rows * columns
 
-        // Swap the active pre-allocated buffer out to get unique ownership.
-        // With double buffering, the last snapshot sharing this buffer's
-        // storage has been dropped by the renderer, so ref count is 1 and
-        // indexed writes go directly into existing memory — zero allocation.
         var buffer = ContiguousArray<CellInstance>()
         if useSnapshotBufferA {
             swap(&buffer, &snapshotBufferA)
@@ -58,7 +45,6 @@ extension TerminalGrid {
             swap(&buffer, &snapshotBufferB)
         }
 
-        // Resize only when grid dimensions change (not every frame).
         if buffer.count != totalCells {
             buffer = ContiguousArray(repeating: CellInstance(
                 row: 0, col: 0, glyphIndex: 0, fgColor: 0, bgColor: 0,
@@ -66,7 +52,6 @@ extension TerminalGrid {
             ), count: totalCells)
         }
 
-        // Fill by index — no append overhead (no bounds check + count increment per cell).
         var idx = 0
         for row in 0..<rows {
             let physicalRowIndex = physicalRow(row, base: rowBase)
@@ -79,19 +64,13 @@ extension TerminalGrid {
                 if rowIsDirty { flags |= CellInstance.flagDirty }
                 if isCursor { flags |= CellInstance.flagCursor }
 
-                let codepoint = cell.primaryCodepoint
-
-                // boldIsBright is pre-applied at write-time; use packed values directly.
-                let fgPacked = cell.fgPackedRGBA
-                let ulColorPacked = cell.underlinePackedRGBA
-
                 buffer[idx] = CellInstance(
                     row: UInt16(row),
                     col: UInt16(col),
-                    glyphIndex: codepoint,
-                    fgColor: fgPacked,
+                    glyphIndex: cell.primaryCodepoint,
+                    fgColor: cell.fgPackedRGBA,
                     bgColor: cell.bgPackedRGBA,
-                    underlineColor: ulColorPacked,
+                    underlineColor: cell.underlinePackedRGBA,
                     attributes: cell.attributes.rawValue,
                     flags: flags,
                     underlineStyle: cell.underlineStyle.rawValue
@@ -100,7 +79,6 @@ extension TerminalGrid {
             }
         }
 
-        // Compute dirty range
         var dirtyRange: Range<Int>?
         if hasDirtyRange {
             let startIdx = dirtyMin * columns
@@ -108,10 +86,6 @@ extension TerminalGrid {
             dirtyRange = startIdx..<endIdx
         }
 
-        // Keep the filled buffer in the reuse slot. The returned snapshot and
-        // slot intentionally share storage; later writes trigger COW when the
-        // old snapshot is still retained by the renderer, preserving correctness
-        // while recovering steady-state buffer reuse.
         let snap = GridSnapshot(
             cells: buffer,
             dirtyRange: dirtyRange,
@@ -135,6 +109,23 @@ extension TerminalGrid {
 
         lastSnapshot = snap
         return snap
+    }
+
+    /// Produce an immutable snapshot of the current grid state for the renderer.
+    /// Clears dirty tracking after snapshot is taken.
+    ///
+    /// When synchronized output (mode 2026) is active, returns the previously
+    /// cached snapshot so the renderer keeps displaying the last complete frame
+    /// while the remote app is mid-update.
+    nonisolated func snapshot() -> GridSnapshot {
+        makeSnapshot(respectingSynchronizedOutput: true)
+    }
+
+    /// Produce a live snapshot even when synchronized output is active.
+    /// Used as a bounded watchdog path so long-lived sync windows do not
+    /// leave the UI apparently frozen forever.
+    nonisolated func liveSnapshot() -> GridSnapshot {
+        makeSnapshot(respectingSynchronizedOutput: false)
     }
 
     /// Produce a snapshot with scrollback lines blended in.
