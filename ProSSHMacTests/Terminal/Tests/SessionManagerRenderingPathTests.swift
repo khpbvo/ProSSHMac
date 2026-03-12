@@ -168,7 +168,7 @@ final class SessionManagerRenderingPathTests: XCTestCase {
     }
 
     @MainActor
-    func testAlternateBufferResetsOnEntryButAllowsViewportScrollbackAfterward() async {
+    func testAlternateBufferAlwaysResetsScrollOffsetToLiveView() async {
         let manager = SessionManager(
             transport: MockSSHTransport(),
             knownHostsStore: InMemoryKnownHostsStore()
@@ -192,6 +192,7 @@ final class SessionManagerRenderingPathTests: XCTestCase {
         await waitForNonceIncrement(manager: manager, sessionID: session.id, baseline: preAltBaselineNonce)
         XCTAssertEqual(manager.scrollStateBySessionID[session.id]?.scrollOffset, 4)
 
+        // Entering alternate buffer resets scroll offset to 0.
         _ = await engine.feed(Data("\u{1B}[?1049h".utf8))
         await manager.renderingCoordinator.publishGridState(for: session.id, engine: engine)
 
@@ -200,6 +201,7 @@ final class SessionManagerRenderingPathTests: XCTestCase {
         XCTAssertEqual(stateInAlt?.scrollOffset, 0)
         XCTAssertGreaterThan(altScrollbackCount, 0)
 
+        // Simulate scrolling up while in alternate buffer.
         let targetOffset = min(6, altScrollbackCount)
         XCTAssertGreaterThan(targetOffset, 0)
 
@@ -208,14 +210,16 @@ final class SessionManagerRenderingPathTests: XCTestCase {
         await waitForNonceIncrement(manager: manager, sessionID: session.id, baseline: altScrollBaselineNonce)
 
         XCTAssertEqual(manager.scrollStateBySessionID[session.id]?.scrollOffset, targetOffset)
-        XCTAssertEqual(manager.scrollStateBySessionID[session.id]?.scrollbackCount, altScrollbackCount)
 
+        // New TUI output while in alternate buffer must auto-reset scroll
+        // offset to 0, so the user always sees the latest TUI frame.
         let liveAltBaselineNonce = manager.gridSnapshotNonceBySessionID[session.id, default: -1]
         _ = await engine.feed(Data("ALT".utf8))
         await manager.renderingCoordinator.publishGridState(for: session.id, engine: engine)
 
         XCTAssertGreaterThan(manager.gridSnapshotNonceBySessionID[session.id, default: -1], liveAltBaselineNonce)
-        XCTAssertEqual(manager.scrollStateBySessionID[session.id]?.scrollOffset, targetOffset)
+        XCTAssertEqual(manager.scrollStateBySessionID[session.id]?.scrollOffset, 0,
+                       "Alternate buffer output must reset scroll to live view")
         XCTAssertEqual(manager.scrollStateBySessionID[session.id]?.scrollbackCount, altScrollbackCount)
     }
 

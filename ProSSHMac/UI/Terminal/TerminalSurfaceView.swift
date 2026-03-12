@@ -553,10 +553,13 @@ struct TerminalSurfaceView: View {
         if !usingAlternateBuffer {
             return true
         }
-        if sessionManager.isScrolledBack(sessionID: sessionID) {
-            return true
-        }
-        return deltaY > 0
+        // In alternate buffer (TUI apps), don't route scroll events to
+        // viewport scrollback. The alternate buffer has no scrollback of
+        // its own, and scrolling into the primary buffer's scrollback
+        // during a TUI session causes the viewport to desync from the
+        // app's live output. Let the TUI app handle scroll via mouse
+        // reporting instead.
+        return false
     }
 
     private func terminalCellCoordinates(from location: CGPoint, contentPadding: CGFloat = 8) -> (row: Int, col: Int)? {

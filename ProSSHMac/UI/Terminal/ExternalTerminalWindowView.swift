@@ -229,10 +229,10 @@ struct ExternalTerminalWindowView: View {
         if !usingAlternateBuffer {
             return true
         }
-        if sessionManager.isScrolledBack(sessionID: sessionID) {
-            return true
-        }
-        return deltaY > 0
+        // In alternate buffer (TUI apps), don't route scroll events to
+        // viewport scrollback. Let the TUI app handle scroll via mouse
+        // reporting instead.
+        return false
     }
 
     private func handleHardwareCommandShortcut(_ action: HardwareKeyCommandAction) {

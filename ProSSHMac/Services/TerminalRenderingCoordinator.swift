@@ -468,7 +468,11 @@ import os.signpost
         let scrollbackCount = await engine.scrollbackCount
         let usingAlternateBuffer = await engine.usingAlternateBuffer
         var currentOffset = scrollOffsetBySessionID[sessionID] ?? 0
-        if usingAlternateBuffer && !previousUsingAlternateBuffer {
+        if usingAlternateBuffer {
+            // Alternate buffer (TUI apps) should always show the live
+            // alternate-buffer content. Any residual scroll offset from
+            // an earlier user scroll must be cleared on every publish so
+            // rapid TUI redraws always display the latest frame.
             currentOffset = 0
             preserveScrollAnchorBySessionID[sessionID] = false
         }
