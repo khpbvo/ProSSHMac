@@ -218,6 +218,15 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
 
     /// Jump the scroll engine to a specific row instantly (no animation).
     func scrollJumpTo(row: Int) {
+        // Refresh bounds so the engine does not clamp the target row
+        // against a stale maxTargetRow (which is otherwise only updated
+        // during user-driven scrollDelta calls). Without this, the
+        // coordinator's scroll offset can outrun the engine's bounds
+        // during heavy output with preserveScrollAnchor, desynchronising
+        // the two and preventing the user from scrolling back to live.
+        if let maxRow = scrollbackBoundsProvider?() {
+            smoothScrollEngine.setBounds(maxRow: maxRow)
+        }
         smoothScrollEngine.jumpTo(row: row)
     }
 

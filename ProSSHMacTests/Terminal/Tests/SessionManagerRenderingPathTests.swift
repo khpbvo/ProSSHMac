@@ -326,28 +326,29 @@ final class SessionManagerRenderingPathTests: XCTestCase {
         await manager.renderingCoordinator.publishGridState(for: session.id, engine: engine)
 
         let baselineNonce = manager.gridSnapshotNonceBySessionID[session.id, default: -1]
+        // Use short gaps (8ms × 3 = 24ms total) to stay within the 50ms
+        // max deferral window so all fragments coalesce into a single publish.
         let redrawFragments = [
             "\u{1B}[2J\u{1B}[1;1HF",
             "\u{1B}[2J\u{1B}[1;1HFR",
-            "\u{1B}[2J\u{1B}[1;1HFRA",
-            "\u{1B}[2J\u{1B}[1;1HFRAM"
+            "\u{1B}[2J\u{1B}[1;1HFRA"
         ]
 
         for fragment in redrawFragments {
             _ = await engine.feed(Data(fragment.utf8))
             await manager.renderingCoordinator.scheduleParsedChunkPublish(sessionID: session.id, engine: engine)
-            try? await Task.sleep(for: .milliseconds(20))
+            try? await Task.sleep(for: .milliseconds(8))
             XCTAssertEqual(
                 manager.gridSnapshotNonceBySessionID[session.id, default: -1],
                 baselineNonce,
-                "Long alternate-buffer redraw bursts should keep coalescing instead of forcing a publish after ~50ms."
+                "Alternate-buffer redraw bursts within the deferral window should keep coalescing."
             )
         }
 
         _ = await engine.feed(Data("\u{1B}[2J\u{1B}[1;1HFRAME DONE".utf8))
         await manager.renderingCoordinator.scheduleParsedChunkPublish(sessionID: session.id, engine: engine)
 
-        try? await Task.sleep(for: .milliseconds(12))
+        try? await Task.sleep(for: .milliseconds(8))
         XCTAssertEqual(
             manager.gridSnapshotNonceBySessionID[session.id, default: -1],
             baselineNonce,
@@ -548,6 +549,50 @@ final class SessionManagerRenderingPathTests: XCTestCase {
             "OVERRIDE",
             "A sync-exit snapshot captured before later parser activity must not be replaced by a fresh live snapshot when the follow-up publish flushes."
         )
+    }
+
+    @MainActor
+    func testFollowUpPublishRequestedDuringActivePublishDrainsBeforeReturn() async {
+        let manager = SessionManager(
+            transport: MockSSHTransport(),
+            knownHostsStore: InMemoryKnownHostsStore()
+        )
+        await manager.injectScreenshotSessions()
+
+        guard let session = manager.sessions.first,
+              let engine = manager.engines[session.id] else {
+            XCTFail("Expected an injected session with an engine")
+            return
+        }
+
+        _ = await engine.feed(Data("EARLY".utf8))
+        let earlySnapshot = await engine.snapshot()
+        _ = await engine.feed(Data("\u{1B}[2J\u{1B}[HLATEST".utf8))
+        let latestSnapshot = await engine.snapshot()
+        let baselineNonce = manager.gridSnapshotNonceBySessionID[session.id, default: -1]
+
+        manager.renderingCoordinator.testingQueueFollowUpAfterCurrentPublish(
+            sessionID: session.id,
+            snapshotOverride: latestSnapshot
+        )
+        await manager.renderingCoordinator.publishSyncExitSnapshot(
+            sessionID: session.id,
+            engine: engine,
+            snapshotOverride: earlySnapshot
+        )
+
+        XCTAssertEqual(
+            manager.gridSnapshotNonceBySessionID[session.id, default: -1],
+            baselineNonce + 2,
+            "A publish that receives newer output while in flight should drain exactly one follow-up publish before returning."
+        )
+
+        guard let publishedSnapshot = manager.gridSnapshot(for: session.id) else {
+            XCTFail("Expected a published snapshot after the in-flight follow-up drain.")
+            return
+        }
+
+        XCTAssertEqual(snapshotText(publishedSnapshot, row: 0, startCol: 0, count: 6), "LATEST")
     }
 
     @MainActor

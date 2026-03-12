@@ -65,15 +65,20 @@ import os.signpost
     private var forceFullSnapshotNextPublishBySessionID: Set<UUID> = []
     /// Sessions currently redrawing a shell prompt after OSC 133 prompt/command-end markers.
     private var promptRedrawPendingSessionIDs: Set<UUID> = []
+    #if DEBUG
+    /// Deterministic test hook: queue one follow-up snapshot immediately after the
+    /// next publish iteration for the given session.
+    private var testingInjectedFollowUpSnapshotBySessionID: [UUID: GridSnapshot] = [:]
+    #endif
 
     private let shellBufferPublishInterval: TimeInterval = 1.0 / 30.0
     private let throughputShellBufferPublishInterval: TimeInterval = 1.0 / 5.0
     private let snapshotPublishInterval: Duration = .milliseconds(8)
     private let throughputSnapshotPublishInterval: Duration = .milliseconds(16)
-    private let alternateBufferSnapshotPublishInterval: Duration = .milliseconds(24)
+    private let alternateBufferSnapshotPublishInterval: Duration = .milliseconds(16)
     private let promptRedrawSnapshotPublishInterval: Duration = .milliseconds(24)
     private let synchronizedOutputSnapshotPublishInterval: Duration = .milliseconds(40)
-    private let alternateBufferMaxPublishDeferral: TimeInterval = 0.150
+    private let alternateBufferMaxPublishDeferral: TimeInterval = 0.050
     private let promptRedrawMaxPublishDeferral: TimeInterval = 0.050
     private let synchronizedOutputMaxPublishDeferral: TimeInterval = 0.250
     private let burstWindowDuration: TimeInterval = 0.016  // 16ms
@@ -425,6 +430,7 @@ import os.signpost
         }
 
         cancelPendingSnapshotPublish(for: sessionID)
+        followUpPublishRequestedSessionIDs.remove(sessionID)
         let snapshotOverride = pendingScheduledSnapshotOverridesBySessionID.removeValue(forKey: sessionID)
             ?? pendingSnapshotOverridesBySessionID.removeValue(forKey: sessionID)
         await publishLatestGridState(
@@ -715,29 +721,42 @@ import os.signpost
         publishInFlightSessionIDs.insert(sessionID)
         defer {
             publishInFlightSessionIDs.remove(sessionID)
+            promptRedrawPendingSessionIDs.remove(sessionID)
         }
 
-        // Once a publish actually starts, any older stored override has either
-        // been selected explicitly for this publish or is now stale and must
-        // not be replayed by an unrelated follow-up request.
-        pendingSnapshotOverridesBySessionID.removeValue(forKey: sessionID)
+        var nextSnapshotOverride = snapshotOverride
 
-        await publishGridState(for: sessionID, engine: engine, snapshotOverride: snapshotOverride)
+        while true {
+            // Once a publish actually starts, any older stored override has either
+            // been selected explicitly for this publish or is now stale and must
+            // not be replayed by an unrelated follow-up request.
+            pendingSnapshotOverridesBySessionID.removeValue(forKey: sessionID)
 
-        if followUpPublishRequestedSessionIDs.remove(sessionID) != nil {
-            let followUpSnapshotOverride = pendingSnapshotOverridesBySessionID.removeValue(forKey: sessionID)
-            if isPublishingSuspended {
-                suspendedDirtySessionIDs.insert(sessionID)
-            } else {
-                await publishLatestGridState(
-                    for: sessionID,
-                    engine: engine,
-                    snapshotOverride: followUpSnapshotOverride
+            await publishGridState(
+                for: sessionID,
+                engine: engine,
+                snapshotOverride: nextSnapshotOverride
+            )
+            #if DEBUG
+            if let injectedSnapshotOverride = testingInjectedFollowUpSnapshotBySessionID.removeValue(forKey: sessionID) {
+                requestFollowUpPublish(
+                    sessionID: sessionID,
+                    snapshotOverride: injectedSnapshotOverride
                 )
             }
-        }
+            #endif
 
-        promptRedrawPendingSessionIDs.remove(sessionID)
+            guard followUpPublishRequestedSessionIDs.remove(sessionID) != nil else {
+                return
+            }
+
+            if isPublishingSuspended {
+                suspendedDirtySessionIDs.insert(sessionID)
+                return
+            }
+
+            nextSnapshotOverride = pendingSnapshotOverridesBySessionID.removeValue(forKey: sessionID)
+        }
     }
 
     private func shouldPublishShellBuffer(for sessionID: UUID, now: Date = .now) -> Bool {
@@ -795,6 +814,17 @@ import os.signpost
         } else {
             publishInFlightSessionIDs.remove(sessionID)
         }
+    }
+
+    func testingHasPublishInFlight(sessionID: UUID) -> Bool {
+        publishInFlightSessionIDs.contains(sessionID)
+    }
+
+    func testingQueueFollowUpAfterCurrentPublish(
+        sessionID: UUID,
+        snapshotOverride: GridSnapshot
+    ) {
+        testingInjectedFollowUpSnapshotBySessionID[sessionID] = snapshotOverride
     }
 #endif
 }
