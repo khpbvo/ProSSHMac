@@ -587,8 +587,8 @@ final class SessionManagerRenderingPathTests: XCTestCase {
 
         XCTAssertEqual(
             manager.gridSnapshotNonceBySessionID[session.id, default: -1],
-            baselineNonce + 2,
-            "A publish that receives newer output while in flight should drain exactly one follow-up publish before returning."
+            baselineNonce + 1,
+            "A drain with follow-ups should produce a single nonce increment for the final frame."
         )
 
         guard let publishedSnapshot = manager.gridSnapshot(for: session.id) else {
@@ -680,6 +680,227 @@ final class SessionManagerRenderingPathTests: XCTestCase {
             "The first ordinary publish after a synchronized redraw should force a full upload so stale rows from the old frame cannot survive."
         )
         XCTAssertEqual(snapshotText(publishedSnapshot, row: 0, startCol: 0, count: 8), "POSTSYNC")
+    }
+
+    @MainActor
+    func testDrainLoopPublishesSingleNonceForIntermediateFrames() async {
+        let manager = SessionManager(
+            transport: MockSSHTransport(),
+            knownHostsStore: InMemoryKnownHostsStore()
+        )
+        await manager.injectScreenshotSessions()
+
+        guard let session = manager.sessions.first,
+              let engine = manager.engines[session.id] else {
+            XCTFail("Expected an injected session with an engine")
+            return
+        }
+
+        // Build intermediate and final snapshots
+        _ = await engine.feed(Data("INTERMEDIATE".utf8))
+        let intermediateSnapshot = await engine.snapshot()
+        _ = await engine.feed(Data("\u{1B}[2J\u{1B}[HFINAL".utf8))
+        let finalSnapshot = await engine.snapshot()
+
+        let baselineNonce = manager.gridSnapshotNonceBySessionID[session.id, default: -1]
+        let baselineBellNonce = manager.bellEventNonceBySessionID[session.id, default: 0]
+
+        // Ring the bell after baseline measurement so consumeBellCount captures it
+        _ = await engine.feed(Data("\u{07}\u{07}".utf8))
+
+        // Queue a follow-up so the drain loop runs two iterations
+        manager.renderingCoordinator.testingQueueFollowUpAfterCurrentPublish(
+            sessionID: session.id,
+            snapshotOverride: finalSnapshot
+        )
+
+        // Start with intermediate snapshot — drain loop processes the follow-up
+        await manager.renderingCoordinator.publishSyncExitSnapshot(
+            sessionID: session.id,
+            engine: engine,
+            snapshotOverride: intermediateSnapshot
+        )
+
+        // Exactly 1 nonce increment despite 2 drain iterations
+        XCTAssertEqual(
+            manager.gridSnapshotNonceBySessionID[session.id, default: -1],
+            baselineNonce + 1,
+            "Drain loop with follow-ups should produce a single nonce increment for the final frame."
+        )
+
+        // Published snapshot is the latest, not intermediate
+        guard let publishedSnapshot = manager.gridSnapshot(for: session.id) else {
+            XCTFail("Expected a published snapshot after the drain loop.")
+            return
+        }
+        XCTAssertEqual(
+            snapshotText(publishedSnapshot, row: 0, startCol: 0, count: 5),
+            "FINAL",
+            "The drain loop must publish the latest frame, not an intermediate one."
+        )
+
+        // Bell events accumulated during intermediate iterations are not lost
+        XCTAssertGreaterThan(
+            manager.bellEventNonceBySessionID[session.id, default: 0],
+            baselineBellNonce,
+            "Bell events accumulated during intermediate drain iterations must not be lost."
+        )
+    }
+
+    @MainActor
+    func testAlternateBufferResizeDefersGridResizeUntilDebounce() async {
+        let manager = SessionManager(
+            transport: MockSSHTransport(),
+            knownHostsStore: InMemoryKnownHostsStore()
+        )
+        await manager.injectScreenshotSessions()
+
+        guard let session = manager.sessions.first,
+              let engine = manager.engines[session.id] else {
+            XCTFail("Expected an injected session with an engine")
+            return
+        }
+
+        // Enter alternate buffer (TUI mode).
+        _ = await engine.feed(Data("\u{1B}[?1049h\u{1B}[2J\u{1B}[1;1HTUI_CONTENT".utf8))
+        await manager.renderingCoordinator.publishGridState(for: session.id, engine: engine)
+
+        let originalColumns = await engine.columns
+        let originalRows = await engine.rows
+        let baselineNonce = manager.gridSnapshotNonceBySessionID[session.id, default: -1]
+
+        // Simulate animated resize: call resizeTerminal with a different size.
+        // Because alternate buffer is active, the grid should NOT be resized
+        // immediately — nonce and snapshot dimensions should remain unchanged.
+        // Note: PTYConfiguration.default is 120×40, so use a different size
+        // to ensure the dimensionsChanged guard doesn't short-circuit.
+        await manager.resizeTerminal(sessionID: session.id, columns: 96, rows: 28)
+
+        let postResizeNonce = manager.gridSnapshotNonceBySessionID[session.id, default: -1]
+        let postResizeColumns = await engine.columns
+        let postResizeRows = await engine.rows
+
+        XCTAssertEqual(postResizeNonce, baselineNonce,
+                       "Alternate buffer resize should not bump nonce immediately.")
+        XCTAssertEqual(postResizeColumns, originalColumns,
+                       "Grid columns should remain at original size during deferred resize.")
+        XCTAssertEqual(postResizeRows, originalRows,
+                       "Grid rows should remain at original size during deferred resize.")
+
+        // Wait for the 150ms debounce to fire.
+        await waitForNonceIncrement(manager: manager, sessionID: session.id, baseline: baselineNonce)
+
+        let finalColumns = await engine.columns
+        let finalRows = await engine.rows
+        let finalNonce = manager.gridSnapshotNonceBySessionID[session.id, default: -1]
+
+        XCTAssertGreaterThan(finalNonce, baselineNonce,
+                             "Nonce should increment after debounced resize fires.")
+        XCTAssertEqual(finalColumns, 96,
+                       "Grid should be resized to final dimensions after debounce.")
+        XCTAssertEqual(finalRows, 28,
+                       "Grid should be resized to final dimensions after debounce.")
+
+        // Snapshot should reflect the new dimensions.
+        let snapshot = manager.gridSnapshot(for: session.id)
+        XCTAssertEqual(snapshot?.columns, 96)
+        XCTAssertEqual(snapshot?.rows, 28)
+    }
+
+    @MainActor
+    func testPrimaryBufferResizeStillAppliesImmediately() async {
+        let manager = SessionManager(
+            transport: MockSSHTransport(),
+            knownHostsStore: InMemoryKnownHostsStore()
+        )
+        await manager.injectScreenshotSessions()
+
+        guard let session = manager.sessions.first else {
+            XCTFail("Expected at least one injected session")
+            return
+        }
+
+        // Session starts in primary buffer (not alternate).
+        let baselineNonce = manager.gridSnapshotNonceBySessionID[session.id, default: -1]
+        await manager.resizeTerminal(sessionID: session.id, columns: 100, rows: 30)
+
+        let updatedNonce = manager.gridSnapshotNonceBySessionID[session.id, default: -1]
+        let snapshot = manager.gridSnapshot(for: session.id)
+
+        XCTAssertGreaterThan(updatedNonce, baselineNonce,
+                             "Primary buffer resize should bump nonce immediately.")
+        XCTAssertEqual(snapshot?.columns, 100)
+        XCTAssertEqual(snapshot?.rows, 30)
+    }
+
+    @MainActor
+    func testFollowUpDuringHousekeepingIsNotOrphaned() async {
+        let manager = SessionManager(
+            transport: MockSSHTransport(),
+            knownHostsStore: InMemoryKnownHostsStore()
+        )
+        await manager.injectScreenshotSessions()
+
+        guard let session = manager.sessions.first,
+              let engine = manager.engines[session.id] else {
+            XCTFail("Expected an injected session with an engine")
+            return
+        }
+
+        // Feed initial content and establish a baseline.
+        _ = await engine.feed(Data("INITIAL".utf8))
+        await manager.renderingCoordinator.publishGridState(for: session.id, engine: engine)
+        let baselineNonce = manager.gridSnapshotNonceBySessionID[session.id, default: -1]
+
+        // Prepare two snapshots: one for the initial publish, one for the
+        // follow-up that simulates output arriving during housekeeping awaits.
+        _ = await engine.feed(Data("\u{1B}[2J\u{1B}[HEARLY".utf8))
+        let earlySnapshot = await engine.snapshot()
+        _ = await engine.feed(Data("\u{1B}[2J\u{1B}[HLATEST".utf8))
+        let latestSnapshot = await engine.snapshot()
+
+        // Queue a follow-up that fires right before housekeeping begins,
+        // simulating output arriving during one of housekeeping's await points.
+        manager.renderingCoordinator.testingQueueFollowUpDuringHousekeeping(
+            sessionID: session.id,
+            snapshotOverride: latestSnapshot
+        )
+
+        // Trigger a publish via publishSyncExitSnapshot (which calls
+        // publishLatestGridState internally). The inner loop will complete
+        // with earlySnapshot, then the test hook fires the follow-up.
+        // The outer loop must detect the orphaned follow-up after housekeeping
+        // and loop back to drain it.
+        await manager.renderingCoordinator.publishSyncExitSnapshot(
+            sessionID: session.id,
+            engine: engine,
+            snapshotOverride: earlySnapshot
+        )
+
+        // The outer loop ran twice: housekeeping bumps nonce once per pass.
+        XCTAssertEqual(
+            manager.gridSnapshotNonceBySessionID[session.id, default: -1],
+            baselineNonce + 2,
+            "Outer loop should run housekeeping twice: once for the initial publish and once for the orphaned follow-up."
+        )
+
+        // The final snapshot must contain the follow-up content, not EARLY.
+        guard let publishedSnapshot = manager.gridSnapshot(for: session.id) else {
+            XCTFail("Expected a published snapshot after the housekeeping follow-up drain.")
+            return
+        }
+
+        XCTAssertEqual(
+            snapshotText(publishedSnapshot, row: 0, startCol: 0, count: 6),
+            "LATEST",
+            "A follow-up arriving during housekeeping must not be orphaned — it must be drained before publishLatestGridState returns."
+        )
+
+        // In-flight flag must be clean after the method returns.
+        XCTAssertFalse(
+            manager.renderingCoordinator.testingHasPublishInFlight(sessionID: session.id),
+            "publishInFlightSessionIDs should be cleared after publishLatestGridState completes."
+        )
     }
 
     @MainActor

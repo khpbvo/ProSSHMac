@@ -69,6 +69,9 @@ import os.signpost
     /// Deterministic test hook: queue one follow-up snapshot immediately after the
     /// next publish iteration for the given session.
     private var testingInjectedFollowUpSnapshotBySessionID: [UUID: GridSnapshot] = [:]
+    /// Deterministic test hook: queue one follow-up snapshot right before
+    /// housekeeping begins, simulating output arriving during housekeeping awaits.
+    private var testingInjectedHousekeepingFollowUpBySessionID: [UUID: GridSnapshot] = [:]
     #endif
 
     private let shellBufferPublishInterval: TimeInterval = 1.0 / 30.0
@@ -175,28 +178,79 @@ import os.signpost
         guard let manager else { return }
         guard columns >= 10, rows >= 4 else { return }
 
+        // If the desired dimensions haven't changed and a debounce task is
+        // already running, skip re-processing.  This prevents a feedback loop
+        // where updateSnapshot() resets gridColumns/gridRows to the old
+        // snapshot size, causing drawableSizeWillChange to re-fire
+        // onGridSizeChange for the same target dimensions.
+        let previousPTY = desiredPTYBySessionID[sessionID]
+        let dimensionsChanged = previousPTY?.columns != columns || previousPTY?.rows != rows
+        guard dimensionsChanged else { return }
+
         desiredPTYBySessionID[sessionID] = PTYConfiguration(
             columns: columns,
             rows: rows,
             terminalType: PTYConfiguration.default.terminalType
         )
 
+        // When the alternate buffer is active (TUI apps like vim, htop,
+        // Claude Code), defer the grid resize to the debounced task below.
+        // During animated window resize (maximize/minimize button), the view
+        // fires dozens of intermediate size changes.  Resizing the grid
+        // immediately corrupts the alternate buffer because the TUI app
+        // continues outputting for the original dimensions until it receives
+        // SIGWINCH.  Deferring both grid and PTY resize to the same 150ms
+        // debounce ensures a single clean transition.
+        //
+        // Primary buffer uses immediate resize because GridReflow properly
+        // handles content rewrapping and scrollback preservation.
+        let deferGridResize: Bool
         if let engine = manager.engines[sessionID] {
-            await engine.resize(newColumns: columns, newRows: rows)
-            let snapshot = await engine.snapshot()
-            gridSnapshotsBySessionID[sessionID] = snapshot
-            manager.gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
-            cachedScrollbackCountBySessionID[sessionID] = await engine.scrollbackCount
+            deferGridResize = await engine.usingAlternateBuffer
+            if !deferGridResize {
+                await engine.resize(newColumns: columns, newRows: rows)
+                let snapshot = await engine.snapshot()
+                gridSnapshotsBySessionID[sessionID] = snapshot
+                manager.gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
+                cachedScrollbackCountBySessionID[sessionID] = await engine.scrollbackCount
+            }
+        } else {
+            deferGridResize = false
         }
 
         pendingResizeTasks[sessionID]?.cancel()
         pendingResizeTasks[sessionID] = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(150))
             guard !Task.isCancelled else { return }
-            guard let self, let manager = self.manager,
-                  let shell = manager.shellChannels[sessionID] else { return }
+            guard let self, let manager = self.manager else { return }
+
+            // For alternate buffer mode, perform the deferred grid resize now
+            // (at the final settled dimensions), right before the PTY resize.
+            if deferGridResize, let engine = manager.engines[sessionID] {
+                let finalPTY = self.desiredPTYBySessionID[sessionID]
+                let finalColumns = finalPTY?.columns ?? columns
+                let finalRows = finalPTY?.rows ?? rows
+                await engine.resize(newColumns: finalColumns, newRows: finalRows)
+                let snapshot = await engine.snapshot()
+                self.gridSnapshotsBySessionID[sessionID] = snapshot
+                manager.gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
+                self.cachedScrollbackCountBySessionID[sessionID] = await engine.scrollbackCount
+                self.scrollOffsetBySessionID[sessionID] = 0
+                self.preserveScrollAnchorBySessionID[sessionID] = false
+            }
+
+            // Use the latest desired dimensions for the PTY resize in case
+            // additional resize events arrived after this task was scheduled.
+            let ptyConfig = self.desiredPTYBySessionID[sessionID]
+            let ptyColumns = ptyConfig?.columns ?? columns
+            let ptyRows = ptyConfig?.rows ?? rows
+
+            guard let shell = manager.shellChannels[sessionID] else {
+                self.pendingResizeTasks.removeValue(forKey: sessionID)
+                return
+            }
             do {
-                try await shell.resizePTY(columns: columns, rows: rows)
+                try await shell.resizePTY(columns: ptyColumns, rows: ptyRows)
             } catch {
                 // Non-fatal: log but don't surface to user.
             }
@@ -443,7 +497,8 @@ import os.signpost
     func publishGridState(
         for sessionID: UUID,
         engine: TerminalEngine,
-        snapshotOverride: GridSnapshot? = nil
+        snapshotOverride: GridSnapshot? = nil,
+        skipHousekeeping: Bool = false
     ) async {
         guard let manager else { return }
         guard manager.engines[sessionID] != nil else { return }
@@ -464,7 +519,6 @@ import os.signpost
         #endif
 
         let previousScrollbackCount = cachedScrollbackCountBySessionID[sessionID] ?? 0
-        let previousUsingAlternateBuffer = gridSnapshotsBySessionID[sessionID]?.usingAlternateBuffer ?? false
         let scrollbackCount = await engine.scrollbackCount
         let usingAlternateBuffer = await engine.usingAlternateBuffer
         var currentOffset = scrollOffsetBySessionID[sessionID] ?? 0
@@ -521,11 +575,32 @@ import os.signpost
             publishedSnapshot = snapshot
         }
         gridSnapshotsBySessionID[sessionID] = publishedSnapshot
+
+        guard !skipHousekeeping else { return }
+
+        await publishHousekeeping(
+            for: sessionID,
+            engine: engine,
+            scrollOffset: currentOffset,
+            scrollbackCount: scrollbackCount,
+            usingAlternateBuffer: usingAlternateBuffer
+        )
+    }
+
+    private func publishHousekeeping(
+        for sessionID: UUID,
+        engine: TerminalEngine,
+        scrollOffset: Int,
+        scrollbackCount: Int,
+        usingAlternateBuffer: Bool
+    ) async {
+        guard let manager else { return }
+
         manager.gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
 
         publishScrollState(
             sessionID: sessionID,
-            scrollOffset: currentOffset,
+            scrollOffset: scrollOffset,
             scrollbackCount: scrollbackCount
         )
 
@@ -723,44 +798,90 @@ import os.signpost
         }
 
         publishInFlightSessionIDs.insert(sessionID)
-        defer {
-            publishInFlightSessionIDs.remove(sessionID)
-            promptRedrawPendingSessionIDs.remove(sessionID)
-        }
-
         var nextSnapshotOverride = snapshotOverride
 
-        while true {
-            // Once a publish actually starts, any older stored override has either
-            // been selected explicitly for this publish or is now stale and must
-            // not be replayed by an unrelated follow-up request.
-            pendingSnapshotOverridesBySessionID.removeValue(forKey: sessionID)
+        outerLoop: while true {
+            // --- Inner loop: drain follow-up snapshot requests ---
+            while true {
+                // Once a publish actually starts, any older stored override has either
+                // been selected explicitly for this publish or is now stale and must
+                // not be replayed by an unrelated follow-up request.
+                pendingSnapshotOverridesBySessionID.removeValue(forKey: sessionID)
 
-            await publishGridState(
-                for: sessionID,
-                engine: engine,
-                snapshotOverride: nextSnapshotOverride
-            )
+                // Fast path: if a follow-up is already queued, skip this iteration
+                // entirely — its snapshot would be overwritten anyway.
+                if followUpPublishRequestedSessionIDs.remove(sessionID) != nil {
+                    if isPublishingSuspended {
+                        suspendedDirtySessionIDs.insert(sessionID)
+                        publishInFlightSessionIDs.remove(sessionID)
+                        promptRedrawPendingSessionIDs.remove(sessionID)
+                        return
+                    }
+                    nextSnapshotOverride = pendingSnapshotOverridesBySessionID.removeValue(forKey: sessionID)
+                    continue
+                }
+
+                await publishGridState(
+                    for: sessionID,
+                    engine: engine,
+                    snapshotOverride: nextSnapshotOverride,
+                    skipHousekeeping: true
+                )
+                #if DEBUG
+                if let injectedSnapshotOverride = testingInjectedFollowUpSnapshotBySessionID.removeValue(forKey: sessionID) {
+                    requestFollowUpPublish(
+                        sessionID: sessionID,
+                        snapshotOverride: injectedSnapshotOverride
+                    )
+                }
+                #endif
+
+                guard followUpPublishRequestedSessionIDs.remove(sessionID) != nil else {
+                    break
+                }
+
+                if isPublishingSuspended {
+                    suspendedDirtySessionIDs.insert(sessionID)
+                    publishInFlightSessionIDs.remove(sessionID)
+                    promptRedrawPendingSessionIDs.remove(sessionID)
+                    return
+                }
+
+                nextSnapshotOverride = pendingSnapshotOverridesBySessionID.removeValue(forKey: sessionID)
+            }
+
+            // --- Housekeeping: nonce bump + metadata for the final stored snapshot ---
             #if DEBUG
-            if let injectedSnapshotOverride = testingInjectedFollowUpSnapshotBySessionID.removeValue(forKey: sessionID) {
+            if let injectedHousekeepingFollowUp = testingInjectedHousekeepingFollowUpBySessionID.removeValue(forKey: sessionID) {
                 requestFollowUpPublish(
                     sessionID: sessionID,
-                    snapshotOverride: injectedSnapshotOverride
+                    snapshotOverride: injectedHousekeepingFollowUp
                 )
             }
             #endif
 
-            guard followUpPublishRequestedSessionIDs.remove(sessionID) != nil else {
-                return
+            let scrollOffset = scrollOffsetBySessionID[sessionID] ?? 0
+            let scrollbackCount = cachedScrollbackCountBySessionID[sessionID] ?? 0
+            let usingAlt = await engine.usingAlternateBuffer
+            await publishHousekeeping(
+                for: sessionID,
+                engine: engine,
+                scrollOffset: scrollOffset,
+                scrollbackCount: scrollbackCount,
+                usingAlternateBuffer: usingAlt
+            )
+
+            // Check for orphaned follow-ups that arrived during housekeeping awaits.
+            if followUpPublishRequestedSessionIDs.remove(sessionID) != nil {
+                nextSnapshotOverride = pendingSnapshotOverridesBySessionID.removeValue(forKey: sessionID)
+                continue outerLoop
             }
 
-            if isPublishingSuspended {
-                suspendedDirtySessionIDs.insert(sessionID)
-                return
-            }
-
-            nextSnapshotOverride = pendingSnapshotOverridesBySessionID.removeValue(forKey: sessionID)
+            break outerLoop
         }
+
+        publishInFlightSessionIDs.remove(sessionID)
+        promptRedrawPendingSessionIDs.remove(sessionID)
     }
 
     private func shouldPublishShellBuffer(for sessionID: UUID, now: Date = .now) -> Bool {
@@ -829,6 +950,13 @@ import os.signpost
         snapshotOverride: GridSnapshot
     ) {
         testingInjectedFollowUpSnapshotBySessionID[sessionID] = snapshotOverride
+    }
+
+    func testingQueueFollowUpDuringHousekeeping(
+        sessionID: UUID,
+        snapshotOverride: GridSnapshot
+    ) {
+        testingInjectedHousekeepingFollowUpBySessionID[sessionID] = snapshotOverride
     }
 #endif
 }
