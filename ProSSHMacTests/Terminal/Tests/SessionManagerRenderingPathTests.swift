@@ -201,25 +201,22 @@ final class SessionManagerRenderingPathTests: XCTestCase {
         XCTAssertEqual(stateInAlt?.scrollOffset, 0)
         XCTAssertGreaterThan(altScrollbackCount, 0)
 
-        // Simulate scrolling up while in alternate buffer.
-        let targetOffset = min(6, altScrollbackCount)
-        XCTAssertGreaterThan(targetOffset, 0)
+        // Scrolling while in alternate buffer must be a no-op — TUI apps
+        // have no scrollback, and viewport scrolling during alt buffer
+        // produces scrollback-blended snapshots that flash primary-buffer
+        // content before the next publish resets the offset.
+        manager.scrollTerminal(sessionID: session.id, delta: 6)
+        XCTAssertEqual(manager.scrollStateBySessionID[session.id]?.scrollOffset, 0,
+                       "Scroll during alternate buffer must be blocked")
 
-        let altScrollBaselineNonce = manager.gridSnapshotNonceBySessionID[session.id, default: -1]
-        manager.scrollTerminal(sessionID: session.id, delta: targetOffset)
-        await waitForNonceIncrement(manager: manager, sessionID: session.id, baseline: altScrollBaselineNonce)
-
-        XCTAssertEqual(manager.scrollStateBySessionID[session.id]?.scrollOffset, targetOffset)
-
-        // New TUI output while in alternate buffer must auto-reset scroll
-        // offset to 0, so the user always sees the latest TUI frame.
+        // New TUI output while in alternate buffer keeps offset at 0.
         let liveAltBaselineNonce = manager.gridSnapshotNonceBySessionID[session.id, default: -1]
         _ = await engine.feed(Data("ALT".utf8))
         await manager.renderingCoordinator.publishGridState(for: session.id, engine: engine)
 
         XCTAssertGreaterThan(manager.gridSnapshotNonceBySessionID[session.id, default: -1], liveAltBaselineNonce)
         XCTAssertEqual(manager.scrollStateBySessionID[session.id]?.scrollOffset, 0,
-                       "Alternate buffer output must reset scroll to live view")
+                       "Alternate buffer output must keep scroll at live view")
         XCTAssertEqual(manager.scrollStateBySessionID[session.id]?.scrollbackCount, altScrollbackCount)
     }
 

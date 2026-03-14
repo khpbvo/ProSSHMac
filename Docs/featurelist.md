@@ -1737,3 +1737,24 @@ Build: SUCCEEDED.
 
 ### Build/Test
 Build: SUCCEEDED.
+
+---
+
+## 2026-03-14 — Fix TUI Viewport Jump During Heavy Output
+
+### What Changed
+- **Bug fix:** Terminal viewport would jump to the middle of the scrollable area and snap back to the bottom during heavy TUI output (e.g., running Claude Code). Root cause: viewport scrolling was not blocked during alternate buffer mode, allowing scrollback-blended snapshots to briefly flash primary-buffer content.
+- **Defense-in-depth across 3 layers:**
+  1. `scrollTerminal()` and `scrollToRow()` now early-return when session is in alternate buffer — prevents scrollback-blended snapshots entirely.
+  2. Smooth scroll engine reset on every alt-buffer snapshot (not just transitions) — catches residual renderOffset/velocity.
+  3. `scrollJumpTo` skipped in `MetalTerminalSessionSurface` during alt-buffer — prevents stale scroll offsets from desync'ing the viewport.
+- Updated `testAlternateBufferAlwaysResetsScrollOffsetToLiveView` to assert scroll-during-alt-buffer is blocked (was previously asserting the old behavior of allowing viewport scroll in alt buffer).
+
+### Files Modified
+- `Services/TerminalRenderingCoordinator.swift` (alt-buffer guards on scrollTerminal/scrollToRow)
+- `Terminal/Renderer/MetalTerminalRenderer+SnapshotUpdate.swift` (reset smooth scroll on every alt-buffer snapshot)
+- `UI/Terminal/MetalTerminalSessionSurface.swift` (skip scrollJumpTo during alt-buffer)
+- `Tests/SessionManagerRenderingPathTests.swift` (updated test expectations)
+
+### Build/Test
+Build: SUCCEEDED. Tests: 21/21 passed (SessionManagerRenderingPathTests).

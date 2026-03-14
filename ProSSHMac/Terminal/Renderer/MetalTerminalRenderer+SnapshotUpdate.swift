@@ -18,8 +18,15 @@ extension MetalTerminalRenderer {
     ///
     /// - Parameter snapshot: The grid snapshot to render.
     func updateSnapshot(_ snapshot: GridSnapshot) {
-        // Reset scroll state on alt-screen buffer transitions (e.g. entering/exiting vim)
-        if let prev = latestSnapshot, prev.usingAlternateBuffer != snapshot.usingAlternateBuffer {
+        // Alternate buffer (TUI apps) must never carry smooth-scroll state.
+        // Reset on every alt-buffer snapshot — not just transitions — so that
+        // residual renderOffset/velocity from any source (stale scroll events,
+        // missed transitions, momentum carry-over) cannot produce non-zero
+        // scrollOffsetPixels in the shader, which shifts all cell quads and
+        // causes a visible "jump then snap back" artifact.
+        if snapshot.usingAlternateBuffer {
+            smoothScrollEngine.handleResize()
+        } else if let prev = latestSnapshot, prev.usingAlternateBuffer != snapshot.usingAlternateBuffer {
             smoothScrollEngine.handleResize()
         }
         latestSnapshot = snapshot

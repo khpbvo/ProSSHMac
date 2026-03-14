@@ -245,18 +245,20 @@ All paths relative to repo root, under `ProSSHMac/`.
 ## Next Session Plan
 
 <!-- NEXT SESSION PLAN -->
-**All OptimizeP2 and OptimizeP3 phases complete.**
+**Fixed TUI viewport jump during heavy output (alternate buffer scroll desync).**
 
 Completed today:
-- P3 Phase 4: Blur optimization — hide `NSVisualEffectView` when fully opaque
-- P3 Phases 1, 2, 3, 5, 6, 7: Marked as already done (previously implemented or negligible impact)
+- Blocked viewport scrolling during alternate buffer mode in `scrollTerminal`/`scrollToRow`
+- Reset smooth scroll engine on every alt-buffer snapshot (not just transitions)
+- Skip `scrollJumpTo` during alt-buffer in `MetalTerminalSessionSurface`
+- Updated test to assert scroll-during-alt-buffer is blocked
 
 Next steps:
 - Pick from `docs/bugs.md` (68-bug audit) or `docs/FutureFeatures.md` (feature roadmap)
 - Consider running full benchmark suite to capture post-optimization numbers
 
-Manual QA for blur optimization:
-- Set background opacity to 100% — verify no blur GPU usage
-- Set background opacity to 80% — verify blur effect renders correctly
-- Toggle opacity back to 100% — verify blur hides again
+Manual QA:
+- Run Claude Code (or any TUI) with heavy output — verify no viewport jumping
+- Verify scrollback still works in primary buffer (non-TUI) sessions
+- Enter TUI, exit TUI — verify scroll works normally after exit
 <!-- /NEXT SESSION PLAN -->

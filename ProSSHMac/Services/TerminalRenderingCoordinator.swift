@@ -277,6 +277,16 @@ import os.signpost
 
     func scrollTerminal(sessionID: UUID, delta: Int) {
         guard let manager, let engine = manager.engines[sessionID] else { return }
+
+        // Alternate buffer (TUI apps) has no scrollback of its own.
+        // Viewport scrolling during alt buffer produces a scrollback-blended
+        // snapshot that flashes primary-buffer content before the next
+        // publish resets the offset to 0, causing a visible "jump to middle
+        // then snap back" artifact during heavy TUI output.
+        if gridSnapshotsBySessionID[sessionID]?.usingAlternateBuffer == true {
+            return
+        }
+
         Task { @MainActor [weak self] in
             guard let self, let manager = self.manager else { return }
             let current = self.scrollOffsetBySessionID[sessionID, default: 0]
@@ -302,6 +312,12 @@ import os.signpost
 
     func scrollToRow(sessionID: UUID, row: Int) {
         guard let manager, let engine = manager.engines[sessionID] else { return }
+
+        // Block viewport scrolling during alternate buffer — see scrollTerminal.
+        if gridSnapshotsBySessionID[sessionID]?.usingAlternateBuffer == true {
+            return
+        }
+
         Task { @MainActor [weak self] in
             guard let self, let manager = self.manager else { return }
             let maxOffset = await engine.scrollbackCount

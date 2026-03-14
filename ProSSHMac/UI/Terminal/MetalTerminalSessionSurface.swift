@@ -77,10 +77,15 @@ struct MetalTerminalSessionSurface: View {
                     selectionCoordinator?.unregister(sessionID: sessionID)
                 }
                 .onChange(of: snapshotNonce) { _, _ in
-                    if let scrollOffsetProvider {
+                    let snapshot = snapshotProvider()
+                    // Skip scroll engine sync during alternate buffer — TUI apps
+                    // have no scrollback and the engine should stay at row 0.
+                    // Calling scrollJumpTo with stale offsets during heavy TUI
+                    // output can briefly desync the viewport.
+                    if snapshot?.usingAlternateBuffer != true, let scrollOffsetProvider {
                         model.renderer?.scrollJumpTo(row: scrollOffsetProvider())
                     }
-                    model.apply(snapshot: snapshotProvider())
+                    model.apply(snapshot: snapshot)
                 }
                 .onChange(of: isFocused) { _, newValue in
                     model.updateFPS(isFocused: newValue)
