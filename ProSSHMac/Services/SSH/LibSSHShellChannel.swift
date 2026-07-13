@@ -1,7 +1,7 @@
 // Extracted from SSHTransport.swift
 import Foundation
 
-nonisolated actor LibSSHShellChannel: SSHShellChannel {
+actor LibSSHShellChannel: SSHShellChannel {
     nonisolated let rawOutput: AsyncStream<Data>
 
     private nonisolated(unsafe) let handle: OpaquePointer
@@ -49,7 +49,7 @@ nonisolated actor LibSSHShellChannel: SSHShellChannel {
             throw SSHTransportError.transportFailure(message: errorBuffer.asString)
         }
 
-        let channel = LibSSHShellChannel(
+        let channel = await LibSSHShellChannel(
             handle: handle.raw,
             rawContinuation: rawContinuation,
             rawOutput: rawOutput

@@ -152,7 +152,6 @@ struct TerminalSurfaceView: View {
             fontFamily: terminalUIFontFamily,
             backgroundOpacityPercent: terminalBackgroundOpacityPercent,
             onTap: { _ in
-                selectionCoordinator.clearSelection(sessionID: session.id)
                 onFocusTap()
             },
             onTerminalResize: { columns, rows in

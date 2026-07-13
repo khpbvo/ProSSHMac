@@ -535,7 +535,7 @@ actor LibSSHTransport: SSHTransporting {
             throw SSHTransportError.transportFailure(message: message.isEmpty ? "Failed to open forward channel." : message)
         }
 
-        return LibSSHForwardChannel(pointer: UncheckedOpaquePointer(raw: fwdPtr))
+        return await LibSSHForwardChannel(pointer: UncheckedOpaquePointer(raw: fwdPtr))
     }
 
     func sendKeepalive(sessionID: UUID) async -> Bool {

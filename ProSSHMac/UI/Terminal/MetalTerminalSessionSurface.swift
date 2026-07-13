@@ -36,6 +36,7 @@ struct MetalTerminalSessionSurface: View {
                     renderer: renderer,
                     onTerminalResize: onTerminalResize,
                     onTap: { point in
+                        model.handleTap()
                         onTap?(point)
                     },
                     onDrag: { point, phase in
@@ -268,6 +269,10 @@ final class MetalTerminalSurfaceModel: ObservableObject {
     }
 
     // MARK: - Selection
+
+    func handleTap() {
+        renderer?.clearSelection()
+    }
 
     func handleDrag(point: CGPoint, phase: TerminalPointerPhase) {
         guard let renderer else { return }

@@ -118,7 +118,7 @@ actor MockSSHTransport: SSHTransporting {
             let childPath = RemotePath.join(directoryPath, name)
 
             if remainder.contains("/") {
-                if entriesByPath[childPath] == nil {
+                if case nil = entriesByPath[childPath] {
                     entriesByPath[childPath] = SFTPDirectoryEntry(
                         path: childPath,
                         name: name,

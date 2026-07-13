@@ -1,7 +1,7 @@
 // Extracted from SSHTransport.swift
 import Foundation
 
-nonisolated actor LibSSHForwardChannel: SSHForwardChannel {
+actor LibSSHForwardChannel: SSHForwardChannel {
     private nonisolated(unsafe) var pointer: OpaquePointer?
 
     init(pointer: UncheckedOpaquePointer) {
