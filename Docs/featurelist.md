@@ -30,6 +30,10 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 - Active phase: Phase 6 (persistence + hardening + remaining test coverage).
 - Immediate objective: continue migrating legacy tests into the shared test bundle while keeping targeted regressions green during migration.
 - Test stability TODOs: no active crash quarantines remain for previously skipped pane/AI view-model tests.
+- Task alignment (2026-08-27, initial window resizing can split prompt geometry):
+  - Starting Point: primary-buffer view resizes immediately reflow the emulator grid but debounce the matching PTY resize for 150 ms, so shell redraws emitted during the mismatch use stale dimensions and can strand prompt fragments at old columns. The renderer also reallocates both Metal cell buffers from view geometry before a matching grid snapshot exists, temporarily discarding the last valid drawable contents.
+  - End Point: resize bursts keep the emulator grid and PTY on one settled geometry transition, view/font geometry changes no longer mutate snapshot-owned Metal cell storage, prompt rows remain aligned after initial window resizing, focused resize regressions pass, and the ProSSHMac scheme builds successfully.
+  - Status: Complete. Primary and alternate-buffer resize bursts now settle grid + PTY geometry together, Metal cell capacity changes only when a matching snapshot is uploaded, the focused suite passes 21/21, and the app scheme builds successfully.
 - Task alignment (2026-07-13, Swift 6.3 rejects libssh channel actor declarations):
   - Starting Point: `LibSSHShellChannel` and `LibSSHForwardChannel` are declared as `nonisolated actor`, which Swift 6.3 rejects because `nonisolated` cannot be applied to an actor declaration; their synchronous initializers also require awaited calls when reached from the nonisolated shell factory or the libssh transport actor under the project's default MainActor isolation.
   - End Point: both libssh channel types use valid actor declarations, retain their actor-isolated channel state and nonisolated stream access, and the ProSSHMac scheme builds successfully with the current Xcode/Swift toolchain.
@@ -1785,3 +1789,26 @@ Build: SUCCEEDED. Tests: 21/21 passed (SessionManagerRenderingPathTests).
 
 ### Build/Test
 Build: SUCCEEDED with Xcode 26.6 / Swift 6.3.3 (`xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform=macOS' build`). No task-specific runtime tests were needed for this compile-time compatibility fix. Pending: none for the reported build failure.
+
+---
+
+## 2026-08-27 — Fix Initial Window-Resize Prompt Geometry Corruption
+
+### What Changed
+- Debounced primary-buffer grid resizing together with the PTY resize, matching the existing alternate-buffer strategy. The parser grid is now resized immediately before the shell receives the settled `SIGWINCH`, so zsh/readline redraws cannot calculate cursor positions for one width while the emulator interprets them at another.
+- Stopped view-size and font-size callbacks from reserving `CellBuffer` storage. Metal cell buffers now remain valid until a matching snapshot owns the dimension change and performs its required full upload.
+- Removed the obsolete `CellBuffer.resize(columns:rows:)` API so view geometry cannot accidentally invalidate both active buffers again.
+- Updated nonce-driven resize coverage and added `testPrimaryBufferResizeSettlesGridAndPTYGeometryTogether`, which verifies an animated primary resize burst stays on the old geometry until settling and then publishes only the final dimensions.
+
+### Files Modified
+- `Services/TerminalRenderingCoordinator.swift`
+- `Terminal/Renderer/CellBuffer.swift`
+- `Terminal/Renderer/MetalTerminalRenderer+FontManagement.swift`
+- `Terminal/Renderer/MetalTerminalRenderer+ViewConfiguration.swift`
+- `Tests/SessionManagerRenderingPathTests.swift`
+
+### Build/Test
+- `xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform=macOS' build`: BUILD SUCCEEDED.
+- `xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform=macOS' -only-testing:ProSSHMacTests/SessionManagerRenderingPathTests test`: TEST SUCCEEDED, 21 tests, 0 failures.
+- `git diff --check`: passed.
+- Pending: none for the reported resize corruption.

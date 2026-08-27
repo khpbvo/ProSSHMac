@@ -27,6 +27,7 @@ final class SessionManagerRenderingPathTests: XCTestCase {
         XCTAssertNotNil(initialSnapshot)
 
         await manager.resizeTerminal(sessionID: session.id, columns: 96, rows: 28)
+        await waitForNonceIncrement(manager: manager, sessionID: session.id, baseline: initialNonce)
 
         let updatedNonce = manager.gridSnapshotNonceBySessionID[session.id, default: -1]
         let updatedSnapshot = manager.gridSnapshot(for: session.id)
@@ -805,7 +806,7 @@ final class SessionManagerRenderingPathTests: XCTestCase {
     }
 
     @MainActor
-    func testPrimaryBufferResizeStillAppliesImmediately() async {
+    func testPrimaryBufferResizeSettlesGridAndPTYGeometryTogether() async {
         let manager = SessionManager(
             transport: MockSSHTransport(),
             knownHostsStore: InMemoryKnownHostsStore()
@@ -817,17 +818,38 @@ final class SessionManagerRenderingPathTests: XCTestCase {
             return
         }
 
-        // Session starts in primary buffer (not alternate).
+        guard let engine = manager.engines[session.id] else {
+            XCTFail("Expected an injected session with an engine")
+            return
+        }
+
+        // Session starts in primary buffer (not alternate). A resize burst must
+        // leave the parser on its old PTY geometry until the debounce settles.
         let baselineNonce = manager.gridSnapshotNonceBySessionID[session.id, default: -1]
+        let originalColumns = await engine.columns
+        let originalRows = await engine.rows
         await manager.resizeTerminal(sessionID: session.id, columns: 100, rows: 30)
+        await manager.resizeTerminal(sessionID: session.id, columns: 104, rows: 32)
+
+        XCTAssertEqual(manager.gridSnapshotNonceBySessionID[session.id, default: -1], baselineNonce)
+        let unsettledColumns = await engine.columns
+        let unsettledRows = await engine.rows
+        XCTAssertEqual(unsettledColumns, originalColumns)
+        XCTAssertEqual(unsettledRows, originalRows)
+
+        await waitForNonceIncrement(manager: manager, sessionID: session.id, baseline: baselineNonce)
 
         let updatedNonce = manager.gridSnapshotNonceBySessionID[session.id, default: -1]
         let snapshot = manager.gridSnapshot(for: session.id)
+        let settledColumns = await engine.columns
+        let settledRows = await engine.rows
 
         XCTAssertGreaterThan(updatedNonce, baselineNonce,
-                             "Primary buffer resize should bump nonce immediately.")
-        XCTAssertEqual(snapshot?.columns, 100)
-        XCTAssertEqual(snapshot?.rows, 30)
+                             "Primary buffer resize should publish after the debounce settles.")
+        XCTAssertEqual(snapshot?.columns, 104)
+        XCTAssertEqual(snapshot?.rows, 32)
+        XCTAssertEqual(settledColumns, 104)
+        XCTAssertEqual(settledRows, 32)
     }
 
     @MainActor

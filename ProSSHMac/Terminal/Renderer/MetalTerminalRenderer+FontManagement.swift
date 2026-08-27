@@ -190,7 +190,9 @@ extension MetalTerminalRenderer {
         if newColumns != gridColumns || newRows != gridRows {
             gridColumns = newColumns
             gridRows = newRows
-            cellBuffer.resize(columns: newColumns, rows: newRows)
+            // The next matching snapshot owns cell-buffer capacity and performs
+            // the required full upload; keep the current drawable snapshot valid
+            // while the engine resize is still being debounced.
             onGridSizeChange?(newColumns, newRows)
             isDirty = true
         }

@@ -288,25 +288,6 @@ final class CellBuffer {
         }
     }
 
-    // MARK: - Resize
-
-    /// Resizes the cell buffer for new grid dimensions.
-    ///
-    /// This forces reallocation of both MTLBuffers if the new cell count
-    /// exceeds the current capacity. The next call to `update(from:glyphLookup:)`
-    /// will perform a full (non-partial) upload because the dimensions changed.
-    ///
-    /// - Parameters:
-    ///   - newColumns: New grid column count.
-    ///   - newRows: New grid row count.
-    func resize(columns newColumns: Int, rows newRows: Int) {
-        let newCellCount = newColumns * newRows
-        guard newCellCount > 0 else { return }
-        ensureCapacity(newCellCount)
-        // Do not update `columns` / `rows` here — let `update(from:glyphLookup:)`
-        // detect the dimension change and perform a full update.
-    }
-
     // MARK: - Diagnostics
 
     /// Returns the byte size of a single buffer (or 0 if not allocated).

@@ -175,7 +175,7 @@ import os.signpost
     // MARK: - Resize
 
     func resizeTerminal(sessionID: UUID, columns: Int, rows: Int) async {
-        guard let manager else { return }
+        guard manager != nil else { return }
         guard columns >= 10, rows >= 4 else { return }
 
         // If the desired dimensions haven't changed and a debounce task is
@@ -193,64 +193,44 @@ import os.signpost
             terminalType: PTYConfiguration.default.terminalType
         )
 
-        // When the alternate buffer is active (TUI apps like vim, htop,
-        // Claude Code), defer the grid resize to the debounced task below.
-        // During animated window resize (maximize/minimize button), the view
-        // fires dozens of intermediate size changes.  Resizing the grid
-        // immediately corrupts the alternate buffer because the TUI app
-        // continues outputting for the original dimensions until it receives
-        // SIGWINCH.  Deferring both grid and PTY resize to the same 150ms
-        // debounce ensures a single clean transition.
-        //
-        // Primary buffer uses immediate resize because GridReflow properly
-        // handles content rewrapping and scrollback preservation.
-        let deferGridResize: Bool
-        if let engine = manager.engines[sessionID] {
-            deferGridResize = await engine.usingAlternateBuffer
-            if !deferGridResize {
-                await engine.resize(newColumns: columns, newRows: rows)
-                let snapshot = await engine.snapshot()
-                gridSnapshotsBySessionID[sessionID] = snapshot
-                manager.gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
-                cachedScrollbackCountBySessionID[sessionID] = await engine.scrollbackCount
-            }
-        } else {
-            deferGridResize = false
-        }
-
+        // Keep the emulator grid and PTY dimensions synchronized. During an
+        // animated window resize the view reports many intermediate sizes. If
+        // the primary grid reflows immediately while SIGWINCH remains debounced,
+        // readline/zle can emit cursor movement calculated for the old PTY width
+        // into a grid that already uses the new width, permanently splitting a
+        // prompt across unrelated columns. Settle both sides together instead.
         pendingResizeTasks[sessionID]?.cancel()
         pendingResizeTasks[sessionID] = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(150))
             guard !Task.isCancelled else { return }
             guard let self, let manager = self.manager else { return }
 
-            // For alternate buffer mode, perform the deferred grid resize now
-            // (at the final settled dimensions), right before the PTY resize.
-            if deferGridResize, let engine = manager.engines[sessionID] {
-                let finalPTY = self.desiredPTYBySessionID[sessionID]
-                let finalColumns = finalPTY?.columns ?? columns
-                let finalRows = finalPTY?.rows ?? rows
+            let finalPTY = self.desiredPTYBySessionID[sessionID]
+            let finalColumns = finalPTY?.columns ?? columns
+            let finalRows = finalPTY?.rows ?? rows
+
+            // Resize and publish the parser grid immediately before notifying
+            // the shell. Any redraw caused by SIGWINCH is then interpreted with
+            // the exact dimensions the shell was given.
+            if let engine = manager.engines[sessionID] {
+                let wasUsingAlternateBuffer = await engine.usingAlternateBuffer
                 await engine.resize(newColumns: finalColumns, newRows: finalRows)
                 let snapshot = await engine.snapshot()
                 self.gridSnapshotsBySessionID[sessionID] = snapshot
                 manager.gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
                 self.cachedScrollbackCountBySessionID[sessionID] = await engine.scrollbackCount
-                self.scrollOffsetBySessionID[sessionID] = 0
-                self.preserveScrollAnchorBySessionID[sessionID] = false
+                if wasUsingAlternateBuffer {
+                    self.scrollOffsetBySessionID[sessionID] = 0
+                    self.preserveScrollAnchorBySessionID[sessionID] = false
+                }
             }
-
-            // Use the latest desired dimensions for the PTY resize in case
-            // additional resize events arrived after this task was scheduled.
-            let ptyConfig = self.desiredPTYBySessionID[sessionID]
-            let ptyColumns = ptyConfig?.columns ?? columns
-            let ptyRows = ptyConfig?.rows ?? rows
 
             guard let shell = manager.shellChannels[sessionID] else {
                 self.pendingResizeTasks.removeValue(forKey: sessionID)
                 return
             }
             do {
-                try await shell.resizePTY(columns: ptyColumns, rows: ptyRows)
+                try await shell.resizePTY(columns: finalColumns, rows: finalRows)
             } catch {
                 // Non-fatal: log but don't surface to user.
             }

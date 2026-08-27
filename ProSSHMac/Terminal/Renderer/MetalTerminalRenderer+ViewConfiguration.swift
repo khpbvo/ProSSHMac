@@ -68,8 +68,9 @@ extension MetalTerminalRenderer {
                 gridColumns = newColumns
                 gridRows = newRows
 
-                // Notify the cell buffer of the new dimensions.
-                cellBuffer.resize(columns: newColumns, rows: newRows)
+                // Cell storage is snapshot-owned. Reserving from view geometry
+                // can replace both active buffers before the asynchronously
+                // resized grid snapshot arrives, exposing empty/stale cells.
                 smoothScrollEngine.handleResize()
                 onGridSizeChange?(newColumns, newRows)
                 isDirty = true
