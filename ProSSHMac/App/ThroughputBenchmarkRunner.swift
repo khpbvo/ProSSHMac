@@ -120,9 +120,11 @@ enum ThroughputBenchmarkRunner {
                 shellPath: "/bin/sh"
             )
 
-            // Wire PTY output → engine.feed (mimicking SessionManager's startParserReader)
-            let sentinel = "---BENCH_DONE---"
-            let command = "dd if=/dev/urandom bs=1024 count=\(kilobytes) 2>/dev/null | base64; echo '\(sentinel)'\n"
+            // Wire PTY output → engine.feed (mimicking SessionManager's startParserReader).
+            // The shell echoes submitted commands, so the literal completion marker must not
+            // appear in the command itself or the benchmark will stop before the flood begins.
+            let sentinel = "---PROSSH_BENCH_DONE_\(UUID().uuidString)---"
+            let command = makePTYBenchmarkCommand(kilobytes: kilobytes, sentinel: sentinel)
 
             let start = CFAbsoluteTimeGetCurrent()
 
@@ -130,6 +132,7 @@ enum ThroughputBenchmarkRunner {
 
             var totalBytes = 0
             var foundSentinel = false
+            var sentinelMatcher = BenchmarkSentinelMatcher(sentinel: sentinel)
 
             for await chunk in channel.rawOutput {
                 if Task.isCancelled { break }
@@ -137,9 +140,7 @@ enum ThroughputBenchmarkRunner {
                 await engine.feed(chunk)
                 totalBytes += chunk.count
 
-                // Check for sentinel in the raw data
-                if let text = String(data: chunk, encoding: .utf8),
-                   text.contains(sentinel) {
+                if sentinelMatcher.consume(chunk) {
                     foundSentinel = true
                     break
                 }
@@ -162,6 +163,18 @@ enum ThroughputBenchmarkRunner {
             print("  ERROR: PTY spawn failed: \(error.localizedDescription)")
             return 0
         }
+    }
+
+    static func makePTYBenchmarkCommand(kilobytes: Int, sentinel: String) -> String {
+        precondition(sentinel.utf8.count > 1)
+        precondition(!sentinel.contains("'"))
+
+        let midpoint = sentinel.index(sentinel.startIndex, offsetBy: sentinel.count / 2)
+        let firstHalf = String(sentinel[..<midpoint])
+        let secondHalf = String(sentinel[midpoint...])
+
+        return "dd if=/dev/urandom bs=1024 count=\(kilobytes) 2>/dev/null | base64; "
+            + "printf '\\n%s%s\\n' '\(firstHalf)' '\(secondHalf)'\n"
     }
 
     private static func runScenario(
@@ -250,6 +263,29 @@ enum ThroughputBenchmarkRunner {
             return defaultValue
         }
         return Int(args[idx + 1]) ?? defaultValue
+    }
+}
+
+struct BenchmarkSentinelMatcher {
+    private let sentinel: Data
+    private var overlap = Data()
+
+    init(sentinel: String) {
+        self.sentinel = Data(sentinel.utf8)
+    }
+
+    mutating func consume(_ chunk: Data) -> Bool {
+        guard !sentinel.isEmpty else { return true }
+
+        var window = overlap
+        window.append(chunk)
+        if window.range(of: sentinel) != nil {
+            return true
+        }
+
+        let overlapCount = min(sentinel.count - 1, window.count)
+        overlap = Data(window.suffix(overlapCount))
+        return false
     }
 }
 

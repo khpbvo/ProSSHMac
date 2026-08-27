@@ -53,10 +53,27 @@ if [[ "$NO_BUILD" -eq 0 ]]; then
         2>&1 | tail -3
 fi
 
-DERIVED_DATA="$HOME/Library/Developer/Xcode/DerivedData"
-APP_PATH=$(find "$DERIVED_DATA" -path "*/ProSSHMac-*/Build/Products/Debug/$APP_NAME.app" -type d -maxdepth 5 2>/dev/null | head -1)
-if [ -z "$APP_PATH" ]; then
-    echo "ERROR: Could not find built $APP_NAME.app in DerivedData"
+TARGET_BUILD_DIR=$(xcodebuild \
+    -project "$PROJECT_DIR/ProSSHMac.xcodeproj" \
+    -scheme "$SCHEME" \
+    -configuration Debug \
+    -destination 'platform=macOS' \
+    -showBuildSettings \
+    2>/dev/null | awk '
+        /^[[:space:]]*TARGET_BUILD_DIR = / && !found {
+            sub(/^[[:space:]]*TARGET_BUILD_DIR = /, "")
+            value = $0
+            found = 1
+        }
+        END { if (found) print value }
+    ')
+if [ -z "$TARGET_BUILD_DIR" ]; then
+    echo "ERROR: Could not resolve the $APP_NAME build directory"
+    exit 1
+fi
+APP_PATH="$TARGET_BUILD_DIR/$APP_NAME.app"
+if [ ! -d "$APP_PATH" ]; then
+    echo "ERROR: Could not find built $APP_NAME.app at $APP_PATH"
     exit 1
 fi
 

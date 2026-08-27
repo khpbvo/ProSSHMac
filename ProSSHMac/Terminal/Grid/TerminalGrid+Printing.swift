@@ -206,15 +206,13 @@ extension TerminalGrid {
                             if base == rows { base = 0 }
                         } else {
                             let regionCount = scrollBottom - scrollTop + 1
-                            var regionKeys = [Int]()
-                            regionKeys.reserveCapacity(regionCount)
-                            for row in scrollTop...scrollBottom {
-                                regionKeys.append(logicalRowIndex(row, base: base))
-                            }
-                            let regionPhysicalRows = regionKeys.map { rowMap[$0] }
-                            for i in 0..<regionCount {
-                                rowMap[regionKeys[i]] = regionPhysicalRows[(i + 1) % regionCount]
-                            }
+                            rotatePartialRowMap(
+                                &rowMap,
+                                base: base,
+                                regionStart: scrollTop,
+                                regionCount: regionCount,
+                                leftBy: 1
+                            )
                         }
 
                         let bottomPhysical = physicalRow(scrollBottom, base: base, map: rowMap)

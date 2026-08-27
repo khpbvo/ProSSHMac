@@ -31,17 +31,13 @@ extension TerminalGrid {
                 base += lines
                 if base >= rows { base %= rows }
             } else {
-                // Partial scroll region: rotate row indirection in-region.
-                let regionCount = scrollBottom - scrollTop + 1
-                var regionKeys = [Int]()
-                regionKeys.reserveCapacity(regionCount)
-                for row in scrollTop...scrollBottom {
-                    regionKeys.append(logicalRowIndex(row, base: base))
-                }
-                let regionPhysicalRows = regionKeys.map { rowMap[$0] }
-                for i in 0..<regionCount {
-                    rowMap[regionKeys[i]] = regionPhysicalRows[(i + lines) % regionCount]
-                }
+                rotatePartialRowMap(
+                    &rowMap,
+                    base: base,
+                    regionStart: scrollTop,
+                    regionCount: regionHeight,
+                    leftBy: lines
+                )
             }
 
             // Clear newly exposed bottom lines.
@@ -70,17 +66,13 @@ extension TerminalGrid {
                 base -= lines
                 while base < 0 { base += rows }
             } else {
-                // Partial scroll region: rotate row indirection in-region.
-                let regionCount = scrollBottom - scrollTop + 1
-                var regionKeys = [Int]()
-                regionKeys.reserveCapacity(regionCount)
-                for row in scrollTop...scrollBottom {
-                    regionKeys.append(logicalRowIndex(row, base: base))
-                }
-                let regionPhysicalRows = regionKeys.map { rowMap[$0] }
-                for i in 0..<regionCount {
-                    rowMap[regionKeys[i]] = regionPhysicalRows[(i - lines + regionCount) % regionCount]
-                }
+                rotatePartialRowMap(
+                    &rowMap,
+                    base: base,
+                    regionStart: scrollTop,
+                    regionCount: regionHeight,
+                    leftBy: regionHeight - lines
+                )
             }
 
             // Clear newly exposed top lines.
@@ -92,6 +84,68 @@ extension TerminalGrid {
 
         if lines > 0 {
             markDirty(rows: scrollTop...scrollBottom)
+        }
+    }
+
+    /// Rotate physical-row mappings within a partial scroll region without allocating.
+    /// `leftBy` follows the same direction as an upward terminal scroll.
+    @inline(__always)
+    nonisolated func rotatePartialRowMap(
+        _ rowMap: inout [Int],
+        base: Int,
+        regionStart: Int,
+        regionCount: Int,
+        leftBy requestedShift: Int
+    ) {
+        guard regionCount > 1 else { return }
+        let shift = requestedShift % regionCount
+        guard shift > 0 else { return }
+
+        @inline(__always)
+        func key(at offset: Int) -> Int {
+            logicalRowIndex(regionStart + offset, base: base)
+        }
+
+        // The overwhelmingly common cases are one-line scroll up/down. Keep them
+        // as tight shifts so flood output does not enter generic rotation logic.
+        if shift == 1 {
+            let firstValue = rowMap[key(at: 0)]
+            var offset = 0
+            while offset < regionCount - 1 {
+                rowMap[key(at: offset)] = rowMap[key(at: offset + 1)]
+                offset += 1
+            }
+            rowMap[key(at: regionCount - 1)] = firstValue
+            return
+        }
+
+        if shift == regionCount - 1 {
+            let lastValue = rowMap[key(at: regionCount - 1)]
+            var offset = regionCount - 1
+            while offset > 0 {
+                rowMap[key(at: offset)] = rowMap[key(at: offset - 1)]
+                offset -= 1
+            }
+            rowMap[key(at: 0)] = lastValue
+            return
+        }
+
+        var a = regionCount
+        var b = shift
+        while b != 0 {
+            (a, b) = (b, a % b)
+        }
+
+        for cycleStart in 0..<a {
+            let savedValue = rowMap[key(at: cycleStart)]
+            var current = cycleStart
+            while true {
+                let next = (current + shift) % regionCount
+                if next == cycleStart { break }
+                rowMap[key(at: current)] = rowMap[key(at: next)]
+                current = next
+            }
+            rowMap[key(at: current)] = savedValue
         }
     }
 

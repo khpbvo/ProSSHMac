@@ -750,6 +750,43 @@ final class TerminalGridTests: XCTestCase {
         XCTAssertEqual(snapshotText(snapshot, row: 5, startCol: 0, count: 1), "F")
     }
 
+    func testPartialScrollRegionRotationHandlesWrappedRowBase() async {
+        await grid.scrollUp(lines: 23)
+
+        let markers: [Character] = ["A", "B", "C", "D", "E", "F"]
+        for (row, marker) in markers.enumerated() {
+            await grid.moveCursorTo(row: row, col: 0)
+            await grid.printCharacter(marker)
+        }
+
+        await grid.setScrollRegion(top: 1, bottom: 4)
+        await grid.scrollUp(lines: 2)
+
+        let row0AfterUp = await grid.cellAt(row: 0, col: 0)
+        let row1AfterUp = await grid.cellAt(row: 1, col: 0)
+        let row2AfterUp = await grid.cellAt(row: 2, col: 0)
+        let row3AfterUp = await grid.cellAt(row: 3, col: 0)
+        let row4AfterUp = await grid.cellAt(row: 4, col: 0)
+        let row5AfterUp = await grid.cellAt(row: 5, col: 0)
+        XCTAssertEqual(row0AfterUp?.graphemeCluster, "A")
+        XCTAssertEqual(row1AfterUp?.graphemeCluster, "D")
+        XCTAssertEqual(row2AfterUp?.graphemeCluster, "E")
+        XCTAssertTrue(row3AfterUp?.isBlank ?? false)
+        XCTAssertTrue(row4AfterUp?.isBlank ?? false)
+        XCTAssertEqual(row5AfterUp?.graphemeCluster, "F")
+
+        await grid.scrollDown(lines: 1)
+
+        let row1AfterDown = await grid.cellAt(row: 1, col: 0)
+        let row2AfterDown = await grid.cellAt(row: 2, col: 0)
+        let row3AfterDown = await grid.cellAt(row: 3, col: 0)
+        let row4AfterDown = await grid.cellAt(row: 4, col: 0)
+        XCTAssertTrue(row1AfterDown?.isBlank ?? false)
+        XCTAssertEqual(row2AfterDown?.graphemeCluster, "D")
+        XCTAssertEqual(row3AfterDown?.graphemeCluster, "E")
+        XCTAssertTrue(row4AfterDown?.isBlank ?? false)
+    }
+
     func testPartialScrollRegionMarksEntireDirtyRangeForSnapshot() async {
         for (row, marker) in ["A", "B", "C", "D", "E", "F"].map({ Character($0) }).enumerated() {
             await grid.moveCursorTo(row: row, col: 0)

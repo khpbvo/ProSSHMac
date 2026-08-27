@@ -2,8 +2,10 @@
 
 **Target:** `dd if=/dev/urandom bs=1024 count=100000 | base64` completes in 1.5 seconds (~89 MB/s throughput).
 
-**Current:** **1.60 MB/s** fullscreen, **1.37 MB/s** partial scroll (parser/grid benchmark, 56x gap remaining).
-**Previous:** ~220 KB/s initial estimate → 1.13 MB/s post-merge → 1.34 MB/s post-ring → 1.70 MB/s post-pack.
+**Current:** **1.68 MB/s** fullscreen, **1.82 MB/s** partial scroll (2 MB parser/grid benchmark, 2026-08-27).
+**Sustained 32 MB:** **1.69–1.81 MB/s** fullscreen, **1.69–1.78 MB/s** partial scroll.
+**PTY local:** **1.69 MB/s** average (2 MB, 3 runs; corrected completion detection).
+**Previous:** ~220 KB/s initial estimate → 1.13 MB/s post-merge → 1.34 MB/s post-ring → 1.70 MB/s post-pack → 1.60/1.37 MB/s pre-rotation optimization.
 
 Data pipeline (current — after TerminalEngine merge):
 ```
@@ -24,12 +26,22 @@ Benchmark command paths:
 ./scripts/benchmark-ssh.sh --host <hostname> --user <username>
 ```
 
-Latest sample (2026-02-21, post renderer/parser micro-optimization batch):
+Latest sample (2026-08-27, PTY repair + allocation-free partial-row rotation):
+- standard command: `./scripts/benchmark-throughput.sh --benchmark-bytes 2097152 --benchmark-runs 3 --benchmark-chunk 4096 --no-build`
+- fullscreen avg: **1.68 MB/s** (first fullscreen run includes repeatable cold-start overhead; later runs reached 1.85–1.87 MB/s)
+- partial scroll-region avg: **1.82 MB/s**
+- sustained 32 MB runs: fullscreen **1.69–1.81 MB/s**, partial **1.69–1.78 MB/s**
+- PTY-local command: `./scripts/benchmark-throughput.sh --pty-local --benchmark-bytes 2097152 --benchmark-runs 3 --no-build`
+- PTY-local avg: **1.69 MB/s** (runs: 1.64, 1.70, 1.74 MB/s)
+- Time Profiler: `TerminalGrid.scrollUp(lines:)` partial-workload inclusive samples fell from approximately **4.89 s** to **1.23 s** after replacing per-scroll `regionKeys` / `regionPhysicalRows` allocations with in-place row-map rotation.
+- parser state after all parser/grid runs: `ground`
+
+Previous sample (2026-02-21, post renderer/parser micro-optimization batch):
 - command: `./scripts/benchmark-throughput.sh --benchmark-bytes 2097152 --benchmark-runs 3 --benchmark-chunk 4096 --no-build`
 - fullscreen avg: **1.60 MB/s**
 - partial scroll-region avg: **1.37 MB/s**
 - parser state after run: `ground`
-- note: `--pty-local` wrapper no longer crashes on empty args; benchmark run still needs interactive-local validation.
+- note: the old PTY-local completion detector matched the sentinel inside the echoed shell command and produced invalid premature results; fixed 2026-08-27.
 
 Previous samples (2026-02-21):
 - Pre-packed-cell baseline: fullscreen 1.34 MB/s, partial 1.38 MB/s
