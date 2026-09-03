@@ -58,7 +58,7 @@ private struct RingBuffer {
 final class RendererPerformanceMonitor: @unchecked Sendable {
 
     private let sampleWindow = 240
-    private let log = OSLog(subsystem: "nl.budgetsoft.ProSSHV2", category: "TerminalRenderer")
+    private var log: OSLog { TerminalPerf.log }
 
     // Lock protecting all mutable state below.
     private let lock = NSLock()
@@ -78,13 +78,11 @@ final class RendererPerformanceMonitor: @unchecked Sendable {
 
     @discardableResult
     func beginFrame() -> OSSignpostID {
-        #if DEBUG
+        guard TerminalPerf.isEnabled else { return .invalid }
+        let log = self.log
         let id = OSSignpostID(log: log)
         os_signpost(.begin, log: log, name: "TerminalFrame", signpostID: id)
         return id
-        #else
-        return .invalid
-        #endif
     }
 
     func endFrame(
@@ -113,7 +111,6 @@ final class RendererPerformanceMonitor: @unchecked Sendable {
         }
         lock.unlock()
 
-        #if DEBUG
         if signpostID != .invalid {
             os_signpost(
                 .end,
@@ -125,7 +122,6 @@ final class RendererPerformanceMonitor: @unchecked Sendable {
                 drawCalls
             )
         }
-        #endif
     }
 
     func snapshot() -> RendererPerformanceSnapshot {

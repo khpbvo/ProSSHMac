@@ -1,9 +1,7 @@
 // Extracted from TerminalGrid.swift
 
 import Foundation
-#if DEBUG
 import os.signpost
-#endif
 
 extension TerminalGrid {
 
@@ -13,7 +11,6 @@ extension TerminalGrid {
         if respectingSynchronizedOutput, synchronizedOutput, let cached = lastSnapshot {
             return cached
         }
-        #if DEBUG
         let signpostID = OSSignpostID(log: Self.perfSignpostLog)
         os_signpost(
             .begin,
@@ -21,7 +18,9 @@ extension TerminalGrid {
             name: respectingSynchronizedOutput ? "GridSnapshot" : "GridSnapshotLive",
             signpostID: signpostID
         )
+        let snapshotStart = TerminalPerf.now()
         defer {
+            TerminalPerf.record(.snapshotBuild, since: snapshotStart)
             os_signpost(
                 .end,
                 log: Self.perfSignpostLog,
@@ -29,7 +28,6 @@ extension TerminalGrid {
                 signpostID: signpostID
             )
         }
-        #endif
 
         let activeCells = usingAlternateBuffer ? alternateCells : primaryCells
         let rowBase = activeRowBase
@@ -151,7 +149,6 @@ extension TerminalGrid {
         guard scrollOffset > 0, scrollback.count > 0 else {
             return snapshot()
         }
-        #if DEBUG
         let signpostID = OSSignpostID(log: Self.perfSignpostLog)
         os_signpost(
             .begin,
@@ -161,7 +158,9 @@ extension TerminalGrid {
             "offset=%d",
             scrollOffset
         )
+        let snapshotStart = TerminalPerf.now()
         defer {
+            TerminalPerf.record(.snapshotBuild, since: snapshotStart)
             os_signpost(
                 .end,
                 log: Self.perfSignpostLog,
@@ -169,7 +168,6 @@ extension TerminalGrid {
                 signpostID: signpostID
             )
         }
-        #endif
 
         let activeCells = usingAlternateBuffer ? alternateCells : primaryCells
         let rowBase = activeRowBase

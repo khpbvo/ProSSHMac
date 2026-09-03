@@ -1,8 +1,6 @@
 // Extracted from SessionManager.swift
 import Foundation
-#if DEBUG
 import os.signpost
-#endif
 
 @MainActor final class TerminalRenderingCoordinator {
     private enum PublishDebounceMode {
@@ -88,8 +86,8 @@ import os.signpost
     private let burstThreshold = 3                         // requests within window to activate
     private let burstRevertDelay: Duration = .milliseconds(200)
 
+    private var perfSignpostLog: OSLog { TerminalPerf.log }
     #if DEBUG
-    private let perfSignpostLog = OSLog(subsystem: "com.prossh", category: "TerminalPerf")
     private var _dbgPublishCount = 0
     private var _dbgWindowStart = Date.now
     #endif
@@ -498,12 +496,15 @@ import os.signpost
     ) async {
         guard let manager else { return }
         guard manager.engines[sessionID] != nil else { return }
-        #if DEBUG
-        let signpostID = OSSignpostID(log: perfSignpostLog)
-        os_signpost(.begin, log: perfSignpostLog, name: "PublishGridState", signpostID: signpostID)
+        let signpostLog = perfSignpostLog
+        let signpostID = OSSignpostID(log: signpostLog)
+        os_signpost(.begin, log: signpostLog, name: "PublishGridState", signpostID: signpostID)
+        let publishStart = TerminalPerf.now()
         defer {
-            os_signpost(.end, log: perfSignpostLog, name: "PublishGridState", signpostID: signpostID)
+            TerminalPerf.record(.publish, since: publishStart)
+            os_signpost(.end, log: signpostLog, name: "PublishGridState", signpostID: signpostID)
         }
+        #if DEBUG
         _dbgPublishCount += 1
         let _elapsed = Date.now.timeIntervalSince(_dbgWindowStart)
         if _elapsed >= 0.1 {

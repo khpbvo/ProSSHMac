@@ -207,6 +207,7 @@ actor LocalPTYProcess {
                 }
 
                 // Drain all available data in one pass
+                let readStart = TerminalPerf.now()
                 var chunk = Data()
                 inner: while true {
                     let n = buf.withUnsafeMutableBufferPointer { ptr -> Int in
@@ -221,9 +222,13 @@ actor LocalPTYProcess {
                     if err == EIO { break outer }
                     break outer
                 }
+                TerminalPerf.record(.ptyRead, since: readStart, byteCount: chunk.count)
 
                 if !chunk.isEmpty {
+                    let handoffStart = TerminalPerf.now()
+                    let handoffBytes = chunk.count
                     await self?.yieldSanitized(chunk)
+                    TerminalPerf.record(.ptyHandoff, since: handoffStart, byteCount: handoffBytes)
                 }
             }
 
@@ -242,6 +247,9 @@ actor LocalPTYProcess {
 
     private func yield(_ data: Data) { continuation.yield(data) }
     private func yieldSanitized(_ data: Data) {
+        let sanitizeStart = TerminalPerf.now()
+        defer { TerminalPerf.record(.ptySanitize, since: sanitizeStart, byteCount: data.count) }
+
         guard !didSuppressZshTTYPgrpWarning,
               let chunk = String(data: data, encoding: .utf8) else {
             continuation.yield(data)

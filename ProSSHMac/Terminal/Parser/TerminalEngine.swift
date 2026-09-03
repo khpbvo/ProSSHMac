@@ -11,9 +11,7 @@
 
 import Foundation
 import os.log
-#if DEBUG
 import os.signpost
-#endif
 
 // MARK: - TerminalEngine Actor
 
@@ -23,9 +21,7 @@ typealias VTParser = TerminalEngine
 actor TerminalEngine {
 
     private static let parserLog = Logger(subsystem: "com.prossh", category: "TerminalEngine")
-    #if DEBUG
-    private static let perfSignpostLog = OSLog(subsystem: "com.prossh", category: "TerminalPerf")
-    #endif
+    private static var perfSignpostLog: OSLog { TerminalPerf.log }
 
     // MARK: - Grid (owned)
 
@@ -166,7 +162,6 @@ actor TerminalEngine {
             let next = feedQueue[feedQueueHead]
             feedQueueHead += 1
             var index = 0
-            #if DEBUG
             let signpostID = OSSignpostID(log: Self.perfSignpostLog)
             os_signpost(
                 .begin,
@@ -176,7 +171,10 @@ actor TerminalEngine {
                 "bytes=%d",
                 next.count
             )
+            let parseStart = TerminalPerf.now()
+            let parseBytes = next.count
             defer {
+                TerminalPerf.record(.parse, since: parseStart, byteCount: parseBytes)
                 os_signpost(
                     .end,
                     log: Self.perfSignpostLog,
@@ -184,7 +182,6 @@ actor TerminalEngine {
                     signpostID: signpostID
                 )
             }
-            #endif
 
             while index < next.count {
                 let byte = next[index]

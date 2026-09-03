@@ -87,6 +87,38 @@ Do not quote the Debug 32 MB speedup factors as real; they are contaminated by t
   delivery path (`LocalShellChannel` → `AsyncStream<Data>` → `TerminalEngine.feed`), not in the
   kernel's tty layer.
 
+### Phase 1 — stage attribution (Release, instrumentation enabled)
+
+`TerminalPerf` (`Terminal/Diagnostics/TerminalPerf.swift`) gates the five Instruments
+Points-of-Interest signposts *and* a set of in-process stage timers behind one runtime switch —
+`--perf-signposts`, `PROSSH_PERF_SIGNPOSTS=1`, or
+`defaults write com.prossh terminal.perf.signposts -bool true`. Off by default; when off the shared
+`OSLog` is `.disabled` and the timers return after a single static `Bool` check.
+
+Timers are recorded at **chunk** granularity, never per byte. Verified free: with instrumentation
+off, Release measured 35.69 MB/s parser/grid and 6.78 MB/s PTY-local against Phase 0's 36.40 and
+6.81 — inside run-to-run spread.
+
+`--pty-local`, 2 MB, Release, four runs (representative run):
+
+```
+stage budget (pty-local):
+  pty read          7.61 ms    1.9%  (2776 calls, 2.67 MB)
+  pty sanitize    364.08 ms   92.6%  (2776 calls, 2.67 MB)
+  pty handoff     365.31 ms   92.9%  (2776 calls, 2.67 MB)
+  parse + grid     72.79 ms   18.5%  (2775 calls, 2.67 MB)
+  snapshot build    0.04 ms    0.0%  (1 calls)
+  wall            393.27 ms
+```
+
+Stages overlap — the PTY reader is a detached task feeding an `AsyncStream` the parser drains on
+the engine actor — so percentages do not partition wall time.
+
+**`pty sanitize` was 92.6% of wall time.** `pty handoff` (the actor hop plus the sanitizer) is
+365 ms, of which 364 ms is the sanitizer itself, so the hop costs ~1 ms across 2776 chunks. Actual
+reading is 7.6 ms. The parser does the full 2.67 MB in 72.8 ms — **36.7 MB/s, matching the
+standalone parser/grid benchmark exactly**. The parser was never the problem in the PTY path.
+
 ### Commands
 
 ```bash
