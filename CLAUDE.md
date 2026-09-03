@@ -111,8 +111,9 @@ xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform
   -only-testing:ProSSHMacTests/<TestClassName>
 
 # Throughput benchmarks
-./scripts/benchmark-throughput.sh --benchmark-bytes 2097152 --benchmark-runs 3 --no-build
-./scripts/benchmark-throughput.sh --pty-local --benchmark-bytes 2097152 --benchmark-runs 3 --no-build
+# Defaults to Debug. Pass --configuration Release for numbers that reflect a shipping build.
+./scripts/benchmark-throughput.sh --configuration Release --benchmark-bytes 2097152 --benchmark-runs 4 --benchmark-chunk 4096
+./scripts/benchmark-throughput.sh --configuration Release --no-build --pty-local --benchmark-bytes 2097152 --benchmark-runs 4
 ./scripts/benchmark-ssh.sh --host <hostname> --user <username>
 ```
 
@@ -124,8 +125,10 @@ xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform
 - Tests must not depend on the developer's real `UserDefaults`. `LLMProviderRegistry` takes an
   injectable `userDefaults:`; agent tests build one via `makeIsolatedOpenAIRegistry()` in
   `AIAgentServiceTests.swift`. Follow that pattern for any new defaults-backed type.
-- Throughput baseline (2026-08-27): ~1.68 MB/s fullscreen, ~1.82 MB/s partial scroll (2 MB parser/grid);
-  ~1.69 MB/s PTY-local. See `docs/Optimization.md`.
+- **Throughput baseline (2026-09-03), Release:** **36.40 MB/s** fullscreen, **35.85 MB/s** partial
+  scroll (2 MB parser/grid); **6.81 MB/s** PTY-local. Debug: 1.84 / 1.82 / 1.74 MB/s.
+  **Release is ~20x faster than Debug** — always state the configuration with any number, and
+  never compare a Debug figure to a Release one. See `docs/Optimization.md`.
 
 ---
 
@@ -341,7 +344,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-09-0
 | `docs/bugs.md` | Bug audit by subsystem/severity — 50 of 79 still open; paths are pre-refactor |
 | `docs/FutureFeatures.md` | Prioritized feature roadmap (competitive analysis) |
 | `docs/Optimization.md` | Performance bottleneck analysis, benchmark commands, current numbers |
-| `docs/FasterThenYouWillEverLiveToBe.md` | Throughput gap profiling plan (Phases 0–5) — **NOT STARTED** |
+| `docs/FasterThenYouWillEverLiveToBe.md` | Throughput gap profiling plan — **Phase 0 done, H1 confirmed; Phases 1–5 need re-scope** |
 | `docs/optimizationspart2.md` | Throughput recovery playbook (Part 2) |
 | `docs/OptimizeP2.md` / `docs/OptimizeP3.md` | P2 / P3 optimization phased checklists — **COMPLETE** |
 | `docs/PhaseB.md` | Local Input V2 Phase B checklist (make byte-first local input the only path) |
@@ -364,22 +367,31 @@ at `Docs/featurelist.md`. Keep it in sync when process guidance changes.
 
 ## Next Session Plan
 
-**Last completed work (2026-09-03): CLAUDE.md audit + full test suite back to green (38 failures → 0).**
+**Last completed work (2026-09-03): `docs/FasterThenYouWillEverLiveToBe.md` Phase 0 — Release-vs-Debug baseline.**
 
-Two real user-facing bugs were found behind the red baseline and fixed:
-- `MouseEncoder.encodeSGR` double-incremented already-1-based coordinates, so every SGR mouse
-  report landed one row down / one column right in any TUI (vim, htop, mc, tmux).
-- `TerminalEngine` dropped byte `0x9C` when it was a UTF-8 continuation inside an OSC/DCS string,
-  corrupting the surrounding character — a UTF-8 window title never got set. Fixed for OSC and DCS.
+H1 confirmed and then some. `scripts/benchmark-throughput.sh` now takes `--configuration
+<Debug|Release>` (default Debug). Release builds clean with no source changes.
 
-The other 32 failures were stale tests asserting behaviour that later phases deliberately changed
-(bounds clamping, packed cell colour, wide emoji, removed reply reflow, removed `; clear`) plus
-`LLMProviderRegistry` reading the developer's real `UserDefaults`.
+- Parser/grid 2 MB: **1.84 → 36.40 MB/s** fullscreen (**19.8x**), 1.82 → 35.85 MB/s partial.
+- PTY-local 2 MB: **1.74 → 6.81 MB/s** (only **3.9x**).
+- The documented "50x gap" was mostly `-Onone`. Remaining gap to the 89 MB/s target: **2.4x**
+  on parser/grid.
+- Debug 32 MB *degrades inside one process run* (1.89 → 0.37 MB/s across four runs); Release is
+  flat at 36.0–36.1. The old "Sustained 32 MB: 1.69–1.81 MB/s" line was that artifact.
+
+**The bottleneck moved and is no longer where the plan assumed.** In Release the parser/grid runs
+at 36 MB/s while the full PTY path delivers 6.81 MB/s — 5.3x slower than the parser it feeds.
+It is not the kernel tty: the same 2 MB through a real PTY via `script -q /dev/null` reaches
+92–138 MB/s here. The ceiling is in `LocalShellChannel` → `AsyncStream<Data>` →
+`TerminalEngine.feed`.
 
 Next steps:
-- **Recommended: `docs/FasterThenYouWillEverLiveToBe.md` Phase 0** — every throughput number in the
-  project comes from a Debug build (`benchmark-throughput.sh` hardcodes `-configuration Debug`), so
-  the documented ~50x gap may be largely a measurement artifact. Cheapest high-value test available.
-- Pick from `docs/bugs.md` (50 open bugs — see the staleness caveat above) or `docs/FutureFeatures.md`
-- `docs/PhaseB.md` (Local Input V2 Phase B) is still an open, unstarted checklist
-- Consider consolidating the `Docs/` vs `docs/` directory split before it bites a CI checkout
+- **Re-scope `docs/FasterThenYouWillEverLiveToBe.md` before running Phase 1 as written.** Its
+  Phase 2 targets parse/grid/snapshot attribution, which Phase 0 has largely answered. The open
+  question is the PTY delivery path (chunk size, `AsyncStream` buffering/hop count per read,
+  actor hops per chunk into `TerminalEngine.feed`).
+- Phase 5's retarget is now high-value on its own: measure Ghostty/Alacritty on this machine and
+  replace the 89 MB/s pipe-derived target (H4).
+- Phase 1 (Release-traceable signposts + in-process stage timers) is still worth doing, but point
+  its instrumentation at the PTY path.
+- Unrelated open work: `docs/bugs.md` (50 open), `docs/PhaseB.md`, the `Docs/` vs `docs/` case split.

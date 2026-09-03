@@ -2,7 +2,9 @@
 
 Profiling plan for the unexplained throughput gap between ProSSHMac and its stated target.
 
-**Status:** Not started. Created 2026-09-03.
+**Status:** Phase 0 complete (2026-09-03). H1 confirmed — see the Phase 0 result below.
+Phases 1+ are **on hold pending re-scope**: Release closed the parser/grid gap from ~50x
+to ~2.4x, and moved the bottleneck to the PTY read path.
 
 ---
 
@@ -114,7 +116,7 @@ unreachable number. Ending this work with an honest target is a valid success co
 
 Each phase is one session. Do not start a phase before its predecessor's exit criteria are met.
 
-- [ ] **Phase 0: Release-vs-Debug baseline**
+- [x] **Phase 0: Release-vs-Debug baseline**
 
   **Goal:** Establish what the throughput actually is in a shipping build. Tests H1.
 
@@ -127,6 +129,36 @@ Each phase is one session. Do not start a phase before its predecessor's exit cr
   with the Machine Profile updated to record both. The headline "Current:" figures are restated
   against Release, and the gap is re-expressed against it. If Release closes most of the gap,
   **stop and re-scope the rest of this plan** — Phases 3+ may be unnecessary.
+
+  **Result (2026-09-03) — H1 CONFIRMED.** Release builds clean on the first attempt (no
+  compilation fixes were needed). Full table in `docs/Optimization.md` §"Release vs Debug".
+
+  | Scenario | Debug | Release | Speedup |
+  |---|---|---|---|
+  | 2 MB parser/grid fullscreen | 1.84 MB/s | **36.40 MB/s** | 19.8x |
+  | 2 MB parser/grid partial | 1.82 MB/s | **35.85 MB/s** | 19.7x |
+  | 32 MB sustained fullscreen | 0.39 MB/s* | **36.08 MB/s** | 91.8x* |
+  | 32 MB sustained partial | 0.35 MB/s* | **35.62 MB/s** | 101.8x* |
+  | 2 MB PTY local end-to-end | 1.74 MB/s | **6.81 MB/s** | 3.9x |
+
+  \* Debug 32 MB degrades within one process run (1.89 → 0.40 → 0.41 → 0.37 MB/s). Release is
+  flat. The previously documented "Sustained 32 MB: 1.69–1.81 MB/s" was that artifact.
+
+  Three consequences:
+
+  1. **The ~50x gap was mostly `-Onone`.** Remaining gap to the 89 MB/s target is **2.4x** on
+     parser/grid. **H4 is now the live question, not H2 or H3** — 36 MB/s of full VT emulation
+     against a 385 MB/s pipe that does none of it is close to the useful floor.
+  2. **The bottleneck moved to the PTY read path.** Release parser/grid does 36 MB/s but the full
+     PTY path delivers 6.81 MB/s — 5.3x slower than the parser it feeds. Debug hid this by making
+     both ~1.8 MB/s. This was not in the ranked hypotheses at all.
+  3. **It is not the kernel tty.** The same 2 MB payload pushed through a real PTY with
+     `script -q /dev/null` reaches 92–138 MB/s on this machine. The ceiling is in
+     `LocalShellChannel` → `AsyncStream<Data>` → `TerminalEngine.feed`.
+
+  **Re-scope recommendation:** replace Phases 1–4 as written. Phase 1's Release-traceability work
+  is still needed, but Phase 2's stage attribution should target the **PTY delivery path** rather
+  than parse/grid/snapshot, and Phase 5's retarget is now the highest-value remaining step.
 
 - [ ] **Phase 1: Make Release traceable**
 

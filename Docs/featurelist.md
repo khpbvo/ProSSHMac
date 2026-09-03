@@ -1904,3 +1904,68 @@ signpost is `#if DEBUG`-gated, so a Release build currently cannot be traced (Ph
 
 ### Build/Test
 No code changes. Suite unchanged at 870 tests, 0 failures.
+
+---
+
+## 2026-09-03 — FasterThenYouWillEverLiveToBe Phase 0: Release-vs-Debug baseline
+
+**H1 confirmed.** Every throughput number in the project's history was measured against a Debug
+(`-Onone`) build. Release is ~20x faster on the parser/grid path.
+
+### What changed
+`scripts/benchmark-throughput.sh` now accepts `--configuration <Debug|Release>`, defaulting to
+`Debug` so historical numbers stay reproducible. Both `xcodebuild` call sites use it — the `build`
+invocation *and* the `-showBuildSettings` call that resolves `TARGET_BUILD_DIR` (parameterizing only
+the first would build Release and then run the stale Debug binary). The value is validated, and the
+resolved configuration is echoed in the run header so it lands in any captured output.
+
+No source changes. Release built clean on the first attempt despite never having been built on this
+machine before (`Build/Products/` contained only `Debug`), so no compilation-fix commit was needed.
+
+### Measured (4 runs each, first discarded, 80×24, chunk 4096, throughput mode off)
+
+| Scenario | Debug (spread) | Release (spread) | Speedup |
+|---|---|---|---|
+| 2 MB parser/grid fullscreen | 1.84 MB/s (1.83–1.85) | **36.40 MB/s** (36.06–36.95) | 19.8x |
+| 2 MB parser/grid partial | 1.82 MB/s (1.81–1.82) | **35.85 MB/s** (35.42–36.18) | 19.7x |
+| 32 MB sustained fullscreen | 0.39 MB/s (0.37–0.41)* | **36.08 MB/s** (36.05–36.10) | 91.8x* |
+| 32 MB sustained partial | 0.35 MB/s (0.33–0.36)* | **35.62 MB/s** (35.57–35.68) | 101.8x* |
+| 2 MB PTY local end-to-end | 1.74 MB/s (1.74–1.75) | **6.81 MB/s** (6.77–6.83) | 3.9x |
+
+Parser state `ground` after every run. Debug 2 MB reproduced the historical figures, confirming the
+script change did not perturb the measurement.
+
+\* The Debug 32 MB scenarios degrade *within a single process run* — fullscreen 1.89 → 0.40 → 0.41 →
+0.37 MB/s, partial 1.04 → 0.33 → 0.36 → 0.36. Release is flat across the same four runs. The
+previously documented "Sustained 32 MB: 1.69–1.81 MB/s" was that Debug-only degradation, not a
+property of the emulator. Those two speedup factors are contaminated and should not be quoted.
+
+### Three findings
+
+1. **The ~50x gap was mostly `-Onone`.** Remaining gap to the 89 MB/s target is **2.4x** on
+   parser/grid. H4 (miscalibrated target) is now the live hypothesis, not H2 or H3.
+2. **The bottleneck moved to the PTY read path.** Release parser/grid does 36 MB/s while the full
+   PTY path delivers 6.81 MB/s — **5.3x slower than the parser it feeds**. Debug hid this entirely
+   by pinning both at ~1.8 MB/s. This was not among the ranked hypotheses.
+3. **It is not the kernel tty.** Same 2 MB payload on this machine: `dd | base64 > /dev/null`
+   ~276 MB/s; the same output pushed through a real PTY (`script -q /dev/null`) **92–138 MB/s**;
+   the 100 MB reference command 0.35s (~385 MB/s). The ceiling is in `LocalShellChannel` →
+   `AsyncStream<Data>` → `TerminalEngine.feed`.
+
+### Consequence for the plan
+Stopped at the Phase 0 gate as specified ("if Release closes most of the gap, stop and re-scope").
+Phases 1–5 need re-scoping: Phase 2's parse/grid/snapshot attribution is largely answered, and the
+open question is PTY delivery. Phase 5's retarget against a peer emulator is now high-value.
+
+### Files Modified
+- `scripts/benchmark-throughput.sh`
+- `docs/Optimization.md` (headline restated, Release-vs-Debug section, Machine Profile refreshed —
+  it recorded macOS 15.x / Xcode 16.x; actual is macOS 26.6.2 / Xcode 26.6)
+- `docs/FasterThenYouWillEverLiveToBe.md` (Phase 0 ticked, H1 verdict, re-scope recommendation)
+- `CLAUDE.md` (throughput baseline, benchmark commands, reference-doc row, Next Session Plan)
+- `docs/featurelist.md`
+
+### Build/Test
+`xcodebuild -configuration Release build` → **BUILD SUCCEEDED**. `-configuration Debug build` →
+**BUILD SUCCEEDED**. No source changes, so no test run was warranted; suite baseline stands at
+870 tests, 0 failures.

@@ -2,10 +2,18 @@
 
 **Target:** `dd if=/dev/urandom bs=1024 count=100000 | base64` completes in 1.5 seconds (~89 MB/s throughput).
 
-**Current:** **1.68 MB/s** fullscreen, **1.82 MB/s** partial scroll (2 MB parser/grid benchmark, 2026-08-27).
-**Sustained 32 MB:** **1.69–1.81 MB/s** fullscreen, **1.69–1.78 MB/s** partial scroll.
-**PTY local:** **1.69 MB/s** average (2 MB, 3 runs; corrected completion detection).
-**Previous:** ~220 KB/s initial estimate → 1.13 MB/s post-merge → 1.34 MB/s post-ring → 1.70 MB/s post-pack → 1.60/1.37 MB/s pre-rotation optimization.
+**Current (Release, 2026-09-03):** **36.40 MB/s** fullscreen, **35.85 MB/s** partial scroll
+(2 MB parser/grid benchmark). **Sustained 32 MB:** **36.08 MB/s** fullscreen, **35.62 MB/s** partial.
+**PTY local:** **6.81 MB/s** average (2 MB).
+
+**Current (Debug, 2026-09-03):** **1.84 MB/s** fullscreen, **1.82 MB/s** partial scroll (2 MB).
+**PTY local:** **1.74 MB/s**. Debug is **~20x slower** than Release — see the Release-vs-Debug
+section below. Every number recorded in this document before 2026-09-03 is a Debug number.
+
+**Remaining gap to target:** **2.4x** on parser/grid, **13.1x** end-to-end through the PTY.
+The dominant remaining cost is no longer the parser or the grid — it is the PTY read path.
+
+**Previous (all Debug):** ~220 KB/s initial estimate → 1.13 MB/s post-merge → 1.34 MB/s post-ring → 1.70 MB/s post-pack → 1.60/1.37 MB/s pre-rotation optimization.
 
 Data pipeline (current — after TerminalEngine merge):
 ```
@@ -36,6 +44,63 @@ Latest sample (2026-08-27, PTY repair + allocation-free partial-row rotation):
 - Time Profiler: `TerminalGrid.scrollUp(lines:)` partial-workload inclusive samples fell from approximately **4.89 s** to **1.23 s** after replacing per-scroll `regionKeys` / `regionPhysicalRows` allocations with in-place row-map rotation.
 - parser state after all parser/grid runs: `ground`
 
+## Release vs Debug (2026-09-03) — FasterThenYouWillEverLiveToBe Phase 0
+
+Until 2026-09-03 `scripts/benchmark-throughput.sh` hardcoded `-configuration Debug`, so **every
+throughput figure in this document's history was measured against an unoptimized build**
+(`SWIFT_OPTIMIZATION_LEVEL = -Onone`, `GCC_OPTIMIZATION_LEVEL = 0`, `ENABLE_TESTABILITY = YES`).
+The script now takes `--configuration <Debug|Release>`, defaulting to `Debug` so historical
+numbers stay reproducible.
+
+Protocol: 4 runs per scenario, **first run discarded**, mean and min–max of the remaining three.
+Grid 80×24, chunk 4096, throughput mode **off** (the default is unset). Parser state `ground`
+after every run. Build once per configuration, `--no-build` for the rest of the matrix.
+
+| Scenario | Debug mean (spread) | Release mean (spread) | Speedup |
+|---|---|---|---|
+| 2 MB parser/grid — fullscreen | 1.84 MB/s (1.83–1.85) | **36.40 MB/s** (36.06–36.95) | **19.8x** |
+| 2 MB parser/grid — partial scroll | 1.82 MB/s (1.81–1.82) | **35.85 MB/s** (35.42–36.18) | **19.7x** |
+| 32 MB sustained — fullscreen | 0.39 MB/s (0.37–0.41)† | **36.08 MB/s** (36.05–36.10) | **91.8x**† |
+| 32 MB sustained — partial scroll | 0.35 MB/s (0.33–0.36)† | **35.62 MB/s** (35.57–35.68) | **101.8x**† |
+| 2 MB PTY local end-to-end | 1.74 MB/s (1.74–1.75) | **6.81 MB/s** (6.77–6.83) | **3.9x** |
+
+† **The Debug 32 MB rows degrade within a single process run** — fullscreen went 1.89 → 0.40 →
+0.41 → 0.37 MB/s across four runs, partial 1.04 → 0.33 → 0.36 → 0.36. Release is flat across the
+same four runs (36.05–36.10). So the previously documented "Sustained 32 MB: 1.69–1.81 MB/s" was a
+Debug-only artifact of a degrading process, not a sustained-throughput property of the emulator.
+Do not quote the Debug 32 MB speedup factors as real; they are contaminated by that degradation.
+
+### What this changes
+
+- **H1 is confirmed.** Release is ~20x faster on parser/grid. The documented "50x gap" and the
+  "400x slowdown" framing were measuring `-Onone`, not the emulator.
+- **The gap to the 89 MB/s target is now 2.4x on parser/grid**, not 50x. For a component that
+  parses, stores, and reflows every cell against a pipe that does none of that, this is close to
+  the floor of what is worth chasing.
+- **The bottleneck moved.** In Release the parser/grid runs at 36 MB/s but the full PTY path
+  delivers only 6.81 MB/s — **5.3x slower than the parser it feeds**. In Debug both sat around
+  1.8 MB/s, which hid this completely.
+- **It is not the PTY itself.** Measured on this machine, same 2 MB payload:
+  `dd | base64 > /dev/null` reaches ~276 MB/s, and the same command with its output pushed
+  **through a real PTY** (`script -q /dev/null`) still reaches **92–138 MB/s**. The 100 MB
+  reference command runs in 0.35s (~385 MB/s). The ~6.8 MB/s ceiling is in ProSSHMac's read and
+  delivery path (`LocalShellChannel` → `AsyncStream<Data>` → `TerminalEngine.feed`), not in the
+  kernel's tty layer.
+
+### Commands
+
+```bash
+# Release
+./scripts/benchmark-throughput.sh --configuration Release --benchmark-bytes 2097152 --benchmark-runs 4 --benchmark-chunk 4096
+./scripts/benchmark-throughput.sh --configuration Release --no-build --benchmark-bytes 33554432 --benchmark-runs 4 --benchmark-chunk 4096
+./scripts/benchmark-throughput.sh --configuration Release --no-build --pty-local --benchmark-bytes 2097152 --benchmark-runs 4
+
+# Debug (default; reproduces the historical numbers)
+./scripts/benchmark-throughput.sh --benchmark-bytes 2097152 --benchmark-runs 4 --benchmark-chunk 4096
+```
+
+---
+
 Previous sample (2026-02-21, post renderer/parser micro-optimization batch):
 - command: `./scripts/benchmark-throughput.sh --benchmark-bytes 2097152 --benchmark-runs 3 --benchmark-chunk 4096 --no-build`
 - fullscreen avg: **1.60 MB/s**
@@ -62,12 +127,12 @@ All benchmark numbers in this document were collected on this configuration:
 | Property | Value |
 |----------|-------|
 | Hardware | Apple Silicon Mac (arm64) |
-| macOS | 15.x (Darwin 25.3.0) |
-| Xcode | 16.x |
-| Build config | Debug (no optimizations) |
+| macOS | 26.6.2 (Darwin 25.6.0) |
+| Xcode | 26.6 (17F113) |
+| Build config | **Debug** (`-Onone`) for every number dated before 2026-09-03; **Release** (`-O`, `wholemodule`) and Debug both recorded from 2026-09-03 on. Select with `--configuration`. |
 | Grid size | 80 columns × 24 rows |
 | Reference command | `dd if=/dev/urandom bs=1024 count=100000 \| base64` |
-| Host baseline | `time sh -c '... \| base64 > /dev/null'` → **0.373s** (~357 MB/s) |
+| Host baseline | `time sh -c '... \| base64 > /dev/null'` → **0.35s** (~385 MB/s); same payload through a real PTY (`script -q /dev/null`) → **92–138 MB/s** |
 | Parser/grid benchmark | `./scripts/benchmark-throughput.sh --benchmark-bytes 2097152 --benchmark-runs 3 --benchmark-chunk 4096 --no-build` |
 | PTY local benchmark | `./scripts/benchmark-throughput.sh --pty-local --no-build` |
 | Remote SSH benchmark | `./scripts/benchmark-ssh.sh --host <host> --user <user>` |
