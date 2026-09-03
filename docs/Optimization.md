@@ -3,7 +3,7 @@
 **Target:** ~~`dd if=/dev/urandom bs=1024 count=100000 | base64` in 1.5 seconds (~89 MB/s)~~ —
 **superseded 2026-09-03.** That number is a pipe baseline with no terminal emulation and is not
 reachable by any real emulator on this machine. Proposed replacement: **match or beat Terminal.app
-end-to-end with rendering on (~22 MB/s here)**. See "Phase 5 — retarget against peer emulators".
+end-to-end with rendering on (~26 MB/s here)**. See "Phase 5 — retarget against peer emulators".
 
 **Current (Release, 2026-09-03):** **36.38 MB/s** fullscreen, **35.16 MB/s** partial scroll
 (2 MB parser/grid benchmark). **Sustained 32 MB:** **36.08 MB/s** fullscreen, **35.62 MB/s** partial.
@@ -14,9 +14,9 @@ end-to-end with rendering on (~22 MB/s here)**. See "Phase 5 — retarget agains
 section below. Every number recorded in this document before 2026-09-03 is a Debug number.
 
 **Target under revision.** The 89 MB/s figure comes from a pipe that does no terminal emulation.
-Measured here, the fastest peer emulator (Terminal.app) does **22.2 MB/s** with rendering and
-iTerm2 does **2.44 MB/s**; see "Phase 5 — retarget" below. Against that, ProSSHMac's 17.97 MB/s
-PTY-local (rendering excluded) is in the same league as the fastest peer.
+Measured here, the fastest peer emulator (Terminal.app) does **26.5 MB/s** with rendering; see
+"Phase 5 — retarget" below. Against that, ProSSHMac's 17.97 MB/s PTY-local (rendering excluded) is
+in the same league as the fastest peer.
 
 **Previous (all Debug):** ~220 KB/s initial estimate → 1.13 MB/s post-merge → 1.34 MB/s post-ring → 1.70 MB/s post-pack → 1.60/1.37 MB/s pre-rotation optimization.
 
@@ -163,14 +163,27 @@ loop and `AsyncStream` delivery: 2592 chunks for 2.67 MB is ~1 KB per chunk, so 
 The 89 MB/s target derives from `dd | base64` piped to `/dev/null`, which does no terminal
 emulation. Measured on this machine, 6 MB of base64 written to a real terminal window, three runs:
 
+Reproduce with `./scripts/benchmark-peer-emulator.sh --app <Terminal|iTerm> --mb 6 --runs 3`.
+
 | Emulator | Throughput | Notes |
 |---|---|---|
 | Host pipe to `/dev/null` | ~276 MB/s | no emulation, no PTY |
 | Host through a PTY (`script -q /dev/null`) | 92–138 MB/s | PTY, no emulation |
-| **Terminal.app** | **21.4–23.1 MB/s** (mean 22.2) | with rendering |
-| **iTerm2** | **2.29–2.52 MB/s** (mean 2.44) | with rendering |
+| **Terminal.app** | **26.1–27.3 MB/s** (mean 26.5) | with rendering |
+| **iTerm2** | **1.3–1.5 MB/s** | with rendering; see caveat |
 | **ProSSHMac PTY-local** | **17.97 MB/s** | parse + grid only, **no rendering** |
 | ProSSHMac parser/grid only | 36.38 MB/s | no PTY, no rendering |
+
+An earlier ad-hoc version of this measurement was **wrong by 33%**: base64 expands its input by
+4/3, so a script asking `dd` for 6 MB puts ~8 MB on the wire, and the first numbers recorded here
+(Terminal.app 22.2, iTerm2 2.44) divided the elapsed time by the wrong figure. The committed script
+sizes `dd` so that the *output* is the requested size. It also forces `LC_ALL=C`, without which
+`time`'s comma decimal separator under a European locale makes `awk` read `0.17` as zero.
+
+iTerm2's figure is the least stable of these — a separate run measured ~3 MB/s — and it degrades as
+windows and scrollback accumulate. Treat it as "an order of magnitude slower than Terminal.app
+here", not as a precise number. Terminal.app's is stable across runs and is the one the target
+below rests on.
 
 Ghostty and Alacritty are not installed on this machine; Terminal.app and iTerm2 were the
 available peers.
@@ -180,10 +193,10 @@ not, so ProSSHMac's figure is flattered. Terminal.app also coalesces and drops o
 emulating every cell, which is part of why it is fast.
 
 Even so the calibration is clear: **no real emulator on this machine comes close to 89 MB/s.** The
-fastest peer does 22 MB/s with rendering. A defensible target is to **match or beat Terminal.app
-end-to-end with rendering on**, i.e. ~22 MB/s — not 89 MB/s. ProSSHMac is now at 17.97 MB/s
-without rendering, so the honest statement is that it is in the same league as the fastest peer
-and roughly 7x faster than iTerm2, with the rendering cost still unmeasured.
+fastest peer does ~26 MB/s with rendering. A defensible target is to **match or beat Terminal.app
+end-to-end with rendering on**, i.e. ~26 MB/s — not 89 MB/s. ProSSHMac is at 17.97 MB/s *without*
+rendering, so the honest statement is that it is in the same league as the fastest peer, with the
+rendering cost still unmeasured and therefore the true gap still unknown.
 
 ### Commands
 

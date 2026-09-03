@@ -245,8 +245,8 @@ Each phase is one session. Do not start a phase before its predecessor's exit cr
   |---|---|
   | Host pipe to `/dev/null` (no emulation, no PTY) | ~276 MB/s |
   | Host through a PTY (`script -q /dev/null`) | 92–138 MB/s |
-  | **Terminal.app** (with rendering) | **22.2 MB/s** |
-  | **iTerm2** (with rendering) | **2.44 MB/s** |
+  | **Terminal.app** (with rendering) | **26.5 MB/s** |
+  | **iTerm2** (with rendering) | **~1.4 MB/s** (unstable; see doc) |
   | **ProSSHMac PTY-local** (no rendering) | **17.97 MB/s** |
 
   Ghostty and Alacritty are not installed here. The comparison is **not like-for-like** — peers
@@ -254,7 +254,12 @@ Each phase is one session. Do not start a phase before its predecessor's exit cr
   coalesces and drops output rather than emulating every cell.
 
   **No real emulator on this machine approaches 89 MB/s.** The target in `docs/Optimization.md` is
-  restated as **match or beat Terminal.app end-to-end with rendering on (~22 MB/s here)**.
+  restated as **match or beat Terminal.app end-to-end with rendering on (~26 MB/s here)**.
+
+  Reproduce with `./scripts/benchmark-peer-emulator.sh`. The first pass at this measurement was
+  wrong by 33% — base64 expands 4/3, so asking `dd` for 6 MB puts 8 MB on the wire — and hit a
+  locale bug where `awk` reads a dotted decimal as zero under `nl_NL`. Both are fixed in the
+  committed script.
 
 ---
 
@@ -271,7 +276,7 @@ measurement, but the code defect was found only because Phase 1's timers were po
 nobody had suspected. H2 and H3 were both measured and killed.
 
 **The remaining honest gap is small.** ProSSHMac does 17.97 MB/s through a real PTY without
-rendering against a fastest-peer 22.2 MB/s with rendering. The unknown is what rendering costs,
+rendering against a fastest-peer 26.5 MB/s with rendering. The unknown is what rendering costs,
 which none of these benchmarks measure — that, not further parser micro-optimisation, is the
 highest-value thing left to find out.
 

@@ -130,8 +130,9 @@ xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform
   **Release is ~20x faster than Debug** — always state the configuration with any number, and
   never compare a Debug figure to a Release one.
 - **Target is no longer 89 MB/s.** That was a pipe baseline with no terminal emulation. Measured
-  peers on this machine (6 MB, with rendering): Terminal.app **22.2 MB/s**, iTerm2 **2.44 MB/s**.
-  Current target: match or beat Terminal.app end-to-end. See `docs/Optimization.md`.
+  peers on this machine (6 MB, with rendering): Terminal.app **26.5 MB/s**, iTerm2 ~1.4 MB/s.
+  Current target: match or beat Terminal.app end-to-end. Reproduce with
+  `./scripts/benchmark-peer-emulator.sh`. See `docs/Optimization.md`.
 - **Perf instrumentation:** `TerminalPerf` (`Terminal/Diagnostics/TerminalPerf.swift`) gates the
   five signposts and the in-process stage timers behind `--perf-signposts` /
   `PROSSH_PERF_SIGNPOSTS=1` / `terminal.perf.signposts`. Pass `--perf-signposts` to
@@ -154,6 +155,7 @@ ProSSHMac/
 ├── Services/             # SessionManager (+Queries) + 7 coordinators, TransferManager,
 │   │                     #   EncryptedStorage, PersistentStore, PortForwardingManager,
 │   │                     #   LocalPTYProcess, LocalShellBootstrap, LocalShellChannel,
+│   │                     #   ZshStartupWarningFilter,
 │   │                     #   KeyForgeService, KeyStore, KnownHostsStore, CertificateStore,
 │   │                     #   CertificateAuthorityService (+3 ext), AuditLogManager/Store,
 │   │                     #   TOTPGenerator/Store, BiometricPasswordStore, SecureEnclaveKeyManager,
@@ -167,6 +169,7 @@ ProSSHMac/
 │   └── LLM/              #   LLMTypes, LLMProvider, LLMProviderRegistry, LLMAPIKeyStore
 │       └── Providers/    #   ChatCompletionsClient, Mistral/Ollama/Anthropic/DeepSeek providers
 ├── Terminal/
+│   ├── Diagnostics/      # TerminalPerf (runtime-gated signposts + stage timers)
 │   ├── Grid/             # TerminalGrid + 11 extensions, TerminalCell, CursorState, CharacterWidth,
 │   │                     #   GridReflow, GridSnapshot, ScrollbackBuffer
 │   ├── Parser/           # TerminalEngine, VTParserTables, VTConstants, CSI/OSC/SGR/ESC/DCS/Charset
@@ -233,7 +236,9 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-09-0
 | `Services/LocalShellBootstrap.swift` | Child env for local PTY, ZDOTDIR/BASH_ENV injection (202L) |
 | `ViewModels/TerminalAIAssistantViewModel.swift` | AI sidebar VM: messages, streaming, patch approval (379L) |
 | `UI/Terminal/PatchApprovalCardView.swift` | Inline patch approval card for `apply_patch` (177L) |
-| `App/ThroughputBenchmarkRunner.swift` | Parser/grid + PTY-local benchmarks, `BenchmarkSentinelMatcher` |
+| `App/ThroughputBenchmarkRunner.swift` | Parser/grid + PTY-local benchmarks, `BenchmarkSentinelMatcher`, stage-budget print |
+| `Terminal/Diagnostics/TerminalPerf.swift` | Runtime-gated signposts + in-process stage timers (152L). Start here for any perf work |
+| `Services/ZshStartupWarningFilter.swift` | Bounded zsh startup-warning filter for the PTY path (120L) |
 | `Services/LLM/` (4 files) | LLMTypes, LLMProvider protocol, LLMProviderRegistry, LLMAPIKeyStore |
 | `Services/LLM/Providers/` (5 files) | ChatCompletionsClient, Mistral/Ollama/Anthropic/DeepSeek providers |
 
@@ -384,6 +389,8 @@ at `Docs/featurelist.md`. Keep it in sync when process guidance changes.
 
 ## Next Session Plan
 
+<!-- NEXT SESSION PLAN -->
+
 **Last completed work (2026-09-03): FasterThenYouWillEverLiveToBe Phases 0, 1, 2, 3 and 5.**
 
 The "50x gap" was three separate things:
@@ -396,7 +403,7 @@ The "50x gap" was three separate things:
    the whole session: **92.6% of local-shell wall time**. Extracted to
    `ZshStartupWarningFilter` and bounded to 32 KB. **PTY-local 6.81 → 17.97 MB/s.**
 3. **A target derived from a pipe that does no emulation** — 89 MB/s is unreachable by any real
-   emulator here. Terminal.app does 22.2 MB/s with rendering, iTerm2 2.44 MB/s.
+   emulator here. Terminal.app does 26.5 MB/s with rendering.
 
 `TerminalPerf` now gates the five signposts plus in-process stage timers behind
 `--perf-signposts`; that instrumentation is what found #2, in a stage none of the plan's four
@@ -407,7 +414,7 @@ ranked hypotheses had named. H2 and H3 were measured and killed.
 Next steps:
 - **Optional: Phase 4** — the dominant stage is now `parse + grid` (44% of wall), and the rest is
   reader/`AsyncStream` overhead: 2592 chunks for 2.67 MB is ~1 KB per chunk, ~2600 actor hops.
-  Try coalescing reads before the hand-off. Judge against ~22 MB/s, not 89.
+  Try coalescing reads before the hand-off. Judge against ~26 MB/s, not 89.
 - **The real unknown is rendering cost.** No benchmark here measures it — peers were measured with
   rendering, ProSSHMac without. Measuring it is higher-value than more parser work.
 - `SessionManagerRenderingPathTests.testLocalSessionStreamsProgressiveCommandOutput` is flaky

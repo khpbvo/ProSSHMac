@@ -2074,3 +2074,65 @@ real `/bin/zsh` and times out at 8s under full-suite load. Verified pre-existing
 identically at the previous commit (870 tests, 1 failure, same test) and passes 3/3 in isolation
 both before and after these changes. The CLAUDE.md "870 tests, 0 failures" line does not reproduce
 today.
+
+---
+
+## 2026-09-03 — Handoff hardening + peer-measurement correction
+
+Follow-up to the same session. Made the work resumable by a fresh session, and corrected an error
+found while doing so.
+
+### Correction: peer emulator numbers were 33% low
+The Phase 5 peer measurement was taken with an ad-hoc script that asked `dd` for 6 MB of random
+bytes. **base64 expands its input by 4/3**, so ~8 MB actually went to the terminal while the
+throughput was computed against 6 MB. Corrected figures, from the now-committed script:
+
+| | Was recorded | Actual |
+|---|---|---|
+| Terminal.app | 22.2 MB/s | **26.5 MB/s** (26.1–27.3) |
+| iTerm2 | 2.44 MB/s | ~1.4 MB/s (unstable) |
+| Target restated as | ~22 MB/s | **~26 MB/s** |
+
+The conclusion is unchanged — no real emulator here approaches 89 MB/s — but every figure was
+wrong, so all four documents were corrected.
+
+iTerm2's number is unstable (a separate run gave ~3 MB/s) and degrades as windows and scrollback
+accumulate; it is now labelled as such rather than quoted precisely. Terminal.app's is stable and
+is what the target rests on. The host-baseline figures were computed correctly and are unchanged,
+apart from the 100 MB reference command (385 → 372 MB/s, same 4/3 arithmetic).
+
+### New: `scripts/benchmark-peer-emulator.sh`
+The retarget now rests on peer numbers, so the measurement is reproducible rather than ad-hoc.
+Drives Terminal.app or iTerm2 via AppleScript, sizes `dd` so the *output* is the requested size,
+and documents the two caveats that matter: peer numbers include rendering while ProSSHMac's
+`--pty-local` does not, and Terminal.app coalesces/drops output rather than emulating every cell.
+
+Also carries a locale fix: `/usr/bin/time` prints `0,17` under `nl_NL`, and `awk` uses the locale
+for string-to-number conversion, so a dotted decimal parses as **zero**. The script forces
+`LC_ALL=C` in both the payload and the parser. The first run of the committed script failed with
+"division by zero" for exactly this reason.
+
+### Handoff gaps closed in `CLAUDE.md`
+- `Terminal/Diagnostics/` was a new directory absent from the Project Structure tree; added, along
+  with `ZshStartupWarningFilter` under `Services/`.
+- `TerminalPerf.swift` and `ZshStartupWarningFilter.swift` added to the Key Files table.
+- The workflow section promises a `<!-- NEXT SESSION PLAN -->` block that gets injected into the
+  next session. **That literal marker did not exist** — it was only referenced in prose, and was
+  already missing before this session's work. Added at the Next Session Plan heading so the
+  documented mechanism has something to key on.
+
+### `AGENTS.md` synced
+CLAUDE.md instructs keeping this parallel working-memory file current, and it had not been touched
+since 2026-03-05. It still described renderer/throughput work as the active stream with no mention
+of this profiling work, and carried a six-month-old "uncommitted worktree change" note. Now records
+the three findings, the Debug-vs-Release rule, the instrumentation switch, and the real test
+baseline.
+
+### Files Modified
+- New: `scripts/benchmark-peer-emulator.sh`
+- `docs/Optimization.md`, `docs/FasterThenYouWillEverLiveToBe.md`, `CLAUDE.md`, `AGENTS.md`,
+  `docs/featurelist.md`
+
+### Build/Test
+Docs and one new script only; no app sources touched, so no rebuild was warranted. Script verified
+with `bash -n` and by running both emulator paths end to end.
