@@ -1969,3 +1969,108 @@ open question is PTY delivery. Phase 5's retarget against a peer emulator is now
 `xcodebuild -configuration Release build` → **BUILD SUCCEEDED**. `-configuration Debug build` →
 **BUILD SUCCEEDED**. No source changes, so no test run was warranted; suite baseline stands at
 870 tests, 0 failures.
+
+---
+
+## 2026-09-03 — FasterThenYouWillEverLiveToBe Phases 1, 2, 3 and 5
+
+Phase 1 instrumentation found a defect none of the plan's four ranked hypotheses had named, and
+fixing it took PTY-local throughput from **6.81 → 17.97 MB/s**.
+
+### Phase 1 — runtime-gated instrumentation
+`Terminal/Diagnostics/TerminalPerf.swift` gates the five signposts *and* a set of in-process stage
+timers behind one switch (`--perf-signposts`, `PROSSH_PERF_SIGNPOSTS=1`, or the
+`terminal.perf.signposts` default). Off by default: the shared `OSLog` is `.disabled` (every
+`os_signpost` becomes a no-op) and the timers return after one static `Bool` check.
+
+Instruments could not be scripted end-to-end — no stock template combines Time Profiler with
+Points of Interest, and `xctrace record` takes only a template *name* — so the in-process timers
+became the primary attribution path rather than a supplement to a trace.
+
+Three defects fixed while un-gating: the signpost subsystem was split between `com.prossh` and
+`nl.budgetsoft.ProSSHV2`; the category was `TerminalPerf`/`TerminalRenderer`, so these signposts
+appeared under the *os_signpost* instrument and never under Points of Interest as the docs
+claimed; and the coordinator's `#if DEBUG` block mixed a signpost with an up-to-10×/s `print`
+that had to stay Debug-only.
+
+Verified free: instrumentation off measures 35.69 MB/s parser/grid and 6.78 MB/s PTY-local against
+Phase 0's 36.40 and 6.81 — inside run-to-run spread.
+
+### Phase 2 — answered on the first instrumented run
+```
+pty read          7.61 ms    1.9%
+pty sanitize    364.08 ms   92.6%
+pty handoff     365.31 ms   92.9%
+parse + grid     72.79 ms   18.5%
+snapshot build    0.04 ms    0.0%
+wall            393.27 ms
+```
+**H2 and H3 killed.** Parse does the full 2.67 MB in 72.8 ms — 36.7 MB/s, identical to the
+standalone parser/grid benchmark — so per-byte async dispatch costs nothing measurable here.
+Snapshot build is 0.04 ms.
+
+### Phase 3 — the fix
+`LocalPTYProcess.yieldSanitized` strips zsh's one-off `can't set tty pgrp` startup warning. Its
+"stop scanning" flag was **only ever set if the warning was actually found**, so under any shell
+that never emits it (`sh`, `bash`, the benchmark's `/bin/sh`) the filter ran for the entire
+session, paying per chunk a UTF-8 decode, a concatenation, a case-insensitive `range(of:)`, a
+`lowercased()` copy, up to 23 `String` slice comparisons, and a re-encode back to `Data`.
+
+Extracted to `Services/ZshStartupWarningFilter.swift` — a testable value type, following the
+`BenchmarkSentinelMatcher` precedent — and bounded to the first 32 KB of a session, after which it
+switches off permanently. The warning lands within the first ~100 bytes.
+
+Also fixed in the extraction: when a chunk boundary split a multi-byte character, the old code
+yielded the raw chunk while leaving a buffered partial match in place, emitting bytes out of order.
+
+| PTY-local 2 MB, Release | Before | After |
+|---|---|---|
+| Throughput | 6.81 MB/s | **17.97 MB/s** (2.6x) |
+| `pty sanitize` | 364.08 ms / 92.6% | 4.49 ms / 2.7% |
+| `parse + grid` | 72.79 ms / 18.5% | 72.10 ms / 44.0% |
+| wall | 393.27 ms | 155.66 ms |
+
+Parser/grid unchanged at 36.38 MB/s fullscreen (Phase 0: 36.40), confirming the change is confined
+to the PTY path.
+
+### Phase 5 — retarget (H4 confirmed)
+6 MB of base64 into a real terminal window on this machine, three runs each:
+
+| | Throughput |
+|---|---|
+| Host pipe to `/dev/null` | ~276 MB/s |
+| Host through a PTY (`script -q /dev/null`) | 92–138 MB/s |
+| **Terminal.app** (with rendering) | **21.4–23.1 MB/s** |
+| **iTerm2** (with rendering) | **2.29–2.52 MB/s** |
+| **ProSSHMac PTY-local** (no rendering) | **17.97 MB/s** |
+
+Ghostty and Alacritty are not installed here. The comparison is not like-for-like — peers include
+rendering, ProSSHMac's number does not — but no real emulator on this machine approaches 89 MB/s.
+Target restated as "match or beat Terminal.app end-to-end with rendering on (~22 MB/s here)".
+
+### What is left
+Phase 4 only, and it is optional. The dominant stage is now `parse + grid` at 44% of a 156 ms
+wall; the other ~84 ms is reader/`AsyncStream` overhead (2592 chunks for 2.67 MB is ~1 KB per
+chunk, ~2600 actor hops). The larger unknown is **rendering cost**, which no benchmark here
+measures.
+
+### Files Modified
+- New: `ProSSHMac/Terminal/Diagnostics/TerminalPerf.swift`,
+  `ProSSHMac/Services/ZshStartupWarningFilter.swift`,
+  `ProSSHMacTests/ZshStartupWarningFilterTests.swift` (13 tests)
+- `ProSSHMac/Services/LocalPTYProcess.swift`, `ProSSHMac/App/ThroughputBenchmarkRunner.swift`,
+  `ProSSHMac/Terminal/Parser/TerminalEngine.swift`, `ProSSHMac/Terminal/Grid/TerminalGrid.swift`,
+  `ProSSHMac/Terminal/Grid/TerminalGrid+Snapshot.swift`,
+  `ProSSHMac/Terminal/Renderer/CellBuffer.swift`,
+  `ProSSHMac/Terminal/Renderer/RendererPerformanceMonitor.swift`,
+  `ProSSHMac/Services/TerminalRenderingCoordinator.swift`
+- `docs/Optimization.md`, `docs/FasterThenYouWillEverLiveToBe.md`, `CLAUDE.md`,
+  `docs/featurelist.md`
+
+### Build/Test
+Release and Debug builds succeed. **Full suite: 883 tests, 1 failure.** The failure is
+`SessionManagerRenderingPathTests.testLocalSessionStreamsProgressiveCommandOutput`, which spawns a
+real `/bin/zsh` and times out at 8s under full-suite load. Verified pre-existing: it fails
+identically at the previous commit (870 tests, 1 failure, same test) and passes 3/3 in isolation
+both before and after these changes. The CLAUDE.md "870 tests, 0 failures" line does not reproduce
+today.

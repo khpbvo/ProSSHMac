@@ -1,17 +1,22 @@
 # Terminal Throughput Optimization Checklist
 
-**Target:** `dd if=/dev/urandom bs=1024 count=100000 | base64` completes in 1.5 seconds (~89 MB/s throughput).
+**Target:** ~~`dd if=/dev/urandom bs=1024 count=100000 | base64` in 1.5 seconds (~89 MB/s)~~ —
+**superseded 2026-09-03.** That number is a pipe baseline with no terminal emulation and is not
+reachable by any real emulator on this machine. Proposed replacement: **match or beat Terminal.app
+end-to-end with rendering on (~22 MB/s here)**. See "Phase 5 — retarget against peer emulators".
 
-**Current (Release, 2026-09-03):** **36.40 MB/s** fullscreen, **35.85 MB/s** partial scroll
+**Current (Release, 2026-09-03):** **36.38 MB/s** fullscreen, **35.16 MB/s** partial scroll
 (2 MB parser/grid benchmark). **Sustained 32 MB:** **36.08 MB/s** fullscreen, **35.62 MB/s** partial.
-**PTY local:** **6.81 MB/s** average (2 MB).
+**PTY local:** **17.97 MB/s** (2 MB) — was 6.81 MB/s before the zsh-warning scan was bounded.
 
 **Current (Debug, 2026-09-03):** **1.84 MB/s** fullscreen, **1.82 MB/s** partial scroll (2 MB).
 **PTY local:** **1.74 MB/s**. Debug is **~20x slower** than Release — see the Release-vs-Debug
 section below. Every number recorded in this document before 2026-09-03 is a Debug number.
 
-**Remaining gap to target:** **2.4x** on parser/grid, **13.1x** end-to-end through the PTY.
-The dominant remaining cost is no longer the parser or the grid — it is the PTY read path.
+**Target under revision.** The 89 MB/s figure comes from a pipe that does no terminal emulation.
+Measured here, the fastest peer emulator (Terminal.app) does **22.2 MB/s** with rendering and
+iTerm2 does **2.44 MB/s**; see "Phase 5 — retarget" below. Against that, ProSSHMac's 17.97 MB/s
+PTY-local (rendering excluded) is in the same league as the fastest peer.
 
 **Previous (all Debug):** ~220 KB/s initial estimate → 1.13 MB/s post-merge → 1.34 MB/s post-ring → 1.70 MB/s post-pack → 1.60/1.37 MB/s pre-rotation optimization.
 
@@ -118,6 +123,67 @@ the engine actor — so percentages do not partition wall time.
 365 ms, of which 364 ms is the sanitizer itself, so the hop costs ~1 ms across 2776 chunks. Actual
 reading is 7.6 ms. The parser does the full 2.67 MB in 72.8 ms — **36.7 MB/s, matching the
 standalone parser/grid benchmark exactly**. The parser was never the problem in the PTY path.
+
+### Phase 3 — the fix: bound the zsh startup-warning scan
+
+`LocalPTYProcess.yieldSanitized` stripped zsh's one-off `can't set tty pgrp` startup warning. Its
+"stop scanning" flag was only ever set **if the warning was actually found** — so under any shell
+that never emits it (`sh`, `bash`, and the benchmark's `/bin/sh`) the filter ran on every chunk for
+the entire session, doing per chunk: a `String(data:encoding:.utf8)` decode, a concatenation, a
+case-insensitive `range(of:)`, a `lowercased()` copy of the whole chunk, up to 23 `String`
+slice comparisons, and a re-encode back to `Data`.
+
+Extracted to `Services/ZshStartupWarningFilter.swift` (a testable value type, following the
+`BenchmarkSentinelMatcher` precedent) and **bounded to the first 32 KB of a session**, after which
+it switches off permanently. The warning lands within the first ~100 bytes, so the budget is
+several hundred times larger than needed.
+
+Also fixed in the extraction: when a chunk boundary split a multi-byte character the old code
+yielded the raw chunk while leaving a buffered partial match in place, emitting those bytes out of
+order. The filter now flushes its carry first.
+
+| PTY-local 2 MB, Release | Before | After |
+|---|---|---|
+| Throughput | 6.81 MB/s | **17.97 MB/s** (**2.6x**) |
+| `pty sanitize` | 364.08 ms / 92.6% | **4.49 ms / 2.7%** (88 calls, then off) |
+| `parse + grid` | 72.79 ms / 18.5% | 72.10 ms / 44.0% |
+| wall | 393.27 ms | **155.66 ms** |
+
+Parser/grid is unchanged at 36.38 MB/s fullscreen (Phase 0: 36.40), confirming the change is
+confined to the PTY path. Full suite: 883 tests, 1 failure — `testLocalSessionStreamsProgressive
+CommandOutput`, which fails identically at the previous commit under full-suite load and passes
+in isolation. 13 new tests cover the filter, which had none.
+
+**The dominant stage is now `parse + grid` at 44% of wall.** The remaining ~84 ms is the reader
+loop and `AsyncStream` delivery: 2592 chunks for 2.67 MB is ~1 KB per chunk, so the path pays
+~2600 actor hops. That is the next target if this work continues.
+
+### Phase 5 — retarget against peer emulators
+
+The 89 MB/s target derives from `dd | base64` piped to `/dev/null`, which does no terminal
+emulation. Measured on this machine, 6 MB of base64 written to a real terminal window, three runs:
+
+| Emulator | Throughput | Notes |
+|---|---|---|
+| Host pipe to `/dev/null` | ~276 MB/s | no emulation, no PTY |
+| Host through a PTY (`script -q /dev/null`) | 92–138 MB/s | PTY, no emulation |
+| **Terminal.app** | **21.4–23.1 MB/s** (mean 22.2) | with rendering |
+| **iTerm2** | **2.29–2.52 MB/s** (mean 2.44) | with rendering |
+| **ProSSHMac PTY-local** | **17.97 MB/s** | parse + grid only, **no rendering** |
+| ProSSHMac parser/grid only | 36.38 MB/s | no PTY, no rendering |
+
+Ghostty and Alacritty are not installed on this machine; Terminal.app and iTerm2 were the
+available peers.
+
+**The comparison is not like-for-like** — the peer numbers include rendering and ProSSHMac's do
+not, so ProSSHMac's figure is flattered. Terminal.app also coalesces and drops output rather than
+emulating every cell, which is part of why it is fast.
+
+Even so the calibration is clear: **no real emulator on this machine comes close to 89 MB/s.** The
+fastest peer does 22 MB/s with rendering. A defensible target is to **match or beat Terminal.app
+end-to-end with rendering on**, i.e. ~22 MB/s — not 89 MB/s. ProSSHMac is now at 17.97 MB/s
+without rendering, so the honest statement is that it is in the same league as the fastest peer
+and roughly 7x faster than iTerm2, with the rendering cost still unmeasured.
 
 ### Commands
 

@@ -14,8 +14,7 @@ actor LocalPTYProcess {
     private let continuation: AsyncStream<Data>.Continuation
     private var readerTask: Task<Void, Never>?
     private var isClosed = false
-    private var didSuppressZshTTYPgrpWarning = false
-    private var zshWarningPrefixCarry = ""
+    private var zshWarningFilter = ZshStartupWarningFilter()
 
     // MARK: - Spawn
 
@@ -246,63 +245,29 @@ actor LocalPTYProcess {
     }
 
     private func yield(_ data: Data) { continuation.yield(data) }
-    private func yieldSanitized(_ data: Data) {
-        let sanitizeStart = TerminalPerf.now()
-        defer { TerminalPerf.record(.ptySanitize, since: sanitizeStart, byteCount: data.count) }
 
-        guard !didSuppressZshTTYPgrpWarning,
-              let chunk = String(data: data, encoding: .utf8) else {
+    /// Forward PTY output, stripping zsh's one-off startup warning.
+    ///
+    /// Once the filter has switched off (warning found, or its byte budget
+    /// spent) this is a straight passthrough — see `ZshStartupWarningFilter`
+    /// for why that matters.
+    private func yieldSanitized(_ data: Data) {
+        guard zshWarningFilter.isScanning else {
             continuation.yield(data)
             return
         }
 
-        let warningMarker = "zsh: can't set tty pgrp:"
-        var text = zshWarningPrefixCarry + chunk
-        zshWarningPrefixCarry.removeAll(keepingCapacity: false)
+        let sanitizeStart = TerminalPerf.now()
+        defer { TerminalPerf.record(.ptySanitize, since: sanitizeStart, byteCount: data.count) }
 
-        if let markerRange = text.range(of: warningMarker, options: [.caseInsensitive]) {
-            let lineStart = text[..<markerRange.lowerBound].lastIndex(of: "\n")
-                .map { text.index(after: $0) } ?? text.startIndex
-            let lineEnd = text[markerRange.upperBound...].firstIndex(of: "\n")
-                .map { text.index(after: $0) } ?? text.endIndex
-
-            text.removeSubrange(lineStart..<lineEnd)
-            didSuppressZshTTYPgrpWarning = true
-            if !text.isEmpty {
-                continuation.yield(Data(text.utf8))
-            }
-            return
+        zshWarningFilter.process(data) { [continuation] out in
+            continuation.yield(out)
         }
-
-        let lowercaseText = text.lowercased()
-        let markerLowercase = warningMarker.lowercased()
-        let maxSuffixLength = min(lowercaseText.count, markerLowercase.count - 1)
-        var carryLength = 0
-
-        if maxSuffixLength > 0 {
-            for length in stride(from: maxSuffixLength, through: 1, by: -1) {
-                if lowercaseText.suffix(length) == markerLowercase.prefix(length) {
-                    carryLength = length
-                    break
-                }
-            }
-        }
-
-        if carryLength == 0 {
-            continuation.yield(Data(text.utf8))
-            return
-        }
-
-        let emitCount = text.count - carryLength
-        if emitCount > 0 {
-            continuation.yield(Data(text.prefix(emitCount).utf8))
-        }
-        zshWarningPrefixCarry = String(text.suffix(carryLength))
     }
+
     private func finish() {
-        if !zshWarningPrefixCarry.isEmpty {
-            continuation.yield(Data(zshWarningPrefixCarry.utf8))
-            zshWarningPrefixCarry.removeAll(keepingCapacity: false)
+        zshWarningFilter.finish { [continuation] out in
+            continuation.yield(out)
         }
         continuation.finish()
     }
