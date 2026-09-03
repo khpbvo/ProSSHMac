@@ -257,10 +257,27 @@ actor TerminalEngine {
         }
 
         // Guard: in string states, 0x9C may be a UTF-8 continuation byte
-        // rather than a real C1 ST. Skip the table lookup if mid-sequence.
+        // rather than a real C1 ST. Skip the table lookup if mid-sequence — but still
+        // collect the byte, otherwise it is silently dropped from the string and the
+        // surrounding multi-byte character decodes as invalid UTF-8 (e.g. "✳" = E2 9C B3
+        // became E2 B3, which made OSC title dispatch fail outright).
         if byte == 0x9C && stringUTF8Remaining > 0 {
             switch state {
-            case .oscString, .dcsPassthrough, .sosPmApcString:
+            case .oscString:
+                if oscString.count < ParserLimits.maxOSCLength {
+                    oscString.append(byte)
+                }
+                updateStringUTF8State(with: byte)
+                return
+            case .dcsPassthrough:
+                if dcsData.count < ParserLimits.maxDCSLength {
+                    dcsData.append(byte)
+                }
+                updateStringUTF8State(with: byte)
+                return
+            case .sosPmApcString:
+                // SOS/PM/APC payloads are discarded; only keep the counter honest.
+                updateStringUTF8State(with: byte)
                 return
             default:
                 break

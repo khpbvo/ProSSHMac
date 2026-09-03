@@ -82,16 +82,20 @@ final class UnicodeRenderTest: IntegrationTestBase {
 
     // MARK: F.14.3 — Emoji
 
-    /// Feed 3 emoji. Current implementation treats emoji as single-width
-    /// (wide char detection covers CJK only). Verify they are stored correctly.
+    /// Feed 3 emoji. `CharacterWidth` classifies these codepoints as width=2,
+    /// so each occupies two columns with a continuation cell after it.
     func testEmoji() async {
         await feed("🌍🚀💻")
 
-        // Emoji width detection is not yet implemented — they occupy 1 col each
-        let emoji: [(String, Int)] = [("🌍", 0), ("🚀", 1), ("💻", 2)]
+        // Width=2: each emoji starts on an even column and owns the next one.
+        let emoji: [(String, Int)] = [("🌍", 0), ("🚀", 2), ("💻", 4)]
         for (expected, col) in emoji {
             let ch = await charAt(row: 0, col: col)
             XCTAssertEqual(ch, expected, "Emoji '\(expected)' at col \(col)")
+
+            let continuation = await grid.cellAt(row: 0, col: col + 1)
+            XCTAssertEqual(continuation?.width, 0,
+                           "Column \(col + 1) should be a wide-char continuation cell")
         }
     }
 

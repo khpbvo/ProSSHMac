@@ -358,11 +358,13 @@ final class Base32Tests: XCTestCase {
         XCTAssertEqual(Base32.encode(Data()), "")
     }
 
-    func testDecodeEmpty() throws {
-        let result = try Base32.decode("")
-        // Empty after stripping produces an error
-        // Actually let's check
-        XCTAssertTrue(result.isEmpty || true) // decode of empty throws
+    func testDecodeEmpty() {
+        // An empty string is not a usable TOTP secret, so decoding rejects it.
+        XCTAssertThrowsError(try Base32.decode("")) { error in
+            guard case TOTPConfiguration.ParseError.invalidBase32Secret = error else {
+                return XCTFail("Expected .invalidBase32Secret, got \(error)")
+            }
+        }
     }
 
     func testRoundTrip() throws {

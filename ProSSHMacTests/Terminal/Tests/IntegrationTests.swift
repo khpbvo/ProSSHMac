@@ -69,6 +69,28 @@ class IntegrationTestBase: XCTestCase {
         return cell?.attributes ?? []
     }
 
+    /// Assert that a cell colour *renders* as the expected colour.
+    ///
+    /// `TerminalCell` stores only packed RGBA — the semantic `TerminalColor` is
+    /// reconstructed by a reverse palette lookup, so representations that share an
+    /// RGB value are indistinguishable after a write (`.indexed(15)` and
+    /// `.indexed(231)` are both #FFFFFF; `.rgb(0, 0, 0)` decodes as `.indexed(16)`).
+    /// Comparing rendered RGB keeps these assertions meaningful without asserting a
+    /// representation the storage no longer keeps.
+    @nonobjc
+    func XCTAssertRendersAs(
+        _ actual: TerminalColor,
+        _ expected: TerminalColor,
+        _ message: String = "",
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        func rgb(_ color: TerminalColor) -> [UInt8]? {
+            color.resolvedRGB().map { [$0.r, $0.g, $0.b] }
+        }
+        XCTAssertEqual(rgb(actual), rgb(expected), message, file: file, line: line)
+    }
+
     /// Read a string from a row spanning columns [startCol, endCol).
     @nonobjc
     func rowText(row: Int, startCol: Int = 0, endCol: Int? = nil) async -> String {

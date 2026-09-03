@@ -78,16 +78,21 @@ Before every implementation phase, plan mode is enabled. The plan should:
 ## Project Overview
 
 **ProSSHMac** is a native macOS SSH/terminal client built with SwiftUI + Metal.
+Deployment target: macOS 26.0. Swift 6 language mode (`SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`).
 
 Key capabilities:
-- Metal-rendered terminal (custom glyph atlas, GPU cell buffer, cursor animation)
-- SSH connections via libssh (C wrapper in `CLibSSH/`)
+- Metal-rendered terminal (glyph atlas + cache, GPU cell buffer, cursor animation, smooth scrolling)
+- SSH connections via libssh (C wrapper in `CLibSSH/`, vendored libs in `Vendor/`)
 - Local shell sessions via PTY (`LocalPTYProcess` + `LocalShellBootstrap`)
 - SFTP file browser sidebar (left, toggle `Cmd+B`)
 - AI Terminal Copilot sidebar (right, toggle `Cmd+Opt+I`) — multi-provider LLM support
-- Pane splitting, session tabs, broadcast input routing, session recording/playback
-- KeyForge (SSH key generation), certificate management, port forwarding
-- Visual effects: CRT scanlines, barrel distortion, gradient glow, matrix screensaver
+- Pane splitting, session tabs, broadcast input routing (`Cmd+Shift+B`), session recording/playback
+- KeyForge (SSH key generation), certificate management + KRL, port forwarding
+- TOTP 2FA (`TOTPStore`/`TOTPGenerator`), biometric password store, Secure Enclave keys
+- `~/.ssh/config` import/export, Spotlight host indexing, App Intents / Shortcuts
+- Shell integration (command blocks, history index, prompt marks)
+- Visual effects: CRT scanlines, barrel distortion, gradient glow, bloom/text glow,
+  bold-text color, scanner, transparency, bell, matrix + idle screensaver
 - AI tools: `apply_patch` (V4A diff), `send_input` (interactive prompts), broadcast-aware execution
 
 ---
@@ -96,17 +101,31 @@ Key capabilities:
 
 ```bash
 # Build
-xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build
+xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform=macOS' build
 
 # Run all tests
-xcodebuild -scheme ProSSHMac -destination 'platform=macOS' test
+xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform=macOS' test
 
 # Run specific test suite
-xcodebuild -scheme ProSSHMac -destination 'platform=macOS' test -only-testing:ProSSHMacTests/<TestClassName>
+xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform=macOS' test \
+  -only-testing:ProSSHMacTests/<TestClassName>
+
+# Throughput benchmarks
+./scripts/benchmark-throughput.sh --benchmark-bytes 2097152 --benchmark-runs 3 --no-build
+./scripts/benchmark-throughput.sh --pty-local --benchmark-bytes 2097152 --benchmark-runs 3 --no-build
+./scripts/benchmark-ssh.sh --host <hostname> --user <username>
 ```
 
-- Test bundle: `ProSSHMacTests`. Most test files still compiled under app sources (migration ongoing).
-- Known: some tests require host app process; 2 pre-existing test failures (unrelated baseline).
+- Test bundle: `ProSSHMacTests` — 4 files at the bundle root plus 47 in `ProSSHMacTests/Terminal/Tests/`.
+  Migration out of the app target is **complete**; no test sources remain under `ProSSHMac/`.
+- Some tests require the host app process (UI/AppKit-backed suites).
+- **Full-suite baseline (2026-09-03): 870 tests, 0 failures.** The suite is green — a red run
+  means something you touched, not pre-existing noise.
+- Tests must not depend on the developer's real `UserDefaults`. `LLMProviderRegistry` takes an
+  injectable `userDefaults:`; agent tests build one via `makeIsolatedOpenAIRegistry()` in
+  `AIAgentServiceTests.swift`. Follow that pattern for any new defaults-backed type.
+- Throughput baseline (2026-08-27): ~1.68 MB/s fullscreen, ~1.82 MB/s partial scroll (2 MB parser/grid);
+  ~1.69 MB/s PTY-local. See `docs/Optimization.md`.
 
 ---
 
@@ -114,32 +133,59 @@ xcodebuild -scheme ProSSHMac -destination 'platform=macOS' test -only-testing:Pr
 
 ```
 ProSSHMac/
-├── App/                  # App entry, dependencies, navigation coordinator
-├── CLibSSH/              # C wrapper around libssh (ProSSHLibSSHWrapper.c/.h)
-├── Models/               # Host, Session, Transfer, SSHKey, SSHCertificate, AuditLogEntry
-├── Services/             # SessionManager, TransferManager, EncryptedStorage, PortForwardingManager,
-│   │                     #   LocalPTYProcess, LocalShellBootstrap,
-│   │                     #   OpenAIResponsesPayloadTypes, OpenAIResponsesStreamAccumulator
-│   ├── SSH/              #   LibSSHTransport, MockSSHTransport, SSHCredentialResolver, RemotePath
-│   ├── AI/               #   AIToolHandler, AIAgentRunner, AIToolDefinitions, ApplyPatchTool
-│   └── LLM/             #   LLMTypes, LLMProvider, LLMProviderRegistry, LLMAPIKeyStore
+├── ProSSHMacApp.swift    # @main entry, Spotlight indexer wiring
+├── ContentView.swift
+├── App/                  # AppDependencies, AppNavigationCoordinator, AppAppearance,
+│   │                     #   AppLaunchCommandStore, ThroughputBenchmarkRunner
+├── AppIntents/           # ProSSHShortcuts (App Intents / Siri Shortcuts)
+├── CLibSSH/              # C wrapper around libssh (ProSSHLibSSHWrapper.c/.h, bridging header)
+├── Models/               # Host, Session, Transfer, SSHKey, SSHCertificate, AuditLogEntry,
+│   │                     #   TOTPConfiguration
+├── Services/             # SessionManager (+Queries) + 7 coordinators, TransferManager,
+│   │                     #   EncryptedStorage, PersistentStore, PortForwardingManager,
+│   │                     #   LocalPTYProcess, LocalShellBootstrap, LocalShellChannel,
+│   │                     #   KeyForgeService, KeyStore, KnownHostsStore, CertificateStore,
+│   │                     #   CertificateAuthorityService (+3 ext), AuditLogManager/Store,
+│   │                     #   TOTPGenerator/Store, BiometricPasswordStore, SecureEnclaveKeyManager,
+│   │                     #   HostStore, HostSpotlightIndexer, SSHConfig{Parser,Mapper,Importer,
+│   │                     #   Exporter,TokenExpander}, OpenAIAgentService, OpenAIResponses*
+│   ├── SSH/              #   LibSSHTransport, LibSSH{Shell,Forward}Channel, MockSSHTransport,
+│   │                     #   SSHTransportProtocol/Types, SSHAlgorithmPolicy, SSHCredentialResolver,
+│   │                     #   SSHBinaryReader, RemotePath
+│   ├── AI/               #   AIToolHandler (+5 ext), AIAgentRunner, AIToolDefinitions,
+│   │                     #   AIConversationContext, ApplyPatchTool, UnifiedDiffPatcher, apply_diff
+│   └── LLM/              #   LLMTypes, LLMProvider, LLMProviderRegistry, LLMAPIKeyStore
 │       └── Providers/    #   ChatCompletionsClient, Mistral/Ollama/Anthropic/DeepSeek providers
 ├── Terminal/
-│   ├── Grid/             # TerminalGrid + 11 extensions, TerminalCell, ScrollbackBuffer
-│   ├── Parser/           # VT parser, CSIHandler, OSCHandler, SGRHandler, ESCHandler, DCSHandler
-│   ├── Input/            # KeyEncoder, MouseEncoder, HardwareKeyHandler, LocalTerminalSubsystem
-│   ├── Renderer/         # MetalTerminalRenderer + 8 extensions, GlyphAtlas, CellBuffer, Shaders.metal
-│   ├── Effects/          # CRT, gradient, scanner, blink, transparency, bell, PromptAppearance
-│   └── Features/         # PaneManager, SessionTabManager, TerminalSearch, QuickCommands, SessionRecorder
+│   ├── Grid/             # TerminalGrid + 11 extensions, TerminalCell, CursorState, CharacterWidth,
+│   │                     #   GridReflow, GridSnapshot, ScrollbackBuffer
+│   ├── Parser/           # TerminalEngine, VTParserTables, VTConstants, CSI/OSC/SGR/ESC/DCS/Charset
+│   ├── Input/            # KeyEncoder, MouseEncoder, HardwareKeyHandler, LocalTerminalSubsystem,
+│   │                     #   InputModeState, PasteHandler, KeyboardToolbar
+│   ├── Renderer/         # MetalTerminalRenderer + 8 extensions, TerminalMetalView, CellBuffer,
+│   │                     #   GlyphAtlas/Cache/Rasterizer, FontManager, Cursor/SelectionRenderer,
+│   │                     #   SmoothScrollEngine, TerminalUniforms, TerminalShaders.metal,
+│   │                     #   RendererPerformanceMonitor, RendererStressHarness
+│   ├── Effects/          # CRT, gradient, bloom, scanner, cursor, transparency, bell, resize,
+│   │                     #   BoldTextColor, SmoothScrollConfiguration, ScrollIndicator,
+│   │                     #   LinkDetector, PromptAppearance, Matrix + IdleScreensaver
+│   └── Features/         # PaneManager, SplitNode, PaneLayoutStore, SessionTabManager,
+│                         #   TerminalSearch, QuickCommands, SessionRecorder, CommandBlock,
+│                         #   ShellIntegrationScripts, TerminalHistoryIndex, TerminalFileBrowserTree
 ├── UI/
-│   ├── Terminal/         # TerminalView (1,002L), TerminalAIAssistantPane, MetalTerminalSessionSurface,
-│   │                     #   TerminalInputCaptureView, ExternalTerminalWindowView, PatchApprovalCardView
-│   ├── Hosts/            # HostsView, HostFormView
+│   ├── Terminal/         # 21 files: TerminalView, TerminalSurfaceView, MetalTerminalSessionSurface,
+│   │                     #   TerminalPaneView/SplitNodeView/PaneDividerView, TerminalAIAssistantPane,
+│   │                     #   PatchApprovalCardView, TerminalFileBrowserSidebar, session tab/header/
+│   │                     #   actions/metadata bars, search bar, scrollbar, quick commands,
+│   │                     #   TerminalInputCaptureView, ExternalTerminalWindowView, MatrixScreensaverView,
+│   │                     #   TerminalKeyboardShortcutLayer, TerminalSidebarLayoutStore
+│   ├── Hosts/            # HostsView, HostFormView, PortForwardingRuleEditor, SSHConfigImportPreviewView
 │   ├── Transfers/        # TransfersView
-│   ├── Settings/         # SettingsView + effect settings subviews
+│   ├── Settings/         # SettingsView + 8 effect settings subviews
 │   ├── KeyForge/         # KeyForgeView, KeyInspectorView
 │   └── Certificates/     # CertificatesView, CertificateInspectorView
-├── ViewModels/           # HostListVM, KeyForgeVM, CertificatesVM, AIProviderSettingsVM, TerminalAIAssistantVM
+├── ViewModels/           # HostListVM, KeyForgeVM, CertificatesVM, AIProviderSettingsVM,
+│                         #   TerminalAIAssistantVM
 └── Platform/             # PlatformCompatibility (macOS/iOS shims)
 ```
 
@@ -147,65 +193,130 @@ ProSSHMac/
 
 ## Key Files
 
-All paths relative to repo root, under `ProSSHMac/`.
+All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-09-03.
 
 | File / Group | What it does |
 |---|---|
-| `UI/Terminal/TerminalView.swift` | Main terminal UI, sidebar layout, focus, input capture (1,002L) |
-| `UI/Terminal/TerminalAIAssistantPane.swift` | AI copilot sidebar, composer, message rendering (~781L) |
-| `UI/Terminal/PatchApprovalCardView.swift` | Inline patch approval card for `apply_patch` |
-| `UI/Terminal/MetalTerminalSessionSurface.swift` | SwiftUI-Metal bridge, snapshot application, selection |
-| `UI/Terminal/TerminalInputCaptureView.swift` | NSViewRepresentable keyboard bridge for local sessions (~423L) |
-| `UI/Terminal/ExternalTerminalWindowView.swift` | Separate-window terminal session view (~316L) |
-| `Terminal/Renderer/MetalTerminalRenderer.swift` + 8 extensions | Metal renderer (331L): glyph resolution, snapshot update, font management, draw loop, view config, selection, post-processing, diagnostics |
-| `Terminal/Renderer/TerminalMetalView.swift` | NSViewRepresentable wrapping MTKView, gesture recognizers |
+| `Services/AI/AIToolHandler.swift` + 5 extensions | Tool dispatch (1,119L) — largest file. Extensions: ArgumentParsing, RemoteExecution, LocalFilesystem, InteractiveInput, OutputHelpers |
+| `UI/Terminal/TerminalView.swift` | Main terminal UI, sidebar layout, focus, input capture (1,066L) |
+| `Services/SessionManager.swift` + Queries | Session lifecycle, shell I/O, SFTP, grid snapshots (1,017L) |
+| `UI/Terminal/TerminalAIAssistantPane.swift` | AI copilot sidebar, composer, message rendering (966L) |
+| `Services/TerminalRenderingCoordinator.swift` | Snapshot publishing, scroll state, resize debounce, alt-buffer policy (958L) |
+| `Services/SSH/LibSSHTransport.swift` | LibSSH transport actor (822L); channels in `LibSSHShellChannel`/`LibSSHForwardChannel` |
+| `Terminal/Parser/TerminalEngine.swift` | VT parser hot path, merged parse/apply loop (733L) |
+| `Terminal/Renderer/MetalTerminalRenderer.swift` + 8 extensions | Metal renderer (496L): glyph resolution, snapshot update, font management, draw loop, view config, selection, post-processing, diagnostics |
+| `Terminal/Renderer/SmoothScrollEngine.swift` | CPU scroll physics, rubber-band, jumpTo, frame-rate independence |
 | `Terminal/Grid/TerminalGrid.swift` + 11 extensions | Grid state (457L): modes, OSC, tabs, cursor, scroll, erase, line ops, screen buffer, lifecycle, printing, snapshot |
-| `Services/SessionManager.swift` + Queries | Session lifecycle, shell I/O, SFTP, grid snapshots (969L) |
-| `Services/Session*Coordinator.swift` (7 files) | Extracted coordinators: AITool, SFTP, ShellIO, Reconnect, Keepalive, Rendering, Recording |
-| `Services/SSH/LibSSHTransport.swift` | LibSSH transport actor (~797L) |
-| `Services/OpenAIAgentService.swift` | Agent-layer protocols, provider routing (~290L) |
-| `Services/AI/AIToolHandler.swift` + 4 extensions | Tool dispatch (~503L), arg parsing, remote exec, local filesystem, output helpers |
-| `Services/AI/AIToolDefinitions.swift` | Developer prompt, tool schemas (~373L) |
-| `Services/AI/AIAgentRunner.swift` | Agent iteration loop, timeout, provider mismatch (~195L) |
-| `Services/AI/ApplyPatchTool.swift` | PatchApprovalTracker, LocalWorkspacePatcher, RemotePatchCommandBuilder (~456L) |
-| `Services/AI/UnifiedDiffPatcher.swift` | V4A unified diff parser and applicator (~370L) |
+| `Services/Session*Coordinator.swift` (6) + `TerminalRenderingCoordinator.swift` | 7 extracted coordinators: AITool, SFTP, ShellIO, Reconnect, Keepalive, Recording, Rendering |
+| `Services/AI/ApplyPatchTool.swift` | PatchApprovalTracker, LocalWorkspacePatcher, RemotePatchCommandBuilder (605L) |
+| `Services/AI/UnifiedDiffPatcher.swift` | V4A unified diff parser and applicator (491L) |
+| `UI/Terminal/MetalTerminalSessionSurface.swift` | SwiftUI-Metal bridge, snapshot application, selection, tap-to-deselect (406L) |
+| `UI/Terminal/TerminalInputCaptureView.swift` | NSViewRepresentable keyboard bridge for local sessions (422L) |
+| `Terminal/Features/PaneManager.swift` | Split-pane tree, input routing, broadcast/solo mode (444L) |
+| `UI/Terminal/ExternalTerminalWindowView.swift` | Separate-window terminal session view (341L) |
+| `Services/AI/AIToolDefinitions.swift` | Developer prompt, 8 tool schemas, direct-action filter, error helpers (320L) |
+| `Services/OpenAIAgentService.swift` | Agent-layer protocols, provider routing, tool definition assembly (317L) |
+| `Services/LocalPTYProcess.swift` | Actor wrapping forkpty, async output stream (301L) |
+| `Services/AI/AIAgentRunner.swift` | Agent iteration loop, direct-action mode, provider mismatch (249L) |
+| `Terminal/Renderer/TerminalMetalView.swift` | NSViewRepresentable wrapping MTKView, gesture recognizers (239L) |
+| `ViewModels/AIProviderSettingsViewModel.swift` | Multi-provider settings VM (236L) |
+| `Services/LocalShellBootstrap.swift` | Child env for local PTY, ZDOTDIR/BASH_ENV injection (202L) |
+| `ViewModels/TerminalAIAssistantViewModel.swift` | AI sidebar VM: messages, streaming, patch approval (379L) |
+| `UI/Terminal/PatchApprovalCardView.swift` | Inline patch approval card for `apply_patch` (177L) |
+| `App/ThroughputBenchmarkRunner.swift` | Parser/grid + PTY-local benchmarks, `BenchmarkSentinelMatcher` |
 | `Services/LLM/` (4 files) | LLMTypes, LLMProvider protocol, LLMProviderRegistry, LLMAPIKeyStore |
 | `Services/LLM/Providers/` (5 files) | ChatCompletionsClient, Mistral/Ollama/Anthropic/DeepSeek providers |
-| `Services/LocalPTYProcess.swift` | Actor wrapping forkpty, async output stream (~302L) |
-| `Services/LocalShellBootstrap.swift` | Child env for local PTY, ZDOTDIR/BASH_ENV injection (~203L) |
-| `ViewModels/TerminalAIAssistantViewModel.swift` | AI sidebar VM: messages, streaming, patch approval (~379L) |
-| `ViewModels/AIProviderSettingsViewModel.swift` | Multi-provider settings VM (~175L) |
-| `Terminal/Features/PaneManager.swift` | Split-pane tree, input routing, broadcast/solo mode |
 
 ---
 
 ## Architecture Conventions
 
 - **ObservableObject + @StateObject** throughout (not `@Observable`).
-- **Metal rendering**: `MTKView` display-link auto-pauses when idle (`isPaused = true` in draw loop early-exit). Cursor blink driven by a ~15fps `Task` loop in `MetalTerminalRenderer+ViewConfiguration.swift`. Dirty flag skips redundant draws.
-- **Grid snapshot flow**: `TerminalGrid.snapshot()` → `SessionManager` nonce++ → SwiftUI `.onChange` → `MetalTerminalRenderer.updateSnapshot()` → `isDirty = true`.
+- **Metal rendering**: demand-driven `MTKView` (`enableSetNeedsDisplay = true`, `isPaused = true`).
+  `requiresContinuousFrames()` aggregates cursor lerp, smooth scroll, scanner, gradient animation;
+  all redraw triggers go through `requestFrame()`. Dirty flag skips redundant draws.
+- **Grid snapshot flow**: `TerminalGrid.snapshot()` → `SessionManager` nonce++ → SwiftUI `.onChange` →
+  `MetalTerminalRenderer.updateSnapshot()` → `isDirty = true`.
 - **Terminal keyboard input**: `DirectTerminalInputNSView` (transparent NSView overlay, `hitTest` returns `nil`).
-- **Focus management**: `isAIAssistantComposerFocused` state. `focusSessionAndPane()` resigns at AppKit level, then re-arms terminal. See Known Issues.
-- **AI service stack**: `OpenAIAgentService.sendProviderRequest()` routes by `providerRegistry.activeProviderID`. OpenAI → Responses API; others → `LLMProvider` protocol. Provider-agnostic types in `LLMTypes.swift`. See `docs/multiprovider-architecture.md`.
-- **AI agent tools**: 11 tools (9 primary + `apply_patch` + `send_input`). Error format: `{ok:false, error, hint}`. Max iterations: 50 (app: 200). See `AIToolDefinitions.swift`.
-- **`apply_patch` remote flow**: base64 read → V4A in-process diff → base64 heredoc write. See `docs/RemotePatchingFix.md`.
-- **`nonisolated` on TerminalGrid extensions**: `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` makes extension methods default to `@MainActor`. All `TerminalGrid+*.swift` methods MUST be explicitly `nonisolated`.
-- **Coordinator pattern**: `SessionManager` delegates to 7 `@MainActor final class` coordinators, each with `weak var manager`.
-- **Input routing**: `InputRoutingMode` (.singleFocus/.broadcast/.selectGroup) in `PaneManager`. Solo mode: Option+Click in broadcast → single-pane input. `Cmd+Shift+B` toggles broadcast/ends solo. See `docs/Issue15.md`.
-- **AI broadcast**: `BroadcastContext` threads through ViewModel → AgentService → Runner → ToolHandler. `target_session` on all tools. See `docs/AIBroadCaster.md`.
-- **Local PTY**: `LocalPTYProcess` (actor, forkpty) + `LocalShellBootstrap` (env, ZDOTDIR). `LocalTerminalSubsystem` translates NSEvent → PTY bytes.
-- **`nonisolated deinit`**: Required on types with actor-isolated context that may deallocate in non-task contexts (`V4AParserState`, `SessionTabManager`, `PaneManager`).
+- **Focus management**: `isAIAssistantComposerFocused` state. `focusSessionAndPane()` resigns at AppKit
+  level, then re-arms terminal. See Known Issues.
+- **AI service stack**: `OpenAIAgentService.sendProviderRequest()` routes by
+  `providerRegistry.activeProviderID`. OpenAI → Responses API; others → `LLMProvider` protocol.
+  Provider-agnostic types in `LLMTypes.swift`. See `docs/multiprovider-architecture.md`.
+- **AI agent tools**: 10 exposed schemas — 8 in `AIToolDefinitions` (`get_command_output`,
+  `get_current_screen`, `search_filesystem`, `search_file_contents`, `read_files`,
+  `get_recent_commands`, `execute_command`, `execute_and_wait`) plus `apply_patch` (gated on
+  `patchToolEnabled`) and `send_input`. The handler also accepts the legacy/internal names
+  `read_file_chunk`, `get_session_info`, and the `search_terminal_history` alias.
+  Error format: `{ok:false, error, hint}`.
+- **Direct-action mode**: prompts starting `run `/`execute `/`cd ` filter to 8 tools and cap
+  iterations at `min(maxToolIterations, 15)` (`AIAgentRunner`). Default `maxToolIterations` is 50;
+  `AppDependencies` constructs the service with **200**.
+- **`apply_patch` remote flow**: base64 read → V4A in-process diff → base64 heredoc write.
+  See `docs/RemotePatchingFix.md`.
+- **`nonisolated` on TerminalGrid extensions**: `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` makes
+  extension methods default to `@MainActor`. All `TerminalGrid+*.swift` methods MUST be explicitly
+  `nonisolated`.
+- **Coordinator pattern**: `SessionManager` delegates to 7 `@MainActor final class` coordinators,
+  each with `weak var manager`.
+- **Input routing**: `InputRoutingMode` (.singleFocus/.broadcast/.selectGroup) in `PaneManager`.
+  Solo mode: Option+Click in broadcast → single-pane input. `Cmd+Shift+B` toggles broadcast/ends solo.
+  See `docs/Issue15.md`.
+- **AI broadcast**: `BroadcastContext` threads through ViewModel → AgentService → Runner → ToolHandler.
+  `target_session` on all tools. See `docs/AIBroadCaster.md`.
+- **Local PTY**: `LocalPTYProcess` (actor, forkpty) + `LocalShellBootstrap` (env, ZDOTDIR).
+  `LocalTerminalSubsystem` translates NSEvent → PTY bytes.
+- **`nonisolated deinit`**: required on `@MainActor` types that may deallocate off the main actor —
+  used on ~18 types (coordinators, `SessionManager`, `PaneManager`, `SessionTabManager`,
+  `AIToolHandler`, `AIAgentRunner`, `TerminalAIAssistantViewModel`, `V4AParserState`, …).
 
 ---
 
 ## Known Issues & Gotchas
 
-- **TerminalView.swift** (1,002L) is the largest UI file. Read surrounding context before modifying.
-- **Focus management** between AI composer (NSTextView) and terminal (DirectTerminalInputNSView) is delicate. Must resign at AppKit level, not just SwiftUI state. See `focusSessionAndPane()`.
-- **SwiftUI state mutations during `updateNSView`** cause warnings. Use `DispatchQueue.main.async` or `Task { @MainActor in await Task.yield() }` deferral.
-- **SourceKit false positives**: "Cannot find type" errors across files. Always verify with `xcodebuild build`.
-- **Bugs doc**: `docs/bugs.md` has a 68-bug audit by subsystem/severity. Check before working on a subsystem.
-- **Terminal selection**: `selectedText()` skips wide-char continuation cells. Click-to-deselect in `TerminalSurfaceView.onTap`. `handleDrag` processes `.ended`/`.cancelled` before `gridCell(at:)` guard.
+- **Swift 6.3 / Xcode 26.6**: declaration-level `nonisolated` on an `actor` is invalid and fails to
+  compile. Actors keep their isolated state; await their initializers at cross-isolation call sites.
+  (Bit `LibSSHShellChannel`/`LibSSHForwardChannel` — see the 2026-07-13 featurelist entry.)
+- **`AIToolHandler.swift` (1,119L)** is now the largest file, ahead of `TerminalView.swift` (1,066L)
+  and `SessionManager.swift` (1,017L). Read surrounding context before modifying.
+- **Focus management** between AI composer (NSTextView) and terminal (DirectTerminalInputNSView) is
+  delicate. Must resign at AppKit level, not just SwiftUI state. See `focusSessionAndPane()`.
+- **SwiftUI state mutations during `updateNSView`** cause warnings. Use `DispatchQueue.main.async` or
+  `Task { @MainActor in await Task.yield() }` deferral.
+- **Alternate buffer scroll policy**: viewport scrolling is blocked during alt-buffer
+  (`TerminalRenderingCoordinator.scrollTerminal`/`scrollToRow` early-return); the smooth scroll engine
+  is reset on every alt-buffer snapshot and `scrollJumpTo` is skipped in `MetalTerminalSessionSurface`.
+  Do not re-enable alt-buffer viewport scroll without re-testing TUI (Claude Code, htop) output.
+- **Resize**: primary-buffer grid resize is debounced *together with* the PTY resize so both settle on
+  one geometry. View/font geometry changes must NOT reserve `CellBuffer` storage — only a matching
+  snapshot may change buffer dimensions. `CellBuffer.resize(columns:rows:)` was deliberately removed.
+- **Benchmark sentinels**: PTY-local benchmark completion markers are emitted from two shell arguments
+  so the literal sentinel cannot appear in the shell's echo of the command; `BenchmarkSentinelMatcher`
+  handles markers split across PTY chunks. Don't inline the sentinel back into one string.
+- **`TerminalGrid` partial-region `scrollUp`** rotates the row map in place (fast paths for ±1 line,
+  cycle rotation otherwise). Avoid reintroducing per-scroll `regionKeys`/`regionPhysicalRows` arrays —
+  that was the 32 MB partial-throughput cliff.
+- **Tests read real `UserDefaults`**: `LLMProviderRegistry` restores the persisted active provider,
+  so all 17 `AIAgentServiceTests` fail with `providerNotConfigured(...)` on a machine whose last
+  selected provider (e.g. DeepSeek) has no API key. The tests do not inject an isolated defaults
+  suite — treat these failures as environment leakage, not agent-layer regressions.
+- **SourceKit false positives**: "Cannot find type" errors across files. Always verify with
+  `xcodebuild build`.
+- **Bugs doc is stale**: `docs/bugs.md` lists 79 numbered bugs, 29 already marked `[FIXED]` — so **50
+  are open** (13 High / 16 Medium / 21 Low), and its summary table ("68 total, 1 Critical") is wrong:
+  the sole Critical (Bug 51, QuickCommands) is fixed. Its `**File:**` paths predate the refactors —
+  of 48 distinct paths, 18 have moved (`Views/` → `UI/`, `SSH/` → `Services/SSH/`, `Services/Security/`
+  → `Services/`) and 10 no longer exist. Resolve paths by basename before trusting an entry.
+- **Cell colour is stored packed, not semantic**: `TerminalCell` keeps only `fgPackedRGBA`;
+  `cell.fgColor` is a lossy reverse lookup, and `TerminalDefaults.boldIsBright` (true, xterm-style)
+  is **pre-applied at write time**. So bold + red reads back as `.indexed(9)`, and `.rgb(0,0,0)`
+  reads back as `.indexed(16)`. Assert rendered RGB via `XCTAssertRendersAs`, never the enum case.
+- **Terminal selection**: `selectedText()` skips wide-char continuation cells. Plain-tap deselection
+  lives in `MetalTerminalSessionSurface` (shared by embedded and external windows).
+  `handleDrag` processes `.ended`/`.cancelled` before the `gridCell(at:)` guard.
+- **Docs directory case**: git tracks 19 files under `Docs/` and 4 under `docs/`
+  (`FutureFeatures.md`, `Optimization.md`, `RefactorTheFinalRun.md`, `screenshots/`). This only works
+  because macOS is case-insensitive — a case-sensitive checkout will split them into two directories.
 
 ---
 
@@ -213,11 +324,12 @@ All paths relative to repo root, under `ProSSHMac/`.
 
 | Refactor | Phases | Key output | Spec |
 |---|---|---|---|
-| RefactorTheActor (Strict Concurrency) | 0-8 | `Services/SSH/`, `Services/AI/`, 4 session coordinators | `RefactorTheActor.md` |
-| RefactorTerminalView | 0-9 | `UI/Terminal/` split into 11+ components | `RefactorTerminalView.md` |
-| RefactorTerminalGrid | 0-11 | 11 `TerminalGrid+*.swift` extensions | `RefactorTerminalGrid.md` |
+| RefactorTheActor (Strict Concurrency) | 0-8 | `Services/SSH/`, `Services/AI/`, session coordinators | spec file no longer in repo; see `docs/featurelist.md` |
+| RefactorTerminalView | 0-9 | `UI/Terminal/` split into 21 components | `RefactorTerminalView.md` (repo root) |
+| RefactorTerminalGrid | 0-11 | 11 `TerminalGrid+*.swift` extensions | `RefactorTerminalGrid.md` (repo root) |
 | RefactorMetalTerminalRenderer | 0-8 | 8 `MetalTerminalRenderer+*.swift` extensions | `docs/RefactorMetalTerminalRenderer.md` |
-| RefactorTheFinalRun | 0-19 | 4 god files decomposed; `SessionManager.swift` → 969L | `docs/RefactorTheFinalRun.md` |
+| RefactorTheFinalRun | 0-19 | 4 god files decomposed | `docs/RefactorTheFinalRun.md` |
+| Test migration | — | All tests now in `ProSSHMacTests/` (none under app sources) | `docs/featurelist.md` |
 
 ---
 
@@ -226,10 +338,14 @@ All paths relative to repo root, under `ProSSHMac/`.
 | Doc | Purpose |
 |-----|---------|
 | `docs/featurelist.md` | **Long-term memory** — dated work log, phase progress, loop-log entries |
-| `docs/bugs.md` | 68-bug audit by subsystem and severity |
+| `docs/bugs.md` | Bug audit by subsystem/severity — 50 of 79 still open; paths are pre-refactor |
 | `docs/FutureFeatures.md` | Prioritized feature roadmap (competitive analysis) |
-| `docs/Optimization.md` | Performance bottleneck analysis and fixes |
+| `docs/Optimization.md` | Performance bottleneck analysis, benchmark commands, current numbers |
+| `docs/optimizationspart2.md` | Throughput recovery playbook (Part 2) |
+| `docs/OptimizeP2.md` / `docs/OptimizeP3.md` | P2 / P3 optimization phased checklists — **COMPLETE** |
+| `docs/PhaseB.md` | Local Input V2 Phase B checklist (make byte-first local input the only path) |
 | `docs/multiprovider-architecture.md` | Multi-provider LLM architecture overview |
+| `docs/AIpatchfeatureIntegration.md` | `apply_patch` integration guide |
 | `docs/RemotePatchingFix.md` | Remote patching fix (base64 read/write approach) |
 | `docs/Issue15.md` | Multi-session broadcast input routing |
 | `docs/AIBroadCaster.md` | AI Broadcaster — session-aware agent for multi-pane broadcast |
@@ -240,25 +356,26 @@ All paths relative to repo root, under `ProSSHMac/`.
 | `docs/TextGlow.md` | Bloom / Text Glow — **COMPLETE** (Phases 0–7) |
 | `docs/SmoothScroll.md` | Smooth Scrolling — **COMPLETE** (Phases 0–6) |
 
+Note: `AGENTS.md` (repo root) is a parallel working-memory file for non-Claude assistants and points
+at `Docs/featurelist.md`. Keep it in sync when process guidance changes.
+
 ---
 
 ## Next Session Plan
 
-<!-- NEXT SESSION PLAN -->
-**Fixed TUI viewport jump during heavy output (alternate buffer scroll desync).**
+**Last completed work (2026-09-03): CLAUDE.md audit + full test suite back to green (38 failures → 0).**
 
-Completed today:
-- Blocked viewport scrolling during alternate buffer mode in `scrollTerminal`/`scrollToRow`
-- Reset smooth scroll engine on every alt-buffer snapshot (not just transitions)
-- Skip `scrollJumpTo` during alt-buffer in `MetalTerminalSessionSurface`
-- Updated test to assert scroll-during-alt-buffer is blocked
+Two real user-facing bugs were found behind the red baseline and fixed:
+- `MouseEncoder.encodeSGR` double-incremented already-1-based coordinates, so every SGR mouse
+  report landed one row down / one column right in any TUI (vim, htop, mc, tmux).
+- `TerminalEngine` dropped byte `0x9C` when it was a UTF-8 continuation inside an OSC/DCS string,
+  corrupting the surrounding character — a UTF-8 window title never got set. Fixed for OSC and DCS.
+
+The other 32 failures were stale tests asserting behaviour that later phases deliberately changed
+(bounds clamping, packed cell colour, wide emoji, removed reply reflow, removed `; clear`) plus
+`LLMProviderRegistry` reading the developer's real `UserDefaults`.
 
 Next steps:
-- Pick from `docs/bugs.md` (68-bug audit) or `docs/FutureFeatures.md` (feature roadmap)
-- Consider running full benchmark suite to capture post-optimization numbers
-
-Manual QA:
-- Run Claude Code (or any TUI) with heavy output — verify no viewport jumping
-- Verify scrollback still works in primary buffer (non-TUI) sessions
-- Enter TUI, exit TUI — verify scroll works normally after exit
-<!-- /NEXT SESSION PLAN -->
+- Pick from `docs/bugs.md` (50 open bugs — see the staleness caveat above) or `docs/FutureFeatures.md`
+- `docs/PhaseB.md` (Local Input V2 Phase B) is still an open, unstarted checklist
+- Consider consolidating the `Docs/` vs `docs/` directory split before it bites a CI checkout

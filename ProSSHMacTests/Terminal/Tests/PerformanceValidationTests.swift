@@ -367,7 +367,7 @@ final class ColorRenderValidationTest: IntegrationTestBase {
             let row = i / 80
             let col = i % 80
             let bg = await bgAt(row: row, col: col)
-            XCTAssertEqual(bg, .indexed(UInt8(i)),
+            XCTAssertRendersAs(bg, .indexed(UInt8(i)),
                 "Cell at index \(i) (row \(row), col \(col)) should have background color \(i)")
         }
     }
@@ -390,28 +390,28 @@ final class ColorRenderValidationTest: IntegrationTestBase {
 
         // Verify endpoints and midpoint
         let bgStart = await bgAt(row: 0, col: 0)
-        XCTAssertEqual(bgStart, .rgb(0, 0, 0),
+        XCTAssertRendersAs(bgStart, .rgb(0, 0, 0),
             "Red gradient start should be (0, 0, 0)")
 
         // Index 128 is at row 1, col 48
         let bgMid = await bgAt(row: 1, col: 48)
-        XCTAssertEqual(bgMid, .rgb(128, 0, 0),
+        XCTAssertRendersAs(bgMid, .rgb(128, 0, 0),
             "Red gradient midpoint should be (128, 0, 0)")
 
         // Index 255 is at row 3, col 15
         let bgEnd = await bgAt(row: 3, col: 15)
-        XCTAssertEqual(bgEnd, .rgb(255, 0, 0),
+        XCTAssertRendersAs(bgEnd, .rgb(255, 0, 0),
             "Red gradient end should be (255, 0, 0)")
 
         // Spot-check a few intermediate values
         // Index 64 is at row 0, col 64
         let bg64 = await bgAt(row: 0, col: 64)
-        XCTAssertEqual(bg64, .rgb(64, 0, 0),
+        XCTAssertRendersAs(bg64, .rgb(64, 0, 0),
             "Red gradient at index 64 should be (64, 0, 0)")
 
         // Index 200 is at row 2, col 40
         let bg200 = await bgAt(row: 2, col: 40)
-        XCTAssertEqual(bg200, .rgb(200, 0, 0),
+        XCTAssertRendersAs(bg200, .rgb(200, 0, 0),
             "Red gradient at index 200 should be (200, 0, 0)")
     }
 
@@ -439,32 +439,32 @@ final class ColorRenderValidationTest: IntegrationTestBase {
 
         // Verify green gradient start
         let greenStart = await bgAt(row: 0, col: 0)
-        XCTAssertEqual(greenStart, .rgb(0, 0, 0),
+        XCTAssertRendersAs(greenStart, .rgb(0, 0, 0),
             "Green gradient start should be (0, 0, 0)")
 
         // Green gradient midpoint (col 40 -> g = 120)
         let greenMid = await bgAt(row: 0, col: 40)
-        XCTAssertEqual(greenMid, .rgb(0, 120, 0),
+        XCTAssertRendersAs(greenMid, .rgb(0, 120, 0),
             "Green gradient midpoint should be (0, 120, 0)")
 
         // Green gradient end (col 79 -> g = 237)
         let greenEnd = await bgAt(row: 0, col: 79)
-        XCTAssertEqual(greenEnd, .rgb(0, 237, 0),
+        XCTAssertRendersAs(greenEnd, .rgb(0, 237, 0),
             "Green gradient end should be (0, 237, 0)")
 
         // Verify blue gradient start
         let blueStart = await bgAt(row: 1, col: 0)
-        XCTAssertEqual(blueStart, .rgb(0, 0, 0),
+        XCTAssertRendersAs(blueStart, .rgb(0, 0, 0),
             "Blue gradient start should be (0, 0, 0)")
 
         // Blue gradient midpoint (col 40 -> b = 120)
         let blueMid = await bgAt(row: 1, col: 40)
-        XCTAssertEqual(blueMid, .rgb(0, 0, 120),
+        XCTAssertRendersAs(blueMid, .rgb(0, 0, 120),
             "Blue gradient midpoint should be (0, 0, 120)")
 
         // Blue gradient end (col 79 -> b = 237)
         let blueEnd = await bgAt(row: 1, col: 79)
-        XCTAssertEqual(blueEnd, .rgb(0, 0, 237),
+        XCTAssertRendersAs(blueEnd, .rgb(0, 0, 237),
             "Blue gradient end should be (0, 0, 237)")
     }
 
@@ -524,8 +524,10 @@ final class ColorRenderValidationTest: IntegrationTestBase {
         XCTAssertTrue(attrsA.contains(.italic), "Pre-reset: should have italic")
         XCTAssertTrue(attrsA.contains(.underline), "Pre-reset: should have underline")
 
+        // `TerminalDefaults.boldIsBright` is true (xterm/iTerm2 behaviour), and it is
+        // pre-applied at write time, so bold + red (31) is stored as bright red.
         let fgA = await fgAt(row: 0, col: 0)
-        XCTAssertEqual(fgA, .indexed(1), "Pre-reset: should have red foreground")
+        XCTAssertRendersAs(fgA, .indexed(9), "Pre-reset: should have bright red foreground")
 
         let bgA = await bgAt(row: 0, col: 0)
         XCTAssertEqual(bgA, .indexed(4), "Pre-reset: should have blue background")
@@ -552,7 +554,7 @@ final class ColorRenderValidationTest: IntegrationTestBase {
         await feed("D")
 
         let fgC = await fgAt(row: 0, col: 2)
-        XCTAssertEqual(fgC, .rgb(255, 128, 64), "Truecolor fg should be set")
+        XCTAssertRendersAs(fgC, .rgb(255, 128, 64), "Truecolor fg should be set")
 
         let fgD = await fgAt(row: 0, col: 3)
         XCTAssertEqual(fgD, .default, "After SGR 0, truecolor fg should be reset to default")

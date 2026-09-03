@@ -22,12 +22,31 @@ final class SmoothScrollEngineTests: XCTestCase {
     func testScrollDeltaNegativeDirection() {
         let engine = SmoothScrollEngine()
         var firedDeltas: [Int] = []
+
+        // `minTargetRow` is always 0, so a negative delta only produces a row change
+        // when the viewport is already scrolled back. Start at row 5 within bounds.
+        engine.setBounds(maxRow: 100)
+        engine.jumpTo(row: 5)
         engine.onScrollLineChange = { delta in firedDeltas.append(delta) }
 
         engine.scrollDelta(-40.0, cellHeight: cellHeight)
 
         XCTAssertEqual(firedDeltas, [-2], "Should fire callback with -2 row delta")
-        XCTAssertEqual(engine.targetScrollRow, -2)
+        XCTAssertEqual(engine.targetScrollRow, 3)
+    }
+
+    func testScrollDeltaBelowMinimumRowIsClampedNotFired() {
+        let engine = SmoothScrollEngine()
+        var firedDeltas: [Int] = []
+        engine.setBounds(maxRow: 100)
+        engine.onScrollLineChange = { delta in firedDeltas.append(delta) }
+
+        // Already at the live bottom (row 0) — scrolling further down rubber-bands
+        // instead of driving `targetScrollRow` negative.
+        engine.scrollDelta(-40.0, cellHeight: cellHeight)
+
+        XCTAssertEqual(firedDeltas, [], "Should not fire below the minimum row")
+        XCTAssertEqual(engine.targetScrollRow, 0)
     }
 
     func testFractionalRemainderPreserved() {
@@ -49,6 +68,11 @@ final class SmoothScrollEngineTests: XCTestCase {
     func testSlowGestureAccumulatesAcrossFramesWithoutBleedingOff() {
         let engine = SmoothScrollEngine()
         var firedDeltas: [Int] = []
+
+        // Away from the bounds, where `frame()` clamps `renderOffset` to the
+        // rubber-band limit (±0.3) and would swallow the sub-row accumulation.
+        engine.setBounds(maxRow: 100)
+        engine.jumpTo(row: 5)
         engine.onScrollLineChange = { delta in firedDeltas.append(delta) }
 
         engine.beginGesture()
@@ -60,7 +84,7 @@ final class SmoothScrollEngineTests: XCTestCase {
         engine.scrollDelta(10.0, cellHeight: cellHeight) // total 1.0 rows
 
         XCTAssertEqual(firedDeltas, [1], "Slow gesture input should accumulate across frames")
-        XCTAssertEqual(engine.targetScrollRow, 1, "Slow gesture should still advance by one row")
+        XCTAssertEqual(engine.targetScrollRow, 6, "Slow gesture should still advance by one row")
     }
 
     // MARK: - Momentum decay

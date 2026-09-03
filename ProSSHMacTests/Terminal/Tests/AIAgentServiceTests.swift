@@ -2,6 +2,22 @@
 import XCTest
 @testable import ProSSHMac
 
+// MARK: - Test Support
+
+/// A provider registry pinned to OpenAI and backed by a throwaway defaults suite.
+///
+/// `LLMProviderRegistry` restores the persisted provider choice from
+/// `UserDefaults.standard`, so without this every one of these tests routes to
+/// whichever provider the developer last selected in the real app and fails with
+/// `providerNotConfigured` instead of exercising the mock responses service.
+@MainActor
+func makeIsolatedOpenAIRegistry() -> LLMProviderRegistry {
+    let suiteName = "ProSSHMacTests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName) ?? .standard
+    defaults.removePersistentDomain(forName: suiteName)
+    return LLMProviderRegistry(defaultProvider: .openai, userDefaults: defaults)
+}
+
 @MainActor
 final class AIAgentServiceTests: XCTestCase {
     func testGenerateReplyRunsToolLoopAndReturnsAssistantAnswer() async throws {
@@ -21,7 +37,8 @@ final class AIAgentServiceTests: XCTestCase {
 
         let service = OpenAIAgentService(
             responsesService: responses,
-            sessionProvider: sessionProvider
+            sessionProvider: sessionProvider,
+            providerRegistry: makeIsolatedOpenAIRegistry()
         )
 
         let reply = try await service.generateReply(
@@ -64,7 +81,8 @@ final class AIAgentServiceTests: XCTestCase {
 
         let service = OpenAIAgentService(
             responsesService: responses,
-            sessionProvider: sessionProvider
+            sessionProvider: sessionProvider,
+            providerRegistry: makeIsolatedOpenAIRegistry()
         )
 
         _ = try await service.generateReply(
@@ -96,7 +114,8 @@ final class AIAgentServiceTests: XCTestCase {
 
         let service = OpenAIAgentService(
             responsesService: responses,
-            sessionProvider: sessionProvider
+            sessionProvider: sessionProvider,
+            providerRegistry: makeIsolatedOpenAIRegistry()
         )
 
         _ = try await service.generateReply(
@@ -126,7 +145,8 @@ final class AIAgentServiceTests: XCTestCase {
 
         let service = OpenAIAgentService(
             responsesService: responses,
-            sessionProvider: sessionProvider
+            sessionProvider: sessionProvider,
+            providerRegistry: makeIsolatedOpenAIRegistry()
         )
 
         let reply = try await service.generateReply(
@@ -158,7 +178,8 @@ final class AIAgentServiceTests: XCTestCase {
 
         let service = OpenAIAgentService(
             responsesService: responses,
-            sessionProvider: sessionProvider
+            sessionProvider: sessionProvider,
+            providerRegistry: makeIsolatedOpenAIRegistry()
         )
 
         let reply = try await service.generateReply(
@@ -196,6 +217,7 @@ final class AIAgentServiceTests: XCTestCase {
         let service = OpenAIAgentService(
             responsesService: responses,
             sessionProvider: sessionProvider,
+            providerRegistry: makeIsolatedOpenAIRegistry(),
             requestTimeoutSeconds: 60,
             maxToolIterations: 2
         )
@@ -231,7 +253,8 @@ final class AIAgentServiceTests: XCTestCase {
 
         let service = OpenAIAgentService(
             responsesService: responses,
-            sessionProvider: sessionProvider
+            sessionProvider: sessionProvider,
+            providerRegistry: makeIsolatedOpenAIRegistry()
         )
 
         _ = try await service.generateReply(
@@ -263,6 +286,7 @@ final class AIAgentServiceTests: XCTestCase {
         let service = OpenAIAgentService(
             responsesService: responses,
             sessionProvider: sessionProvider,
+            providerRegistry: makeIsolatedOpenAIRegistry(),
             persistConversationContext: false
         )
 
@@ -298,7 +322,8 @@ final class AIAgentServiceTests: XCTestCase {
 
         let service = OpenAIAgentService(
             responsesService: responses,
-            sessionProvider: sessionProvider
+            sessionProvider: sessionProvider,
+            providerRegistry: makeIsolatedOpenAIRegistry()
         )
 
         _ = try await service.generateReply(
@@ -338,7 +363,8 @@ final class AIAgentServiceTests: XCTestCase {
 
         let service = OpenAIAgentService(
             responsesService: responses,
-            sessionProvider: sessionProvider
+            sessionProvider: sessionProvider,
+            providerRegistry: makeIsolatedOpenAIRegistry()
         )
 
         let reply = try await service.generateReply(
@@ -373,7 +399,8 @@ final class AIAgentServiceTests: XCTestCase {
 
         let service = OpenAIAgentService(
             responsesService: responses,
-            sessionProvider: sessionProvider
+            sessionProvider: sessionProvider,
+            providerRegistry: makeIsolatedOpenAIRegistry()
         )
 
         let reply = try await service.generateReply(
@@ -404,7 +431,8 @@ final class AIAgentServiceTests: XCTestCase {
 
         let service = OpenAIAgentService(
             responsesService: responses,
-            sessionProvider: sessionProvider
+            sessionProvider: sessionProvider,
+            providerRegistry: makeIsolatedOpenAIRegistry()
         )
 
         let reply = try await service.generateReply(
@@ -441,7 +469,8 @@ final class AIAgentServiceTests: XCTestCase {
 
         let service = OpenAIAgentService(
             responsesService: responses,
-            sessionProvider: sessionProvider
+            sessionProvider: sessionProvider,
+            providerRegistry: makeIsolatedOpenAIRegistry()
         )
 
         let reply = try await service.generateReply(
@@ -482,7 +511,8 @@ final class AIAgentServiceTests: XCTestCase {
 
         let service = OpenAIAgentService(
             responsesService: responses,
-            sessionProvider: sessionProvider
+            sessionProvider: sessionProvider,
+            providerRegistry: makeIsolatedOpenAIRegistry()
         )
 
         _ = try await service.generateReply(
@@ -537,7 +567,8 @@ final class AIAgentServiceTests: XCTestCase {
 
         let service = OpenAIAgentService(
             responsesService: responses,
-            sessionProvider: sessionProvider
+            sessionProvider: sessionProvider,
+            providerRegistry: makeIsolatedOpenAIRegistry()
         )
 
         _ = try await service.generateReply(
@@ -585,7 +616,8 @@ final class AIAgentServiceTests: XCTestCase {
 
         let service = OpenAIAgentService(
             responsesService: responses,
-            sessionProvider: sessionProvider
+            sessionProvider: sessionProvider,
+            providerRegistry: makeIsolatedOpenAIRegistry()
         )
 
         _ = try await service.generateReply(
@@ -618,7 +650,8 @@ final class AIAgentServiceTests: XCTestCase {
 
         let service = OpenAIAgentService(
             responsesService: responses,
-            sessionProvider: sessionProvider
+            sessionProvider: sessionProvider,
+            providerRegistry: makeIsolatedOpenAIRegistry()
         )
 
         var streamed: [AIAgentStreamEvent] = []

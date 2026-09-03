@@ -493,9 +493,10 @@ final class MikroTikCompatTest: IntegrationTestBase {
         XCTAssertEqual(br, "┘", "Bottom-right corner should be ┘")
 
         // Heading: verify bold + cyan on "MikroTik"
+        // boldIsBright is pre-applied at write time, so bold + cyan (36) stores as bright cyan.
         let headingFg = await fgAt(row: 1, col: 2)
-        XCTAssertEqual(headingFg, .indexed(6),
-                        "Heading should have cyan foreground (indexed 6)")
+        XCTAssertRendersAs(headingFg, .indexed(14),
+                        "Heading should have bright cyan foreground (bold + indexed 6)")
 
         let headingAttrs = await attrsAt(row: 1, col: 2)
         XCTAssertTrue(headingAttrs.contains(.bold),
@@ -503,8 +504,8 @@ final class MikroTikCompatTest: IntegrationTestBase {
 
         // Menu item number: verify bold + white
         let itemFg = await fgAt(row: 3, col: 2)
-        XCTAssertEqual(itemFg, .indexed(7),
-                        "Menu item number should have white foreground (indexed 7)")
+        XCTAssertRendersAs(itemFg, .indexed(15),
+                        "Menu item number should have bright white foreground (bold + indexed 7)")
 
         let itemAttrs = await attrsAt(row: 3, col: 2)
         XCTAssertTrue(itemAttrs.contains(.bold),
@@ -1278,9 +1279,10 @@ final class McFileManagerCompatTest: IntegrationTestBase {
         // --- File Color Assertions ---
 
         // Directory "/Documents" in left panel should be bold + blue
+        // boldIsBright is pre-applied at write time, so bold + blue (34) stores as bright blue.
         let dirFg = await fgAt(row: 4, col: 1)
-        XCTAssertEqual(dirFg, .indexed(4),
-                        "Directory should have blue foreground (indexed 4)")
+        XCTAssertRendersAs(dirFg, .indexed(12),
+                        "Directory should have bright blue foreground (bold + indexed 4)")
 
         let dirAttrs = await attrsAt(row: 4, col: 1)
         XCTAssertTrue(dirAttrs.contains(.bold),
@@ -1288,8 +1290,8 @@ final class McFileManagerCompatTest: IntegrationTestBase {
 
         // Executable "*build.sh" should be bold + green
         let execFg = await fgAt(row: 5, col: 1)
-        XCTAssertEqual(execFg, .indexed(2),
-                        "Executable should have green foreground (indexed 2)")
+        XCTAssertRendersAs(execFg, .indexed(10),
+                        "Executable should have bright green foreground (bold + indexed 2)")
 
         let execAttrs = await attrsAt(row: 5, col: 1)
         XCTAssertTrue(execAttrs.contains(.bold),
@@ -1297,8 +1299,8 @@ final class McFileManagerCompatTest: IntegrationTestBase {
 
         // ".." entry should be bold + blue
         let dotdotFg = await fgAt(row: 3, col: 1)
-        XCTAssertEqual(dotdotFg, .indexed(4),
-                        "Parent dir (..) should be blue")
+        XCTAssertRendersAs(dotdotFg, .indexed(12),
+                        "Parent dir (..) should be bright blue (bold + indexed 4)")
     }
 
     // MARK: - testMcMenuBar
