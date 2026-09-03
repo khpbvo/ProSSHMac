@@ -341,6 +341,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-09-0
 | `docs/bugs.md` | Bug audit by subsystem/severity — 50 of 79 still open; paths are pre-refactor |
 | `docs/FutureFeatures.md` | Prioritized feature roadmap (competitive analysis) |
 | `docs/Optimization.md` | Performance bottleneck analysis, benchmark commands, current numbers |
+| `docs/FasterThenYouWillEverLiveToBe.md` | Throughput gap profiling plan (Phases 0–5) — **NOT STARTED** |
 | `docs/optimizationspart2.md` | Throughput recovery playbook (Part 2) |
 | `docs/OptimizeP2.md` / `docs/OptimizeP3.md` | P2 / P3 optimization phased checklists — **COMPLETE** |
 | `docs/PhaseB.md` | Local Input V2 Phase B checklist (make byte-first local input the only path) |
@@ -376,6 +377,9 @@ The other 32 failures were stale tests asserting behaviour that later phases del
 `LLMProviderRegistry` reading the developer's real `UserDefaults`.
 
 Next steps:
+- **Recommended: `docs/FasterThenYouWillEverLiveToBe.md` Phase 0** — every throughput number in the
+  project comes from a Debug build (`benchmark-throughput.sh` hardcodes `-configuration Debug`), so
+  the documented ~50x gap may be largely a measurement artifact. Cheapest high-value test available.
 - Pick from `docs/bugs.md` (50 open bugs — see the staleness caveat above) or `docs/FutureFeatures.md`
 - `docs/PhaseB.md` (Local Input V2 Phase B) is still an open, unstarted checklist
 - Consider consolidating the `Docs/` vs `docs/` directory split before it bites a CI checkout

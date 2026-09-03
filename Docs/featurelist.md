@@ -1869,3 +1869,38 @@ Build: SUCCEEDED with Xcode 26.6 / Swift 6.3.3 (`xcodebuild -project ProSSHMac.x
 ### Build/Test
 - `xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform=macOS' build`: BUILD SUCCEEDED.
 - Full suite: **870 tests, 0 failures** (32.4s). Was 38 failures at session start.
+
+---
+
+## 2026-09-03 — Feature Start: FasterThenYouWillEverLiveToBe (Throughput Gap Profiling)
+
+### What Changed
+- Created `docs/FasterThenYouWillEverLiveToBe.md` — a 6-phase (0–5) plan to explain and close the
+  ~50x gap between current terminal throughput (~1.7 MB/s) and the 89 MB/s target.
+- Added the spec to the `CLAUDE.md` Reference Docs table and recommended Phase 0 as the next session.
+
+### Why a plan rather than a checklist
+`docs/FutureFeatures.md` Priority 2's remaining unchecked "documented bottlenecks" are already done:
+`TerminalEngine.feed(_ data: Data)` iterates `Data` directly (no Array copy), and `TerminalGrid` is a
+`nonisolated final class` held directly by the engine (no parser↔grid actor hop). The documented
+explanations are exhausted while the gap persists, so this is a measurement problem first.
+
+### Leading hypothesis (H1)
+`scripts/benchmark-throughput.sh` hardcodes `-configuration Debug` (lines 50 and 59), and the Machine
+Profile in `docs/Optimization.md` records "Build config: Debug (no optimizations)". **Every throughput
+number in the project — and therefore the 400x/50x gap framing — was measured against an unoptimized
+build.** Phase 0 tests this before any code is touched. A secondary finding: the `ParserChunk`
+signpost is `#if DEBUG`-gated, so a Release build currently cannot be traced (Phase 1).
+
+### Other hypotheses recorded
+- H2: per-byte `async` dispatch off the ground-text fast path (`processByte`/`executeAction` are both
+  `async`) — expected to matter for escape-dense TUI output, not base64.
+- H3: cost is downstream in snapshot/publish/CellBuffer rather than parsing.
+- H4: the 89 MB/s target is miscalibrated — it derives from a pipe that does no terminal emulation.
+  Phase 5 recalibrates against a peer emulator (Ghostty/Alacritty) on the same machine.
+
+### Files Modified
+- `Docs/FasterThenYouWillEverLiveToBe.md` (new), `CLAUDE.md`, `Docs/featurelist.md`
+
+### Build/Test
+No code changes. Suite unchanged at 870 tests, 0 failures.
