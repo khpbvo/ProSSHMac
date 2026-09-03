@@ -242,6 +242,9 @@ enum RawShellInputSource: String {
     }
 
     private func recordParsedChunk(sessionID: UUID, chunk: Data) async {
+        // No-op outside `--benchmark-render`; the rendered benchmark cannot drain
+        // the PTY stream itself, so it watches for its sentinel here.
+        ThroughputBenchmarkRunner.observeBenchmarkChunk(chunk)
         guard let manager else { return }
         manager.lastActivityBySessionID[sessionID] = .now
         manager.bytesReceivedBySessionID[sessionID, default: 0] += Int64(chunk.count)

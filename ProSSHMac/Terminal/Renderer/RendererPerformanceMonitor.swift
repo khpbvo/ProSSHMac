@@ -4,6 +4,7 @@
 // Runtime profiling utilities for Metal terminal rendering.
 
 import Foundation
+import QuartzCore
 import os.signpost
 
 /// Snapshot of renderer frame performance.
@@ -122,6 +123,16 @@ final class RendererPerformanceMonitor: @unchecked Sendable {
                 drawCalls
             )
         }
+    }
+
+    /// Record GPU execution time for a frame. Metal only reports this once the
+    /// command buffer completes, which is after `endFrame` has already run on the
+    /// render thread — so GPU samples arrive out of band from CPU samples.
+    func recordGPUFrame(seconds: CFTimeInterval) {
+        guard seconds > 0 else { return }
+        lock.lock()
+        gpuFrameSamples.append(seconds * 1000.0)
+        lock.unlock()
     }
 
     func snapshot() -> RendererPerformanceSnapshot {

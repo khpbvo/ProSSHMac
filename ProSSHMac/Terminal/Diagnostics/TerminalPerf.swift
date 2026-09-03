@@ -60,6 +60,11 @@ enum TerminalPerf {
         case snapshotBuild
         case publish
         case cellBufferUpdate
+        case drawableWait
+        case snapshotApply
+        case frameEncode
+        case gpuExecute
+        case drawFrame
 
         nonisolated var label: String {
             switch self {
@@ -70,6 +75,11 @@ enum TerminalPerf {
             case .snapshotBuild:    return "snapshot build"
             case .publish:          return "publish"
             case .cellBufferUpdate: return "cell buffer"
+            case .drawableWait:     return "drawable wait"
+            case .snapshotApply:    return "snapshot apply"
+            case .frameEncode:      return "frame encode"
+            case .gpuExecute:       return "gpu execute"
+            case .drawFrame:        return "draw frame"
             }
         }
     }
@@ -96,6 +106,20 @@ enum TerminalPerf {
         let index = stage.rawValue
         lock.lock()
         nanos[index] &+= elapsed
+        calls[index] &+= 1
+        bytes[index] &+= UInt64(byteCount)
+        lock.unlock()
+    }
+
+    /// Accumulate an already-measured duration against a stage. Used where the
+    /// elapsed time arrives as a duration rather than a start stamp — notably GPU
+    /// time, which Metal reports only in the command buffer's completion handler.
+    @inline(__always)
+    nonisolated static func add(_ stage: Stage, nanoseconds: UInt64, byteCount: Int = 0) {
+        guard isEnabled, nanoseconds != 0 else { return }
+        let index = stage.rawValue
+        lock.lock()
+        nanos[index] &+= nanoseconds
         calls[index] &+= 1
         bytes[index] &+= UInt64(byteCount)
         lock.unlock()

@@ -2136,3 +2136,78 @@ baseline.
 ### Build/Test
 Docs and one new script only; no app sources touched, so no rebuild was warranted. Script verified
 with `bash -n` and by running both emulator paths end to end.
+
+---
+
+## 2026-09-03 — RenderCost Phases R0 + R1: rendering cost measured, and it is not rendering
+
+`FasterThenYouWillEverLiveToBe` ended with a corrected target (Terminal.app, 26.5 MB/s) but an
+uncomparable measurement: the peer figure included rendering, ProSSHMac's 17.97 MB/s did not — and
+the PTY-local benchmark also bypassed the real reader entirely. This session built the measurement
+that closes that gap, and it inverted the plan.
+
+### Phase R0 — draw loop instrumented
+Five stages added to `TerminalPerf`: `drawableWait`, `snapshotApply`, `frameEncode`, `gpuExecute`,
+`drawFrame` (12 total). New `add(_:nanoseconds:)` takes a duration rather than a start stamp,
+because Metal reports GPU time only in the command buffer's completion handler — where
+`gpuEndTime - gpuStartTime` is now recorded and fed to the new
+`RendererPerformanceMonitor.recordGPUFrame(seconds:)`. `averageGPUFrameMs` had always been nil:
+`draw(in:)` called `endFrame` with `gpuFrameSeconds: nil`. All of it stays behind the existing
+`isEnabled` gate.
+
+### Phase R1 — `--benchmark-render` / `--benchmark-render-detached`
+Runs the flood through the real path — `SessionManager.openLocalSession`, the 4 ms batching reader,
+`publishGridState`, SwiftUI, the Metal surface — in a real window, and times both "to sentinel"
+(parser done) and "to settled" (renderer drained). Completion is detected from a benchmark-gated tap
+in `SessionShellIOCoordinator.recordParsedChunk`, reusing the existing split-sentinel command and
+`BenchmarkSentinelMatcher`.
+
+Three separate problems each produced a confidently wrong number before being fixed:
+1. Launching the binary directly gives a process with **zero windows**; rendered runs must go
+   through `open -n`, which detaches stdout — hence `--benchmark-out`, polled by the script.
+2. Restored window state came back as **149x129 at x=-234**, off-screen. That measured ~16x too
+   fast. `prepareWindow` now forces a usable on-screen frame and makes it key (an unfocused surface
+   is throttled to 30 FPS).
+3. Reopening the session per run left the surface bound only for run 1; runs 2+ drew **zero frames**
+   while printing identical-looking results. One session is now shared across runs.
+
+### Results (Release, 1 MB, /bin/sh, 1100x750 active window)
+| Path | Rendering | MB/s |
+|---|---|---|
+| Parser/grid only | none | 36.44 |
+| PTY -> `engine.feed` (`--pty-local`) | none | 19.20 |
+| Real app path, hosts tab (`--render-detached`) | none | **0.14** |
+| Real app path, terminal tab (`--render`) | full | **0.03-0.05** |
+| Terminal.app (peer) | full | 26.5 |
+
+Renderer per-frame cost: ~3000 frames/run at 74-83 fps, CPU avg 3.76-5.91 ms, GPU avg ~1.05 ms,
+glyph cache hit 100%.
+
+### The two findings that matter
+1. **`parse + grid` is 0.1% of wall on the real path** (40.93 ms of a 31.6 s run).
+   `FasterThenYouWillEverLiveToBe` Phase 4 proposed optimising exactly that stage next. It is a
+   rounding error — Phase 4 is abandoned, not optional.
+2. **The Metal draw loop is not the bottleneck.** Runs where the surface was unbound drew zero
+   frames and were just as slow as runs drawing 2987. `publish` is 23-25% of wall at 4-8.5 ms per
+   call, and the stage budget sums to well under wall time — ~18 s of a 31.6 s run is spent waiting.
+
+Also learned: **`--perf-signposts` is free when off but costs ~19x when on** on this path
+(detached: 2.81 -> 0.15 MB/s), unlike the parser-only benchmark. Signpost-on numbers are only
+comparable to other signpost-on numbers.
+
+### Files Modified
+- New: `ProSSHMac/App/ThroughputBenchmarkRunner+Render.swift`,
+  `ProSSHMacTests/Terminal/Tests/TerminalPerfTests.swift`, `docs/RenderCost.md`
+- `Terminal/Diagnostics/TerminalPerf.swift`, `Terminal/Renderer/MetalTerminalRenderer.swift`,
+  `Terminal/Renderer/MetalTerminalRenderer+DrawLoop.swift`,
+  `Terminal/Renderer/RendererPerformanceMonitor.swift`,
+  `Services/SessionShellIOCoordinator.swift`, `App/AppDependencies.swift`,
+  `App/ThroughputBenchmarkRunner.swift`, `scripts/benchmark-throughput.sh`,
+  `ProSSHMacTests/ThroughputBenchmarkRunnerTests.swift`, `CLAUDE.md`
+
+### Build/Test
+`xcodebuild build` succeeds (Debug and Release). Targeted suites green: **24 tests, 0 failures,
+1 skipped** (`TerminalPerfTests`, `ThroughputBenchmarkRunnerTests`, `ZshStartupWarningFilterTests`).
+The skip is a `TerminalPerfTests` case that only runs with stage timers enabled.
+Regression check: parser/grid **36.44 MB/s** (was 36.38) and PTY-local **19.20 MB/s** (was 17.97) —
+both unchanged or better, so the instrumentation costs nothing when off.

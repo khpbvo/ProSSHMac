@@ -246,12 +246,12 @@ enum ThroughputBenchmarkRunner {
         return out
     }
 
-    private static func average(of values: [Double]) -> Double {
+    static func average(of values: [Double]) -> Double {
         guard !values.isEmpty else { return 0 }
         return values.reduce(0, +) / Double(values.count)
     }
 
-    private static func format(_ value: Double) -> String {
+    static func format(_ value: Double) -> String {
         String(format: "%.2f", value)
     }
 
@@ -270,7 +270,7 @@ enum ThroughputBenchmarkRunner {
         )
     }
 
-    private static func intArg(_ flag: String, args: [String], defaultValue: Int) -> Int {
+    static func intArg(_ flag: String, args: [String], defaultValue: Int) -> Int {
         guard let idx = args.firstIndex(of: flag), idx + 1 < args.count else {
             return defaultValue
         }
