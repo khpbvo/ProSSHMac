@@ -37,6 +37,7 @@ enum ThroughputBenchmarkRunner {
 
         print("==> ProSSHMac Throughput Benchmark")
         print("    bytes=\(config.bytes) chunk=\(config.chunkSize) runs=\(config.runs) lineLength=\(config.lineLength)")
+        print("    signposts/stage-timers: \(TerminalPerf.isEnabled ? "ENABLED" : "off")")
         print("")
 
         var fullResults: [BenchmarkResult] = []
@@ -88,6 +89,7 @@ enum ThroughputBenchmarkRunner {
 
         print("==> ProSSHMac PTY Local End-to-End Benchmark")
         print("    kilobytes=\(kilobytes) runs=\(runs)")
+        print("    signposts/stage-timers: \(TerminalPerf.isEnabled ? "ENABLED" : "off")")
         print("")
 
         var results: [Double] = []
@@ -126,6 +128,7 @@ enum ThroughputBenchmarkRunner {
             let sentinel = "---PROSSH_BENCH_DONE_\(UUID().uuidString)---"
             let command = makePTYBenchmarkCommand(kilobytes: kilobytes, sentinel: sentinel)
 
+            TerminalPerf.reset()
             let start = CFAbsoluteTimeGetCurrent()
 
             try await channel.send(command)
@@ -155,6 +158,10 @@ enum ThroughputBenchmarkRunner {
 
             if !foundSentinel {
                 print("  WARNING: sentinel not found, measurement may be inaccurate")
+            }
+
+            if let budget = TerminalPerf.report(title: "pty-local", wallSeconds: elapsed) {
+                print(budget)
             }
 
             let mbps = elapsed > 0 ? Double(totalBytes) / elapsed / 1_048_576.0 : 0
@@ -189,6 +196,7 @@ enum ThroughputBenchmarkRunner {
             await engine.setScrollRegion(top: region.top, bottom: region.bottom)
         }
 
+        TerminalPerf.reset()
         let start = CFAbsoluteTimeGetCurrent()
         var offset = 0
         while offset < payload.count {
@@ -201,6 +209,10 @@ enum ThroughputBenchmarkRunner {
 
         let state = await engine.state
         _ = await engine.snapshot()
+
+        if let budget = TerminalPerf.report(title: name, wallSeconds: elapsed) {
+            print(budget)
+        }
 
         return BenchmarkResult(
             name: name,

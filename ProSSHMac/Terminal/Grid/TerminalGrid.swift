@@ -8,16 +8,12 @@
 // Thread safety: owned exclusively by the TerminalEngine actor.
 
 import Foundation
-#if DEBUG
 import os.signpost
-#endif
 
 // MARK: - TerminalGrid
 
 nonisolated final class TerminalGrid: @unchecked Sendable {
-    #if DEBUG
-    static let perfSignpostLog = OSLog(subsystem: "com.prossh", category: "TerminalPerf")
-    #endif
+    static var perfSignpostLog: OSLog { TerminalPerf.log }
 
     /// Reuse one-character ASCII strings to avoid per-character allocations
     /// in the common shell-output fast path.

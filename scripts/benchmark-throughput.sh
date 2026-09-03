@@ -2,13 +2,18 @@
 #
 # benchmark-throughput.sh
 #
-# Builds ProSSHMac (Debug) and runs the in-app throughput benchmark mode.
+# Builds ProSSHMac and runs the in-app throughput benchmark mode.
 #
 # Usage:
-#   ./scripts/benchmark-throughput.sh [--no-build] [--pty-local] [benchmark args...]
+#   ./scripts/benchmark-throughput.sh [--configuration <Debug|Release>] [--no-build] [--pty-local] [benchmark args...]
+#
+# The build configuration defaults to Debug so that historical numbers in
+# docs/Optimization.md stay reproducible. Every recorded measurement must state
+# which configuration it came from — see docs/FasterThenYouWillEverLiveToBe.md.
 #
 # Examples:
 #   ./scripts/benchmark-throughput.sh
+#   ./scripts/benchmark-throughput.sh --configuration Release --benchmark-bytes 2097152 --benchmark-runs 4
 #   ./scripts/benchmark-throughput.sh --benchmark-bytes 33554432 --benchmark-runs 5
 #   ./scripts/benchmark-throughput.sh --pty-local --no-build
 
@@ -18,12 +23,21 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 SCHEME="ProSSHMac"
 APP_NAME="ProSSHMac"
+CONFIGURATION="Debug"
 NO_BUILD=0
 PTY_LOCAL=0
 EXTRA_ARGS=()
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --configuration)
+            if [[ $# -lt 2 ]]; then
+                echo "ERROR: --configuration requires a value (Debug or Release)"
+                exit 1
+            fi
+            CONFIGURATION="$2"
+            shift 2
+            ;;
         --no-build)
             NO_BUILD=1
             shift
@@ -39,15 +53,24 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+case "$CONFIGURATION" in
+    Debug|Release) ;;
+    *)
+        echo "ERROR: unsupported --configuration '$CONFIGURATION' (expected Debug or Release)"
+        exit 1
+        ;;
+esac
+
 echo "==> ProSSHMac Throughput Benchmark"
+echo "    configuration: $CONFIGURATION"
 echo ""
 
 if [[ "$NO_BUILD" -eq 0 ]]; then
-    echo "==> Building $SCHEME..."
+    echo "==> Building $SCHEME ($CONFIGURATION)..."
     xcodebuild \
         -project "$PROJECT_DIR/ProSSHMac.xcodeproj" \
         -scheme "$SCHEME" \
-        -configuration Debug \
+        -configuration "$CONFIGURATION" \
         -destination 'platform=macOS' \
         build \
         2>&1 | tail -3
@@ -56,7 +79,7 @@ fi
 TARGET_BUILD_DIR=$(xcodebuild \
     -project "$PROJECT_DIR/ProSSHMac.xcodeproj" \
     -scheme "$SCHEME" \
-    -configuration Debug \
+    -configuration "$CONFIGURATION" \
     -destination 'platform=macOS' \
     -showBuildSettings \
     2>/dev/null | awk '

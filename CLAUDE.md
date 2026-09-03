@@ -111,8 +111,9 @@ xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform
   -only-testing:ProSSHMacTests/<TestClassName>
 
 # Throughput benchmarks
-./scripts/benchmark-throughput.sh --benchmark-bytes 2097152 --benchmark-runs 3 --no-build
-./scripts/benchmark-throughput.sh --pty-local --benchmark-bytes 2097152 --benchmark-runs 3 --no-build
+# Defaults to Debug. Pass --configuration Release for numbers that reflect a shipping build.
+./scripts/benchmark-throughput.sh --configuration Release --benchmark-bytes 2097152 --benchmark-runs 4 --benchmark-chunk 4096
+./scripts/benchmark-throughput.sh --configuration Release --no-build --pty-local --benchmark-bytes 2097152 --benchmark-runs 4
 ./scripts/benchmark-ssh.sh --host <hostname> --user <username>
 ```
 
@@ -124,8 +125,18 @@ xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform
 - Tests must not depend on the developer's real `UserDefaults`. `LLMProviderRegistry` takes an
   injectable `userDefaults:`; agent tests build one via `makeIsolatedOpenAIRegistry()` in
   `AIAgentServiceTests.swift`. Follow that pattern for any new defaults-backed type.
-- Throughput baseline (2026-08-27): ~1.68 MB/s fullscreen, ~1.82 MB/s partial scroll (2 MB parser/grid);
-  ~1.69 MB/s PTY-local. See `docs/Optimization.md`.
+- **Throughput baseline (2026-09-03), Release:** **36.38 MB/s** fullscreen, **35.16 MB/s** partial
+  scroll (2 MB parser/grid); **17.97 MB/s** PTY-local. Debug: 1.84 / 1.82 / 1.74 MB/s.
+  **Release is ~20x faster than Debug** — always state the configuration with any number, and
+  never compare a Debug figure to a Release one.
+- **Target is no longer 89 MB/s.** That was a pipe baseline with no terminal emulation. Measured
+  peers on this machine (6 MB, with rendering): Terminal.app **26.5 MB/s**, iTerm2 ~1.4 MB/s.
+  Current target: match or beat Terminal.app end-to-end. Reproduce with
+  `./scripts/benchmark-peer-emulator.sh`. See `docs/Optimization.md`.
+- **Perf instrumentation:** `TerminalPerf` (`Terminal/Diagnostics/TerminalPerf.swift`) gates the
+  five signposts and the in-process stage timers behind `--perf-signposts` /
+  `PROSSH_PERF_SIGNPOSTS=1` / `terminal.perf.signposts`. Pass `--perf-signposts` to
+  `benchmark-throughput.sh` to print a stage budget. Off by default and verified free.
 
 ---
 
@@ -144,6 +155,7 @@ ProSSHMac/
 ├── Services/             # SessionManager (+Queries) + 7 coordinators, TransferManager,
 │   │                     #   EncryptedStorage, PersistentStore, PortForwardingManager,
 │   │                     #   LocalPTYProcess, LocalShellBootstrap, LocalShellChannel,
+│   │                     #   ZshStartupWarningFilter,
 │   │                     #   KeyForgeService, KeyStore, KnownHostsStore, CertificateStore,
 │   │                     #   CertificateAuthorityService (+3 ext), AuditLogManager/Store,
 │   │                     #   TOTPGenerator/Store, BiometricPasswordStore, SecureEnclaveKeyManager,
@@ -157,6 +169,7 @@ ProSSHMac/
 │   └── LLM/              #   LLMTypes, LLMProvider, LLMProviderRegistry, LLMAPIKeyStore
 │       └── Providers/    #   ChatCompletionsClient, Mistral/Ollama/Anthropic/DeepSeek providers
 ├── Terminal/
+│   ├── Diagnostics/      # TerminalPerf (runtime-gated signposts + stage timers)
 │   ├── Grid/             # TerminalGrid + 11 extensions, TerminalCell, CursorState, CharacterWidth,
 │   │                     #   GridReflow, GridSnapshot, ScrollbackBuffer
 │   ├── Parser/           # TerminalEngine, VTParserTables, VTConstants, CSI/OSC/SGR/ESC/DCS/Charset
@@ -223,7 +236,9 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-09-0
 | `Services/LocalShellBootstrap.swift` | Child env for local PTY, ZDOTDIR/BASH_ENV injection (202L) |
 | `ViewModels/TerminalAIAssistantViewModel.swift` | AI sidebar VM: messages, streaming, patch approval (379L) |
 | `UI/Terminal/PatchApprovalCardView.swift` | Inline patch approval card for `apply_patch` (177L) |
-| `App/ThroughputBenchmarkRunner.swift` | Parser/grid + PTY-local benchmarks, `BenchmarkSentinelMatcher` |
+| `App/ThroughputBenchmarkRunner.swift` | Parser/grid + PTY-local benchmarks, `BenchmarkSentinelMatcher`, stage-budget print |
+| `Terminal/Diagnostics/TerminalPerf.swift` | Runtime-gated signposts + in-process stage timers (152L). Start here for any perf work |
+| `Services/ZshStartupWarningFilter.swift` | Bounded zsh startup-warning filter for the PTY path (120L) |
 | `Services/LLM/` (4 files) | LLMTypes, LLMProvider protocol, LLMProviderRegistry, LLMAPIKeyStore |
 | `Services/LLM/Providers/` (5 files) | ChatCompletionsClient, Mistral/Ollama/Anthropic/DeepSeek providers |
 
@@ -300,6 +315,16 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-09-0
   so all 17 `AIAgentServiceTests` fail with `providerNotConfigured(...)` on a machine whose last
   selected provider (e.g. DeepSeek) has no API key. The tests do not inject an isolated defaults
   suite — treat these failures as environment leakage, not agent-layer regressions.
+- **Bounded startup filters**: `ZshStartupWarningFilter` strips zsh's one-off `can't set tty pgrp`
+  warning and **switches off after 32 KB**. Its predecessor only switched off when the warning was
+  actually found, so under `sh`/`bash` it scanned every chunk forever — 92.6% of local-shell wall
+  time. Any "scan the opening output for X" filter added to the PTY path must be bounded the same
+  way. Tests: `ZshStartupWarningFilterTests`.
+- **`SessionManagerRenderingPathTests.testLocalSessionStreamsProgressiveCommandOutput` is flaky**
+  under full-suite load: it spawns a real `/bin/zsh` and waits 8s for output. It passes in
+  isolation and fails in the full suite both before and after recent changes — so the CLAUDE.md
+  "870 tests, 0 failures" line does not reproduce today. Current: **883 tests, 1 failure**, that
+  one. Treat it as environment, not regression, but verify by running it in isolation.
 - **SourceKit false positives**: "Cannot find type" errors across files. Always verify with
   `xcodebuild build`.
 - **Bugs doc is stale**: `docs/bugs.md` lists 79 numbered bugs, 29 already marked `[FIXED]` — so **50
@@ -341,7 +366,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-09-0
 | `docs/bugs.md` | Bug audit by subsystem/severity — 50 of 79 still open; paths are pre-refactor |
 | `docs/FutureFeatures.md` | Prioritized feature roadmap (competitive analysis) |
 | `docs/Optimization.md` | Performance bottleneck analysis, benchmark commands, current numbers |
-| `docs/FasterThenYouWillEverLiveToBe.md` | Throughput gap profiling plan (Phases 0–5) — **NOT STARTED** |
+| `docs/FasterThenYouWillEverLiveToBe.md` | Throughput gap profiling — **Phases 0,1,2,3,5 done; only optional Phase 4 left** |
 | `docs/optimizationspart2.md` | Throughput recovery playbook (Part 2) |
 | `docs/OptimizeP2.md` / `docs/OptimizeP3.md` | P2 / P3 optimization phased checklists — **COMPLETE** |
 | `docs/PhaseB.md` | Local Input V2 Phase B checklist (make byte-first local input the only path) |
@@ -364,22 +389,34 @@ at `Docs/featurelist.md`. Keep it in sync when process guidance changes.
 
 ## Next Session Plan
 
-**Last completed work (2026-09-03): CLAUDE.md audit + full test suite back to green (38 failures → 0).**
+<!-- NEXT SESSION PLAN -->
 
-Two real user-facing bugs were found behind the red baseline and fixed:
-- `MouseEncoder.encodeSGR` double-incremented already-1-based coordinates, so every SGR mouse
-  report landed one row down / one column right in any TUI (vim, htop, mc, tmux).
-- `TerminalEngine` dropped byte `0x9C` when it was a UTF-8 continuation inside an OSC/DCS string,
-  corrupting the surrounding character — a UTF-8 window title never got set. Fixed for OSC and DCS.
+**Last completed work (2026-09-03): FasterThenYouWillEverLiveToBe Phases 0, 1, 2, 3 and 5.**
 
-The other 32 failures were stale tests asserting behaviour that later phases deliberately changed
-(bounds clamping, packed cell colour, wide emoji, removed reply reflow, removed `; clear`) plus
-`LLMProviderRegistry` reading the developer's real `UserDefaults`.
+The "50x gap" was three separate things:
+
+1. **A Debug build** — every historical number used `-Onone`. Release is ~20x faster on
+   parser/grid (1.84 → 36.40 MB/s). `benchmark-throughput.sh` now takes `--configuration`.
+2. **A startup filter that never switched off** — `LocalPTYProcess.yieldSanitized` stripped zsh's
+   one-off `can't set tty pgrp` warning, but only stopped scanning if it actually found it. Under
+   `sh`/`bash` it decoded, lowercased, case-insensitively searched and re-encoded every chunk for
+   the whole session: **92.6% of local-shell wall time**. Extracted to
+   `ZshStartupWarningFilter` and bounded to 32 KB. **PTY-local 6.81 → 17.97 MB/s.**
+3. **A target derived from a pipe that does no emulation** — 89 MB/s is unreachable by any real
+   emulator here. Terminal.app does 26.5 MB/s with rendering.
+
+`TerminalPerf` now gates the five signposts plus in-process stage timers behind
+`--perf-signposts`; that instrumentation is what found #2, in a stage none of the plan's four
+ranked hypotheses had named. H2 and H3 were measured and killed.
+
+**Current Release numbers:** 36.38 MB/s parser/grid fullscreen, 17.97 MB/s PTY-local.
 
 Next steps:
-- **Recommended: `docs/FasterThenYouWillEverLiveToBe.md` Phase 0** — every throughput number in the
-  project comes from a Debug build (`benchmark-throughput.sh` hardcodes `-configuration Debug`), so
-  the documented ~50x gap may be largely a measurement artifact. Cheapest high-value test available.
-- Pick from `docs/bugs.md` (50 open bugs — see the staleness caveat above) or `docs/FutureFeatures.md`
-- `docs/PhaseB.md` (Local Input V2 Phase B) is still an open, unstarted checklist
-- Consider consolidating the `Docs/` vs `docs/` directory split before it bites a CI checkout
+- **Optional: Phase 4** — the dominant stage is now `parse + grid` (44% of wall), and the rest is
+  reader/`AsyncStream` overhead: 2592 chunks for 2.67 MB is ~1 KB per chunk, ~2600 actor hops.
+  Try coalescing reads before the hand-off. Judge against ~26 MB/s, not 89.
+- **The real unknown is rendering cost.** No benchmark here measures it — peers were measured with
+  rendering, ProSSHMac without. Measuring it is higher-value than more parser work.
+- `SessionManagerRenderingPathTests.testLocalSessionStreamsProgressiveCommandOutput` is flaky
+  under full-suite load (pre-existing, fails at HEAD too). Worth stabilising.
+- Unrelated open work: `docs/bugs.md` (50 open), `docs/PhaseB.md`, the `Docs/` vs `docs/` case split.

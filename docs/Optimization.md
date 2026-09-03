@@ -1,11 +1,24 @@
 # Terminal Throughput Optimization Checklist
 
-**Target:** `dd if=/dev/urandom bs=1024 count=100000 | base64` completes in 1.5 seconds (~89 MB/s throughput).
+**Target:** ~~`dd if=/dev/urandom bs=1024 count=100000 | base64` in 1.5 seconds (~89 MB/s)~~ —
+**superseded 2026-09-03.** That number is a pipe baseline with no terminal emulation and is not
+reachable by any real emulator on this machine. Proposed replacement: **match or beat Terminal.app
+end-to-end with rendering on (~26 MB/s here)**. See "Phase 5 — retarget against peer emulators".
 
-**Current:** **1.68 MB/s** fullscreen, **1.82 MB/s** partial scroll (2 MB parser/grid benchmark, 2026-08-27).
-**Sustained 32 MB:** **1.69–1.81 MB/s** fullscreen, **1.69–1.78 MB/s** partial scroll.
-**PTY local:** **1.69 MB/s** average (2 MB, 3 runs; corrected completion detection).
-**Previous:** ~220 KB/s initial estimate → 1.13 MB/s post-merge → 1.34 MB/s post-ring → 1.70 MB/s post-pack → 1.60/1.37 MB/s pre-rotation optimization.
+**Current (Release, 2026-09-03):** **36.38 MB/s** fullscreen, **35.16 MB/s** partial scroll
+(2 MB parser/grid benchmark). **Sustained 32 MB:** **36.08 MB/s** fullscreen, **35.62 MB/s** partial.
+**PTY local:** **17.97 MB/s** (2 MB) — was 6.81 MB/s before the zsh-warning scan was bounded.
+
+**Current (Debug, 2026-09-03):** **1.84 MB/s** fullscreen, **1.82 MB/s** partial scroll (2 MB).
+**PTY local:** **1.74 MB/s**. Debug is **~20x slower** than Release — see the Release-vs-Debug
+section below. Every number recorded in this document before 2026-09-03 is a Debug number.
+
+**Target under revision.** The 89 MB/s figure comes from a pipe that does no terminal emulation.
+Measured here, the fastest peer emulator (Terminal.app) does **26.5 MB/s** with rendering; see
+"Phase 5 — retarget" below. Against that, ProSSHMac's 17.97 MB/s PTY-local (rendering excluded) is
+in the same league as the fastest peer.
+
+**Previous (all Debug):** ~220 KB/s initial estimate → 1.13 MB/s post-merge → 1.34 MB/s post-ring → 1.70 MB/s post-pack → 1.60/1.37 MB/s pre-rotation optimization.
 
 Data pipeline (current — after TerminalEngine merge):
 ```
@@ -36,6 +49,169 @@ Latest sample (2026-08-27, PTY repair + allocation-free partial-row rotation):
 - Time Profiler: `TerminalGrid.scrollUp(lines:)` partial-workload inclusive samples fell from approximately **4.89 s** to **1.23 s** after replacing per-scroll `regionKeys` / `regionPhysicalRows` allocations with in-place row-map rotation.
 - parser state after all parser/grid runs: `ground`
 
+## Release vs Debug (2026-09-03) — FasterThenYouWillEverLiveToBe Phase 0
+
+Until 2026-09-03 `scripts/benchmark-throughput.sh` hardcoded `-configuration Debug`, so **every
+throughput figure in this document's history was measured against an unoptimized build**
+(`SWIFT_OPTIMIZATION_LEVEL = -Onone`, `GCC_OPTIMIZATION_LEVEL = 0`, `ENABLE_TESTABILITY = YES`).
+The script now takes `--configuration <Debug|Release>`, defaulting to `Debug` so historical
+numbers stay reproducible.
+
+Protocol: 4 runs per scenario, **first run discarded**, mean and min–max of the remaining three.
+Grid 80×24, chunk 4096, throughput mode **off** (the default is unset). Parser state `ground`
+after every run. Build once per configuration, `--no-build` for the rest of the matrix.
+
+| Scenario | Debug mean (spread) | Release mean (spread) | Speedup |
+|---|---|---|---|
+| 2 MB parser/grid — fullscreen | 1.84 MB/s (1.83–1.85) | **36.40 MB/s** (36.06–36.95) | **19.8x** |
+| 2 MB parser/grid — partial scroll | 1.82 MB/s (1.81–1.82) | **35.85 MB/s** (35.42–36.18) | **19.7x** |
+| 32 MB sustained — fullscreen | 0.39 MB/s (0.37–0.41)† | **36.08 MB/s** (36.05–36.10) | **91.8x**† |
+| 32 MB sustained — partial scroll | 0.35 MB/s (0.33–0.36)† | **35.62 MB/s** (35.57–35.68) | **101.8x**† |
+| 2 MB PTY local end-to-end | 1.74 MB/s (1.74–1.75) | **6.81 MB/s** (6.77–6.83) | **3.9x** |
+
+† **The Debug 32 MB rows degrade within a single process run** — fullscreen went 1.89 → 0.40 →
+0.41 → 0.37 MB/s across four runs, partial 1.04 → 0.33 → 0.36 → 0.36. Release is flat across the
+same four runs (36.05–36.10). So the previously documented "Sustained 32 MB: 1.69–1.81 MB/s" was a
+Debug-only artifact of a degrading process, not a sustained-throughput property of the emulator.
+Do not quote the Debug 32 MB speedup factors as real; they are contaminated by that degradation.
+
+### What this changes
+
+- **H1 is confirmed.** Release is ~20x faster on parser/grid. The documented "50x gap" and the
+  "400x slowdown" framing were measuring `-Onone`, not the emulator.
+- **The gap to the 89 MB/s target is now 2.4x on parser/grid**, not 50x. For a component that
+  parses, stores, and reflows every cell against a pipe that does none of that, this is close to
+  the floor of what is worth chasing.
+- **The bottleneck moved.** In Release the parser/grid runs at 36 MB/s but the full PTY path
+  delivers only 6.81 MB/s — **5.3x slower than the parser it feeds**. In Debug both sat around
+  1.8 MB/s, which hid this completely.
+- **It is not the PTY itself.** Measured on this machine, same 2 MB payload:
+  `dd | base64 > /dev/null` reaches ~276 MB/s, and the same command with its output pushed
+  **through a real PTY** (`script -q /dev/null`) still reaches **92–138 MB/s**. The 100 MB
+  reference command runs in 0.35s (~385 MB/s). The ~6.8 MB/s ceiling is in ProSSHMac's read and
+  delivery path (`LocalShellChannel` → `AsyncStream<Data>` → `TerminalEngine.feed`), not in the
+  kernel's tty layer.
+
+### Phase 1 — stage attribution (Release, instrumentation enabled)
+
+`TerminalPerf` (`Terminal/Diagnostics/TerminalPerf.swift`) gates the five Instruments
+Points-of-Interest signposts *and* a set of in-process stage timers behind one runtime switch —
+`--perf-signposts`, `PROSSH_PERF_SIGNPOSTS=1`, or
+`defaults write com.prossh terminal.perf.signposts -bool true`. Off by default; when off the shared
+`OSLog` is `.disabled` and the timers return after a single static `Bool` check.
+
+Timers are recorded at **chunk** granularity, never per byte. Verified free: with instrumentation
+off, Release measured 35.69 MB/s parser/grid and 6.78 MB/s PTY-local against Phase 0's 36.40 and
+6.81 — inside run-to-run spread.
+
+`--pty-local`, 2 MB, Release, four runs (representative run):
+
+```
+stage budget (pty-local):
+  pty read          7.61 ms    1.9%  (2776 calls, 2.67 MB)
+  pty sanitize    364.08 ms   92.6%  (2776 calls, 2.67 MB)
+  pty handoff     365.31 ms   92.9%  (2776 calls, 2.67 MB)
+  parse + grid     72.79 ms   18.5%  (2775 calls, 2.67 MB)
+  snapshot build    0.04 ms    0.0%  (1 calls)
+  wall            393.27 ms
+```
+
+Stages overlap — the PTY reader is a detached task feeding an `AsyncStream` the parser drains on
+the engine actor — so percentages do not partition wall time.
+
+**`pty sanitize` was 92.6% of wall time.** `pty handoff` (the actor hop plus the sanitizer) is
+365 ms, of which 364 ms is the sanitizer itself, so the hop costs ~1 ms across 2776 chunks. Actual
+reading is 7.6 ms. The parser does the full 2.67 MB in 72.8 ms — **36.7 MB/s, matching the
+standalone parser/grid benchmark exactly**. The parser was never the problem in the PTY path.
+
+### Phase 3 — the fix: bound the zsh startup-warning scan
+
+`LocalPTYProcess.yieldSanitized` stripped zsh's one-off `can't set tty pgrp` startup warning. Its
+"stop scanning" flag was only ever set **if the warning was actually found** — so under any shell
+that never emits it (`sh`, `bash`, and the benchmark's `/bin/sh`) the filter ran on every chunk for
+the entire session, doing per chunk: a `String(data:encoding:.utf8)` decode, a concatenation, a
+case-insensitive `range(of:)`, a `lowercased()` copy of the whole chunk, up to 23 `String`
+slice comparisons, and a re-encode back to `Data`.
+
+Extracted to `Services/ZshStartupWarningFilter.swift` (a testable value type, following the
+`BenchmarkSentinelMatcher` precedent) and **bounded to the first 32 KB of a session**, after which
+it switches off permanently. The warning lands within the first ~100 bytes, so the budget is
+several hundred times larger than needed.
+
+Also fixed in the extraction: when a chunk boundary split a multi-byte character the old code
+yielded the raw chunk while leaving a buffered partial match in place, emitting those bytes out of
+order. The filter now flushes its carry first.
+
+| PTY-local 2 MB, Release | Before | After |
+|---|---|---|
+| Throughput | 6.81 MB/s | **17.97 MB/s** (**2.6x**) |
+| `pty sanitize` | 364.08 ms / 92.6% | **4.49 ms / 2.7%** (88 calls, then off) |
+| `parse + grid` | 72.79 ms / 18.5% | 72.10 ms / 44.0% |
+| wall | 393.27 ms | **155.66 ms** |
+
+Parser/grid is unchanged at 36.38 MB/s fullscreen (Phase 0: 36.40), confirming the change is
+confined to the PTY path. Full suite: 883 tests, 1 failure — `testLocalSessionStreamsProgressive
+CommandOutput`, which fails identically at the previous commit under full-suite load and passes
+in isolation. 13 new tests cover the filter, which had none.
+
+**The dominant stage is now `parse + grid` at 44% of wall.** The remaining ~84 ms is the reader
+loop and `AsyncStream` delivery: 2592 chunks for 2.67 MB is ~1 KB per chunk, so the path pays
+~2600 actor hops. That is the next target if this work continues.
+
+### Phase 5 — retarget against peer emulators
+
+The 89 MB/s target derives from `dd | base64` piped to `/dev/null`, which does no terminal
+emulation. Measured on this machine, 6 MB of base64 written to a real terminal window, three runs:
+
+Reproduce with `./scripts/benchmark-peer-emulator.sh --app <Terminal|iTerm> --mb 6 --runs 3`.
+
+| Emulator | Throughput | Notes |
+|---|---|---|
+| Host pipe to `/dev/null` | ~276 MB/s | no emulation, no PTY |
+| Host through a PTY (`script -q /dev/null`) | 92–138 MB/s | PTY, no emulation |
+| **Terminal.app** | **26.1–27.3 MB/s** (mean 26.5) | with rendering |
+| **iTerm2** | **1.3–1.5 MB/s** | with rendering; see caveat |
+| **ProSSHMac PTY-local** | **17.97 MB/s** | parse + grid only, **no rendering** |
+| ProSSHMac parser/grid only | 36.38 MB/s | no PTY, no rendering |
+
+An earlier ad-hoc version of this measurement was **wrong by 33%**: base64 expands its input by
+4/3, so a script asking `dd` for 6 MB puts ~8 MB on the wire, and the first numbers recorded here
+(Terminal.app 22.2, iTerm2 2.44) divided the elapsed time by the wrong figure. The committed script
+sizes `dd` so that the *output* is the requested size. It also forces `LC_ALL=C`, without which
+`time`'s comma decimal separator under a European locale makes `awk` read `0.17` as zero.
+
+iTerm2's figure is the least stable of these — a separate run measured ~3 MB/s — and it degrades as
+windows and scrollback accumulate. Treat it as "an order of magnitude slower than Terminal.app
+here", not as a precise number. Terminal.app's is stable across runs and is the one the target
+below rests on.
+
+Ghostty and Alacritty are not installed on this machine; Terminal.app and iTerm2 were the
+available peers.
+
+**The comparison is not like-for-like** — the peer numbers include rendering and ProSSHMac's do
+not, so ProSSHMac's figure is flattered. Terminal.app also coalesces and drops output rather than
+emulating every cell, which is part of why it is fast.
+
+Even so the calibration is clear: **no real emulator on this machine comes close to 89 MB/s.** The
+fastest peer does ~26 MB/s with rendering. A defensible target is to **match or beat Terminal.app
+end-to-end with rendering on**, i.e. ~26 MB/s — not 89 MB/s. ProSSHMac is at 17.97 MB/s *without*
+rendering, so the honest statement is that it is in the same league as the fastest peer, with the
+rendering cost still unmeasured and therefore the true gap still unknown.
+
+### Commands
+
+```bash
+# Release
+./scripts/benchmark-throughput.sh --configuration Release --benchmark-bytes 2097152 --benchmark-runs 4 --benchmark-chunk 4096
+./scripts/benchmark-throughput.sh --configuration Release --no-build --benchmark-bytes 33554432 --benchmark-runs 4 --benchmark-chunk 4096
+./scripts/benchmark-throughput.sh --configuration Release --no-build --pty-local --benchmark-bytes 2097152 --benchmark-runs 4
+
+# Debug (default; reproduces the historical numbers)
+./scripts/benchmark-throughput.sh --benchmark-bytes 2097152 --benchmark-runs 4 --benchmark-chunk 4096
+```
+
+---
+
 Previous sample (2026-02-21, post renderer/parser micro-optimization batch):
 - command: `./scripts/benchmark-throughput.sh --benchmark-bytes 2097152 --benchmark-runs 3 --benchmark-chunk 4096 --no-build`
 - fullscreen avg: **1.60 MB/s**
@@ -62,12 +238,12 @@ All benchmark numbers in this document were collected on this configuration:
 | Property | Value |
 |----------|-------|
 | Hardware | Apple Silicon Mac (arm64) |
-| macOS | 15.x (Darwin 25.3.0) |
-| Xcode | 16.x |
-| Build config | Debug (no optimizations) |
+| macOS | 26.6.2 (Darwin 25.6.0) |
+| Xcode | 26.6 (17F113) |
+| Build config | **Debug** (`-Onone`) for every number dated before 2026-09-03; **Release** (`-O`, `wholemodule`) and Debug both recorded from 2026-09-03 on. Select with `--configuration`. |
 | Grid size | 80 columns × 24 rows |
 | Reference command | `dd if=/dev/urandom bs=1024 count=100000 \| base64` |
-| Host baseline | `time sh -c '... \| base64 > /dev/null'` → **0.373s** (~357 MB/s) |
+| Host baseline | `time sh -c '... \| base64 > /dev/null'` → **0.35s** (~385 MB/s); same payload through a real PTY (`script -q /dev/null`) → **92–138 MB/s** |
 | Parser/grid benchmark | `./scripts/benchmark-throughput.sh --benchmark-bytes 2097152 --benchmark-runs 3 --benchmark-chunk 4096 --no-build` |
 | PTY local benchmark | `./scripts/benchmark-throughput.sh --pty-local --no-build` |
 | Remote SSH benchmark | `./scripts/benchmark-ssh.sh --host <host> --user <user>` |

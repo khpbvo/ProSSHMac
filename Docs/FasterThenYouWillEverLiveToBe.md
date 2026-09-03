@@ -2,7 +2,11 @@
 
 Profiling plan for the unexplained throughput gap between ProSSHMac and its stated target.
 
-**Status:** Not started. Created 2026-09-03.
+**Status:** Phases 0, 1, 3 and 5 complete (2026-09-03). H1 confirmed; H2 and H3 killed; H4
+confirmed and the target restated. PTY-local throughput went **1.74 MB/s (Debug) → 6.81 (Release)
+→ 17.97 MB/s** (bounding the zsh startup-warning scan). Phase 2 was absorbed into Phase 1, whose
+stage timers answered it directly. **Phase 4 is the only work left**, and it is optional — see
+"Where this stands" at the end.
 
 ---
 
@@ -114,7 +118,7 @@ unreachable number. Ending this work with an honest target is a valid success co
 
 Each phase is one session. Do not start a phase before its predecessor's exit criteria are met.
 
-- [ ] **Phase 0: Release-vs-Debug baseline**
+- [x] **Phase 0: Release-vs-Debug baseline**
 
   **Goal:** Establish what the throughput actually is in a shipping build. Tests H1.
 
@@ -128,72 +132,153 @@ Each phase is one session. Do not start a phase before its predecessor's exit cr
   against Release, and the gap is re-expressed against it. If Release closes most of the gap,
   **stop and re-scope the rest of this plan** — Phases 3+ may be unnecessary.
 
-- [ ] **Phase 1: Make Release traceable**
+  **Result (2026-09-03) — H1 CONFIRMED.** Release builds clean on the first attempt (no
+  compilation fixes were needed). Full table in `docs/Optimization.md` §"Release vs Debug".
 
-  **Goal:** Be able to profile the build that the numbers now come from.
+  | Scenario | Debug | Release | Speedup |
+  |---|---|---|---|
+  | 2 MB parser/grid fullscreen | 1.84 MB/s | **36.40 MB/s** | 19.8x |
+  | 2 MB parser/grid partial | 1.82 MB/s | **35.85 MB/s** | 19.7x |
+  | 32 MB sustained fullscreen | 0.39 MB/s* | **36.08 MB/s** | 91.8x* |
+  | 32 MB sustained partial | 0.35 MB/s* | **35.62 MB/s** | 101.8x* |
+  | 2 MB PTY local end-to-end | 1.74 MB/s | **6.81 MB/s** | 3.9x |
 
-  **Method:** The `ParserChunk` signpost is inside `#if DEBUG`
-  (`Terminal/Parser/TerminalEngine.swift:169-187`); audit the other four for the same gating.
-  Move Points-of-Interest signposts behind a runtime flag (e.g. a `terminal.perf.signposts`
-  default, or a `PROFILE` build setting) so a Release build can emit them, keeping them off by
-  default so normal Release users pay nothing.
+  \* Debug 32 MB degrades within one process run (1.89 → 0.40 → 0.41 → 0.37 MB/s). Release is
+  flat. The previously documented "Sustained 32 MB: 1.69–1.81 MB/s" was that artifact.
 
-  **Exit criteria:** A Time Profiler + Points of Interest trace captured against a Release build
-  showing all five intervals — `ParserChunk`, `GridSnapshot`, `GridSnapshotScrollback`,
-  `PublishGridState`, `CellBufferUpdate`. Confirm signpost overhead itself is not material by
-  re-running Phase 0's benchmark with them enabled and disabled.
+  Three consequences:
 
-- [ ] **Phase 2: Stage attribution**
+  1. **The ~50x gap was mostly `-Onone`.** Remaining gap to the 89 MB/s target is **2.4x** on
+     parser/grid. **H4 is now the live question, not H2 or H3** — 36 MB/s of full VT emulation
+     against a 385 MB/s pipe that does none of it is close to the useful floor.
+  2. **The bottleneck moved to the PTY read path.** Release parser/grid does 36 MB/s but the full
+     PTY path delivers 6.81 MB/s — 5.3x slower than the parser it feeds. Debug hid this by making
+     both ~1.8 MB/s. This was not in the ranked hypotheses at all.
+  3. **It is not the kernel tty.** The same 2 MB payload pushed through a real PTY with
+     `script -q /dev/null` reaches 92–138 MB/s on this machine. The ceiling is in
+     `LocalShellChannel` → `AsyncStream<Data>` → `TerminalEngine.feed`.
 
-  **Goal:** A per-stage budget. Answer "where does the wall time actually go" with numbers,
-  before touching any implementation. Tests H2 and H3.
+  **Re-scope recommendation:** replace Phases 1–4 as written. Phase 1's Release-traceability work
+  is still needed, but Phase 2's stage attribution should target the **PTY delivery path** rather
+  than parse/grid/snapshot, and Phase 5's retarget is now the highest-value remaining step.
 
-  **Method:** From the Phase 1 traces, attribute wall-clock time across PTY read → parse →
-  grid write → snapshot build → publish → CellBuffer upload → GPU. Do this for at least three
-  workload shapes, because they stress different stages:
-  1. base64 fullscreen (plain text, fast path dominant)
-  2. partial scroll region (grid rotation dominant)
-  3. an escape-dense TUI capture (tests H2 — record a real `htop`/Claude Code session with
-     `SessionRecorder` and replay it)
+- [x] **Phase 1: Make Release traceable** *(absorbed Phase 2)*
 
-  **Exit criteria:** A stage-budget table in `docs/Optimization.md` — stage, absolute ms, % of
-  wall time, per workload. One stage is identified as dominant, **or** the profile is
-  demonstrably flat (no stage >25%), which would promote H4.
+  **Done.** `Terminal/Diagnostics/TerminalPerf.swift` gates the five signposts **and** a set of
+  in-process stage timers behind one runtime switch (`--perf-signposts`, `PROSSH_PERF_SIGNPOSTS=1`,
+  or the `terminal.perf.signposts` default). Off by default: the shared `OSLog` is `.disabled` and
+  the timers return after one static `Bool` check.
 
-- [ ] **Phase 3: Attack the dominant stage**
+  Instruments could not be driven end-to-end from a script — no stock template combines Time
+  Profiler with Points of Interest, and `xctrace record` takes only a template *name* — so the
+  in-process timers became the primary attribution path rather than a supplement. They record at
+  chunk granularity, never per byte, and `ThroughputBenchmarkRunner` prints the budget.
 
-  **Goal:** Close the largest identified cost. Scope is deliberately undefined here — it is set
-  by Phase 2's evidence.
+  Three defects found while un-gating: the subsystem was split between `com.prossh` and
+  `nl.budgetsoft.ProSSHV2`; the category was `TerminalPerf`/`TerminalRenderer`, so these appeared
+  under the *os_signpost* instrument and **never** under Points of Interest as this doc claimed;
+  and the coordinator's `#if DEBUG` block mixed a signpost with an up-to-10×/s `print` that had to
+  stay Debug-only.
 
-  **Method:** Same loop that worked on `scrollUp`: capture a before trace, form one hypothesis,
-  change one thing, capture an after trace, keep it only if the benchmark moves outside run-to-run
-  noise. One optimisation per commit, each with its trace evidence recorded.
+  **Verified free:** instrumentation off measures 35.69 MB/s parser/grid and 6.78 MB/s PTY-local
+  against Phase 0's 36.40 and 6.81 — inside run-to-run spread.
 
-  **Exit criteria:** A measured improvement on the dominant stage, full suite still green, and
-  before/after traces plus numbers appended to `docs/Optimization.md`.
+- [x] **Phase 2: Stage attribution** — *answered by Phase 1's timers on first run.*
 
-- [ ] **Phase 4: Second-order costs**
+  2 MB pty-local, Release:
 
-  **Goal:** Repeat Phase 3 against the next stage down, if the remaining gap justifies it.
+  ```
+  pty read          7.61 ms    1.9%
+  pty sanitize    364.08 ms   92.6%
+  pty handoff     365.31 ms   92.9%
+  parse + grid     72.79 ms   18.5%
+  snapshot build    0.04 ms    0.0%
+  wall            393.27 ms
+  ```
 
-  **Exit criteria:** Either a further measured improvement, or a written finding that the
-  remaining stages are within a few percent of each other and further micro-optimisation is not
-  the highest-value work.
+  **H2 and H3 are both killed.** Parse is 18.5% and does the full 2.67 MB in 72.8 ms — 36.7 MB/s,
+  identical to the standalone parser/grid benchmark, so per-byte async dispatch (H2) is not
+  costing anything measurable on this workload. Snapshot build is 0.04 ms, so H3 is not it either.
+  One stage held 92.6%.
 
-- [ ] **Phase 5: Re-baseline, retarget, and document**
+- [x] **Phase 3: Attack the dominant stage**
 
-  **Goal:** Leave the project with honest numbers and a defensible target.
+  **`LocalPTYProcess.yieldSanitized` strips zsh's one-off `can't set tty pgrp` startup warning, and
+  its "stop scanning" flag was only ever set if the warning was actually found.** Under any shell
+  that never emits it — `sh`, `bash`, and the benchmark's own `/bin/sh` — the filter ran forever,
+  paying per chunk a UTF-8 decode, a concatenation, a case-insensitive `range(of:)`, a
+  `lowercased()` copy, up to 23 `String` slice comparisons, and a re-encode back to `Data`.
 
-  **Method:** Full re-run of all scenarios under both configurations. Measure a peer emulator
-  (Ghostty or Alacritty) on the same machine and the same workload to calibrate what a good
-  native terminal actually achieves here. Restate the target in `docs/Optimization.md` and
-  `docs/FutureFeatures.md` Priority 2 against that peer number rather than the pipe baseline.
+  Extracted to `Services/ZshStartupWarningFilter.swift` (a testable value type, following the
+  `BenchmarkSentinelMatcher` precedent) and bounded to the first 32 KB of a session. The warning
+  lands within the first ~100 bytes. Also fixed: a chunk boundary splitting a multi-byte character
+  made the old code emit bytes out of order.
 
-  **Exit criteria:** `docs/Optimization.md` headline figures, Machine Profile, and target all
-  current; `docs/FutureFeatures.md` Priority 2 checkboxes reconciled with reality (several are
-  already done but unticked — see Overview); `CLAUDE.md` throughput line updated.
+  | PTY-local 2 MB, Release | Before | After |
+  |---|---|---|
+  | Throughput | 6.81 MB/s | **17.97 MB/s** (2.6x) |
+  | `pty sanitize` | 364.08 ms / 92.6% | 4.49 ms / 2.7% |
+  | wall | 393.27 ms | 155.66 ms |
+
+  Parser/grid unchanged at 36.38 MB/s. 13 new tests cover a filter that had none. Full suite:
+  883 tests, 1 failure — a pre-existing flaky local-shell test that fails identically at the
+  previous commit under full-suite load and passes in isolation.
+
+- [ ] **Phase 4: Second-order costs** — *optional; the only work left.*
+
+  The dominant stage is now `parse + grid` at 44% of a 156 ms wall. The other ~84 ms is the reader
+  loop and `AsyncStream` delivery: **2592 chunks for 2.67 MB is ~1 KB per chunk**, so the path pays
+  ~2600 actor hops for 2.67 MB. The `poll()`-then-drain loop returns as soon as the tty has
+  anything, rather than accumulating toward its 64 KB buffer.
+
+  Worth trying, in order: coalesce reads before handing off (a short accumulation window, or drain
+  until EAGAIN *and* a minimum size); check whether `AsyncStream`'s default unbounded buffering is
+  adding a hop per element that a batched hand-off would remove.
+
+  Judge against the retargeted number below, not against 89 MB/s.
+
+- [x] **Phase 5: Re-baseline, retarget, and document**
+
+  **H4 confirmed.** Measured on this machine, 6 MB of base64 into a real terminal window:
+
+  | | Throughput |
+  |---|---|
+  | Host pipe to `/dev/null` (no emulation, no PTY) | ~276 MB/s |
+  | Host through a PTY (`script -q /dev/null`) | 92–138 MB/s |
+  | **Terminal.app** (with rendering) | **26.5 MB/s** |
+  | **iTerm2** (with rendering) | **~1.4 MB/s** (unstable; see doc) |
+  | **ProSSHMac PTY-local** (no rendering) | **17.97 MB/s** |
+
+  Ghostty and Alacritty are not installed here. The comparison is **not like-for-like** — peers
+  include rendering and ProSSHMac's number does not, so ProSSHMac is flattered; Terminal.app also
+  coalesces and drops output rather than emulating every cell.
+
+  **No real emulator on this machine approaches 89 MB/s.** The target in `docs/Optimization.md` is
+  restated as **match or beat Terminal.app end-to-end with rendering on (~26 MB/s here)**.
+
+  Reproduce with `./scripts/benchmark-peer-emulator.sh`. The first pass at this measurement was
+  wrong by 33% — base64 expands 4/3, so asking `dd` for 6 MB puts 8 MB on the wire — and hit a
+  locale bug where `awk` reads a dotted decimal as zero under `nl_NL`. Both are fixed in the
+  committed script.
 
 ---
+
+## Where this stands
+
+Started as "explain a 50x gap". The gap was three things, in descending order:
+
+1. **A Debug build** (~20x). Phase 0.
+2. **A startup filter that never switched off** (2.6x on the PTY path). Phase 3.
+3. **A target derived from a pipe that does no emulation** (the rest). Phase 5.
+
+None of the four ranked hypotheses named the actual bottleneck — H1 was right about the
+measurement, but the code defect was found only because Phase 1's timers were pointed at a stage
+nobody had suspected. H2 and H3 were both measured and killed.
+
+**The remaining honest gap is small.** ProSSHMac does 17.97 MB/s through a real PTY without
+rendering against a fastest-peer 26.5 MB/s with rendering. The unknown is what rendering costs,
+which none of these benchmarks measure — that, not further parser micro-optimisation, is the
+highest-value thing left to find out.
 
 ## Measurement Protocol
 

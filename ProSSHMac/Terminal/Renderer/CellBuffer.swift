@@ -8,9 +8,7 @@
 // updates (dirty ranges) and wide character handling.
 
 import Metal
-#if DEBUG
 import os.signpost
-#endif
 
 // MARK: - Constants
 
@@ -24,9 +22,7 @@ private let kCellStride: Int = MemoryLayout<CellInstance>.stride
 /// Sentinel glyph index meaning "no glyph".
 /// This must match the shader-side `GLYPH_INDEX_NONE` constant.
 private let kNoGlyphIndex: UInt32 = 0xFFFF_FFFF
-#if DEBUG
-private let kCellBufferSignpostLog = OSLog(subsystem: "com.prossh", category: "TerminalPerf")
-#endif
+private var kCellBufferSignpostLog: OSLog { TerminalPerf.log }
 
 // MARK: - GlyphResolver Protocol
 
@@ -158,13 +154,14 @@ final class CellBuffer {
     ///   - snapshot: The immutable grid snapshot to upload.
     ///   - resolver: Object that resolves glyph atlas indices for cells.
     func update<R: GlyphResolver>(from snapshot: GridSnapshot, resolver: R) {
-        #if DEBUG
-        let signpostID = OSSignpostID(log: kCellBufferSignpostLog)
-        os_signpost(.begin, log: kCellBufferSignpostLog, name: "CellBufferUpdate", signpostID: signpostID)
+        let signpostLog = kCellBufferSignpostLog
+        let signpostID = OSSignpostID(log: signpostLog)
+        os_signpost(.begin, log: signpostLog, name: "CellBufferUpdate", signpostID: signpostID)
+        let uploadStart = TerminalPerf.now()
         defer {
-            os_signpost(.end, log: kCellBufferSignpostLog, name: "CellBufferUpdate", signpostID: signpostID)
+            TerminalPerf.record(.cellBufferUpdate, since: uploadStart)
+            os_signpost(.end, log: signpostLog, name: "CellBufferUpdate", signpostID: signpostID)
         }
-        #endif
 
         let newCellCount = snapshot.rows * snapshot.columns
         guard newCellCount > 0 else {
