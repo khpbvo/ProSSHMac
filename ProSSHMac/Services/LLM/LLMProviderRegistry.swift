@@ -19,6 +19,10 @@ final class LLMProviderRegistry: ObservableObject {
 
     private var providers: [LLMProviderID: any LLMProvider] = [:]
 
+    /// Backing store for the persisted provider/model choice. Injectable so tests can
+    /// run against an isolated suite instead of the developer's real selection.
+    private let userDefaults: UserDefaults
+
     private static let providerDefaultsKey = "ai.provider.active"
     private static let modelDefaultsKey = "ai.model.active"
 
@@ -26,11 +30,14 @@ final class LLMProviderRegistry: ObservableObject {
 
     init(
         defaultProvider: LLMProviderID = .openai,
-        defaultModel: String = "gpt-5.1-codex-max"
+        defaultModel: String = "gpt-5.1-codex-max",
+        userDefaults: UserDefaults = .standard
     ) {
-        let storedProvider = UserDefaults.standard.string(forKey: Self.providerDefaultsKey)
+        self.userDefaults = userDefaults
+
+        let storedProvider = userDefaults.string(forKey: Self.providerDefaultsKey)
             .flatMap(LLMProviderID.init(rawValue:))
-        let storedModel = UserDefaults.standard.string(forKey: Self.modelDefaultsKey)
+        let storedModel = userDefaults.string(forKey: Self.modelDefaultsKey)
 
         self.activeProviderID = storedProvider ?? defaultProvider
         self.activeModelID = storedModel ?? defaultModel
@@ -70,14 +77,14 @@ final class LLMProviderRegistry: ObservableObject {
     func setActiveProvider(_ providerID: LLMProviderID, model: String) {
         activeProviderID = providerID
         activeModelID = model
-        UserDefaults.standard.set(providerID.rawValue, forKey: Self.providerDefaultsKey)
-        UserDefaults.standard.set(model, forKey: Self.modelDefaultsKey)
+        userDefaults.set(providerID.rawValue, forKey: Self.providerDefaultsKey)
+        userDefaults.set(model, forKey: Self.modelDefaultsKey)
     }
 
     /// Switch only the model within the current provider.
     func setActiveModel(_ model: String) {
         activeModelID = model
-        UserDefaults.standard.set(model, forKey: Self.modelDefaultsKey)
+        userDefaults.set(model, forKey: Self.modelDefaultsKey)
     }
 
     /// Validate that the current selection is still valid.

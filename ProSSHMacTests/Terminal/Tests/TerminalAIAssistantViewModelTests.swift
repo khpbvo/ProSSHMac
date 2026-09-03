@@ -53,14 +53,18 @@ final class TerminalAIAssistantViewModelTests: XCTestCase {
         XCTAssertEqual(service.clearedSessionIDs, [sessionID])
     }
 
-    func testSubmitPromptReflowsDenseAssistantReplyIntoParagraphs() async throws {
+    /// `normalizeAssistantReply` was reduced to a trim in b6a7165 ("simplify markdown
+    /// text processing"), which deliberately removed the paragraph/bullet reflow that
+    /// rewrote the model's prose. The reply must now reach the message list verbatim
+    /// apart from surrounding whitespace.
+    func testSubmitPromptPassesAssistantReplyThroughUnmodified() async throws {
         let sessionID = UUID()
         let denseReply = """
         This repository contains a CLI orchestrator for document workflows. It includes configuration and runtime integration for external tools. The project also wires approval-aware execution paths for safe editing. It supports retrieval and summarization flows for large document sets.
         """
         let service = MockOpenAIAgentService(
             nextReply: AIAgentReply(
-                text: denseReply,
+                text: "  \n" + denseReply + "\n  ",
                 responseID: "resp_456",
                 toolCallsExecuted: 3
             )
@@ -78,8 +82,8 @@ final class TerminalAIAssistantViewModelTests: XCTestCase {
         }
 
         XCTAssertEqual(viewModel.messages.count, 2)
-        let assistantText = viewModel.messages[1].content
-        XCTAssertTrue(assistantText.contains("\n\n"))
+        XCTAssertEqual(viewModel.messages[1].content, denseReply,
+                       "Reply should be trimmed but otherwise unmodified")
     }
 
     func testRequestPatchApprovalUsesModalStateWithoutInlineMessage() async throws {
@@ -238,63 +242,6 @@ final class TerminalAIAssistantViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.messages[1].role, .assistant)
         XCTAssertEqual(viewModel.messages[1].content, "Hello from stream")
         XCTAssertFalse(viewModel.messages[1].isStreaming)
-    }
-
-    func testSubmitPromptFormatsDenseCapabilitySentenceIntoReadableList() async throws {
-        let sessionID = UUID()
-        let rawReply = "I can:Run commands and inspect output.Provide summaries and explain failures.Search files and inspect results."
-        let service = MockOpenAIAgentService(
-            nextReply: AIAgentReply(
-                text: rawReply,
-                responseID: "resp_fmt",
-                toolCallsExecuted: 0
-            )
-        )
-        let viewModel = TerminalAIAssistantViewModel(
-            agentService: service,
-            streamChunkDelayNanoseconds: 0
-        )
-
-        viewModel.draftPrompt = "What can you do?"
-        viewModel.submitPrompt(for: sessionID)
-
-        try await waitUntil(timeout: 1.5) {
-            !viewModel.isSending
-        }
-
-        let assistantText = viewModel.messages[1].content
-        XCTAssertTrue(assistantText.contains("\n- "))
-        XCTAssertFalse(assistantText.contains(".Provide"))
-    }
-
-    func testSubmitPromptFormatsCapabilityRunOnWithToolNamesIntoBulletList() async throws {
-        let sessionID = UUID()
-        let rawReply = "Sure, here is a concise list of abilities:Execute shell commands and return output directly (execute_and_wait).Run interactive commands (execute_command) and inspect live screen (get_current_screen).View command history (get_recent_commands) and fetch command output (get_command_output).Search files (search_filesystem) and content (search_file_contents)."
-        let service = MockOpenAIAgentService(
-            nextReply: AIAgentReply(
-                text: rawReply,
-                responseID: "resp_fmt_tools",
-                toolCallsExecuted: 0
-            )
-        )
-        let viewModel = TerminalAIAssistantViewModel(
-            agentService: service,
-            streamChunkDelayNanoseconds: 0
-        )
-
-        viewModel.draftPrompt = "List your abilities"
-        viewModel.submitPrompt(for: sessionID)
-
-        try await waitUntil(timeout: 1.5) {
-            !viewModel.isSending
-        }
-
-        let assistantText = viewModel.messages[1].content
-        let lowered = assistantText.lowercased()
-        XCTAssertTrue(assistantText.contains("\n- "))
-        XCTAssertTrue(lowered.contains("execute_and_wait"))
-        XCTAssertTrue(lowered.contains("execute_command"))
-        XCTAssertFalse(assistantText.contains(":Execute"))
     }
 
     private func waitUntil(

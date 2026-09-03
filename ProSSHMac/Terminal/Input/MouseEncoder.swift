@@ -32,7 +32,10 @@ enum MouseEventKind: Sendable {
 struct MouseEvent: Sendable {
     var kind: MouseEventKind
     var button: MouseButton
+    /// 1-based terminal row. Producers (`terminalCellCoordinates`) already clamp to >= 1;
+    /// both X10 and SGR encoders pass this through without further adjustment.
     var row: Int
+    /// 1-based terminal column. See `row`.
     var column: Int
     var modifiers: MouseEventModifiers
 
@@ -152,9 +155,11 @@ struct MouseEncoder: Sendable {
     }
 
     private func encodeSGR(buttonCode: Int, event: MouseEvent) -> String {
-        // SGR mouse encoding uses 1-based coordinates; grid coordinates are 0-based.
-        let col = max(1, event.column + 1)
-        let row = max(1, event.row + 1)
+        // SGR mouse encoding uses 1-based coordinates, and `MouseEvent` already carries
+        // 1-based cell coordinates (see `MouseEvent.row`/`column`), so pass them through
+        // unchanged. Adding another +1 here shifted every SGR report one cell down/right.
+        let col = max(1, event.column)
+        let row = max(1, event.row)
         let suffix = event.kind == .release ? "m" : "M"
         return "\u{1B}[<\(buttonCode);\(col);\(row)\(suffix)"
     }

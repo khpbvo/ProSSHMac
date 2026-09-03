@@ -108,16 +108,22 @@ final class ShellIntegrationTests: XCTestCase {
     // MARK: - SSH Injection Script Tests
 
     func testSSHInjectionScriptsAreSingleLine() {
-        let shellTypes: [ShellIntegrationType] = [.zsh, .bash, .fish, .posixSh]
-        for type in shellTypes {
+        // fish closes blocks with `end`; the POSIX-family shells use `fi`.
+        let shellTypes: [(ShellIntegrationType, String)] = [
+            (.zsh, "fi"), (.bash, "fi"), (.fish, "end"), (.posixSh, "fi")
+        ]
+        for (type, blockTerminator) in shellTypes {
             let script = ShellIntegrationScripts.sshInjectionScript(for: type)
             XCTAssertNotNil(script, "Expected SSH injection script for \(type)")
             // Must be a single line (no newlines)
             XCTAssertFalse(script!.contains("\n"), "SSH injection script for \(type) must be single-line")
             // Must start with space (history suppression)
             XCTAssertTrue(script!.hasPrefix(" "), "SSH injection script for \(type) must start with space")
-            // Must end with clear
-            XCTAssertTrue(script!.hasSuffix("; clear"), "SSH injection script for \(type) must end with clear")
+            // Must close the idempotency guard. The trailing `; clear` was removed
+            // deliberately in 4238448 — clearing on connect wiped the login banner/MOTD.
+            XCTAssertTrue(script!.hasSuffix(blockTerminator),
+                          "SSH injection script for \(type) must close its guard with \(blockTerminator)")
+            XCTAssertFalse(script!.contains("; clear"), "SSH injection script for \(type) must not clear the screen")
             // Must contain OSC 133 sequences
             XCTAssertTrue(script!.contains("133;A"), "SSH injection script for \(type) must contain OSC 133;A")
             // Must contain idempotency guard

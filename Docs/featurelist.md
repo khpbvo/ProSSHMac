@@ -1818,3 +1818,54 @@ Build: SUCCEEDED with Xcode 26.6 / Swift 6.3.3 (`xcodebuild -project ProSSHMac.x
 - `xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform=macOS' -only-testing:ProSSHMacTests/SessionManagerRenderingPathTests test`: TEST SUCCEEDED, 21 tests, 0 failures.
 - `git diff --check`: passed.
 - Pending: none for the reported resize corruption.
+
+---
+
+## 2026-09-03 — CLAUDE.md Audit + Full Test Suite Back to Green
+
+### What Changed
+- **Audited `CLAUDE.md` against the repo.** Corrected stale line counts, the AI tool inventory
+  (10 exposed schemas, not 11), the renderer draw-loop description (now demand-driven), a spec file
+  that no longer exists (`RefactorTheActor.md`), and `Shaders.metal` → `TerminalShaders.metal`.
+  Documented previously-unmentioned subsystems: App Intents, TOTP 2FA, biometric/Secure Enclave
+  stores, SSH config import/export, Spotlight indexing, shell integration, `SmoothScrollEngine`,
+  `TerminalRenderingCoordinator`, `ThroughputBenchmarkRunner`, bloom/bold-text-colour effects.
+- **`docs/bugs.md` is stale** — 29 of its 79 entries are already `[FIXED]` (including the sole
+  Critical), so 50 are open; 18 of its 48 file paths moved in the refactors and 10 no longer exist.
+  Recorded that caveat rather than trusting the summary table.
+- **Full test suite: 38 distinct failures across 12 suites → 870 tests, 0 failures.**
+
+### Real bugs found and fixed (both user-facing)
+- `MouseEncoder.encodeSGR` added +1 to coordinates that `terminalCellCoordinates` already produces
+  1-based, while `encodeX10` treated the same field as 1-based. Every SGR mouse report — the
+  encoding modern TUIs negotiate — landed one row down and one column right.
+- `TerminalEngine` dropped byte `0x9C` when it was a UTF-8 continuation byte inside an OSC or DCS
+  string. "✳" (E2 9C B3) became E2 B3, so the string failed to decode and OSC title dispatch
+  produced nothing. Now collected for OSC and DCS; SOS/PM/APC keep the counter honest.
+
+### Test-side fixes (stale assertions, not regressions)
+- `LLMProviderRegistry` now takes an injectable `userDefaults:`; agent tests use
+  `makeIsolatedOpenAIRegistry()`. Previously all 17 `AIAgentServiceTests` failed with
+  `providerNotConfigured` on any machine whose last-selected provider had no API key.
+- Colour assertions: `TerminalCell` stores packed RGBA only, and `boldIsBright` is pre-applied at
+  write time. Added `XCTAssertRendersAs` (compares rendered RGB) and updated bold+colour
+  expectations to the bright variant.
+- `SmoothScrollEngineTests`: two tests predated Phase 4 bounds clamping and ran at `targetScrollRow`
+  0, where the engine correctly rubber-bands. Rewritten to set bounds first; added a test pinning
+  the clamp-at-minimum behaviour.
+- `UnicodeRenderTest.testEmoji`: emoji width=2 has since been implemented; expectations moved to
+  columns 0/2/4 with continuation-cell checks.
+- `ShellIntegrationTests`: asserted a trailing `; clear` deliberately removed in 4238448.
+- `Base32Tests.testDecodeEmpty`: was self-contradictory (`XCTAssertTrue(x || true)` after a throwing
+  call); now asserts the actual `invalidBase32Secret` contract.
+- `TerminalAIAssistantViewModelTests`: three tests asserted reply reflow removed in b6a7165.
+  Replaced with one test pinning the current pass-through-after-trim contract.
+
+### Files Modified
+- `ProSSHMac/Terminal/Input/MouseEncoder.swift`, `ProSSHMac/Terminal/Parser/TerminalEngine.swift`,
+  `ProSSHMac/Services/LLM/LLMProviderRegistry.swift`
+- 9 test files, `CLAUDE.md`
+
+### Build/Test
+- `xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform=macOS' build`: BUILD SUCCEEDED.
+- Full suite: **870 tests, 0 failures** (32.4s). Was 38 failures at session start.
