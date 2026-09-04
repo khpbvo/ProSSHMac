@@ -140,20 +140,29 @@ None of that was measured by any existing benchmark.
 
   `history index` fell from **3541 ms (89.2% of wall) to 510 ms (12.2%)**.
 
-  **Throughput improved, but the bottleneck simply moved.** Single runs taken minutes apart said the
-  fix changed nothing; they were confounded by background load. An interleaved A/B of the two
-  binaries — HEAD vs fixed, alternating launches so both saw the same load, 8 MB, 3 runs each,
-  signposts off — favours the fixed build in **every** pair:
+  **Throughput improved by ~4.3x, but the bottleneck simply moved.** Single runs taken minutes apart
+  said the fix changed nothing; they were confounded by background load. The trustworthy measurement
+  is an interleaved A/B of the two binaries — HEAD~1 vs R2a, alternating launches so both see the
+  same conditions, 8 MB, 3 runs each, signposts off, no window. On a quiet machine:
 
-  | Pair | Load avg | HEAD (MB/s) | Fixed (MB/s) |
+  | Pair | Load avg | HEAD~1 (MB/s) | R2a (MB/s) |
   |---|---|---|---|
-  | 1 | 10.1 / 11.6 | 0.13, 0.07, 0.11 | 1.60, 18.94, 0.20 |
-  | 2 | 9.3 / 7.4 | 0.27, 0.27, 0.11 | 0.45, 0.35, 3.15 |
-  | 3 | 4.8 / 4.7 | 1.20, 1.04, 1.08 | 3.81, 3.13, 1.23 |
+  | 1 | 2.45 / 2.04 | 1.05, 0.92, 0.79 | 3.95, 3.80, 4.23 |
+  | 2 | 2.03 / 2.15 | 1.10, 0.79, 0.96 | 5.01, 3.94, 3.80 |
+  | 3 | 2.48 / 2.36 | 0.88, 0.93, 0.76 | 4.29, 3.97, 3.86 |
 
-  Per-launch medians: **0.11 / 0.27 / 1.08 against 1.60 / 0.45 / 3.13** — roughly 3x at the lowest
-  load and more as contention rises, which is what removing ~1250 MainActor hops per MB should look
-  like. Absolute values are not comparable across pairs; only within one.
+  The two ranges do not overlap: every baseline run falls in **0.76-1.10**, every fixed run in
+  **3.80-5.01**. Medians **0.92 vs 3.95 — 4.3x**, and the slowest fixed run beats the fastest
+  baseline run by 3.4x.
+
+  The same experiment run earlier under heavy load (load 7-12) gave the same direction with far more
+  scatter — per-launch medians 0.11/0.27/1.08 against 1.60/0.45/3.13 — so contention widens the gap
+  but also destroys precision.
+
+  **Only within-pair ratios are trustworthy.** The identical baseline binary measured 2.86 MB/s early
+  in the session and 0.92 MB/s hours later at a comparable load average, so absolute figures drift
+  across a long benchmarking session (thermal state is the likely cause). Never compare a number to
+  one taken at a different time; interleave.
 
   With the per-chunk cost gone, stages that had been invisible now dominate (Release, 8 MB, load ~4,
   no window, wall 4252 ms — the most stable run of the session at 2.70/2.67/2.64 MB/s):

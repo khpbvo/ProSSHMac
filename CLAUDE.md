@@ -67,7 +67,8 @@ chunk (~1290/MB) via the `@MainActor` hop in `recordParsedChunk` and, past its 1
 cap, paid four O(n) passes over the whole buffer per call (a COW copy, two grapheme-cluster
 `String.count`s, an O(n) `removeFirst`). Raw output is now UTF-8 bytes with an amortized trim and a
 read-time character cap, and `recordParsedChunk` runs once per 4 ms batch. `history index` fell to
-11.6%; an interleaved A/B shows ~3x at low load and more under contention.
+11.6%, and an interleaved A/B on a quiet machine measures **4.3x** end to end (medians 0.92 -> 3.95
+MB/s, ranges 0.76-1.10 vs 3.80-5.01, no overlap).
 
 **`publish` measured 0.3%, not the 23-25% R1 recorded.** Do not act on R1's ranking.
 
@@ -90,7 +91,9 @@ before trusting any rendered number:**
   benchmark silently measures the detached path. It now warns. R1's windowed figures could not be
   reproduced.
 - The recorded "`--perf-signposts` costs ~19x" did not reproduce (2.78 on vs 2.86 off).
-- Background load swings results 7x-100x. Use interleaved A/B runs of two binaries.
+- Background load swings results 7x-100x, and absolute figures drift over hours — the same baseline
+  binary measured 2.86 MB/s early in a session and 0.92 later at the same load average. Only
+  within-pair ratios from interleaved A/B runs of two binaries are trustworthy.
 
 Unrelated open work: `docs/bugs.md` (50 open), `docs/PhaseB.md` manual smoke checklist,
 and the `Docs/` vs `docs/` case split. (`SessionManagerRenderingPathTests` ran 21/21 green twice

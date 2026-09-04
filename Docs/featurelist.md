@@ -2175,9 +2175,14 @@ sequence the history index decodes.
 ### Throughput, measured properly
 
 Single runs minutes apart said the fix changed nothing — they were confounded by background load. An
-interleaved A/B of the two binaries (HEAD vs fixed, alternating launches, 8 MB, 3 runs, signposts
-off) favours the fixed build in every pair; per-launch medians **0.11 / 0.27 / 1.08 MB/s against
-1.60 / 0.45 / 3.13**, roughly 3x at the lowest load and more as contention rises.
+interleaved A/B of the two binaries (HEAD~1 vs R2a, alternating launches, 8 MB, 3 runs each,
+signposts off) settles it. On a quiet machine the two ranges do not overlap — every baseline run in
+**0.76-1.10 MB/s**, every fixed run in **3.80-5.01** — medians **0.92 vs 3.95, i.e. 4.3x**, with the
+slowest fixed run beating the fastest baseline run by 3.4x. The same experiment under heavy load
+(7-12) gave the same direction with far more scatter.
+
+Absolute figures drift over a long session: the identical baseline binary measured 2.86 MB/s early on
+and 0.92 hours later at a comparable load average. Only within-pair ratios are trustworthy.
 
 ### The finding that matters for R2b
 
