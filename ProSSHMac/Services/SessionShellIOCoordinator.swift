@@ -176,12 +176,13 @@ enum RawShellInputSource: String {
         let (batchedStream, batchContinuation) = AsyncStream<Data>.makeStream(bufferingPolicy: .unbounded)
         let accumulator = ChunkBatchAccumulator(continuation: batchContinuation)
 
-        // Accumulator task: record each raw chunk (preserving per-chunk timestamps/byte counts),
-        // then batch into 4ms windows to reduce actor-hop frequency on engine.feed().
-        let accTask = Task.detached(priority: .userInitiated) { [weak self] in
+        // Accumulator task: batch raw chunks into 4ms windows to reduce actor-hop
+        // frequency on engine.feed(). Bookkeeping used to run here per raw chunk —
+        // one MainActor hop each, ~1290 per MB — and now runs once per batch in the
+        // parser task below; see recordParsedChunk.
+        let accTask = Task.detached(priority: .userInitiated) {
             for await chunk in rawOutput {
                 if Task.isCancelled { break }
-                await self?.recordParsedChunk(sessionID: sessionID, chunk: chunk)
                 await accumulator.push(chunk)
             }
             await accumulator.finish()
@@ -193,7 +194,19 @@ enum RawShellInputSource: String {
 
             for await batch in batchedStream {
                 if Task.isCancelled { break }
+                let recordStart = TerminalPerf.now()
+                await self?.recordParsedChunk(sessionID: sessionID, chunk: batch)
+                TerminalPerf.record(.chunkRecord, since: recordStart, byteCount: batch.count)
+
+                let feedStart = TerminalPerf.now()
                 await engine.feed(batch)
+                TerminalPerf.record(.feedCall, since: feedStart, byteCount: batch.count)
+
+                // Four more cross-actor round-trips per batch, each queueing behind
+                // whatever the engine is already doing. Timed as one stage so their
+                // combined cost is visible next to feed and publish.
+                let followUpStart = TerminalPerf.now()
+                defer { TerminalPerf.record(.batchFollowUp, since: followUpStart, byteCount: batch.count) }
                 await self?.manager?.renderingCoordinator.refreshInputModeSnapshot(
                     sessionID: sessionID,
                     engine: engine
@@ -241,18 +254,30 @@ enum RawShellInputSource: String {
         }
     }
 
+    /// Per-batch bookkeeping for output that has arrived: activity, byte counts,
+    /// command-history capture and recording.
+    ///
+    /// This is `@MainActor`, so it costs one hop per call. It used to be called once
+    /// per raw PTY chunk (~1290 per MB) and now runs once per 4 ms batch (~30 per
+    /// MB). Everything it does concatenates, so batching is equivalent — and it also
+    /// fixes a latent defect, since a raw chunk can split a UTF-8 sequence that
+    /// `TerminalHistoryIndex` decodes.
     private func recordParsedChunk(sessionID: UUID, chunk: Data) async {
         // No-op outside `--benchmark-render`; the rendered benchmark cannot drain
-        // the PTY stream itself, so it watches for its sentinel here.
+        // the PTY stream itself, so it watches for its sentinel here. The matcher
+        // handles a sentinel split across inputs, so batching delays detection by at
+        // most one batch window.
         ThroughputBenchmarkRunner.observeBenchmarkChunk(chunk)
         guard let manager else { return }
         manager.lastActivityBySessionID[sessionID] = .now
         manager.bytesReceivedBySessionID[sessionID, default: 0] += Int64(chunk.count)
+        let historyStart = TerminalPerf.now()
         await manager.terminalHistoryIndex.recordOutputChunk(
             sessionID: sessionID,
             data: chunk,
             at: .now
         )
+        TerminalPerf.record(.historyIndex, since: historyStart, byteCount: chunk.count)
         manager.recordingCoordinator.recordIfActive(sessionID: sessionID, chunk: chunk, throughputModeEnabled: manager.throughputModeEnabled)
     }
 }

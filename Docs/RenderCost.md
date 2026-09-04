@@ -1,6 +1,6 @@
 # RenderCost — measuring what rendering actually costs
 
-**Status:** Phases R0 and R1 complete (2026-09-03). R2 open.
+**Status:** Phases R0, R1 and R2a complete (2026-09-04). R2b open.
 
 `FasterThenYouWillEverLiveToBe` ended by retargeting throughput at Terminal.app's **26.5 MB/s**.
 That peer figure was measured **with rendering**; ProSSHMac's **17.97 MB/s** was measured **without**
@@ -80,19 +80,123 @@ None of that was measured by any existing benchmark.
   A key window is not cosmetic: `MetalTerminalSessionSurface.updateFPS` drops an unfocused surface
   to 30 FPS.
 
-- [ ] **Phase R2: Attack the dominant stage**
+- [x] **Phase R2 (superseded by R2a below): Attack the dominant stage**
 
-  The measurements below say where to look. In order of expected value:
+  The ranking written here from R1's data — `publish` first, window-size scaling second, the
+  per-chunk MainActor hop third — was measured in a configuration R2a could not reproduce, and
+  every item in it was wrong about magnitude. Kept for the record; act on R2a/R2b instead.
 
-  1. **`publish` is 23–25% of wall in every budget, at 4–8.5 ms per call.** In the parser-only
-     benchmark it was negligible. `publishGridState` is `@MainActor` and runs once per 4 ms batch.
-  2. **Cost scales with window size.** A 149×129 off-screen window measured 2.31 MB/s detached; a
-     1100×750 on-screen one measured 0.14 MB/s on the same code path — 16x, with the terminal not
-     even visible. The grid is larger, so every snapshot build and publish moves more cells.
-     Confirm this is snapshot/publish cost scaling with cell count.
-  3. **The MainActor hop per raw chunk** in `recordParsedChunk` (~1290 hops per MB) queues behind
-     publishes and draws.
-  4. Only then the draw loop, which is cheap per frame (see Results).
+- [x] **Phase R2a: Attribute the missing wall time, and remove the per-chunk cost**
+
+  R2's ranking above was wrong on every count, and R2a's instrumentation says why. Ranked item 1
+  (`publish` at 23-25%) measured **0.3%** here; ranked item 3 (the per-chunk MainActor hop) turned
+  out to matter enormously, but for the work it carried rather than the hop itself.
+
+  **What was added**
+
+  Seven stages — `chunkRecord`, `historyIndex`, `feedCall`, `batchFollowUp`, `publishEngineWait`,
+  `publishHousekeeping`, `visibleTextScan` — several deliberately paired with an existing
+  callee-side stage, so that `feedCall` minus `parse` and `publish` minus `publishEngineWait` are
+  the actor hop and queue wait rather than the work.
+
+  `TerminalPerf` also tracks a **span** (first start to last end) and **busy%** (time / span) per
+  stage. Summed durations alone cannot separate a stage that is blocked from one that never ran,
+  which is exactly why ~18 s of R1's 31.6 s run was unattributable. `--benchmark-window WxH` forces
+  the frame, because R1's own lesson was that window size moves the result by more than 10x and so
+  must be an input rather than whatever the app restored.
+
+  **Where the time actually goes** (Release, 8 MB payload, idle machine, no window — see the
+  measurement caveat below; wall 3968 ms)
+
+  | Stage | Time | % wall | Busy | Calls |
+  |---|---|---|---|---|
+  | chunk record | 3704.87 ms | **93.4%** | 98.6% | 10595 |
+  | history index | 3541.18 ms | **89.2%** | 94.3% | 10595 |
+  | feed call | 263.54 ms | 6.6% | 7.0% | 2718 |
+  | parse + grid | 256.41 ms | 6.5% | 6.8% | 2718 |
+  | publish | 12.68 ms | 0.3% | 0.3% | 254 |
+  | pty read | 29.76 ms | 0.7% | 29.0% | 10595 |
+
+  Two things fall out of the span column immediately:
+
+  1. **`pty read` spans 103 ms of a 3968 ms run.** All 10.67 MB is read off the PTY in the first
+     tenth of a second and then sits in the unbounded `AsyncStream`. Every rendered "MB/s" figure in
+     this spec measures how fast the app *digests* a backlog, not how fast it reads.
+  2. **`history index` is 96% of `chunk record`.** `TerminalHistoryIndex.recordOutputChunk` ran once
+     per raw chunk (~1290/MB) and, past its 120,000-character cap, paid four O(n) passes over the
+     whole buffer every time: a copy-on-write of the string (the `var state = sessionStates[id]`
+     copy left it doubly referenced), two grapheme-cluster `count`s, and an O(n) `removeFirst`.
+
+  **What was fixed**
+
+  - `ActiveCommandContext` keeps raw output as UTF-8 bytes. Length is O(1), the trim is amortized
+    (run to 2x the cap, drop back to it, realign to a UTF-8 lead byte), and the character cap is
+    applied at read time — once per command completion, where `finalizeActiveCommand` already
+    applied it. The retained window is unchanged; `hasOutput` becomes a byte-level test, so non-ASCII
+    whitespace such as U+00A0 now counts as output.
+  - `recordParsedChunk` moved from per raw chunk to per 4 ms batch: ~1290 MainActor hops per MB
+    become ~30. Everything it does concatenates, and batching also fixes a latent defect, since a raw
+    chunk can split a UTF-8 sequence that the history index decodes.
+
+  `history index` fell from **3541 ms (89.2% of wall) to 510 ms (12.2%)**.
+
+  **Throughput improved, but the bottleneck simply moved.** Single runs taken minutes apart said the
+  fix changed nothing; they were confounded by background load. An interleaved A/B of the two
+  binaries — HEAD vs fixed, alternating launches so both saw the same load, 8 MB, 3 runs each,
+  signposts off — favours the fixed build in **every** pair:
+
+  | Pair | Load avg | HEAD (MB/s) | Fixed (MB/s) |
+  |---|---|---|---|
+  | 1 | 10.1 / 11.6 | 0.13, 0.07, 0.11 | 1.60, 18.94, 0.20 |
+  | 2 | 9.3 / 7.4 | 0.27, 0.27, 0.11 | 0.45, 0.35, 3.15 |
+  | 3 | 4.8 / 4.7 | 1.20, 1.04, 1.08 | 3.81, 3.13, 1.23 |
+
+  Per-launch medians: **0.11 / 0.27 / 1.08 against 1.60 / 0.45 / 3.13** — roughly 3x at the lowest
+  load and more as contention rises, which is what removing ~1250 MainActor hops per MB should look
+  like. Absolute values are not comparable across pairs; only within one.
+
+  With the per-chunk cost gone, stages that had been invisible now dominate (Release, 8 MB, load ~4,
+  no window, wall 4252 ms — the most stable run of the session at 2.70/2.67/2.64 MB/s):
+
+  | Stage | Time | % wall | Busy | Calls |
+  |---|---|---|---|---|
+  | batch follow-up | 1984.54 ms | **46.7%** | 49.3% | 1251 |
+  | publish housekeep | 1378.66 ms | 32.4% | 34.3% | 713 |
+  | publish | 1130.90 ms | 26.6% | 28.1% | 720 |
+  | publish engine wait | 1124.82 ms | 26.5% | 28.0% | 1440 |
+  | feed call | 1063.36 ms | 25.0% | 26.4% | 1251 |
+  | parse + grid | 1033.15 ms | 24.3% | 25.7% | 1251 |
+  | chunk record | 946.61 ms | 22.3% | 23.5% | 1251 |
+  | history index | 494.58 ms | 11.6% | 12.3% | 1251 |
+  | pty read | 237.43 ms | 5.6% | 50.9% | 4013 |
+
+  `batchFollowUp` is the four cross-actor round-trips `startParserReader` makes after every
+  `engine.feed` — `refreshInputModeSnapshot`, `consumeSyncExitSnapshots`, `synchronizedOutput` and
+  `scheduleParsedChunkPublish` (which awaits `usingAlternateBuffer` again). `publish` is 99%
+  `publishEngineWait`: not working, queueing. (`publish housekeep` exceeds `publish` because the
+  publish drain loop calls `publishHousekeeping` directly, outside `publishGridState`'s own timer —
+  which is why that timer lives inside the function rather than at the call site.)
+
+  **The real bottleneck is cross-actor round-trip count, not the work at either end.** That is R2b.
+
+- [ ] **Phase R2b: Coalesce the per-batch and per-publish engine round-trips**
+
+  Sized by R2a, in order:
+
+  1. `startParserReader`'s four post-feed round-trips (`batchFollowUp`, 47% of wall) fold into what
+     `engine.feed` returns: input-mode snapshot, sync-exit snapshots, synchronized-output flag and
+     alternate-buffer flag in one `FeedOutcome`.
+  2. `publishGridState`'s engine awaits (`publishEngineWait`, ~99% of `publish`) coalesce into one
+     composite call: scrollback count, alternate-buffer flag, snapshot, bell count, input mode,
+     title and working directory. Covered by 21 `SessionManagerRenderingPathTests`.
+  3. `publishHousekeeping` (32% of wall) makes five more engine round-trips of its own — bell count,
+     input mode, window title, working directory, and `visibleText` — and is called both from
+     `publishGridState` and directly from the publish drain loop. It coalesces into the same
+     composite call as item 2.
+  4. Also open: throughput is **bimodal** under load. One run in the A/B reached 18.94 MB/s while its
+     neighbours in the same launch managed 0.20 — a 90x spread with no code change. The burst-mode
+     and debounce logic in `scheduleCoalescedGridPublish` is the obvious suspect for a feedback loop
+     and should be examined once the round-trip count is down.
 
 ---
 
@@ -142,14 +246,49 @@ waiting, not working. That gap is itself the R2 target.
 
 ---
 
+## Measurement caveats found in R2a (2026-09-04)
+
+**The rendered benchmark could not obtain a window at all on this machine.** Every R2a figure was
+measured in a process with **zero windows** (`NSApp.windows.count == 0`), so the grid kept its
+default geometry and nothing rendered — `--benchmark-render` degraded to `--benchmark-render-detached`
+and said so. The cause is LaunchServices, not the app: `open -n ProSSHMac.app` restores a window,
+while `open -n ProSSHMac.app --args <anything at all>` produces a process that never materializes
+one. A harmless unused flag reproduces it. `applicationShouldHandleReopen` does not recover it.
+The runner now emits an explicit warning when a run has no windows, since a windowless number looks
+exactly like a windowed one in the output.
+
+Consequences:
+
+- R1's rendered figures (0.14 detached / 0.03-0.05 rendered at 1100x750) **could not be reproduced**
+  and R2a's are not comparable to them. R2a's own numbers are internally consistent.
+- The window-size scaling claim and the rendered-vs-detached delta could not be tested this session.
+  Whoever restores window acquisition should retest both.
+
+**The `--perf-signposts` "~19x" gotcha did not reproduce.** Detached, same binary, back to back:
+**2.78 MB/s with signposts on, 2.86 MB/s off** — within noise. Note that the previously recorded
+"signposts off" figure of 2.81 MB/s is almost exactly R2a's windowless measurement, which suggests
+that pair differed by window state rather than by signposts. Treat the 19x as unfounded.
+
+**Background load dominates everything.** A `mediaanalysisd` pass (300% CPU, load average 6-17)
+made the identical binary measure 7x slower — 4.2 s vs 30.5 s wall for the same 8 MB — and produced
+run-to-run spreads of 100x within one launch. Check `sysctl -n vm.loadavg` and the top CPU consumers
+before trusting any rendered number, record the load with the result, and prefer interleaved A/B
+runs of two binaries over comparing numbers taken minutes apart.
+
+**Rendered MB/s is a digest rate, not an I/O rate.** `pty read` spans ~100-400 ms of a multi-second
+run: the payload is read off the PTY almost immediately and buffered in an unbounded `AsyncStream`.
+The figure measures how fast the app drains that backlog.
+
+---
+
 ## Gotchas
 
-- **`--perf-signposts` is not free on this path.** Detached measured 2.81 MB/s with signposts off
-  and 0.15 MB/s with them on — ~19x. The parser-only benchmark showed no such effect (Phase 1 of
-  `FasterThenYouWillEverLiveToBe` verified that), because the real path crosses far more signpost
-  sites. **Only compare signpost-on numbers to other signpost-on numbers.** Signposts remain free
-  when off, which is the property that matters for shipping.
-- **Window size dominates.** Always record it.
+- ~~**`--perf-signposts` is not free on this path.**~~ Recorded here as ~19x (2.81 MB/s off vs 0.15
+  on). **R2a could not reproduce it** — 2.78 on vs 2.86 off, back to back on one binary. See
+  "Measurement caveats found in R2a". Signposts are free when off either way, which is the property
+  that matters for shipping.
+- **Window size dominates.** Always record it — and record whether there was a window at all
+  (R2a's runs had none; see the caveats section). `--benchmark-window WxH` forces the frame.
 - **`MetalTerminalRenderer.benchmarkInstance` is a strong reference on purpose.** A weak one cannot
   distinguish "surface torn down" from "SwiftUI rebuilt the view", and that distinction is what
   revealed the zero-frame runs above.

@@ -2139,6 +2139,88 @@ with `bash -n` and by running both emulator paths end to end.
 
 ---
 
+## 2026-09-04 — RenderCost Phase R2a: the missing wall time was the command-history index
+
+R1 left ~18 s of a 31.6 s run unattributed and ranked `publish` as the thing to attack. R2a
+instrumented the gap and found the cost somewhere no stage had ever covered — and `publish` measured
+**0.3%**, not 23%.
+
+### What changed
+
+**Instrumentation.** Seven stages added to `TerminalPerf` — `chunkRecord`, `historyIndex`,
+`feedCall`, `batchFollowUp`, `publishEngineWait`, `publishHousekeeping`, `visibleTextScan` — several
+paired with an existing callee-side stage so the difference (`feedCall` − `parse`, `publish` −
+`publishEngineWait`) is the actor hop and queue wait rather than the work. `TerminalPerf` now also
+records a **span** (first start to last end) and **busy%** per stage: summed durations alone cannot
+distinguish a blocked stage from an absent one, which is precisely why R1's gap was opaque.
+`--benchmark-window WxH` forces the window frame, since R1 established that size moves the result
+more than 10x and so must be an input.
+
+**The defect.** `TerminalHistoryIndex.recordOutputChunk` ran once per raw PTY chunk (~1290/MB) and,
+past its 120,000-character cap, paid four O(n) passes over the whole buffer per call: a
+copy-on-write of the string (`var state = sessionStates[id]` left it doubly referenced), two
+grapheme-cluster `String.count`s, and an O(n) `removeFirst`. It measured **89.2% of wall**. It is not
+a benchmark artifact — any command producing large output pays it, and the benchmark reaches it the
+same way a user does, via `recordRawInput` → `startCommand`.
+
+**The fix.** `ActiveCommandContext` keeps raw output as UTF-8 bytes: O(1) length, amortized trim
+(run to 2x the cap, drop back, realign to a UTF-8 lead byte), character cap applied at read time
+where `finalizeActiveCommand` already applied one. Mutation goes through the dictionary subscript so
+no COW copy occurs. `recordParsedChunk` moved from per raw chunk to per 4 ms batch — ~1290 MainActor
+hops per MB become ~30 — which also fixes a latent defect, since a raw chunk can split a UTF-8
+sequence the history index decodes.
+
+`history index` fell from **3541 ms (89.2% of wall) to 510 ms (12.2%)**.
+
+### Throughput, measured properly
+
+Single runs minutes apart said the fix changed nothing — they were confounded by background load. An
+interleaved A/B of the two binaries (HEAD vs fixed, alternating launches, 8 MB, 3 runs, signposts
+off) favours the fixed build in every pair; per-launch medians **0.11 / 0.27 / 1.08 MB/s against
+1.60 / 0.45 / 3.13**, roughly 3x at the lowest load and more as contention rises.
+
+### The finding that matters for R2b
+
+The bottleneck moved rather than disappeared. With the per-chunk cost gone, `batchFollowUp` — the
+four cross-actor round-trips `startParserReader` makes after every `engine.feed` — is **46.7% of
+wall**, `publishHousekeeping` 32.4%, and `publish` is 99% `publishEngineWait`: not working, queueing.
+**The bottleneck is cross-actor round-trip count**, which is now R2b. Also open: throughput is
+bimodal under load (18.94 MB/s and 0.20 MB/s in the same launch, no code change).
+
+### Measurement problems found (all recorded in docs/RenderCost.md)
+
+1. **No window.** Every R2a run had `NSApp.windows.count == 0`. `open -n App.app` restores a window;
+   `open -n App.app --args <anything>` does not — a harmless unused flag reproduces it, and
+   `applicationShouldHandleReopen` does not recover it. So `--benchmark-render` degraded to detached,
+   R1's rendered figures could not be reproduced, and the window-scaling claim could not be tested.
+   The runner now warns explicitly when a run has no windows.
+2. **The "signposts cost ~19x" gotcha did not reproduce**: 2.78 MB/s on vs 2.86 off, back to back.
+   The previously recorded "off" figure of 2.81 is almost exactly R2a's windowless measurement,
+   suggesting that pair differed by window state, not signposts.
+3. **Background load dominates.** A `mediaanalysisd` pass (300% CPU, load 6–17) made the identical
+   binary measure 7x slower on the same payload, with 100x spreads inside a single launch. Only
+   interleaved A/B runs of two binaries are trustworthy on this machine.
+
+### Files Modified
+- `ProSSHMac/Terminal/Diagnostics/TerminalPerf.swift` (7 stages, span/busy tracking, report columns)
+- `ProSSHMac/Terminal/Features/TerminalHistoryIndex.swift` (byte buffer, read-time cap, in-place mutation)
+- `ProSSHMac/Services/SessionShellIOCoordinator.swift` (per-batch `recordParsedChunk`, 3 timers)
+- `ProSSHMac/Services/TerminalRenderingCoordinator.swift` (3 timers)
+- `ProSSHMac/App/ThroughputBenchmarkRunner+Render.swift` (`--benchmark-window`, windowless warning)
+- `scripts/benchmark-throughput.sh`, `docs/RenderCost.md`, `CLAUDE.md`
+- Tests: `TerminalHistoryIndexTests` (+3), `TerminalPerfTests` (+2)
+
+### Build/Test
+- `xcodebuild build` (Debug and Release): **BUILD SUCCEEDED**.
+- Targeted suites green: `TerminalHistoryIndexTests` (8), `TerminalPerfTests` (7, 2 skipped),
+  `ThroughputBenchmarkRunnerTests` (6) — 21 tests, 0 failures; and
+  `SessionManagerRenderingPathTests` **21 tests, 0 failures**, including the previously flaky
+  `testLocalSessionStreamsProgressiveCommandOutput`.
+- Regression: parser/grid Release **36.7–37.3 MB/s** (was 36.44), unchanged — the instrumentation
+  costs nothing when off.
+
+---
+
 ## 2026-09-03 — RenderCost Phases R0 + R1: rendering cost measured, and it is not rendering
 
 `FasterThenYouWillEverLiveToBe` ended with a corrected target (Terminal.app, 26.5 MB/s) but an

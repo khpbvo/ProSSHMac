@@ -58,39 +58,41 @@ Each Claude Code session implements exactly one phase from a feature spec.
 
 At the bottom of this file is a `<!-- NEXT SESSION PLAN -->
 
-**Last completed work (2026-09-03): RenderCost Phases R0 and R1.**
+**Last completed work (2026-09-04): RenderCost Phase R2a.**
 
-The rendering cost is now measured, and the answer inverts the previous plan.
+R1's ~18 s of unattributed wall time is explained, and R2's ranking was wrong on every count.
 
-**Rendering (Metal) is cheap. The path around it is not.** Per frame the renderer costs ~4-6 ms CPU
-and ~1 ms GPU with a 100% glyph cache hit rate. But end-to-end on the real path, in a 1100x750
-active window:
+**The cost was `TerminalHistoryIndex.recordOutputChunk` — 89% of wall.** It ran once per raw PTY
+chunk (~1290/MB) via the `@MainActor` hop in `recordParsedChunk` and, past its 120,000-character
+cap, paid four O(n) passes over the whole buffer per call (a COW copy, two grapheme-cluster
+`String.count`s, an O(n) `removeFirst`). Raw output is now UTF-8 bytes with an amortized trim and a
+read-time character cap, and `recordParsedChunk` runs once per 4 ms batch. `history index` fell to
+11.6%; an interleaved A/B shows ~3x at low load and more under contention.
 
-| Path | MB/s |
+**`publish` measured 0.3%, not the 23-25% R1 recorded.** Do not act on R1's ranking.
+
+Next session: **RenderCost Phase R2b — coalesce cross-actor round-trips**, which now dominate:
+
+| Stage | % wall |
 |---|---|
-| Parser/grid only (`--benchmark-base64`) | 36.44 |
-| PTY -> `engine.feed` (`--pty-local`) | 19.20 |
-| Real app path, terminal off-screen (`--render-detached`) | **0.14** |
-| Real app path, terminal visible (`--render`) | **0.03-0.05** |
-| Terminal.app (peer, with rendering) | 26.5 |
+| batch follow-up (4 engine round-trips after every `feed`) | **46.7%** |
+| publish housekeep (5 more of its own) | 32.4% |
+| publish (99% of it is `publishEngineWait`) | 26.6% |
+| parse + grid | 24.3% |
+| history index | 11.6% |
 
-Two findings make the next step obvious:
+Ranked in `docs/RenderCost.md`. Also open there: throughput is bimodal under load (18.94 and 0.20
+MB/s in one launch, no code change) — suspect the burst/debounce logic.
 
-1. **`parse + grid` is 0.1% of wall on the real path.** `FasterThenYouWillEverLiveToBe` Phase 4
-   proposed optimising exactly that stage next. **Do not do it** — it is a rounding error. Mark
-   Phase 4 abandoned rather than optional.
-2. **`publish` is 23-25% of wall, at 4-8.5 ms per call**, and the draw loop is provably not the
-   cause: runs where the surface was unbound drew **zero frames** and were just as slow. The cost
-   is upstream of `draw(in:)`, in publish -> SwiftUI -> surface.
-
-Next session: **RenderCost Phase R2.** Ranked in `docs/RenderCost.md`:
-- `TerminalRenderingCoordinator.publishGridState` (@MainActor, once per 4 ms batch).
-- Confirm cost scales with grid cell count — a small off-screen window measured 16x faster on the
-  same code path with nothing rendering.
-- The per-raw-chunk MainActor hop in `SessionShellIOCoordinator.recordParsedChunk` (~1290/MB).
-- The stage budget sums to well under wall time; ~18 s of a 31.6 s run is spent waiting, not
-  working. Find out where.
+**Benchmark gotchas that cost this session hours — read `docs/RenderCost.md` "Measurement caveats"
+before trusting any rendered number:**
+- `open -n App.app --args <anything>` yields a process with **zero windows**, so the rendered
+  benchmark silently measures the detached path. It now warns. R1's windowed figures could not be
+  reproduced.
+- The recorded "`--perf-signposts` costs ~19x" did not reproduce (2.78 on vs 2.86 off).
+- Background load swings results 7x-100x. Use interleaved A/B runs of two binaries.
 
 Unrelated open work: `docs/bugs.md` (50 open), `docs/PhaseB.md` manual smoke checklist,
-the `Docs/` vs `docs/` case split, and the flaky
-`SessionManagerRenderingPathTests.testLocalSessionStreamsProgressiveCommandOutput`.
+and the `Docs/` vs `docs/` case split. (`SessionManagerRenderingPathTests` ran 21/21 green twice
+this session, including the previously flaky
+`testLocalSessionStreamsProgressiveCommandOutput`.)

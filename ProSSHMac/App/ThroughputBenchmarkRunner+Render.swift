@@ -12,6 +12,7 @@
 //
 //   --benchmark-render            terminal visible, Metal surface attached
 //   --benchmark-render-detached   same path, parked on .hosts so nothing renders
+//   --benchmark-window WxH        force the window frame (results scale with it)
 //
 // The delta between the two is the cost of rendering.
 
@@ -104,14 +105,26 @@ extension ThroughputBenchmarkRunner {
         // The window must be key and large enough to hold a real grid:
         // MetalTerminalSessionSurface.updateFPS drops an unfocused surface to
         // 30 FPS, which would silently halve the result.
-        let hasKeyWindow = await prepareWindow(timeoutSeconds: 30)
+        let hasKeyWindow = await prepareWindow(timeoutSeconds: 30, forcedSize: config.windowSize)
         if !detached && !hasKeyWindow {
             emit("  WARNING: no usable key window — the surface may be throttled to 30 FPS")
             emit("           and this measurement should not be compared to peer emulators.")
         }
+        // A windowless run is not the detached path either: the grid keeps its
+        // default geometry, so nothing scales with cell count and the result is not
+        // comparable to any run that had a window. Launching through LaunchServices
+        // *with arguments* can produce exactly this — `open -n App.app` restores a
+        // window, `open -n App.app --args anything` may not — so say so loudly
+        // rather than reporting a number that looks like the others.
+        if NSApp.windows.isEmpty {
+            emit("  WARNING: this process has no windows at all. The grid is at its default")
+            emit("           geometry and nothing renders, so this number is NOT comparable")
+            emit("           to any windowed run — state that alongside the result.")
+        }
         let frame = NSApp.keyWindow?.frame ?? NSApp.windows.first?.frame ?? .zero
         emit("    window: active=\(NSApp.isActive) count=\(NSApp.windows.count)"
-            + " frame=\(Int(frame.width))x\(Int(frame.height))@\(Int(frame.origin.x)),\(Int(frame.origin.y))")
+            + " frame=\(Int(frame.width))x\(Int(frame.height))@\(Int(frame.origin.x)),\(Int(frame.origin.y))"
+            + " (\(config.windowSize == nil ? "restored" : "forced"))")
 
         navigationCoordinator.navigate(to: detached ? .hosts : .terminal)
         try? await Task.sleep(for: .milliseconds(750))
@@ -256,14 +269,15 @@ extension ThroughputBenchmarkRunner {
 
     // MARK: - Waiting helpers
 
-    /// Waits for the app's window, forces it to a usable size and position, and
-    /// makes it key.
+    /// Waits for the app's window, sizes and positions it, and makes it key.
     ///
-    /// Saved window state is restored before this runs and can be degenerate — on
-    /// the machine this was written on it came back as 149x129 at x=-234, entirely
-    /// off-screen, which leaves no terminal surface to render into and no key
-    /// window to un-throttle it.
-    private static func prepareWindow(timeoutSeconds: Int) async -> Bool {
+    /// `forcedSize` (`--benchmark-window WxH`) is applied unconditionally, because
+    /// results scale with the grid's cell count and a comparable measurement needs
+    /// the size pinned. Without it, saved window state is kept unless it is
+    /// degenerate — on the machine this was written on it came back as 149x129 at
+    /// x=-234, entirely off-screen, which leaves no terminal surface to render into
+    /// and no key window to un-throttle it.
+    private static func prepareWindow(timeoutSeconds: Int, forcedSize: CGSize?) async -> Bool {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
 
@@ -277,7 +291,12 @@ extension ThroughputBenchmarkRunner {
 
         let frame = window.frame
         let onScreen = NSScreen.screens.contains { $0.visibleFrame.intersects(frame) }
-        if frame.width < 800 || frame.height < 500 || !onScreen {
+        if let forcedSize {
+            window.setFrame(
+                NSRect(x: 120, y: 120, width: forcedSize.width, height: forcedSize.height),
+                display: true
+            )
+        } else if frame.width < 800 || frame.height < 500 || !onScreen {
             window.setFrame(NSRect(x: 120, y: 120, width: 1280, height: 800), display: true)
         }
         window.makeKeyAndOrderFront(nil)
@@ -362,6 +381,9 @@ extension ThroughputBenchmarkRunner {
     private struct RenderBenchmarkConfig {
         let kilobytes: Int
         let runs: Int
+        /// Forced window size from `--benchmark-window WxH`, or nil to keep the
+        /// restored frame unless it is unusable.
+        let windowSize: CGSize?
     }
 
     private static func renderConfigurationFromArgs() -> RenderBenchmarkConfig {
@@ -369,7 +391,23 @@ extension ThroughputBenchmarkRunner {
         let bytes = max(intArg("--benchmark-bytes", args: args, defaultValue: 2 * 1_048_576), 1024)
         return RenderBenchmarkConfig(
             kilobytes: max(bytes / 1024, 1),
-            runs: max(intArg("--benchmark-runs", args: args, defaultValue: 3), 1)
+            runs: max(intArg("--benchmark-runs", args: args, defaultValue: 3), 1),
+            windowSize: windowSizeFromArgs(args)
         )
+    }
+
+    /// Window size changes a rendered result by more than 10x, so it has to be an
+    /// input rather than whatever frame the app happened to restore.
+    private static func windowSizeFromArgs(_ args: [String]) -> CGSize? {
+        guard let idx = args.firstIndex(of: "--benchmark-window"), idx + 1 < args.count else {
+            return nil
+        }
+        let parts = args[idx + 1].lowercased().split(separator: "x")
+        guard parts.count == 2,
+              let width = Double(parts[0]), let height = Double(parts[1]),
+              width >= 200, height >= 200 else {
+            return nil
+        }
+        return CGSize(width: width, height: height)
     }
 }

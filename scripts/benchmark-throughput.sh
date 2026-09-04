@@ -17,6 +17,12 @@
 # The --render vs --render-detached delta is the cost of rendering. --render needs
 # a focused window: an unfocused terminal surface is throttled to 30 FPS.
 #
+# Rendered results scale with window size by more than 10x, so pin it rather than
+# inheriting whatever frame the app restored:
+#   --benchmark-window 1280x800   (forwarded to the app; render modes only)
+# Always record the window size and the signpost state alongside any rendered
+# number — see docs/RenderCost.md.
+#
 # The build configuration defaults to Debug so that historical numbers in
 # docs/Optimization.md stay reproducible. Every recorded measurement must state
 # which configuration it came from — see docs/FasterThenYouWillEverLiveToBe.md.
@@ -28,6 +34,8 @@
 #   ./scripts/benchmark-throughput.sh --pty-local --no-build
 #   ./scripts/benchmark-throughput.sh --configuration Release --render --benchmark-bytes 2097152
 #   ./scripts/benchmark-throughput.sh --configuration Release --no-build --render-detached
+#   ./scripts/benchmark-throughput.sh --configuration Release --render-detached \
+#       --benchmark-window 1280x800 --benchmark-bytes 1048576 --benchmark-runs 3
 
 set -euo pipefail
 

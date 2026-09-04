@@ -13,9 +13,62 @@ actor TerminalHistoryIndex {
         let startedAt: Date
         var boundarySource: CommandBoundarySource
         let startVisibleLines: [String]
-        var rawOutput: String = ""
+        /// Raw output held as UTF-8 bytes, not a `String`.
+        ///
+        /// This is appended to once per batch of terminal output and read once, at
+        /// command completion. As a `String` capped per append it cost four O(n)
+        /// passes over the cap every time — a copy-on-write of the whole buffer, two
+        /// grapheme-cluster `count`s, and an O(n) `removeFirst` — which measured as
+        /// ~89% of wall time on the real reader path. Bytes make the length O(1) and
+        /// let the trim amortize.
+        var rawOutputBytes: [UInt8] = []
         var hasOutput = false
         var sawNonPromptScreenAfterStart = false
+
+        /// Appends one batch of output and keeps the buffer bounded.
+        mutating func appendOutput(_ data: Data, maxBytes: Int) {
+            if !hasOutput, data.contains(where: { $0 != 0 && !Self.isASCIIWhitespace($0) }) {
+                // Byte-level test, where this used to decode and use
+                // `Character.isWhitespace`. The two agree except for non-ASCII
+                // whitespace such as U+00A0, which now counts as output.
+                hasOutput = true
+            }
+
+            rawOutputBytes.reserveCapacity(rawOutputBytes.count + data.count)
+            if data.contains(0) {
+                for byte in data where byte != 0 {
+                    rawOutputBytes.append(byte)
+                }
+            } else {
+                rawOutputBytes.append(contentsOf: data)
+            }
+
+            // Let the buffer run to twice the cap before trimming back to it, so the
+            // O(n) move happens once per cap-worth of output rather than per append.
+            guard rawOutputBytes.count > maxBytes * 2 else { return }
+            rawOutputBytes.removeFirst(rawOutputBytes.count - maxBytes)
+            // The cut can land inside a UTF-8 sequence; drop the orphaned
+            // continuation bytes (at most three) so the window still decodes.
+            var leading = 0
+            while leading < rawOutputBytes.count, (rawOutputBytes[leading] & 0xC0) == 0x80 {
+                leading += 1
+            }
+            if leading > 0 {
+                rawOutputBytes.removeFirst(leading)
+            }
+        }
+
+        /// Decodes the retained window and applies the character cap here, once per
+        /// command completion, instead of on every append.
+        func rawOutput(maxCharacters: Int) -> String {
+            let text = String(decoding: rawOutputBytes, as: UTF8.self)
+            guard text.count > maxCharacters else { return text }
+            return String(text.suffix(maxCharacters))
+        }
+
+        private static func isASCIIWhitespace(_ byte: UInt8) -> Bool {
+            byte == 0x20 || (0x09...0x0D).contains(byte)
+        }
     }
 
     private struct SessionHistoryState: Sendable {
@@ -31,10 +84,14 @@ actor TerminalHistoryIndex {
     private var sessionStates: [UUID: SessionHistoryState] = [:]
     private let maxBlocksPerSession: Int
     private let maxOutputCharacters: Int
+    private let maxRawOutputBytes: Int
 
     init(maxBlocksPerSession: Int = 500, maxOutputCharacters: Int = 120_000) {
         self.maxBlocksPerSession = max(10, maxBlocksPerSession)
         self.maxOutputCharacters = max(2_000, maxOutputCharacters)
+        // Four bytes per character is UTF-8's worst case, so a byte window this
+        // size can never retain fewer characters than the character cap asks for.
+        self.maxRawOutputBytes = max(2_000, maxOutputCharacters) * 4
     }
 
     func registerSession(sessionID: UUID, username: String, hostname: String,
@@ -117,28 +174,17 @@ actor TerminalHistoryIndex {
 
     func recordOutputChunk(sessionID: UUID, data: Data, at: Date = .now) {
         guard !data.isEmpty else { return }
-        var state = sessionStates[sessionID] ?? SessionHistoryState()
-        guard var active = state.activeCommand else {
-            sessionStates[sessionID] = state
+        guard sessionStates[sessionID]?.activeCommand != nil else {
+            if sessionStates[sessionID] == nil {
+                sessionStates[sessionID] = SessionHistoryState()
+            }
             return
         }
 
-        let chunk = String(decoding: data, as: UTF8.self)
-        let sanitizedChunk = chunk.replacingOccurrences(of: "\u{0000}", with: "")
-        if sanitizedChunk.contains(where: { !$0.isWhitespace }) {
-            active.hasOutput = true
-        }
-
-        if !sanitizedChunk.isEmpty {
-            active.rawOutput.append(sanitizedChunk)
-            if active.rawOutput.count > maxOutputCharacters {
-                let overflow = active.rawOutput.count - maxOutputCharacters
-                active.rawOutput.removeFirst(overflow)
-            }
-        }
-
-        state.activeCommand = active
-        sessionStates[sessionID] = state
+        // Mutated through the subscript rather than via a `var state = ...` copy:
+        // a copy leaves the output buffer referenced twice, so every append paid a
+        // full copy-on-write of the whole buffer.
+        sessionStates[sessionID]?.activeCommand?.appendOutput(data, maxBytes: maxRawOutputBytes)
         _ = at
     }
 
@@ -262,7 +308,7 @@ actor TerminalHistoryIndex {
 
     func activeCommandRawOutput(sessionID: UUID) -> String? {
         guard let active = sessionStates[sessionID]?.activeCommand else { return nil }
-        return active.rawOutput
+        return active.rawOutput(maxCharacters: maxOutputCharacters)
     }
 
     // MARK: - Internals
@@ -310,7 +356,7 @@ actor TerminalHistoryIndex {
             command: active.command,
             startLines: active.startVisibleLines,
             endLines: state.lastVisibleLines,
-            rawOutputFallback: active.rawOutput,
+            rawOutputFallback: active.rawOutput(maxCharacters: maxOutputCharacters),
             hints: state.promptHints
         )
 

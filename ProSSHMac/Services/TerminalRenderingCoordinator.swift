@@ -516,8 +516,12 @@ import os.signpost
         #endif
 
         let previousScrollbackCount = cachedScrollbackCountBySessionID[sessionID] ?? 0
+        // Caller-side timer around the engine awaits: `publish` minus this is the
+        // work publish does itself, and this minus `snapshot build` is hop + queue.
+        var engineWaitStart = TerminalPerf.now()
         let scrollbackCount = await engine.scrollbackCount
         let usingAlternateBuffer = await engine.usingAlternateBuffer
+        TerminalPerf.record(.publishEngineWait, since: engineWaitStart)
         var currentOffset = scrollOffsetBySessionID[sessionID] ?? 0
         if usingAlternateBuffer {
             // Alternate buffer (TUI apps) should always show the live
@@ -543,6 +547,7 @@ import os.signpost
         cachedScrollbackCountBySessionID[sessionID] = scrollbackCount
 
         let snapshot: GridSnapshot
+        engineWaitStart = TerminalPerf.now()
         if let snapshotOverride {
             snapshot = snapshotOverride
         } else if currentOffset > 0 {
@@ -550,6 +555,7 @@ import os.signpost
         } else {
             snapshot = await engine.snapshot()
         }
+        TerminalPerf.record(.publishEngineWait, since: engineWaitStart)
         let shouldForceFullSnapshot = forceFullSnapshotNextPublishBySessionID.contains(sessionID)
         let publishedSnapshot: GridSnapshot
         if shouldForceFullSnapshot {
@@ -592,6 +598,11 @@ import os.signpost
         usingAlternateBuffer: Bool
     ) async {
         guard let manager else { return }
+        // Timed here rather than at the call site: the publish drain loop skips
+        // housekeeping per iteration and calls this directly once at the end, so a
+        // caller-side timer would miss the path that actually runs under load.
+        let housekeepingStart = TerminalPerf.now()
+        defer { TerminalPerf.record(.publishHousekeeping, since: housekeepingStart) }
 
         manager.gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
 
@@ -602,6 +613,7 @@ import os.signpost
         )
 
         if !usingAlternateBuffer && shouldPublishShellBuffer(for: sessionID) {
+            let visibleTextStart = TerminalPerf.now()
             let visibleLines = await engine.visibleText()
             manager.shellBuffers[sessionID] = visibleLines
             if let completedBlock = await manager.terminalHistoryIndex.observeVisibleLines(
@@ -611,6 +623,7 @@ import os.signpost
             ) {
                 manager.publishCommandCompletion(completedBlock)
             }
+            TerminalPerf.record(.visibleTextScan, since: visibleTextStart)
         }
 
         let bellCount = await engine.consumeBellCount()

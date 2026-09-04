@@ -30,6 +30,37 @@ final class TerminalPerfTests: XCTestCase {
         XCTAssertTrue(labels.contains("draw frame"))
     }
 
+    /// The reader/parser stages must be present, since the whole point of the
+    /// RenderCost work is attributing time outside the draw loop.
+    func testReaderPathStagesArePresent() {
+        let labels = Set(TerminalPerf.Stage.allCases.map(\.label))
+
+        XCTAssertTrue(labels.contains("chunk record"))
+        XCTAssertTrue(labels.contains("history index"))
+        XCTAssertTrue(labels.contains("feed call"))
+        XCTAssertTrue(labels.contains("batch follow-up"))
+        XCTAssertTrue(labels.contains("publish engine wait"))
+    }
+
+    /// Summed durations alone cannot separate a blocked stage from an absent one,
+    /// so the report carries a span and a busy percentage per stage.
+    func testReportCarriesSpanAndBusyColumns() throws {
+        guard TerminalPerf.isEnabled else {
+            throw XCTSkip("stage timers are off in this process")
+        }
+
+        TerminalPerf.reset()
+        let start = TerminalPerf.now()
+        TerminalPerf.record(.publish, since: start)
+
+        let report = try XCTUnwrap(TerminalPerf.report(title: "test", wallSeconds: 1.0))
+        XCTAssertTrue(report.contains("span"))
+        XCTAssertTrue(report.contains("busy"))
+        XCTAssertTrue(report.contains("publish"))
+
+        TerminalPerf.reset()
+    }
+
     /// The instrumentation must cost nothing when off — that is the whole reason it
     /// is gated. Which branch runs depends on how the test process was launched.
     func testInstrumentationRespectsEnablement() {
