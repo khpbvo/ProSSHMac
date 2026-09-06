@@ -190,22 +190,58 @@ None of that was measured by any existing benchmark.
 
 - [ ] **Phase R2b: Coalesce the per-batch and per-publish engine round-trips**
 
-  Sized by R2a, in order:
+  Every figure below is from the final R2a run (Release, 8 MB, load ~4, no window, wall 4252 ms).
 
-  1. `startParserReader`'s four post-feed round-trips (`batchFollowUp`, 47% of wall) fold into what
-     `engine.feed` returns: input-mode snapshot, sync-exit snapshots, synchronized-output flag and
-     alternate-buffer flag in one `FeedOutcome`.
-  2. `publishGridState`'s engine awaits (`publishEngineWait`, ~99% of `publish`) coalesce into one
-     composite call: scrollback count, alternate-buffer flag, snapshot, bell count, input mode,
-     title and working directory. Covered by 21 `SessionManagerRenderingPathTests`.
-  3. `publishHousekeeping` (32% of wall) makes five more engine round-trips of its own — bell count,
-     input mode, window title, working directory, and `visibleText` — and is called both from
-     `publishGridState` and directly from the publish drain loop. It coalesces into the same
-     composite call as item 2.
-  4. Also open: throughput is **bimodal** under load. One run in the A/B reached 18.94 MB/s while its
-     neighbours in the same launch managed 0.20 — a 90x spread with no code change. The burst-mode
-     and debounce logic in `scheduleCoalescedGridPublish` is the obvious suspect for a feedback loop
-     and should be examined once the round-trip count is down.
+  **1. `startParserReader`'s post-`feed` round-trips — `batchFollowUp`, 46.7% of wall, ~1.6 ms/batch.**
+  `Services/SessionShellIOCoordinator.swift`, in the parser task loop after `await engine.feed(batch)`:
+
+  | Call | Hop |
+  |---|---|
+  | `renderingCoordinator.refreshInputModeSnapshot` | MainActor, then `engine.inputModeSnapshot()` |
+  | `engine.consumeSyncExitSnapshots()` | engine |
+  | `engine.synchronizedOutput` | engine |
+  | `renderingCoordinator.scheduleParsedChunkPublish` | MainActor, then `engine.usingAlternateBuffer` |
+
+  Fold them into what `feed` already returns. `TerminalEngine.feed(_ data: Data)` has a `-> Bool`
+  overload precedent; return a `FeedOutcome` carrying `inputModeSnapshot`, `syncExitSnapshots`,
+  `synchronizedOutput` and `usingAlternateBuffer` instead. Four round-trips become zero.
+
+  **2. `publishGridState` / `publishHousekeeping` — `publishEngineWait` is 99% of `publish`;
+  housekeeping alone is 32.4% of wall.** `Services/TerminalRenderingCoordinator.swift`, seven engine
+  awaits per publish: `scrollbackCount`, `usingAlternateBuffer`, `snapshot(...)`, then in
+  housekeeping `visibleText()`, `consumeBellCount()`, `inputModeSnapshot()`, `windowTitle`,
+  `workingDirectory`. Coalesce into one composite actor call returning all of it.
+
+  Two things constrain the shape. The scroll-anchor arithmetic between the first two reads and the
+  snapshot is MainActor policy over MainActor state, so either split into two calls (read state →
+  resolve offset → snapshot + housekeeping) or pass the prior offset in and return the resolved one;
+  do not move scroll policy into the engine. And `publishHousekeeping` is called both from
+  `publishGridState` and directly from the publish drain loop — that is why its timer lives inside
+  the function, and why a naive caller-side coalesce would miss the path that runs under load.
+
+  Covered by 21 `SessionManagerRenderingPathTests`; all 21 were green on 2026-09-04.
+
+  **3. Then re-examine `visibleTextScan`** (1.9%, 19 calls, throttled to 30/s) — likely fine.
+
+  **4. Open question: throughput is bimodal under load.** One A/B run reached 18.94 MB/s while its
+  neighbours in the same launch managed 0.20 — a 90x spread, no code change. The burst-mode and
+  debounce logic in `scheduleCoalescedGridPublish` (8/16/24/40 ms intervals, `burstThreshold` 3 in a
+  16 ms window, 200 ms revert) is the obvious candidate for a feedback loop. Investigate after the
+  round-trip count is down, since that changes the timing that drives it.
+
+  **How to verify.** Do not compare against any number in this document taken on another day — see
+  "Measurement caveats". Build the current `HEAD` and your branch into two `.app` bundles, then
+  alternate launches:
+
+  ```bash
+  ./scripts/benchmark-throughput.sh --configuration Release --no-build --render-detached \
+      --benchmark-window 1280x800 --benchmark-bytes 8388608 --benchmark-runs 3 --perf-signposts
+  ```
+
+  Expect `batchFollowUp` and `publishEngineWait` to collapse, and check what takes their place before
+  claiming a win — R2a's lesson is that removing the top stage moves the bottleneck rather than
+  eliminating it. Targeted suites: `SessionManagerRenderingPathTests`, `TerminalPerfTests`,
+  `TerminalHistoryIndexTests`, `ThroughputBenchmarkRunnerTests`.
 
 ---
 

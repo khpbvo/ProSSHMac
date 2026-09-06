@@ -2139,6 +2139,53 @@ with `bash -n` and by running both emulator paths end to end.
 
 ---
 
+## 2026-09-06 — Restore CLAUDE.md (truncated two sessions ago) and make the R2b handoff executable
+
+### The problem
+`CLAUDE.md` was cut from **422 lines to 96** by commit 2c99912 (the R0+R1 session) and nobody noticed
+for two sessions. Everything below the workflow header was gone: Project Overview, Build & Test,
+Project Structure, Key Files, Architecture Conventions, Known Issues & Gotchas, Completed Refactors
+and Reference Docs. The sentence introducing the Next Session Plan was cut mid-word, which is the
+only visible symptom. The R2a session inherited the damaged file and only edited its tail, so two
+commits' worth of "updated CLAUDE.md" went into a file that had lost its body.
+
+### What changed
+- **Restored `CLAUDE.md` from 2c99912^** (96 -> 488 lines) and brought every restored section up to
+  current truth rather than replaying a stale snapshot:
+  - Build & Test: `--render` / `--render-detached` / `--benchmark-window WxH` commands; the
+    throughput baseline as a table with a measurement date per row; `TerminalPerf` now 19 stages with
+    span/busy columns and an explanation of what the span column is for.
+  - Key Files: `TerminalPerf` (233L), `TerminalHistoryIndex` (484L), `ThroughputBenchmarkRunner+Render`
+    (413L), `SessionShellIOCoordinator` (330L) and `TerminalRenderingCoordinator` (972L), each
+    annotated with its role in the R2b work.
+  - Gotchas: five new entries — the windowless-launch trap, benchmark drift and the
+    interleaved-A/B rule, the history-index byte buffer as a do-not-regress, per-batch
+    `recordParsedChunk`, and the truncation itself with instructions for editing the plan block.
+  - Doc paths corrected to the `Docs/` case that git actually tracks (21 files under `Docs/`, 4 under
+    `docs/`).
+- **`Docs/RenderCost.md` R2b** rewritten to be startable cold: each round-trip named with its call
+  site and hop, the `FeedOutcome` shape proposed for item 1, the two constraints on item 2 (scroll
+  policy must stay on the MainActor; `publishHousekeeping` has two callers, which is why its timer is
+  inside the function), the bimodality question with the specific constants to look at, and a verify
+  recipe that mandates interleaved A/B against a freshly built `HEAD`.
+- **`AGENTS.md`** — tracked, and stale since 2026-09-03 — given the RenderCost R0/R1/R2a summary,
+  current throughput figures, the 19-stage instrumentation description and the measurement caveats.
+
+### Also measured
+The long-standing flaky test was characterised properly rather than re-labelled. On an unchanged
+tree, `SessionManagerRenderingPathTests.testLocalSessionStreamsProgressiveCommandOutput` passes alone
+in **0.689s** and runs 21/21 green in its own suite twice, but **times out at 8.094s** when four
+suites share one `xcodebuild test` invocation. So the trigger is not full-suite load specifically —
+four suites is enough. Both memory files now say so.
+
+### Verification
+No code changed. `xcodebuild build` and the four targeted suites were re-run to confirm the tree is
+still green; every factual claim added to the docs was checked against the source
+(`feed(_:) -> Bool` overload precedent, the burst/debounce constants, file line counts, the
+`Docs/`/`docs/` split via `git ls-files`).
+
+---
+
 ## 2026-09-04 — RenderCost Phase R2a: the missing wall time was the command-history index
 
 R1 left ~18 s of a 31.6 s run unattributed and ranked `publish` as the thing to attack. R2a
