@@ -447,44 +447,45 @@ at `Docs/featurelist.md`. Keep it in sync when process guidance changes.
 
 ## Next Session Plan
 
-**Last completed work (2026-09-04): RenderCost Phase R2a.**
+**Last completed milestone (2026-09-06/07): RenderCost R2b implementation and focused verification.**
+R2b stays open for the throughput-variability investigation; do not reimplement the actor-call changes.
 
-R1's ~18 s of unattributed wall time is explained, and R2's ranking was wrong on every count.
+- `TerminalEngine.feedAndCollectOutcome(Data)` preserves ordinary `feed`'s Bool/queueing contract
+  while collecting modes, sync exits and the live sync fallback frame for the streaming reader.
+  `handleFeedOutcome` applies them in one MainActor handoff with no post-feed engine reads.
+- `publishViewportState` then `publishSnapshot` leave scroll-anchor policy on MainActor.
+  Ordinary publishes include housekeeping in the second result. The drain loop collects
+  housekeeping once after the final snapshot, preserving bell consumption and throttled text.
+- Metadata is applied before history observation awaits, avoiding a stale-mode overwrite.
+- `visibleTextScan` now sums extraction and observation separately (two timer calls per refresh).
+  Outcome collection is inside `feedCall`; ordinary-publish collection is in `publishEngineWait`.
+- Debug and Release builds succeeded. Focused tests: **167 tests, 0 failures, 2 instrumentation-only
+  skips**: rendering 21, parser 125, history 8, perf 7, benchmark 6. No full-suite run or claim.
 
-**The cost was `TerminalHistoryIndex.recordOutputChunk` — 89% of wall.** It ran once per raw PTY
-chunk (~1290/MB) via the `@MainActor` hop in `recordParsedChunk` and, past its 120,000-character
-cap, paid four O(n) passes over the whole buffer per call (a COW copy, two grapheme-cluster
-`String.count`s, an O(n) `removeFirst`). Raw output is now UTF-8 bytes with an amortized trim and a
-read-time character cap, and `recordParsedChunk` runs once per 4 ms batch. `history index` fell to
-11.6%, and an interleaved A/B on a quiet machine measures **4.3x** end to end (medians 0.92 -> 3.95
-MB/s, ranges 0.76-1.10 vs 3.80-5.01, no overlap).
+**Starting point for the next task:** fresh baseline `af933f4` and the R2b candidate both remain
+bimodal. Three instrumented interleaved pairs gave median to-sentinel ratios **5.01x, 0.33x,
+1.02x**. In a single unchanged candidate launch, parse/grid elapsed time rose from ~270 ms to
+780 ms while to-sentinel throughput fell from ~19 to 5.88 MB/s. Direct launch with instrumentation
+off also varies, so neither signposts nor LaunchServices alone explains it. All three direct/off
+pair medians favor baseline (0.88x, 0.29x, 0.87x); a performance regression cannot be ruled out. All runs had zero
+windows; no real rendered-throughput claim is supported.
 
-**`publish` measured 0.3%, not the 23-25% R1 recorded.** Do not act on R1's ranking.
+**Next actions / end point:**
+1. Read `Docs/RenderCost.md` and `Docs/R2bBenchmarkResults.md`, including all pairs, not just the
+   first apparent win. Preserve the current changes and inspect git status before proceeding.
+2. Distinguish CPU work from scheduler suspension: add opt-in thread CPU versus wall timing around
+   synchronous `grid.processGroundTextBytes` calls (not across async suspension/thread migration).
+   Correlate with burst entry/revert counts, batch sizes, process activity and host load.
+3. Establish whether the slow regime is scheduler/CPU placement or application scheduling before
+   changing the 8/16/24/40 ms publish intervals or burst thresholds. Leave visible-text extraction
+   alone unless new evidence changes its ranking; it remained below 0.4% in the candidate.
+4. Compare interleaved Release runs with identical launch/window/instrumentation conditions.
+   Restore genuine window acquisition before claiming rendered or peer-comparable throughput.
+5. Close R2b only when the remaining variability is explained or bounded enough for a repeatable
+   comparison; update `Docs/featurelist.md`, `Docs/RenderCost.md`, this plan and `AGENTS.md`.
 
-Next session: **RenderCost Phase R2b — coalesce cross-actor round-trips**, which now dominate:
+Build/test logs and comparison bundles are `/tmp/prossh-r2b-baseline*` and
+`/tmp/prossh-r2b-candidate*`; raw reports and the exact reproduction commands are preserved in
+`Docs/R2bBenchmarkResults.md`. `/tmp` files are conveniences, not durable evidence.
 
-| Stage | % wall |
-|---|---|
-| batch follow-up (4 engine round-trips after every `feed`) | **46.7%** |
-| publish housekeep (5 more of its own) | 32.4% |
-| publish (99% of it is `publishEngineWait`) | 26.6% |
-| parse + grid | 24.3% |
-| history index | 11.6% |
-
-Ranked in `Docs/RenderCost.md`. Also open there: throughput is bimodal under load (18.94 and 0.20
-MB/s in one launch, no code change) — suspect the burst/debounce logic.
-
-**Benchmark gotchas that cost this session hours — read `Docs/RenderCost.md` "Measurement caveats"
-before trusting any rendered number:**
-- `open -n App.app --args <anything>` yields a process with **zero windows**, so the rendered
-  benchmark silently measures the detached path. It now warns. R1's windowed figures could not be
-  reproduced.
-- The recorded "`--perf-signposts` costs ~19x" did not reproduce (2.78 on vs 2.86 off).
-- Background load swings results 7x-100x, and absolute figures drift over hours — the same baseline
-  binary measured 2.86 MB/s early in a session and 0.92 later at the same load average. Only
-  within-pair ratios from interleaved A/B runs of two binaries are trustworthy.
-
-Unrelated open work: `Docs/bugs.md` (50 open), `Docs/PhaseB.md` manual smoke checklist,
-and the `Docs/` vs `docs/` case split. (`SessionManagerRenderingPathTests` ran 21/21 green twice
-this session, including the previously flaky
-`testLocalSessionStreamsProgressiveCommandOutput`.)
+Unrelated open work remains in `Docs/bugs.md`, `Docs/PhaseB.md` and the `Docs/` vs `docs/` case split.

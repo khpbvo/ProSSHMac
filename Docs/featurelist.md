@@ -27,6 +27,14 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 
 ### Current Focus
 
+- Task alignment (2026-09-07, R2b scheduling diagnosis):
+  - Starting Point: the R2b candidate passes focused correctness checks, but both binaries exhibit fast/slow regimes and the direct/off comparisons favor baseline.
+  - End Point: measure thread CPU versus elapsed time around synchronous grid work, correlate batching/burst/activity state, identify an evidence-backed cause or bounded explanation, and revise the candidate or benchmark as indicated before repeating controlled Release comparisons.
+  - Status: In progress. Preserve the existing candidate and baseline; add opt-in diagnostics without changing scheduling policy first.
+- Task alignment (2026-09-06, RenderCost R2b):
+  - Starting Point: R2a is complete; post-feed engine round-trips and publish housekeeping dominate the measured real-app path. The working tree was clean.
+  - End Point: coalesce per-batch and per-publish engine reads while preserving MainActor scroll policy, synchronized redraws, input modes, bells and metadata; pass focused regressions/builds and compare interleaved Release baseline/candidate runs before recording performance claims.
+  - Status (2026-09-07): Local candidate implemented and focused verification complete. Feed results now carry follow-up state; publishing uses two engine calls with MainActor scroll resolution between them, plus one final housekeeping call for the drain path. Debug/Release builds pass; 167 focused tests, 0 failures, 2 instrumentation-only skips. Performance validation remains open: six interleaved pairs against freshly built af933f4 are inconsistent, with all three direct/off pair medians favoring baseline. A performance regression cannot be ruled out. See Docs/R2bBenchmarkResults.md; next diagnose thread CPU versus wall time and scheduling variability before accepting this as an optimization.
 - Active phase: Phase 6 (persistence + hardening + remaining test coverage).
 - Immediate objective: continue migrating legacy tests into the shared test bundle while keeping targeted regressions green during migration.
 - Test stability TODOs: no active crash quarantines remain for previously skipped pane/AI view-model tests.
@@ -193,6 +201,8 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
   - End Point: `LocalPTYProcess` startup sanitization now handles split warning fragments across PTY chunks by carrying partial marker prefixes and removing the complete warning line once assembled, preventing leaked tail fragments in terminal output. Test cleanup removed stale `ShellIntegrationTests` cases that still referenced deleted local-shell overlay APIs. In sandboxed builds, `ping` is blocked by macOS App Sandbox ICMP restrictions (`com.apple.security.app-sandbox`); this was later addressed for non-App-Store distributions by disabling App Sandbox at the target level.
 
 ## Loop Log
+
+- 2026-09-07: R2b candidate implementation and focused verification completed (167 tests, 0 failures, 2 skips; Debug/Release builds pass). Six Release A/B pairs preserved in `Docs/R2bBenchmarkResults.md`; no repeatable overall speedup established and a regression remains possible. R2b stays open for CPU-versus-wall/scheduling diagnosis.
 
 - 2026-08-27: Repaired and validated terminal performance benchmarking, then optimized the profiled partial-scroll hotspot. PTY completion markers are now emitted from two shell arguments so the literal sentinel cannot occur in echoed input, and `BenchmarkSentinelMatcher` detects markers split across PTY chunks; 4 new regression tests cover both failure modes. `benchmark-throughput.sh` now resolves `TARGET_BUILD_DIR` from Xcode settings instead of selecting an arbitrary app from multiple DerivedData folders. A real 2 MB PTY benchmark now averages 1.69 MB/s (previous 0.03 MB/s result was premature and invalid). Matching before/after Time Profiler traces identified per-scroll `regionKeys` and `regionPhysicalRows` allocation/mapping in partial-region `scrollUp`; the grid now rotates its row map in place, with fast paths for one-line up/down and a cycle rotation for larger shifts. Sampled `scrollUp` inclusive time fell from about 4.89 s to 1.23 s. Sustained 32 MB partial throughput improved from 0.56–0.71 MB/s to 1.69–1.78 MB/s while fullscreen remained 1.69–1.81 MB/s. Added wrapped-row-base semantic coverage. Validation: 96 focused tests passed, Debug build succeeded, wrapper smoke test resolved the current app, and `git diff --check` passed.
 - 2026-08-27: Established a current terminal stress-test baseline without changing application code. A Debug build succeeded; the standard 2 MB parser/grid benchmark completed in ground state at 1.66 MB/s fullscreen and 1.37 MB/s partial; an 8 MB control measured 1.68/1.43 MB/s. Two sustained 32 MB runs reproduced a size-dependent partial-scroll throughput cliff (fullscreen 1.68-1.69 MB/s, partial 0.56-0.71 MB/s) without crashes or parser-state corruption. `PerformanceValidationTest` passed all 5 cases (base64 floods, 500 htop-style redraws, 10,000 random cursor moves, and 100 top-style rewrites) in 6.737 seconds. PTY-local output of 0.03 MB/s was rejected as invalid because the shell echoes the submitted command containing the completion sentinel, causing premature termination. Pending: profile the 32 MB partial-region path and fix the PTY benchmark sentinel protocol before relying on end-to-end PTY numbers.
@@ -2345,3 +2355,52 @@ comparable to other signpost-on numbers.
 The skip is a `TerminalPerfTests` case that only runs with stage timers enabled.
 Regression check: parser/grid **36.44 MB/s** (was 36.38) and PTY-local **19.20 MB/s** (was 17.97) —
 both unchanged or better, so the instrumentation costs nothing when off.
+
+
+## 2026-09-06/07 — RenderCost R2b candidate: actor reads coalesced, performance validation still open
+
+### Starting Point
+R2a had removed the history-index bottleneck. Four post-feed engine reads and repeated
+publish/housekeeping reads were the next measured targets. The working tree was clean at af933f4.
+
+### End Point
+Preserve terminal semantics while reducing actor calls, pass focused regressions/builds, and
+establish a repeatable interleaved Release performance result. The final performance condition
+has **not** been met, so R2b remains open and these changes remain a local candidate.
+
+### What was implemented
+- Added `TerminalEngine.feedAndCollectOutcome` while preserving ordinary `feed(Data) -> Bool`
+  and its queueing/non-consuming behavior for existing callers. The reader applies modes,
+  sync exits and optional live sync fallback in one MainActor handoff.
+- Added composite viewport, snapshot and housekeeping reads. MainActor still resolves scroll
+  anchors. Ordinary publishes take two engine calls; the drain loop skips intermediate
+  housekeeping and consumes bells once at the end in a single additional engine call.
+- Apply captured metadata before the history-observation await to avoid overwriting newer modes.
+- Added four parser regressions and routed the existing early-input-mode rendering test through
+  the actual combined feed-result path. Existing sync, follow-up, bell and scroll tests pass.
+- Instrumentation still has 19 stages. `visibleTextScan` now sums extraction and observation
+  separately; outcome capture is included in `feedCall`, and ordinary-publish metadata capture
+  is inside `publishEngineWait`. These boundaries are documented in `Docs/RenderCost.md`.
+
+### Exact verification
+- Fresh baseline Release af933f4: BUILD SUCCEEDED. Candidate Debug and Release: BUILD SUCCEEDED.
+- Focused Debug suites: **167 tests, 0 failures, 2 instrumentation-only skips**. Rendering 21,
+  parser 125, history 8, perf 7, benchmark 6. No full-suite claim.
+- Three instrumented A/B pairs, three runs per binary per pair: median to-sentinel ratios
+  5.01x, 0.33x, 1.02x. Three direct-launch, instrumentation-off pairs: 0.88x, 0.29x, 0.87x.
+  Every launch had zero windows; none is a rendered or peer-comparable measurement.
+- Parser-only Release control: baseline fullscreen/partial averages 35.21/35.21 MB/s;
+  candidate 33.94/31.76. Sequential control, not a statistically reliable comparison.
+- Exact commands and all raw performance reports: `Docs/R2bBenchmarkResults.md`.
+- Temporary build/test logs, bundles and host snapshots: `/tmp/prossh-r2b-*`.
+
+### Pending and next action
+Do not claim a repeatable speedup: the first pair's apparent fivefold gain reverses in later
+pairs, and every direct/off pair median favors baseline. A performance regression cannot be
+ruled out. In a single candidate launch the parse/grid timer itself rose from ~270 to 780 ms;
+this is not only a publish-stage slowdown. Direct launch with timers off also varies, ruling
+out those two factors as sole explanations. Compare thread CPU and elapsed time around
+synchronous ground-text/grid work and correlate burst transitions, batch sizes and activity.
+Do not measure thread CPU across async suspension or tune debounce constants without evidence.
+Restore window acquisition before making rendered-throughput claims. `AGENTS.md`, the intact
+`CLAUDE.md` plan block and `Docs/RenderCost.md` point to this remaining work.

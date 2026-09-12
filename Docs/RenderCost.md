@@ -1,6 +1,7 @@
 # RenderCost — measuring what rendering actually costs
 
-**Status:** Phases R0, R1 and R2a complete (2026-09-04). R2b open.
+**Status:** R0, R1 and R2a complete. R2b implementation and focused tests complete
+(2026-09-06/07); performance validation and variability investigation remain open.
 
 `FasterThenYouWillEverLiveToBe` ended by retargeting throughput at Terminal.app's **26.5 MB/s**.
 That peer figure was measured **with rendering**; ProSSHMac's **17.97 MB/s** was measured **without**
@@ -189,6 +190,49 @@ None of that was measured by any existing benchmark.
   **The real bottleneck is cross-actor round-trip count, not the work at either end.** That is R2b.
 
 - [ ] **Phase R2b: Coalesce the per-batch and per-publish engine round-trips**
+
+  **Implementation update (2026-09-06/07; candidate awaiting performance validation):**
+
+  - [x] Coalesce parser follow-up reads and MainActor handoff.
+  - [x] Coalesce publish reads, preserving MainActor scroll policy and drain semantics.
+  - [x] Re-examine visible-text work: still small; no further optimization warranted.
+  - [x] Debug/Release builds and focused regressions.
+  - [ ] Explain or bound variability and establish a repeatable performance result.
+
+  Three interleaved Release pairs with timers on gave median to-sentinel ratios
+  **5.01x, 0.33x, 1.02x**. Three direct-launch pairs with timers off gave **0.88x,
+  0.29x, 0.87x**. All launches had zero windows, so no rendered claim is supported.
+  The direct controls also favor the baseline; **a performance regression cannot be
+  ruled out**. Do not call R2b a proven optimization or close it yet. Complete commands,
+  all pair medians, host load and raw reports are in [R2bBenchmarkResults.md](R2bBenchmarkResults.md).
+
+  Within one unchanged candidate launch, parse/grid elapsed time rose from 268.69 ms
+  to 780.42 ms while throughput fell from 19.74 to 5.88 MB/s. Next diagnostic: compare
+  thread CPU with wall time around synchronous ground-text/grid work (never across an
+  async suspension), correlated with burst transitions, batch sizes and process/host
+  activity. The cause is not established; avoid speculative debounce tuning.
+
+  **Architecture implemented:**
+  `feedAndCollectOutcome(Data)` wraps the existing Bool-returning `feed`, preserving
+  its queueing contract and leaving other callers non-consuming. The streaming reader
+  receives modes, sync-exit frames, alternate-buffer state and an optional live sync
+  fallback frame together, then applies them in one MainActor handoff.
+
+  Publishing uses `publishViewportState` followed by `publishSnapshot`: scroll policy
+  remains between those calls on MainActor. Ordinary publishes include housekeeping
+  in the second result. The drain loop skips housekeeping for intermediate frames and
+  collects it in one separate engine call after the final snapshot, preserving bell
+  delivery and visible-text throttling. Captured metadata is applied before awaiting
+  history observation, so that await cannot let old modes overwrite a newer feed.
+
+  `visibleTextScan` now sums two separately timed operations: engine text extraction
+  and MainActor/history observation. Its call count can therefore be twice the number
+  of text refreshes; it no longer includes the old standalone visible-text actor wait.
+  `feedCall` now includes outcome collection; ordinary-publish housekeeping collection
+  is included in `publishEngineWait`. Drain housekeeping retains its own outer timer.
+
+  Debug build and focused tests pass: 167 tests, 0 failures, 2 instrumentation-only
+  skips (21 rendering, 125 parser, 8 history, 7 perf, 6 benchmark).
 
   Every figure below is from the final R2a run (Release, 8 MB, load ~4, no window, wall 4252 ms).
 

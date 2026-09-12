@@ -221,6 +221,9 @@ extension ThroughputBenchmarkRunner {
 
         let bytesBefore = sessionManager.bytesReceivedBySessionID[sessionID] ?? 0
         TerminalPerf.reset()
+        if TerminalSchedulingDiagnostics.isEnabled {
+            emit("  process before: active=\(NSApp.isActive) thermal=\(ProcessInfo.processInfo.thermalState.rawValue) lowPower=\(ProcessInfo.processInfo.isLowPowerModeEnabled)")
+        }
         let start = CFAbsoluteTimeGetCurrent()
 
         await sessionManager.sendRawShellInput(sessionID: sessionID, input: command)
@@ -240,6 +243,9 @@ extension ThroughputBenchmarkRunner {
         let bytesAfter = sessionManager.bytesReceivedBySessionID[sessionID] ?? 0
         let totalBytes = max(0, bytesAfter - bytesBefore)
 
+        if TerminalSchedulingDiagnostics.isEnabled {
+            emit("  process after: active=\(NSApp.isActive) thermal=\(ProcessInfo.processInfo.thermalState.rawValue) lowPower=\(ProcessInfo.processInfo.isLowPowerModeEnabled)")
+        }
         let budget = TerminalPerf.report(title: detached ? "render-detached" : "render",
                                          wallSeconds: settledElapsed)
 

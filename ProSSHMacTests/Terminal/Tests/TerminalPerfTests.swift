@@ -4,6 +4,41 @@ import XCTest
 
 final class TerminalPerfTests: XCTestCase {
 
+    func testSchedulingProbeRunsWorkWhenDisabled() {
+        var called = false
+        TerminalSchedulingDiagnostics.measureGround(byteCount: 1) { called = true }
+        XCTAssertTrue(called)
+        if !TerminalSchedulingDiagnostics.isEnabled {
+            XCTAssertNil(TerminalSchedulingDiagnostics.report())
+        }
+    }
+
+    func testSchedulingProbeSeparatesSleepingThreadFromCPUWorkAndResets() throws {
+        guard TerminalSchedulingDiagnostics.isEnabled else {
+            throw XCTSkip("scheduling diagnostics are off in this process")
+        }
+        TerminalSchedulingDiagnostics.reset()
+        TerminalSchedulingDiagnostics.measureGround(byteCount: 4096) {
+            Thread.sleep(forTimeInterval: 0.03)
+        }
+        TerminalSchedulingDiagnostics.recordBatch(bytes: 4096)
+        TerminalSchedulingDiagnostics.event("testEvent")
+        let report = try XCTUnwrap(TerminalSchedulingDiagnostics.report())
+        XCTAssertTrue(report.contains("calls=1 bytes=4096"))
+        XCTAssertTrue(report.contains("batches=1 bytes=4096 mean=4096 max=4096 under4K=0"))
+        XCTAssertTrue(report.contains("testEvent=1"))
+        let expression = try NSRegularExpression(pattern: "cpu/elapsed=([0-9.]+)%")
+        let match = try XCTUnwrap(expression.firstMatch(in: report, range: NSRange(report.startIndex..., in: report)))
+        let range = try XCTUnwrap(Range(match.range(at: 1), in: report))
+        XCTAssertLessThan(try XCTUnwrap(Double(report[range])), 50,
+                          "A sleeping synchronous thread should spend most elapsed time off CPU.")
+        TerminalSchedulingDiagnostics.reset()
+        let reset = try XCTUnwrap(TerminalSchedulingDiagnostics.report())
+        XCTAssertFalse(reset.contains("qos="))
+        XCTAssertFalse(reset.contains("testEvent"))
+        XCTAssertTrue(reset.contains("batches=0 bytes=0"))
+    }
+
     /// `nanos`/`calls`/`bytes` are plain arrays indexed by `Stage.rawValue`, so the
     /// raw values must stay contiguous from zero. An explicit raw value on any case
     /// would index out of bounds at runtime.

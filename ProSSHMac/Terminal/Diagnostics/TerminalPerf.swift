@@ -29,6 +29,7 @@ enum TerminalPerf {
 
     /// Resolved once, on first use.
     nonisolated static let isEnabled: Bool = {
+        if TerminalSchedulingDiagnostics.isEnabled { return true }
         let info = ProcessInfo.processInfo
         if info.arguments.contains("--perf-signposts") { return true }
         if let value = info.environment["PROSSH_PERF_SIGNPOSTS"],
@@ -163,6 +164,7 @@ enum TerminalPerf {
     }
 
     nonisolated static func reset() {
+        TerminalSchedulingDiagnostics.reset()
         guard isEnabled else { return }
         let now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
         lock.lock()
@@ -228,6 +230,7 @@ enum TerminalPerf {
         lines.append("  note: PTY reader and parser run concurrently — stages overlap and")
         lines.append("        do not partition wall time. span = first start to last end,")
         lines.append("        busy = time/span, at = first start after reset.")
+        if let scheduling = TerminalSchedulingDiagnostics.report() { lines.append(scheduling) }
         return lines.joined(separator: "\n")
     }
 }

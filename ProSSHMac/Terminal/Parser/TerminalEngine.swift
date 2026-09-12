@@ -20,6 +20,32 @@ typealias VTParser = TerminalEngine
 
 actor TerminalEngine {
 
+    nonisolated struct FeedOutcome: Sendable {
+        let inputModeSnapshot: InputModeSnapshot
+        let syncExitSnapshots: [GridSnapshot]
+        let synchronizedOutput: Bool
+        let usingAlternateBuffer: Bool
+        let liveSyncSnapshot: GridSnapshot?
+    }
+
+    nonisolated struct PublishViewportState: Sendable {
+        let scrollbackCount: Int
+        let usingAlternateBuffer: Bool
+    }
+
+    nonisolated struct PublishHousekeepingState: Sendable {
+        let visibleLines: [String]?
+        let bellCount: Int
+        let inputModeSnapshot: InputModeSnapshot
+        let windowTitle: String
+        let workingDirectory: String
+    }
+
+    nonisolated struct PublishSnapshotResult: Sendable {
+        let snapshot: GridSnapshot
+        let housekeeping: PublishHousekeepingState?
+    }
+
     private static let parserLog = Logger(subsystem: "com.prossh", category: "TerminalEngine")
     private static var perfSignpostLog: OSLog { TerminalPerf.log }
 
@@ -192,7 +218,9 @@ actor TerminalEngine {
                     while index < next.count, shouldFastPathGroundTextByte(next[index]) {
                         index += 1
                     }
-                    grid.processGroundTextBytes(next, range: start..<index)
+                    TerminalSchedulingDiagnostics.measureGround(byteCount: index - start) {
+                        grid.processGroundTextBytes(next, range: start..<index)
+                    }
                     continue
                 }
 
@@ -224,6 +252,20 @@ actor TerminalEngine {
     /// Feed a single byte array into the parser.
     func feed(_ bytes: [UInt8]) async {
         await feed(Data(bytes))
+    }
+
+    /// Streaming-reader entry point. Collect follow-up state without leaving the
+    /// engine actor after feeding. Keep ordinary feed's Bool/queueing contract and
+    /// non-consuming behavior for playback, synthetic output and parser benchmarks.
+    func feedAndCollectOutcome(_ data: Data) async -> FeedOutcome {
+        await feed(data)
+        return FeedOutcome(
+            inputModeSnapshot: grid.inputModeSnapshot(),
+            syncExitSnapshots: grid.consumeSyncExitSnapshots(),
+            synchronizedOutput: grid.synchronizedOutput,
+            usingAlternateBuffer: grid.usingAlternateBuffer,
+            liveSyncSnapshot: grid.synchronizedOutput ? grid.liveSnapshot() : nil
+        )
     }
 
     // MARK: - Core State Machine (A.8.1, A.8.2)
@@ -698,6 +740,45 @@ actor TerminalEngine {
     }
 
     // MARK: - Grid Forwarding (for SessionManager)
+
+    /// The coordinator resolves scroll anchoring on MainActor between this read
+    /// and publishSnapshot; the engine only captures its own state.
+    func publishViewportState() -> PublishViewportState {
+        PublishViewportState(scrollbackCount: grid.scrollbackCount, usingAlternateBuffer: grid.usingAlternateBuffer)
+    }
+
+    func publishSnapshot(
+        scrollOffset: Int,
+        snapshotOverride: GridSnapshot?,
+        includeHousekeeping: Bool,
+        includeVisibleText: Bool
+    ) -> PublishSnapshotResult {
+        let snapshot = snapshotOverride ?? (scrollOffset > 0 ? grid.snapshot(scrollOffset: scrollOffset) : grid.snapshot())
+        return PublishSnapshotResult(
+            snapshot: snapshot,
+            housekeeping: includeHousekeeping ? publishHousekeepingState(includeVisibleText: includeVisibleText) : nil
+        )
+    }
+
+    /// Also used once after the publish drain loop. Intermediate snapshots must
+    /// not consume bells or trigger repeated visible-text extraction.
+    func publishHousekeepingState(includeVisibleText: Bool) -> PublishHousekeepingState {
+        let visibleLines: [String]?
+        if includeVisibleText && !grid.usingAlternateBuffer {
+            let start = TerminalPerf.now()
+            visibleLines = grid.visibleText()
+            TerminalPerf.record(.visibleTextScan, since: start)
+        } else {
+            visibleLines = nil
+        }
+        return PublishHousekeepingState(
+            visibleLines: visibleLines,
+            bellCount: grid.consumeBellCount(),
+            inputModeSnapshot: grid.inputModeSnapshot(),
+            windowTitle: grid.windowTitle,
+            workingDirectory: grid.workingDirectory
+        )
+    }
 
     func snapshot() -> GridSnapshot { grid.snapshot() }
     func liveSnapshot() -> GridSnapshot { grid.liveSnapshot() }

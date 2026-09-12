@@ -194,48 +194,23 @@ enum RawShellInputSource: String {
 
             for await batch in batchedStream {
                 if Task.isCancelled { break }
+                TerminalSchedulingDiagnostics.recordBatch(bytes: batch.count)
                 let recordStart = TerminalPerf.now()
                 await self?.recordParsedChunk(sessionID: sessionID, chunk: batch)
                 TerminalPerf.record(.chunkRecord, since: recordStart, byteCount: batch.count)
 
                 let feedStart = TerminalPerf.now()
-                await engine.feed(batch)
+                let outcome = await engine.feedAndCollectOutcome(batch)
                 TerminalPerf.record(.feedCall, since: feedStart, byteCount: batch.count)
 
-                // Four more cross-actor round-trips per batch, each queueing behind
-                // whatever the engine is already doing. Timed as one stage so their
-                // combined cost is visible next to feed and publish.
+                // One MainActor handoff applies the state already captured by feed.
                 let followUpStart = TerminalPerf.now()
-                defer { TerminalPerf.record(.batchFollowUp, since: followUpStart, byteCount: batch.count) }
-                await self?.manager?.renderingCoordinator.refreshInputModeSnapshot(
+                await self?.manager?.renderingCoordinator.handleFeedOutcome(
                     sessionID: sessionID,
-                    engine: engine
+                    engine: engine,
+                    outcome: outcome
                 )
-
-                let syncExitSnapshots = await engine.consumeSyncExitSnapshots()
-                if !syncExitSnapshots.isEmpty {
-                    await self?.manager?.renderingCoordinator.publishSyncExitSnapshots(
-                        sessionID: sessionID,
-                        engine: engine,
-                        snapshotOverrides: syncExitSnapshots
-                    )
-                }
-
-                let inSyncMode = await engine.synchronizedOutput
-                if inSyncMode {
-                    let liveSyncSnapshot = await engine.liveSnapshot()
-                    await self?.manager?.renderingCoordinator.scheduleSynchronizedOutputFallbackPublish(
-                        sessionID: sessionID,
-                        engine: engine,
-                        snapshotOverride: liveSyncSnapshot
-                    )
-                    continue
-                }
-
-                await self?.manager?.renderingCoordinator.scheduleParsedChunkPublish(
-                    sessionID: sessionID,
-                    engine: engine
-                )
+                TerminalPerf.record(.batchFollowUp, since: followUpStart, byteCount: batch.count)
             }
 
             await self?.manager?.renderingCoordinator.flushPendingSnapshotPublishIfNeeded(
