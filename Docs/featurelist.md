@@ -206,6 +206,8 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 
 ## Loop Log
 
+- 2026-09-12: Merged `perf/throughput-profiling-and-pty-fix` into `master` after committing and verifying the renderer GPU timing isolation fix. The merge completed without conflicts; `master` matches the feature branch tree, `TerminalPerfTests` passed 10 tests with 3 instrumentation-only skips, and the worktree was clean after the merge.
+
 - 2026-09-12: Fixed the draw-loop GPU timing concurrency warning on the active RenderCost branch. `RendererPerformanceMonitor` and its plain-value support types now declare `nonisolated`, matching the monitor's lock-protected cross-thread design and allowing Metal's command-buffer completion callback to call `recordGPUFrame(seconds:)` without an actor hop. Added a detached-task regression proving GPU samples can be recorded and read off the main actor. Validation: `TerminalPerfTests` passed 10 tests with 3 instrumentation-only skips; Debug app build succeeded; `git diff --check` passed.
 
 - 2026-09-07: R2b candidate implementation and focused verification completed (167 tests, 0 failures, 2 skips; Debug/Release builds pass). Six Release A/B pairs preserved in `Docs/R2bBenchmarkResults.md`; no repeatable overall speedup established and a regression remains possible. R2b stays open for CPU-versus-wall/scheduling diagnosis.
