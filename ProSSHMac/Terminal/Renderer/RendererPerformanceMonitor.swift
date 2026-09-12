@@ -8,7 +8,7 @@ import QuartzCore
 import os.signpost
 
 /// Snapshot of renderer frame performance.
-struct RendererPerformanceSnapshot: Sendable {
+nonisolated struct RendererPerformanceSnapshot: Sendable {
     let totalFrames: Int
     let averageCPUFrameMs: Double
     let p95CPUFrameMs: Double
@@ -20,7 +20,7 @@ struct RendererPerformanceSnapshot: Sendable {
 
 /// Fixed-size ring buffer for frame time samples.
 /// Uses a circular index to avoid O(n) `removeFirst()` calls.
-private struct RingBuffer {
+nonisolated private struct RingBuffer {
     private var storage: [Double]
     private var head: Int = 0   // next write position
     private var count_: Int = 0
@@ -56,7 +56,7 @@ private struct RingBuffer {
 /// Rolling performance monitor for draw loop diagnostics and Instruments signposts.
 /// Thread-safe: all mutable state is protected by an unfair lock so that
 /// render-thread writes and main-thread snapshot reads do not race.
-final class RendererPerformanceMonitor: @unchecked Sendable {
+nonisolated final class RendererPerformanceMonitor: @unchecked Sendable {
 
     private let sampleWindow = 240
     private var log: OSLog { TerminalPerf.log }

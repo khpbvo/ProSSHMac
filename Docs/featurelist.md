@@ -27,6 +27,10 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 
 ### Current Focus
 
+- Task alignment (2026-09-12, renderer GPU timing isolation warning):
+  - Starting Point: `MetalTerminalRenderer` records completed-command-buffer GPU timing from Metal's nonisolated completion callback, but `RendererPerformanceMonitor` inherits the project's default `MainActor` isolation even though its mutable state is lock-protected and the class is `@unchecked Sendable`, producing a Swift concurrency warning at `recordGPUFrame(seconds:)`.
+  - End Point: declare the thread-safe performance monitor nonisolated, preserve GPU timing collection, add regression coverage that exercises record/read access from a detached task, and pass the focused tests plus Debug build without the reported warning.
+  - Status: Complete. The monitor, snapshot, and private ring-buffer value type now opt out of default `MainActor` isolation; the existing lock remains the synchronization boundary. The detached-task regression passed, the focused suite passed 10 tests with 3 instrumentation-only skips, and the Debug app build succeeded without the reported warning.
 - Task alignment (2026-09-07, R2b scheduling diagnosis):
   - Starting Point: the R2b candidate passes focused correctness checks, but both binaries exhibit fast/slow regimes and the direct/off comparisons favor baseline.
   - End Point: measure thread CPU versus elapsed time around synchronous grid work, correlate batching/burst/activity state, identify an evidence-backed cause or bounded explanation, and revise the candidate or benchmark as indicated before repeating controlled Release comparisons.
@@ -201,6 +205,8 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
   - End Point: `LocalPTYProcess` startup sanitization now handles split warning fragments across PTY chunks by carrying partial marker prefixes and removing the complete warning line once assembled, preventing leaked tail fragments in terminal output. Test cleanup removed stale `ShellIntegrationTests` cases that still referenced deleted local-shell overlay APIs. In sandboxed builds, `ping` is blocked by macOS App Sandbox ICMP restrictions (`com.apple.security.app-sandbox`); this was later addressed for non-App-Store distributions by disabling App Sandbox at the target level.
 
 ## Loop Log
+
+- 2026-09-12: Fixed the draw-loop GPU timing concurrency warning on the active RenderCost branch. `RendererPerformanceMonitor` and its plain-value support types now declare `nonisolated`, matching the monitor's lock-protected cross-thread design and allowing Metal's command-buffer completion callback to call `recordGPUFrame(seconds:)` without an actor hop. Added a detached-task regression proving GPU samples can be recorded and read off the main actor. Validation: `TerminalPerfTests` passed 10 tests with 3 instrumentation-only skips; Debug app build succeeded; `git diff --check` passed.
 
 - 2026-09-07: R2b candidate implementation and focused verification completed (167 tests, 0 failures, 2 skips; Debug/Release builds pass). Six Release A/B pairs preserved in `Docs/R2bBenchmarkResults.md`; no repeatable overall speedup established and a regression remains possible. R2b stays open for CPU-versus-wall/scheduling diagnosis.
 

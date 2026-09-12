@@ -4,6 +4,17 @@ import XCTest
 
 final class TerminalPerfTests: XCTestCase {
 
+    func testPerformanceMonitorAcceptsGPUFramesOffMainActor() async throws {
+        let monitor = RendererPerformanceMonitor()
+
+        let snapshot = await Task.detached {
+            monitor.recordGPUFrame(seconds: 0.0015)
+            return monitor.snapshot()
+        }.value
+
+        XCTAssertEqual(try XCTUnwrap(snapshot.averageGPUFrameMs), 1.5, accuracy: 0.000_001)
+    }
+
     func testSchedulingProbeRunsWorkWhenDisabled() {
         var called = false
         TerminalSchedulingDiagnostics.measureGround(byteCount: 1) { called = true }
