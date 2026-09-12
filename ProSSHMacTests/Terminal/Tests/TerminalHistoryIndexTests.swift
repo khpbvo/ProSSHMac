@@ -124,6 +124,71 @@ final class TerminalHistoryIndexTests: XCTestCase {
         XCTAssertEqual(commandFirst, "cat /etc/os-release")
     }
 
+    /// The output cap used to be applied on every append, which cost four O(n)
+    /// passes over the whole buffer per chunk. It is now applied once, at read
+    /// time, over a byte buffer trimmed in amortized batches — the retained window
+    /// must still be the last `maxOutputCharacters` characters.
+    @MainActor
+    func testRawOutputRetainsMostRecentCharacterWindow() async {
+        let cap = 2_000
+        let index = TerminalHistoryIndex(maxBlocksPerSession: 20, maxOutputCharacters: cap)
+        let sessionID = UUID()
+
+        await index.registerSession(sessionID: sessionID, username: "kevin", hostname: "box")
+        await index.recordCommandInput(sessionID: sessionID, command: "flood", at: .now, source: .userInput)
+
+        // Well past the amortized trim threshold (4x the cap in bytes, trimmed at
+        // 2x that), in many small chunks.
+        for chunk in 0..<4_000 {
+            await index.recordOutputChunk(
+                sessionID: sessionID,
+                data: Data(String(format: "%07d\n", chunk).utf8),
+                at: .now
+            )
+        }
+
+        let raw = await index.activeCommandRawOutput(sessionID: sessionID)
+        guard let output = raw else { return XCTFail("expected raw output") }
+        XCTAssertLessThanOrEqual(output.count, cap)
+        XCTAssertTrue(output.hasSuffix("0003999\n"), "the newest output must survive the trim")
+        XCTAssertFalse(output.contains("0000000\n"), "the oldest output must be dropped")
+    }
+
+    /// Trimming a UTF-8 byte buffer can cut mid-sequence. The retained window must
+    /// still decode cleanly rather than surfacing replacement characters.
+    @MainActor
+    func testRawOutputTrimDoesNotSplitMultiByteCharacters() async {
+        let index = TerminalHistoryIndex(maxBlocksPerSession: 20, maxOutputCharacters: 2_000)
+        let sessionID = UUID()
+
+        await index.registerSession(sessionID: sessionID, username: "kevin", hostname: "box")
+        await index.recordCommandInput(sessionID: sessionID, command: "unicode", at: .now, source: .userInput)
+
+        // 3-byte characters, so the trim boundary rarely lands on a lead byte.
+        for _ in 0..<2_000 {
+            await index.recordOutputChunk(sessionID: sessionID, data: Data("日本語テスト\n".utf8), at: .now)
+        }
+
+        let raw = await index.activeCommandRawOutput(sessionID: sessionID)
+        guard let output = raw else { return XCTFail("expected raw output") }
+        XCTAssertFalse(output.contains("\u{FFFD}"), "trim split a multi-byte sequence")
+        XCTAssertTrue(output.hasSuffix("日本語テスト\n"))
+    }
+
+    /// NUL bytes were stripped before and must still be.
+    @MainActor
+    func testRawOutputStripsNulBytes() async {
+        let index = TerminalHistoryIndex(maxBlocksPerSession: 20)
+        let sessionID = UUID()
+
+        await index.registerSession(sessionID: sessionID, username: "kevin", hostname: "box")
+        await index.recordCommandInput(sessionID: sessionID, command: "nuls", at: .now, source: .userInput)
+        await index.recordOutputChunk(sessionID: sessionID, data: Data([0x61, 0x00, 0x62]), at: .now)
+
+        let raw = await index.activeCommandRawOutput(sessionID: sessionID)
+        XCTAssertEqual(raw, "ab")
+    }
+
     @MainActor
     func testRingBufferCapacityDropsOldestBlocks() async {
         let index = TerminalHistoryIndex(maxBlocksPerSession: 2)

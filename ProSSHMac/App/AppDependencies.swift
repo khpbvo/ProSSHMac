@@ -161,6 +161,21 @@ final class AppDependencies: ObservableObject {
             return
         }
 
+        // The rendered benchmark needs the real UI, so unlike the modes above it
+        // does not short-circuit initialization — it drives the app once the
+        // window is up, the same way screenshot mode does.
+        if ThroughputBenchmarkRunner.isRenderBenchmarkEnabled {
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                try? await Task.sleep(for: .milliseconds(1500))
+                await ThroughputBenchmarkRunner.runRenderBenchmarkIfRequested(
+                    sessionManager: self.sessionManager,
+                    navigationCoordinator: self.navigationCoordinator
+                )
+            }
+            return
+        }
+
         if screenshotMode {
             Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .milliseconds(300))

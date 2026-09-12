@@ -381,11 +381,10 @@ final class SessionManagerRenderingPathTests: XCTestCase {
             return
         }
 
-        _ = await engine.feed(Data("\u{1B}[?1049h\u{1B}[?1000h\u{1B}[?1006h".utf8))
+        let outcome = await engine.feedAndCollectOutcome(Data("\u{1B}[?1049h\u{1B}[?1000h\u{1B}[?1006h".utf8))
 
         let baselineNonce = manager.gridSnapshotNonceBySessionID[session.id, default: -1]
-        await manager.renderingCoordinator.refreshInputModeSnapshot(sessionID: session.id, engine: engine)
-        await manager.renderingCoordinator.scheduleParsedChunkPublish(sessionID: session.id, engine: engine)
+        await manager.renderingCoordinator.handleFeedOutcome(sessionID: session.id, engine: engine, outcome: outcome)
 
         XCTAssertEqual(
             manager.gridSnapshotNonceBySessionID[session.id, default: -1],

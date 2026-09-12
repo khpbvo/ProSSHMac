@@ -411,12 +411,47 @@ import os.signpost
         manager.inputModeSnapshotsBySessionID[sessionID] = await engine.inputModeSnapshot()
     }
 
+    func handleFeedOutcome(
+        sessionID: UUID,
+        engine: TerminalEngine,
+        outcome: TerminalEngine.FeedOutcome
+    ) async {
+        manager?.inputModeSnapshotsBySessionID[sessionID] = outcome.inputModeSnapshot
+        if !outcome.syncExitSnapshots.isEmpty {
+            await publishSyncExitSnapshots(
+                sessionID: sessionID, engine: engine,
+                snapshotOverrides: outcome.syncExitSnapshots
+            )
+        }
+        if outcome.synchronizedOutput {
+            if let snapshot = outcome.liveSyncSnapshot {
+                scheduleSynchronizedOutputFallbackPublish(
+                    sessionID: sessionID, engine: engine, snapshotOverride: snapshot
+                )
+            }
+        } else {
+            scheduleParsedChunkPublish(
+                sessionID: sessionID, engine: engine,
+                usingAlternateBuffer: outcome.usingAlternateBuffer
+            )
+        }
+    }
+
     func scheduleParsedChunkPublish(
         sessionID: UUID,
         engine: TerminalEngine
     ) async {
+        let usingAlternateBuffer = await engine.usingAlternateBuffer
+        scheduleParsedChunkPublish(sessionID: sessionID, engine: engine, usingAlternateBuffer: usingAlternateBuffer)
+    }
+
+    private func scheduleParsedChunkPublish(
+        sessionID: UUID,
+        engine: TerminalEngine,
+        usingAlternateBuffer: Bool
+    ) {
         let debounceMode: PublishDebounceMode
-        if await engine.usingAlternateBuffer {
+        if usingAlternateBuffer {
             debounceMode = .alternateBuffer
         } else if promptRedrawPendingSessionIDs.contains(sessionID) {
             debounceMode = .promptRedraw
@@ -459,6 +494,7 @@ import os.signpost
         engine: TerminalEngine
     ) async {
         if isPublishingSuspended {
+            TerminalSchedulingDiagnostics.event("suspendedPublish")
             suspendedDirtySessionIDs.insert(sessionID)
             cancelPendingSnapshotPublish(for: sessionID)
             return
@@ -516,8 +552,13 @@ import os.signpost
         #endif
 
         let previousScrollbackCount = cachedScrollbackCountBySessionID[sessionID] ?? 0
-        let scrollbackCount = await engine.scrollbackCount
-        let usingAlternateBuffer = await engine.usingAlternateBuffer
+        // Caller-side timer around the engine awaits: `publish` minus this is the
+        // work publish does itself, and this minus `snapshot build` is hop + queue.
+        var engineWaitStart = TerminalPerf.now()
+        let viewport = await engine.publishViewportState()
+        let scrollbackCount = viewport.scrollbackCount
+        let usingAlternateBuffer = viewport.usingAlternateBuffer
+        TerminalPerf.record(.publishEngineWait, since: engineWaitStart)
         var currentOffset = scrollOffsetBySessionID[sessionID] ?? 0
         if usingAlternateBuffer {
             // Alternate buffer (TUI apps) should always show the live
@@ -542,14 +583,16 @@ import os.signpost
         }
         cachedScrollbackCountBySessionID[sessionID] = scrollbackCount
 
-        let snapshot: GridSnapshot
-        if let snapshotOverride {
-            snapshot = snapshotOverride
-        } else if currentOffset > 0 {
-            snapshot = await engine.snapshot(scrollOffset: currentOffset)
-        } else {
-            snapshot = await engine.snapshot()
-        }
+        let includeVisibleText = !skipHousekeeping && !usingAlternateBuffer && shouldPublishShellBuffer(for: sessionID)
+        engineWaitStart = TerminalPerf.now()
+        let result = await engine.publishSnapshot(
+            scrollOffset: currentOffset,
+            snapshotOverride: snapshotOverride,
+            includeHousekeeping: !skipHousekeeping,
+            includeVisibleText: includeVisibleText
+        )
+        TerminalPerf.record(.publishEngineWait, since: engineWaitStart)
+        let snapshot = result.snapshot
         let shouldForceFullSnapshot = forceFullSnapshotNextPublishBySessionID.contains(sessionID)
         let publishedSnapshot: GridSnapshot
         if shouldForceFullSnapshot {
@@ -580,7 +623,8 @@ import os.signpost
             engine: engine,
             scrollOffset: currentOffset,
             scrollbackCount: scrollbackCount,
-            usingAlternateBuffer: usingAlternateBuffer
+            usingAlternateBuffer: usingAlternateBuffer,
+            capturedState: result.housekeeping
         )
     }
 
@@ -589,9 +633,15 @@ import os.signpost
         engine: TerminalEngine,
         scrollOffset: Int,
         scrollbackCount: Int,
-        usingAlternateBuffer: Bool
+        usingAlternateBuffer: Bool,
+        capturedState: TerminalEngine.PublishHousekeepingState? = nil
     ) async {
         guard let manager else { return }
+        // Timed here rather than at the call site: the publish drain loop skips
+        // housekeeping per iteration and calls this directly once at the end, so a
+        // caller-side timer would miss the path that actually runs under load.
+        let housekeepingStart = TerminalPerf.now()
+        defer { TerminalPerf.record(.publishHousekeeping, since: housekeepingStart) }
 
         manager.gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
 
@@ -601,19 +651,15 @@ import os.signpost
             scrollbackCount: scrollbackCount
         )
 
-        if !usingAlternateBuffer && shouldPublishShellBuffer(for: sessionID) {
-            let visibleLines = await engine.visibleText()
-            manager.shellBuffers[sessionID] = visibleLines
-            if let completedBlock = await manager.terminalHistoryIndex.observeVisibleLines(
-                sessionID: sessionID,
-                lines: visibleLines,
-                at: .now
-            ) {
-                manager.publishCommandCompletion(completedBlock)
-            }
+        let state: TerminalEngine.PublishHousekeepingState
+        if let capturedState {
+            state = capturedState
+        } else {
+            let includeVisibleText = !usingAlternateBuffer && shouldPublishShellBuffer(for: sessionID)
+            state = await engine.publishHousekeepingState(includeVisibleText: includeVisibleText)
         }
 
-        let bellCount = await engine.consumeBellCount()
+        let bellCount = state.bellCount
         if bellCount > 0 {
             if isInBurstMode(for: sessionID) {
                 let now = Date()
@@ -627,16 +673,31 @@ import os.signpost
             }
         }
 
-        manager.inputModeSnapshotsBySessionID[sessionID] = await engine.inputModeSnapshot()
+        manager.inputModeSnapshotsBySessionID[sessionID] = state.inputModeSnapshot
 
-        let title = await engine.windowTitle
+        let title = state.windowTitle
         if !title.isEmpty {
             manager.windowTitleBySessionID[sessionID] = title
         }
 
-        let cwd = await engine.workingDirectory
+        let cwd = state.workingDirectory
         if !cwd.isEmpty {
             manager.workingDirectoryBySessionID[sessionID] = cwd
+        }
+
+        // Apply captured metadata before history observation suspends MainActor,
+        // so a newer feed's input modes cannot be overwritten after that await.
+        if let visibleLines = state.visibleLines {
+            let visibleTextStart = TerminalPerf.now()
+            manager.shellBuffers[sessionID] = visibleLines
+            if let completedBlock = await manager.terminalHistoryIndex.observeVisibleLines(
+                sessionID: sessionID,
+                lines: visibleLines,
+                at: .now
+            ) {
+                manager.publishCommandCompletion(completedBlock)
+            }
+            TerminalPerf.record(.visibleTextScan, since: visibleTextStart)
         }
     }
 
@@ -671,6 +732,7 @@ import os.signpost
 
         let count = burstCountBySessionID[sessionID, default: 0]
         if count > burstThreshold, autoBurstModeBySessionID[sessionID] != true {
+            TerminalSchedulingDiagnostics.event("burstEnter")
             autoBurstModeBySessionID[sessionID] = true
             #if DEBUG
             print("[RenderCoord] burst mode ON  session=\(sessionID.uuidString.prefix(8)) count=\(count)")
@@ -683,6 +745,7 @@ import os.signpost
             guard !Task.isCancelled else { return }
             guard let self else { return }
             if self.autoBurstModeBySessionID[sessionID] == true {
+                TerminalSchedulingDiagnostics.event("burstRevert")
                 self.autoBurstModeBySessionID[sessionID] = false
                 self.burstCountBySessionID.removeValue(forKey: sessionID)
                 self.burstWindowStartBySessionID.removeValue(forKey: sessionID)
@@ -719,6 +782,7 @@ import os.signpost
         snapshotOverride: GridSnapshot? = nil
     ) {
         if isPublishingSuspended {
+            TerminalSchedulingDiagnostics.event("suspendedPublish")
             suspendedDirtySessionIDs.insert(sessionID)
             return
         }
@@ -727,6 +791,7 @@ import os.signpost
             pendingScheduledSnapshotOverridesBySessionID[sessionID] = snapshotOverride
         }
 
+        TerminalSchedulingDiagnostics.event("publishRequest")
         updateBurstState(for: sessionID)
 
         if publishInFlightSessionIDs.contains(sessionID) {
@@ -782,6 +847,7 @@ import os.signpost
         snapshotOverride: GridSnapshot? = nil
     ) async {
         if isPublishingSuspended {
+            TerminalSchedulingDiagnostics.event("suspendedPublish")
             suspendedDirtySessionIDs.insert(sessionID)
             return
         }
@@ -859,7 +925,7 @@ import os.signpost
 
             let scrollOffset = scrollOffsetBySessionID[sessionID] ?? 0
             let scrollbackCount = cachedScrollbackCountBySessionID[sessionID] ?? 0
-            let usingAlt = await engine.usingAlternateBuffer
+            let usingAlt = gridSnapshotsBySessionID[sessionID]?.usingAlternateBuffer ?? false
             await publishHousekeeping(
                 for: sessionID,
                 engine: engine,

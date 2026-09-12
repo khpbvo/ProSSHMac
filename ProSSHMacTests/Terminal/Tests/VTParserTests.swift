@@ -44,6 +44,61 @@ final class VTParserTests: XCTestCase {
 
     // MARK: - State Transition Tests
 
+    func testFeedOutcomeCapturesModesAndDrainsCompletedSyncFrames() async {
+        let outcome = await engine.feedAndCollectOutcome(Data((
+            "\u{1B}[?1049h\u{1B}[?1000h\u{1B}[?1006h" +
+            "\u{1B}[?2026hFIRST\u{1B}[?2026l" +
+            "\u{1B}[?2026h\u{1B}[HFINAL\u{1B}[?2026l"
+        ).utf8))
+        XCTAssertTrue(outcome.usingAlternateBuffer)
+        XCTAssertEqual(outcome.inputModeSnapshot.mouseTracking, .x10)
+        XCTAssertEqual(outcome.inputModeSnapshot.mouseEncoding, .sgr)
+        XCTAssertFalse(outcome.synchronizedOutput)
+        XCTAssertNil(outcome.liveSyncSnapshot)
+        XCTAssertEqual(outcome.syncExitSnapshots.count, 2)
+        let remaining = await engine.consumeSyncExitSnapshots()
+        XCTAssertTrue(remaining.isEmpty, "Captured sync frames must only be delivered once.")
+    }
+
+    func testFeedOutcomeIncludesLiveFrameWhileSynchronizedOutputRemainsOpen() async {
+        let outcome = await engine.feedAndCollectOutcome(Data("\u{1B}[?2026hLIVE".utf8))
+        XCTAssertTrue(outcome.synchronizedOutput)
+        XCTAssertTrue(outcome.syncExitSnapshots.isEmpty)
+        XCTAssertEqual(outcome.liveSyncSnapshot?.cells.first?.glyphIndex, 76)
+    }
+
+    func testCompositePublishPreservesOverrideAndConsumesBellsOnlyDuringHousekeeping() async {
+        await feed("OLD")
+        let oldSnapshot = await engine.snapshot()
+        await feed("\u{1B}[HLIVE\u{07}\u{07}\u{1B}]2;R2b title\u{07}\u{1B}[?2004h")
+        let intermediate = await engine.publishSnapshot(
+            scrollOffset: 0, snapshotOverride: oldSnapshot, includeHousekeeping: false,
+            includeVisibleText: false
+        )
+        XCTAssertNil(intermediate.housekeeping)
+        XCTAssertEqual(intermediate.snapshot.cells.first?.glyphIndex, 79)
+        let final = await engine.publishSnapshot(
+            scrollOffset: 0, snapshotOverride: nil, includeHousekeeping: true,
+            includeVisibleText: true
+        )
+        XCTAssertEqual(final.snapshot.cells.first?.glyphIndex, 76)
+        XCTAssertEqual(final.housekeeping?.bellCount, 2)
+        XCTAssertEqual(final.housekeeping?.windowTitle, "R2b title")
+        XCTAssertEqual(final.housekeeping?.inputModeSnapshot.bracketedPasteMode, true)
+        XCTAssertTrue(final.housekeeping?.visibleLines?.first?.hasPrefix("LIVE") == true)
+        let next = await engine.publishHousekeepingState(includeVisibleText: false)
+        XCTAssertEqual(next.bellCount, 0)
+        XCTAssertNil(next.visibleLines)
+    }
+
+    func testCompositeHousekeepingSkipsAlternateBufferText() async {
+        await feed("\u{1B}[?1049hTUI")
+        let result = await engine.publishHousekeepingState(includeVisibleText: true)
+        XCTAssertNil(result.visibleLines)
+        let state = await engine.publishViewportState()
+        XCTAssertTrue(state.usingAlternateBuffer)
+    }
+
     func testInitialStateIsGround() async {
         let state = await engine.state
         XCTAssertEqual(state, .ground)

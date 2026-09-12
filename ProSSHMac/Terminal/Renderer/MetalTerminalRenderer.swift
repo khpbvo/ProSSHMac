@@ -46,6 +46,16 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     /// Must match `CellBuffer` and `TerminalShaders.metal`.
     static let noGlyphIndex: UInt32 = 0xFFFF_FFFF
 
+    /// Most recently created renderer, populated only under `--benchmark-render`
+    /// so `ThroughputBenchmarkRunner` can read frame statistics from the live
+    /// surface. Never set in a normal run.
+    ///
+    /// Strong on purpose: a weak reference here cannot distinguish "the surface
+    /// was torn down" from "the surface is alive but SwiftUI rebuilt the view",
+    /// and that distinction decides whether a slow run was rendering or not.
+    /// Retaining one renderer for the life of a benchmark process is harmless.
+    static var benchmarkInstance: MetalTerminalRenderer?
+
     // MARK: - Metal Infrastructure (B.8.1)
 
     /// The Metal device.
@@ -481,6 +491,10 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         self.uniformBuffer = ub
 
         super.init()
+
+        if ThroughputBenchmarkRunner.isRenderBenchmarkEnabled {
+            MetalTerminalRenderer.benchmarkInstance = self
+        }
 
         // Wire eviction callback so the atlas can recycle freed regions.
         glyphCache.onEvict = { [weak self] entry in

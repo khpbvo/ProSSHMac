@@ -9,11 +9,11 @@ Read automatically at every session start. Current state only — no history, no
 | Layer | File | Purpose |
 |-------|------|---------|
 | **Working memory** | `CLAUDE.md` (this file) | Current state, conventions, key files, gotchas. Read every session. |
-| **Long-term log** | `docs/featurelist.md` | Dated work log, phase progress, loop-log entries. Append-only history. |
-| **Feature specs** | `docs/<FeatureName>.md` | Per-feature phased checklist with architecture notes. Created at feature start. |
+| **Long-term log** | `Docs/featurelist.md` | Dated work log, phase progress, loop-log entries. Append-only history. |
+| **Feature specs** | `Docs/<FeatureName>.md` | Per-feature phased checklist with architecture notes. Created at feature start. |
 
 - `CLAUDE.md` holds **what is true now**. Update when architecture, conventions, key files, or gotchas change.
-- `docs/featurelist.md` holds **what happened and when**. Every session appends a dated entry.
+- `Docs/featurelist.md` holds **what happened and when**. Every session appends a dated entry.
 - Feature specs hold **what to do and how**. Each phase has a `- [ ]` checkbox, checked off when completed.
 
 ---
@@ -22,12 +22,12 @@ Read automatically at every session start. Current state only — no history, no
 
 ### Starting a New Feature
 
-1. Create `docs/<FeatureName>.md` with:
+1. Create `Docs/<FeatureName>.md` with:
    - Overview (goal, architecture sketch, affected files)
    - Phased checklist using `- [ ] Phase N: <title>` checkbox format
    - Each phase should be one session's worth of work
 2. Add a reference row to the Reference Docs table below.
-3. Log the feature start in `docs/featurelist.md` with today's date.
+3. Log the feature start in `Docs/featurelist.md` with today's date.
 
 ### Session Workflow (one phase per session)
 
@@ -35,7 +35,7 @@ Each Claude Code session implements exactly one phase from a feature spec.
 
 **Start of session:**
 1. This file is read automatically — instant project context.
-2. Read the feature spec (`docs/<FeatureName>.md`) to find the current unchecked phase.
+2. Read the feature spec (`Docs/<FeatureName>.md`) to find the current unchecked phase.
 3. **Plan mode is enabled** before implementation. Design the phase before writing code.
 4. Once the plan is confirmed, exit plan mode and implement.
 
@@ -48,8 +48,8 @@ Each Claude Code session implements exactly one phase from a feature spec.
    `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' build`
    `xcodebuild -scheme ProSSHMac -destination 'platform=macOS' test -only-testing:ProSSHMacTests/<TestClassName>`
    Full test suite (`test` without `-only-testing`) is only needed before major releases or cross-cutting refactors.
-2. Check off completed phase in `docs/<FeatureName>.md`
-3. Append dated entry to `docs/featurelist.md` (what changed, files modified, build/test status)
+2. Check off completed phase in `Docs/<FeatureName>.md`
+3. Append dated entry to `Docs/featurelist.md` (what changed, files modified, build/test status)
 4. Update this `CLAUDE.md` if architecture, conventions, key files, or gotchas changed
 5. Write the **Next Session Plan** block at the bottom of this file
 6. Commit all changes (code + docs) in a single commit
@@ -112,31 +112,53 @@ xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform
 
 # Throughput benchmarks
 # Defaults to Debug. Pass --configuration Release for numbers that reflect a shipping build.
+# Parser/grid only (no PTY, no rendering)
 ./scripts/benchmark-throughput.sh --configuration Release --benchmark-bytes 2097152 --benchmark-runs 4 --benchmark-chunk 4096
+# Real PTY -> engine.feed, but not the app's reader path
 ./scripts/benchmark-throughput.sh --configuration Release --no-build --pty-local --benchmark-bytes 2097152 --benchmark-runs 4
+# The real app path. --render draws; --render-detached parks on .hosts so nothing draws.
+# ALWAYS pin the window and record it — results scale with cell count by >10x.
+./scripts/benchmark-throughput.sh --configuration Release --no-build --render-detached \
+    --benchmark-window 1280x800 --benchmark-bytes 8388608 --benchmark-runs 3 [--perf-signposts]
+./scripts/benchmark-peer-emulator.sh          # Terminal.app / iTerm2 comparison
 ./scripts/benchmark-ssh.sh --host <hostname> --user <username>
 ```
 
 - Test bundle: `ProSSHMacTests` — 4 files at the bundle root plus 47 in `ProSSHMacTests/Terminal/Tests/`.
   Migration out of the app target is **complete**; no test sources remain under `ProSSHMac/`.
 - Some tests require the host app process (UI/AppKit-backed suites).
-- **Full-suite baseline (2026-09-03): 870 tests, 0 failures.** The suite is green — a red run
-  means something you touched, not pre-existing noise.
+- **Full-suite baseline: 883 tests, 1 failure** — see the flaky-test gotcha below. The last
+  clean full-suite run recorded 870/0 on 2026-09-03, before later tests were added. A red run in a
+  suite you touched is yours; a red `SessionManagerRenderingPathTests` under full-suite load is not.
 - Tests must not depend on the developer's real `UserDefaults`. `LLMProviderRegistry` takes an
   injectable `userDefaults:`; agent tests build one via `makeIsolatedOpenAIRegistry()` in
   `AIAgentServiceTests.swift`. Follow that pattern for any new defaults-backed type.
-- **Throughput baseline (2026-09-03), Release:** **36.38 MB/s** fullscreen, **35.16 MB/s** partial
-  scroll (2 MB parser/grid); **17.97 MB/s** PTY-local. Debug: 1.84 / 1.82 / 1.74 MB/s.
-  **Release is ~20x faster than Debug** — always state the configuration with any number, and
-  never compare a Debug figure to a Release one.
+- **Throughput baseline, Release** (state the configuration with every number — Release is ~20x
+  Debug, and never compare across the two):
+
+  | Path | MB/s | Measured |
+  |---|---|---|
+  | Parser/grid, 2 MB (`--benchmark-base64`) | **36.4-37.3** | 2026-09-04 |
+  | PTY -> `engine.feed` (`--pty-local`) | **19.20** | 2026-09-03 |
+  | Real app path, 8 MB (`--render-detached`, **no window**) | **3.80-5.01** | 2026-09-04, post-R2a |
+  | Terminal.app (peer, with rendering) | 26.5 | 2026-09-03 |
+
+  The real-app figure is post-R2a and windowless; R1's windowed figures (0.14 detached /
+  0.03-0.05 rendered at 1100x750) could not be reproduced. **Read `Docs/RenderCost.md`
+  "Measurement caveats" before trusting or recording any rendered number.**
 - **Target is no longer 89 MB/s.** That was a pipe baseline with no terminal emulation. Measured
   peers on this machine (6 MB, with rendering): Terminal.app **26.5 MB/s**, iTerm2 ~1.4 MB/s.
   Current target: match or beat Terminal.app end-to-end. Reproduce with
   `./scripts/benchmark-peer-emulator.sh`. See `docs/Optimization.md`.
-- **Perf instrumentation:** `TerminalPerf` (`Terminal/Diagnostics/TerminalPerf.swift`) gates the
-  five signposts and the in-process stage timers behind `--perf-signposts` /
-  `PROSSH_PERF_SIGNPOSTS=1` / `terminal.perf.signposts`. Pass `--perf-signposts` to
-  `benchmark-throughput.sh` to print a stage budget. Off by default and verified free.
+- **Perf instrumentation:** `TerminalPerf` (`Terminal/Diagnostics/TerminalPerf.swift`) gates five
+  signposts and **19 in-process stage timers** behind `--perf-signposts` / `PROSSH_PERF_SIGNPOSTS=1`
+  / `terminal.perf.signposts`. Pass `--perf-signposts` to `benchmark-throughput.sh` to print a stage
+  budget. Off by default and verified free (parser/grid unchanged at 36.4-37.3 MB/s with it linked in).
+  The budget reports **time, %wall, span, busy% and start offset** per stage: span is first-start to
+  last-end, busy is time/span. A stage spanning the whole run at low busy% is **blocked, not slow** —
+  that column is what finally attributed R1's missing 18 s. Several stages are deliberate
+  caller/callee pairs (`feedCall` vs `parse`, `publish` vs `publishEngineWait`); the difference
+  between a pair is actor-hop and queue wait rather than work.
 
 ---
 
@@ -206,7 +228,7 @@ ProSSHMac/
 
 ## Key Files
 
-All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-09-03.
+All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-09-06.
 
 | File / Group | What it does |
 |---|---|
@@ -214,7 +236,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-09-0
 | `UI/Terminal/TerminalView.swift` | Main terminal UI, sidebar layout, focus, input capture (1,066L) |
 | `Services/SessionManager.swift` + Queries | Session lifecycle, shell I/O, SFTP, grid snapshots (1,017L) |
 | `UI/Terminal/TerminalAIAssistantPane.swift` | AI copilot sidebar, composer, message rendering (966L) |
-| `Services/TerminalRenderingCoordinator.swift` | Snapshot publishing, scroll state, resize debounce, alt-buffer policy (958L) |
+| `Services/TerminalRenderingCoordinator.swift` | Snapshot publishing, scroll state, resize debounce, alt-buffer policy (972L). `publishGridState` + `publishHousekeeping` make ~7 engine round-trips per publish — the R2b target |
 | `Services/SSH/LibSSHTransport.swift` | LibSSH transport actor (822L); channels in `LibSSHShellChannel`/`LibSSHForwardChannel` |
 | `Terminal/Parser/TerminalEngine.swift` | VT parser hot path, merged parse/apply loop (733L) |
 | `Terminal/Renderer/MetalTerminalRenderer.swift` + 8 extensions | Metal renderer (496L): glyph resolution, snapshot update, font management, draw loop, view config, selection, post-processing, diagnostics |
@@ -230,6 +252,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-09-0
 | `Services/AI/AIToolDefinitions.swift` | Developer prompt, 8 tool schemas, direct-action filter, error helpers (320L) |
 | `Services/OpenAIAgentService.swift` | Agent-layer protocols, provider routing, tool definition assembly (317L) |
 | `Services/LocalPTYProcess.swift` | Actor wrapping forkpty, async output stream (301L) |
+| `Services/SessionShellIOCoordinator.swift` | Shell input, the batched parser reader, per-batch bookkeeping (330L). The four post-`feed` engine round-trips here are 46.7% of wall — the R2b target |
 | `Services/AI/AIAgentRunner.swift` | Agent iteration loop, direct-action mode, provider mismatch (249L) |
 | `Terminal/Renderer/TerminalMetalView.swift` | NSViewRepresentable wrapping MTKView, gesture recognizers (239L) |
 | `ViewModels/AIProviderSettingsViewModel.swift` | Multi-provider settings VM (236L) |
@@ -237,7 +260,9 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-09-0
 | `ViewModels/TerminalAIAssistantViewModel.swift` | AI sidebar VM: messages, streaming, patch approval (379L) |
 | `UI/Terminal/PatchApprovalCardView.swift` | Inline patch approval card for `apply_patch` (177L) |
 | `App/ThroughputBenchmarkRunner.swift` | Parser/grid + PTY-local benchmarks, `BenchmarkSentinelMatcher`, stage-budget print |
-| `Terminal/Diagnostics/TerminalPerf.swift` | Runtime-gated signposts + in-process stage timers (152L). Start here for any perf work |
+| `Terminal/Diagnostics/TerminalPerf.swift` | Runtime-gated signposts + 19 in-process stage timers with span/busy tracking (233L). Start here for any perf work |
+| `App/ThroughputBenchmarkRunner+Render.swift` | End-to-end benchmark through the real app path (413L): `--benchmark-render`, `--benchmark-render-detached`, `--benchmark-window WxH`, windowless warning |
+| `Terminal/Features/TerminalHistoryIndex.swift` | Command blocks, prompt heuristics, output capture (484L). Raw output is a bounded UTF-8 byte buffer — see gotchas before touching `recordOutputChunk` |
 | `Services/ZshStartupWarningFilter.swift` | Bounded zsh startup-warning filter for the PTY path (120L) |
 | `Services/LLM/` (4 files) | LLMTypes, LLMProvider protocol, LLMProviderRegistry, LLMAPIKeyStore |
 | `Services/LLM/Providers/` (5 files) | ChatCompletionsClient, Mistral/Ollama/Anthropic/DeepSeek providers |
@@ -257,7 +282,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-09-0
   level, then re-arms terminal. See Known Issues.
 - **AI service stack**: `OpenAIAgentService.sendProviderRequest()` routes by
   `providerRegistry.activeProviderID`. OpenAI → Responses API; others → `LLMProvider` protocol.
-  Provider-agnostic types in `LLMTypes.swift`. See `docs/multiprovider-architecture.md`.
+  Provider-agnostic types in `LLMTypes.swift`. See `Docs/multiprovider-architecture.md`.
 - **AI agent tools**: 10 exposed schemas — 8 in `AIToolDefinitions` (`get_command_output`,
   `get_current_screen`, `search_filesystem`, `search_file_contents`, `read_files`,
   `get_recent_commands`, `execute_command`, `execute_and_wait`) plus `apply_patch` (gated on
@@ -268,7 +293,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-09-0
   iterations at `min(maxToolIterations, 15)` (`AIAgentRunner`). Default `maxToolIterations` is 50;
   `AppDependencies` constructs the service with **200**.
 - **`apply_patch` remote flow**: base64 read → V4A in-process diff → base64 heredoc write.
-  See `docs/RemotePatchingFix.md`.
+  See `Docs/RemotePatchingFix.md`.
 - **`nonisolated` on TerminalGrid extensions**: `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` makes
   extension methods default to `@MainActor`. All `TerminalGrid+*.swift` methods MUST be explicitly
   `nonisolated`.
@@ -276,9 +301,9 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-09-0
   each with `weak var manager`.
 - **Input routing**: `InputRoutingMode` (.singleFocus/.broadcast/.selectGroup) in `PaneManager`.
   Solo mode: Option+Click in broadcast → single-pane input. `Cmd+Shift+B` toggles broadcast/ends solo.
-  See `docs/Issue15.md`.
+  See `Docs/Issue15.md`.
 - **AI broadcast**: `BroadcastContext` threads through ViewModel → AgentService → Runner → ToolHandler.
-  `target_session` on all tools. See `docs/AIBroadCaster.md`.
+  `target_session` on all tools. See `Docs/AIBroadCaster.md`.
 - **Local PTY**: `LocalPTYProcess` (actor, forkpty) + `LocalShellBootstrap` (env, ZDOTDIR).
   `LocalTerminalSubsystem` translates NSEvent → PTY bytes.
 - **`nonisolated deinit`**: required on `@MainActor` types that may deallocate off the main actor —
@@ -288,6 +313,13 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-09-0
 ---
 
 ## Known Issues & Gotchas
+
+- **This file was truncated once and nobody noticed for two sessions.** Commit 2c99912 cut it from
+  422 lines to 96, dropping Project Overview, Build & Test, Project Structure, Key Files,
+  Architecture Conventions, this section, Completed Refactors and Reference Docs — leaving only the
+  workflow header and a Next Session Plan, with the sentence introducing that plan cut mid-word.
+  Restored 2026-09-06 from 2c99912^. When you edit the Next Session Plan, replace only the text
+  below the `## Next Session Plan` heading.
 
 - **Swift 6.3 / Xcode 26.6**: declaration-level `nonisolated` on an `actor` is invalid and fails to
   compile. Actors keep their isolated state; await their initializers at cross-isolation call sites.
@@ -320,14 +352,36 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-09-0
   actually found, so under `sh`/`bash` it scanned every chunk forever — 92.6% of local-shell wall
   time. Any "scan the opening output for X" filter added to the PTY path must be bounded the same
   way. Tests: `ZshStartupWarningFilterTests`.
-- **`SessionManagerRenderingPathTests.testLocalSessionStreamsProgressiveCommandOutput` is flaky**
-  under full-suite load: it spawns a real `/bin/zsh` and waits 8s for output. It passes in
-  isolation and fails in the full suite both before and after recent changes — so the CLAUDE.md
-  "870 tests, 0 failures" line does not reproduce today. Current: **883 tests, 1 failure**, that
-  one. Treat it as environment, not regression, but verify by running it in isolation.
+- **`SessionManagerRenderingPathTests.testLocalSessionStreamsProgressiveCommandOutput` is
+  load-flaky.** It spawns a real `/bin/zsh` and waits 8s for output. Measured 2026-09-06 on an
+  unchanged tree: **0.689s passing alone**, 21/21 green running its own suite twice, and **8.094s
+  timing out** when four suites run in one `xcodebuild test` invocation. It is not only full-suite
+  load — four suites is enough. Last full-suite figure: 883 tests, 1 failure, this one. Treat a
+  failure as environment; confirm by re-running the suite alone before believing a regression.
+- **The rendered benchmark gets no window when launched with arguments.** `open -n App.app` restores
+  a window; `open -n App.app --args <anything at all>` yields a process with `NSApp.windows.count ==
+  0` — a harmless unused flag reproduces it, and `applicationShouldHandleReopen` does not recover it.
+  `--benchmark-render` then silently measures the detached path. The runner warns loudly now; if you
+  see that warning, the number is not comparable to any windowed run. Fixing window acquisition
+  unblocks the window-scaling test and the render-vs-detached delta, both still unmeasured.
+- **Benchmark numbers drift across a session; only interleaved A/B is trustworthy.** The identical
+  baseline binary measured 2.86 MB/s early in a session and 0.92 MB/s hours later at a comparable
+  load average, and a `mediaanalysisd` pass (300% CPU) made it 7x slower again with 100x spreads
+  inside one launch. Never compare a number against one taken at a different time. Build both
+  binaries, alternate launches, and compare within a pair. Check `sysctl -n vm.loadavg` and the top
+  CPU consumers first, and record the load with the result.
+- **`TerminalHistoryIndex` raw output is UTF-8 bytes, deliberately.** It is appended once per output
+  batch and read once per command completion. As a `String` capped on every append it cost four O(n)
+  passes over 120k characters per call — a COW copy, two grapheme-cluster `String.count`s and an O(n)
+  `removeFirst` — and measured **89% of wall** on the real reader path. Do not reintroduce
+  `String.count`, `removeFirst`, or a `var state = sessionStates[id]` copy on that path; the length
+  must stay O(1), the trim amortized, and the character cap applied at read time.
+- **`recordParsedChunk` runs once per 4 ms batch, not per raw chunk.** It is `@MainActor`, so
+  per-chunk it cost ~1290 hops per MB. Everything it does concatenates, so batching is equivalent.
+  Do not move it back into the accumulator loop.
 - **SourceKit false positives**: "Cannot find type" errors across files. Always verify with
   `xcodebuild build`.
-- **Bugs doc is stale**: `docs/bugs.md` lists 79 numbered bugs, 29 already marked `[FIXED]` — so **50
+- **Bugs doc is stale**: `Docs/bugs.md` lists 79 numbered bugs, 29 already marked `[FIXED]` — so **50
   are open** (13 High / 16 Medium / 21 Low), and its summary table ("68 total, 1 Critical") is wrong:
   the sole Critical (Bug 51, QuickCommands) is fixed. Its `**File:**` paths predate the refactors —
   of 48 distinct paths, 18 have moved (`Views/` → `UI/`, `SSH/` → `Services/SSH/`, `Services/Security/`
@@ -339,9 +393,10 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-09-0
 - **Terminal selection**: `selectedText()` skips wide-char continuation cells. Plain-tap deselection
   lives in `MetalTerminalSessionSurface` (shared by embedded and external windows).
   `handleDrag` processes `.ended`/`.cancelled` before the `gridCell(at:)` guard.
-- **Docs directory case**: git tracks 19 files under `Docs/` and 4 under `docs/`
+- **Docs directory case**: git tracks **21 files under `Docs/`** and **4 under `docs/`**
   (`FutureFeatures.md`, `Optimization.md`, `RefactorTheFinalRun.md`, `screenshots/`). This only works
   because macOS is case-insensitive — a case-sensitive checkout will split them into two directories.
+  Paths in this file are written as the docs themselves reference them; resolve by basename.
 
 ---
 
@@ -349,12 +404,12 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-09-0
 
 | Refactor | Phases | Key output | Spec |
 |---|---|---|---|
-| RefactorTheActor (Strict Concurrency) | 0-8 | `Services/SSH/`, `Services/AI/`, session coordinators | spec file no longer in repo; see `docs/featurelist.md` |
+| RefactorTheActor (Strict Concurrency) | 0-8 | `Services/SSH/`, `Services/AI/`, session coordinators | spec file no longer in repo; see `Docs/featurelist.md` |
 | RefactorTerminalView | 0-9 | `UI/Terminal/` split into 21 components | `RefactorTerminalView.md` (repo root) |
 | RefactorTerminalGrid | 0-11 | 11 `TerminalGrid+*.swift` extensions | `RefactorTerminalGrid.md` (repo root) |
-| RefactorMetalTerminalRenderer | 0-8 | 8 `MetalTerminalRenderer+*.swift` extensions | `docs/RefactorMetalTerminalRenderer.md` |
+| RefactorMetalTerminalRenderer | 0-8 | 8 `MetalTerminalRenderer+*.swift` extensions | `Docs/RefactorMetalTerminalRenderer.md` |
 | RefactorTheFinalRun | 0-19 | 4 god files decomposed | `docs/RefactorTheFinalRun.md` |
-| Test migration | — | All tests now in `ProSSHMacTests/` (none under app sources) | `docs/featurelist.md` |
+| Test migration | — | All tests now in `ProSSHMacTests/` (none under app sources) | `Docs/featurelist.md` |
 
 ---
 
@@ -362,61 +417,75 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-09-0
 
 | Doc | Purpose |
 |-----|---------|
-| `docs/featurelist.md` | **Long-term memory** — dated work log, phase progress, loop-log entries |
-| `docs/bugs.md` | Bug audit by subsystem/severity — 50 of 79 still open; paths are pre-refactor |
+| `Docs/featurelist.md` | **Long-term memory** — dated work log, phase progress, loop-log entries |
+| `Docs/bugs.md` | Bug audit by subsystem/severity — 50 of 79 still open; paths are pre-refactor |
 | `docs/FutureFeatures.md` | Prioritized feature roadmap (competitive analysis) |
 | `docs/Optimization.md` | Performance bottleneck analysis, benchmark commands, current numbers |
-| `docs/FasterThenYouWillEverLiveToBe.md` | Throughput gap profiling — **Phases 0,1,2,3,5 done; only optional Phase 4 left** |
-| `docs/optimizationspart2.md` | Throughput recovery playbook (Part 2) |
-| `docs/OptimizeP2.md` / `docs/OptimizeP3.md` | P2 / P3 optimization phased checklists — **COMPLETE** |
-| `docs/PhaseB.md` | Local Input V2 Phase B checklist (make byte-first local input the only path) |
-| `docs/multiprovider-architecture.md` | Multi-provider LLM architecture overview |
-| `docs/AIpatchfeatureIntegration.md` | `apply_patch` integration guide |
-| `docs/RemotePatchingFix.md` | Remote patching fix (base64 read/write approach) |
-| `docs/Issue15.md` | Multi-session broadcast input routing |
-| `docs/AIBroadCaster.md` | AI Broadcaster — session-aware agent for multi-pane broadcast |
-| `docs/BlackTextRenderingFix.md` | Black text rendering fix (issue #9) |
-| `docs/FixTerminalCopyAndSelection.md` | Terminal copy/selection fix (issue #22) |
-| `docs/IntegrationOfNewFeats.md` | Pre-built module integration guide (TOTP 2FA, etc.) |
-| `docs/Issue11.md` | Visual jitter fix — phased checklist (Phases 0–5) |
-| `docs/TextGlow.md` | Bloom / Text Glow — **COMPLETE** (Phases 0–7) |
-| `docs/SmoothScroll.md` | Smooth Scrolling — **COMPLETE** (Phases 0–6) |
+| `Docs/RenderCost.md` | **Active spec.** What rendering actually costs — R0/R1/R2a done, **R2b open**. Read its "Measurement caveats" before any perf measurement |
+| `Docs/FasterThenYouWillEverLiveToBe.md` | Throughput gap profiling — Phases 0,1,2,3,5 done. **Phase 4 is abandoned, not optional**: it proposed optimising `parse + grid`, which measures 0.1-24% depending on configuration but was never the constraint |
+| `Docs/optimizationspart2.md` | Throughput recovery playbook (Part 2) |
+| `Docs/OptimizeP2.md` / `Docs/OptimizeP3.md` | P2 / P3 optimization phased checklists — **COMPLETE** |
+| `Docs/PhaseB.md` | Local Input V2 Phase B checklist (make byte-first local input the only path) |
+| `Docs/multiprovider-architecture.md` | Multi-provider LLM architecture overview |
+| `Docs/AIpatchfeatureIntegration.md` | `apply_patch` integration guide |
+| `Docs/RemotePatchingFix.md` | Remote patching fix (base64 read/write approach) |
+| `Docs/Issue15.md` | Multi-session broadcast input routing |
+| `Docs/AIBroadCaster.md` | AI Broadcaster — session-aware agent for multi-pane broadcast |
+| `Docs/BlackTextRenderingFix.md` | Black text rendering fix (issue #9) |
+| `Docs/FixTerminalCopyAndSelection.md` | Terminal copy/selection fix (issue #22) |
+| `Docs/IntegrationOfNewFeats.md` | Pre-built module integration guide (TOTP 2FA, etc.) |
+| `Docs/Issue11.md` | Visual jitter fix — phased checklist (Phases 0–5) |
+| `Docs/TextGlow.md` | Bloom / Text Glow — **COMPLETE** (Phases 0–7) |
+| `Docs/SmoothScroll.md` | Smooth Scrolling — **COMPLETE** (Phases 0–6) |
 
 Note: `AGENTS.md` (repo root) is a parallel working-memory file for non-Claude assistants and points
 at `Docs/featurelist.md`. Keep it in sync when process guidance changes.
 
 ---
 
-## Next Session Plan
-
 <!-- NEXT SESSION PLAN -->
 
-**Last completed work (2026-09-03): FasterThenYouWillEverLiveToBe Phases 0, 1, 2, 3 and 5.**
+## Next Session Plan
 
-The "50x gap" was three separate things:
+**Last completed milestone (2026-09-06/07): RenderCost R2b implementation and focused verification.**
+R2b stays open for the throughput-variability investigation; do not reimplement the actor-call changes.
 
-1. **A Debug build** — every historical number used `-Onone`. Release is ~20x faster on
-   parser/grid (1.84 → 36.40 MB/s). `benchmark-throughput.sh` now takes `--configuration`.
-2. **A startup filter that never switched off** — `LocalPTYProcess.yieldSanitized` stripped zsh's
-   one-off `can't set tty pgrp` warning, but only stopped scanning if it actually found it. Under
-   `sh`/`bash` it decoded, lowercased, case-insensitively searched and re-encoded every chunk for
-   the whole session: **92.6% of local-shell wall time**. Extracted to
-   `ZshStartupWarningFilter` and bounded to 32 KB. **PTY-local 6.81 → 17.97 MB/s.**
-3. **A target derived from a pipe that does no emulation** — 89 MB/s is unreachable by any real
-   emulator here. Terminal.app does 26.5 MB/s with rendering.
+- `TerminalEngine.feedAndCollectOutcome(Data)` preserves ordinary `feed`'s Bool/queueing contract
+  while collecting modes, sync exits and the live sync fallback frame for the streaming reader.
+  `handleFeedOutcome` applies them in one MainActor handoff with no post-feed engine reads.
+- `publishViewportState` then `publishSnapshot` leave scroll-anchor policy on MainActor.
+  Ordinary publishes include housekeeping in the second result. The drain loop collects
+  housekeeping once after the final snapshot, preserving bell consumption and throttled text.
+- Metadata is applied before history observation awaits, avoiding a stale-mode overwrite.
+- `visibleTextScan` now sums extraction and observation separately (two timer calls per refresh).
+  Outcome collection is inside `feedCall`; ordinary-publish collection is in `publishEngineWait`.
+- Debug and Release builds succeeded. Focused tests: **167 tests, 0 failures, 2 instrumentation-only
+  skips**: rendering 21, parser 125, history 8, perf 7, benchmark 6. No full-suite run or claim.
 
-`TerminalPerf` now gates the five signposts plus in-process stage timers behind
-`--perf-signposts`; that instrumentation is what found #2, in a stage none of the plan's four
-ranked hypotheses had named. H2 and H3 were measured and killed.
+**Starting point for the next task:** fresh baseline `af933f4` and the R2b candidate both remain
+bimodal. Three instrumented interleaved pairs gave median to-sentinel ratios **5.01x, 0.33x,
+1.02x**. In a single unchanged candidate launch, parse/grid elapsed time rose from ~270 ms to
+780 ms while to-sentinel throughput fell from ~19 to 5.88 MB/s. Direct launch with instrumentation
+off also varies, so neither signposts nor LaunchServices alone explains it. All three direct/off
+pair medians favor baseline (0.88x, 0.29x, 0.87x); a performance regression cannot be ruled out. All runs had zero
+windows; no real rendered-throughput claim is supported.
 
-**Current Release numbers:** 36.38 MB/s parser/grid fullscreen, 17.97 MB/s PTY-local.
+**Next actions / end point:**
+1. Read `Docs/RenderCost.md` and `Docs/R2bBenchmarkResults.md`, including all pairs, not just the
+   first apparent win. Preserve the current changes and inspect git status before proceeding.
+2. Distinguish CPU work from scheduler suspension: add opt-in thread CPU versus wall timing around
+   synchronous `grid.processGroundTextBytes` calls (not across async suspension/thread migration).
+   Correlate with burst entry/revert counts, batch sizes, process activity and host load.
+3. Establish whether the slow regime is scheduler/CPU placement or application scheduling before
+   changing the 8/16/24/40 ms publish intervals or burst thresholds. Leave visible-text extraction
+   alone unless new evidence changes its ranking; it remained below 0.4% in the candidate.
+4. Compare interleaved Release runs with identical launch/window/instrumentation conditions.
+   Restore genuine window acquisition before claiming rendered or peer-comparable throughput.
+5. Close R2b only when the remaining variability is explained or bounded enough for a repeatable
+   comparison; update `Docs/featurelist.md`, `Docs/RenderCost.md`, this plan and `AGENTS.md`.
 
-Next steps:
-- **Optional: Phase 4** — the dominant stage is now `parse + grid` (44% of wall), and the rest is
-  reader/`AsyncStream` overhead: 2592 chunks for 2.67 MB is ~1 KB per chunk, ~2600 actor hops.
-  Try coalescing reads before the hand-off. Judge against ~26 MB/s, not 89.
-- **The real unknown is rendering cost.** No benchmark here measures it — peers were measured with
-  rendering, ProSSHMac without. Measuring it is higher-value than more parser work.
-- `SessionManagerRenderingPathTests.testLocalSessionStreamsProgressiveCommandOutput` is flaky
-  under full-suite load (pre-existing, fails at HEAD too). Worth stabilising.
-- Unrelated open work: `docs/bugs.md` (50 open), `docs/PhaseB.md`, the `Docs/` vs `docs/` case split.
+Build/test logs and comparison bundles are `/tmp/prossh-r2b-baseline*` and
+`/tmp/prossh-r2b-candidate*`; raw reports and the exact reproduction commands are preserved in
+`Docs/R2bBenchmarkResults.md`. `/tmp` files are conveniences, not durable evidence.
+
+Unrelated open work remains in `Docs/bugs.md`, `Docs/PhaseB.md` and the `Docs/` vs `docs/` case split.

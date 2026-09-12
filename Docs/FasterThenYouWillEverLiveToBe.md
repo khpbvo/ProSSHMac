@@ -2,7 +2,8 @@
 
 Profiling plan for the unexplained throughput gap between ProSSHMac and its stated target.
 
-**Status:** Phases 0, 1, 3 and 5 complete (2026-09-03). H1 confirmed; H2 and H3 killed; H4
+**Status:** COMPLETE (2026-09-03). Phases 0, 1, 3, 5 done; Phase 4 abandoned as measured-pointless.
+Continues in `docs/RenderCost.md`. H1 confirmed; H2 and H3 killed; H4
 confirmed and the target restated. PTY-local throughput went **1.74 MB/s (Debug) → 6.81 (Release)
 → 17.97 MB/s** (bounding the zsh startup-warning scan). Phase 2 was absorbed into Phase 1, whose
 stage timers answered it directly. **Phase 4 is the only work left**, and it is optional — see
@@ -224,7 +225,16 @@ Each phase is one session. Do not start a phase before its predecessor's exit cr
   883 tests, 1 failure — a pre-existing flaky local-shell test that fails identically at the
   previous commit under full-suite load and passes in isolation.
 
-- [ ] **Phase 4: Second-order costs** — *optional; the only work left.*
+- [x] **Phase 4: Second-order costs** — *abandoned 2026-09-03; measured to be pointless.*
+
+  `docs/RenderCost.md` measured the real app path for the first time and found `parse + grid` is
+  **0.1% of wall** there (40.93 ms of a 31.6 s run). This phase proposed optimising the reader and
+  `AsyncStream` hand-off feeding exactly that stage. The 44%-of-wall figure below came from the
+  parser-only benchmark, which does not run the app's reader, coordinator or renderer at all.
+  Continue in `docs/RenderCost.md` Phase R2 instead — the dominant stage is `publish`.
+
+  Original text follows.
+
 
   The dominant stage is now `parse + grid` at 44% of a 156 ms wall. The other ~84 ms is the reader
   loop and `AsyncStream` delivery: **2592 chunks for 2.67 MB is ~1 KB per chunk**, so the path pays

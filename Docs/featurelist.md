@@ -27,6 +27,18 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
 
 ### Current Focus
 
+- Task alignment (2026-09-12, renderer GPU timing isolation warning):
+  - Starting Point: `MetalTerminalRenderer` records completed-command-buffer GPU timing from Metal's nonisolated completion callback, but `RendererPerformanceMonitor` inherits the project's default `MainActor` isolation even though its mutable state is lock-protected and the class is `@unchecked Sendable`, producing a Swift concurrency warning at `recordGPUFrame(seconds:)`.
+  - End Point: declare the thread-safe performance monitor nonisolated, preserve GPU timing collection, add regression coverage that exercises record/read access from a detached task, and pass the focused tests plus Debug build without the reported warning.
+  - Status: Complete. The monitor, snapshot, and private ring-buffer value type now opt out of default `MainActor` isolation; the existing lock remains the synchronization boundary. The detached-task regression passed, the focused suite passed 10 tests with 3 instrumentation-only skips, and the Debug app build succeeded without the reported warning.
+- Task alignment (2026-09-07, R2b scheduling diagnosis):
+  - Starting Point: the R2b candidate passes focused correctness checks, but both binaries exhibit fast/slow regimes and the direct/off comparisons favor baseline.
+  - End Point: measure thread CPU versus elapsed time around synchronous grid work, correlate batching/burst/activity state, identify an evidence-backed cause or bounded explanation, and revise the candidate or benchmark as indicated before repeating controlled Release comparisons.
+  - Status: In progress. Preserve the existing candidate and baseline; add opt-in diagnostics without changing scheduling policy first.
+- Task alignment (2026-09-06, RenderCost R2b):
+  - Starting Point: R2a is complete; post-feed engine round-trips and publish housekeeping dominate the measured real-app path. The working tree was clean.
+  - End Point: coalesce per-batch and per-publish engine reads while preserving MainActor scroll policy, synchronized redraws, input modes, bells and metadata; pass focused regressions/builds and compare interleaved Release baseline/candidate runs before recording performance claims.
+  - Status (2026-09-07): Local candidate implemented and focused verification complete. Feed results now carry follow-up state; publishing uses two engine calls with MainActor scroll resolution between them, plus one final housekeeping call for the drain path. Debug/Release builds pass; 167 focused tests, 0 failures, 2 instrumentation-only skips. Performance validation remains open: six interleaved pairs against freshly built af933f4 are inconsistent, with all three direct/off pair medians favoring baseline. A performance regression cannot be ruled out. See Docs/R2bBenchmarkResults.md; next diagnose thread CPU versus wall time and scheduling variability before accepting this as an optimization.
 - Active phase: Phase 6 (persistence + hardening + remaining test coverage).
 - Immediate objective: continue migrating legacy tests into the shared test bundle while keeping targeted regressions green during migration.
 - Test stability TODOs: no active crash quarantines remain for previously skipped pane/AI view-model tests.
@@ -193,6 +205,10 @@ Ship two terminal sidebars (left: remote file browser, right: AI assistant) on t
   - End Point: `LocalPTYProcess` startup sanitization now handles split warning fragments across PTY chunks by carrying partial marker prefixes and removing the complete warning line once assembled, preventing leaked tail fragments in terminal output. Test cleanup removed stale `ShellIntegrationTests` cases that still referenced deleted local-shell overlay APIs. In sandboxed builds, `ping` is blocked by macOS App Sandbox ICMP restrictions (`com.apple.security.app-sandbox`); this was later addressed for non-App-Store distributions by disabling App Sandbox at the target level.
 
 ## Loop Log
+
+- 2026-09-12: Fixed the draw-loop GPU timing concurrency warning on the active RenderCost branch. `RendererPerformanceMonitor` and its plain-value support types now declare `nonisolated`, matching the monitor's lock-protected cross-thread design and allowing Metal's command-buffer completion callback to call `recordGPUFrame(seconds:)` without an actor hop. Added a detached-task regression proving GPU samples can be recorded and read off the main actor. Validation: `TerminalPerfTests` passed 10 tests with 3 instrumentation-only skips; Debug app build succeeded; `git diff --check` passed.
+
+- 2026-09-07: R2b candidate implementation and focused verification completed (167 tests, 0 failures, 2 skips; Debug/Release builds pass). Six Release A/B pairs preserved in `Docs/R2bBenchmarkResults.md`; no repeatable overall speedup established and a regression remains possible. R2b stays open for CPU-versus-wall/scheduling diagnosis.
 
 - 2026-08-27: Repaired and validated terminal performance benchmarking, then optimized the profiled partial-scroll hotspot. PTY completion markers are now emitted from two shell arguments so the literal sentinel cannot occur in echoed input, and `BenchmarkSentinelMatcher` detects markers split across PTY chunks; 4 new regression tests cover both failure modes. `benchmark-throughput.sh` now resolves `TARGET_BUILD_DIR` from Xcode settings instead of selecting an arbitrary app from multiple DerivedData folders. A real 2 MB PTY benchmark now averages 1.69 MB/s (previous 0.03 MB/s result was premature and invalid). Matching before/after Time Profiler traces identified per-scroll `regionKeys` and `regionPhysicalRows` allocation/mapping in partial-region `scrollUp`; the grid now rotates its row map in place, with fast paths for one-line up/down and a cycle rotation for larger shifts. Sampled `scrollUp` inclusive time fell from about 4.89 s to 1.23 s. Sustained 32 MB partial throughput improved from 0.56–0.71 MB/s to 1.69–1.78 MB/s while fullscreen remained 1.69–1.81 MB/s. Added wrapped-row-base semantic coverage. Validation: 96 focused tests passed, Debug build succeeded, wrapper smoke test resolved the current app, and `git diff --check` passed.
 - 2026-08-27: Established a current terminal stress-test baseline without changing application code. A Debug build succeeded; the standard 2 MB parser/grid benchmark completed in ground state at 1.66 MB/s fullscreen and 1.37 MB/s partial; an 8 MB control measured 1.68/1.43 MB/s. Two sustained 32 MB runs reproduced a size-dependent partial-scroll throughput cliff (fullscreen 1.68-1.69 MB/s, partial 0.56-0.71 MB/s) without crashes or parser-state corruption. `PerformanceValidationTest` passed all 5 cases (base64 floods, 500 htop-style redraws, 10,000 random cursor moves, and 100 top-style rewrites) in 6.737 seconds. PTY-local output of 0.03 MB/s was rejected as invalid because the shell echoes the submitted command containing the completion sentinel, causing premature termination. Pending: profile the 32 MB partial-region path and fix the PTY benchmark sentinel protocol before relying on end-to-end PTY numbers.
@@ -2136,3 +2152,261 @@ baseline.
 ### Build/Test
 Docs and one new script only; no app sources touched, so no rebuild was warranted. Script verified
 with `bash -n` and by running both emulator paths end to end.
+
+---
+
+## 2026-09-06 — Restore CLAUDE.md (truncated two sessions ago) and make the R2b handoff executable
+
+### The problem
+`CLAUDE.md` was cut from **422 lines to 96** by commit 2c99912 (the R0+R1 session) and nobody noticed
+for two sessions. Everything below the workflow header was gone: Project Overview, Build & Test,
+Project Structure, Key Files, Architecture Conventions, Known Issues & Gotchas, Completed Refactors
+and Reference Docs. The sentence introducing the Next Session Plan was cut mid-word, which is the
+only visible symptom. The R2a session inherited the damaged file and only edited its tail, so two
+commits' worth of "updated CLAUDE.md" went into a file that had lost its body.
+
+### What changed
+- **Restored `CLAUDE.md` from 2c99912^** (96 -> 488 lines) and brought every restored section up to
+  current truth rather than replaying a stale snapshot:
+  - Build & Test: `--render` / `--render-detached` / `--benchmark-window WxH` commands; the
+    throughput baseline as a table with a measurement date per row; `TerminalPerf` now 19 stages with
+    span/busy columns and an explanation of what the span column is for.
+  - Key Files: `TerminalPerf` (233L), `TerminalHistoryIndex` (484L), `ThroughputBenchmarkRunner+Render`
+    (413L), `SessionShellIOCoordinator` (330L) and `TerminalRenderingCoordinator` (972L), each
+    annotated with its role in the R2b work.
+  - Gotchas: five new entries — the windowless-launch trap, benchmark drift and the
+    interleaved-A/B rule, the history-index byte buffer as a do-not-regress, per-batch
+    `recordParsedChunk`, and the truncation itself with instructions for editing the plan block.
+  - Doc paths corrected to the `Docs/` case that git actually tracks (21 files under `Docs/`, 4 under
+    `docs/`).
+- **`Docs/RenderCost.md` R2b** rewritten to be startable cold: each round-trip named with its call
+  site and hop, the `FeedOutcome` shape proposed for item 1, the two constraints on item 2 (scroll
+  policy must stay on the MainActor; `publishHousekeeping` has two callers, which is why its timer is
+  inside the function), the bimodality question with the specific constants to look at, and a verify
+  recipe that mandates interleaved A/B against a freshly built `HEAD`.
+- **`AGENTS.md`** — tracked, and stale since 2026-09-03 — given the RenderCost R0/R1/R2a summary,
+  current throughput figures, the 19-stage instrumentation description and the measurement caveats.
+
+### Also measured
+The long-standing flaky test was characterised properly rather than re-labelled. On an unchanged
+tree, `SessionManagerRenderingPathTests.testLocalSessionStreamsProgressiveCommandOutput` passes alone
+in **0.689s** and runs 21/21 green in its own suite twice, but **times out at 8.094s** when four
+suites share one `xcodebuild test` invocation. So the trigger is not full-suite load specifically —
+four suites is enough. Both memory files now say so.
+
+### Verification
+No code changed. `xcodebuild build` and the four targeted suites were re-run to confirm the tree is
+still green; every factual claim added to the docs was checked against the source
+(`feed(_:) -> Bool` overload precedent, the burst/debounce constants, file line counts, the
+`Docs/`/`docs/` split via `git ls-files`).
+
+---
+
+## 2026-09-04 — RenderCost Phase R2a: the missing wall time was the command-history index
+
+R1 left ~18 s of a 31.6 s run unattributed and ranked `publish` as the thing to attack. R2a
+instrumented the gap and found the cost somewhere no stage had ever covered — and `publish` measured
+**0.3%**, not 23%.
+
+### What changed
+
+**Instrumentation.** Seven stages added to `TerminalPerf` — `chunkRecord`, `historyIndex`,
+`feedCall`, `batchFollowUp`, `publishEngineWait`, `publishHousekeeping`, `visibleTextScan` — several
+paired with an existing callee-side stage so the difference (`feedCall` − `parse`, `publish` −
+`publishEngineWait`) is the actor hop and queue wait rather than the work. `TerminalPerf` now also
+records a **span** (first start to last end) and **busy%** per stage: summed durations alone cannot
+distinguish a blocked stage from an absent one, which is precisely why R1's gap was opaque.
+`--benchmark-window WxH` forces the window frame, since R1 established that size moves the result
+more than 10x and so must be an input.
+
+**The defect.** `TerminalHistoryIndex.recordOutputChunk` ran once per raw PTY chunk (~1290/MB) and,
+past its 120,000-character cap, paid four O(n) passes over the whole buffer per call: a
+copy-on-write of the string (`var state = sessionStates[id]` left it doubly referenced), two
+grapheme-cluster `String.count`s, and an O(n) `removeFirst`. It measured **89.2% of wall**. It is not
+a benchmark artifact — any command producing large output pays it, and the benchmark reaches it the
+same way a user does, via `recordRawInput` → `startCommand`.
+
+**The fix.** `ActiveCommandContext` keeps raw output as UTF-8 bytes: O(1) length, amortized trim
+(run to 2x the cap, drop back, realign to a UTF-8 lead byte), character cap applied at read time
+where `finalizeActiveCommand` already applied one. Mutation goes through the dictionary subscript so
+no COW copy occurs. `recordParsedChunk` moved from per raw chunk to per 4 ms batch — ~1290 MainActor
+hops per MB become ~30 — which also fixes a latent defect, since a raw chunk can split a UTF-8
+sequence the history index decodes.
+
+`history index` fell from **3541 ms (89.2% of wall) to 510 ms (12.2%)**.
+
+### Throughput, measured properly
+
+Single runs minutes apart said the fix changed nothing — they were confounded by background load. An
+interleaved A/B of the two binaries (HEAD~1 vs R2a, alternating launches, 8 MB, 3 runs each,
+signposts off) settles it. On a quiet machine the two ranges do not overlap — every baseline run in
+**0.76-1.10 MB/s**, every fixed run in **3.80-5.01** — medians **0.92 vs 3.95, i.e. 4.3x**, with the
+slowest fixed run beating the fastest baseline run by 3.4x. The same experiment under heavy load
+(7-12) gave the same direction with far more scatter.
+
+Absolute figures drift over a long session: the identical baseline binary measured 2.86 MB/s early on
+and 0.92 hours later at a comparable load average. Only within-pair ratios are trustworthy.
+
+### The finding that matters for R2b
+
+The bottleneck moved rather than disappeared. With the per-chunk cost gone, `batchFollowUp` — the
+four cross-actor round-trips `startParserReader` makes after every `engine.feed` — is **46.7% of
+wall**, `publishHousekeeping` 32.4%, and `publish` is 99% `publishEngineWait`: not working, queueing.
+**The bottleneck is cross-actor round-trip count**, which is now R2b. Also open: throughput is
+bimodal under load (18.94 MB/s and 0.20 MB/s in the same launch, no code change).
+
+### Measurement problems found (all recorded in docs/RenderCost.md)
+
+1. **No window.** Every R2a run had `NSApp.windows.count == 0`. `open -n App.app` restores a window;
+   `open -n App.app --args <anything>` does not — a harmless unused flag reproduces it, and
+   `applicationShouldHandleReopen` does not recover it. So `--benchmark-render` degraded to detached,
+   R1's rendered figures could not be reproduced, and the window-scaling claim could not be tested.
+   The runner now warns explicitly when a run has no windows.
+2. **The "signposts cost ~19x" gotcha did not reproduce**: 2.78 MB/s on vs 2.86 off, back to back.
+   The previously recorded "off" figure of 2.81 is almost exactly R2a's windowless measurement,
+   suggesting that pair differed by window state, not signposts.
+3. **Background load dominates.** A `mediaanalysisd` pass (300% CPU, load 6–17) made the identical
+   binary measure 7x slower on the same payload, with 100x spreads inside a single launch. Only
+   interleaved A/B runs of two binaries are trustworthy on this machine.
+
+### Files Modified
+- `ProSSHMac/Terminal/Diagnostics/TerminalPerf.swift` (7 stages, span/busy tracking, report columns)
+- `ProSSHMac/Terminal/Features/TerminalHistoryIndex.swift` (byte buffer, read-time cap, in-place mutation)
+- `ProSSHMac/Services/SessionShellIOCoordinator.swift` (per-batch `recordParsedChunk`, 3 timers)
+- `ProSSHMac/Services/TerminalRenderingCoordinator.swift` (3 timers)
+- `ProSSHMac/App/ThroughputBenchmarkRunner+Render.swift` (`--benchmark-window`, windowless warning)
+- `scripts/benchmark-throughput.sh`, `docs/RenderCost.md`, `CLAUDE.md`
+- Tests: `TerminalHistoryIndexTests` (+3), `TerminalPerfTests` (+2)
+
+### Build/Test
+- `xcodebuild build` (Debug and Release): **BUILD SUCCEEDED**.
+- Targeted suites green: `TerminalHistoryIndexTests` (8), `TerminalPerfTests` (7, 2 skipped),
+  `ThroughputBenchmarkRunnerTests` (6) — 21 tests, 0 failures; and
+  `SessionManagerRenderingPathTests` **21 tests, 0 failures**, including the previously flaky
+  `testLocalSessionStreamsProgressiveCommandOutput`.
+- Regression: parser/grid Release **36.7–37.3 MB/s** (was 36.44), unchanged — the instrumentation
+  costs nothing when off.
+
+---
+
+## 2026-09-03 — RenderCost Phases R0 + R1: rendering cost measured, and it is not rendering
+
+`FasterThenYouWillEverLiveToBe` ended with a corrected target (Terminal.app, 26.5 MB/s) but an
+uncomparable measurement: the peer figure included rendering, ProSSHMac's 17.97 MB/s did not — and
+the PTY-local benchmark also bypassed the real reader entirely. This session built the measurement
+that closes that gap, and it inverted the plan.
+
+### Phase R0 — draw loop instrumented
+Five stages added to `TerminalPerf`: `drawableWait`, `snapshotApply`, `frameEncode`, `gpuExecute`,
+`drawFrame` (12 total). New `add(_:nanoseconds:)` takes a duration rather than a start stamp,
+because Metal reports GPU time only in the command buffer's completion handler — where
+`gpuEndTime - gpuStartTime` is now recorded and fed to the new
+`RendererPerformanceMonitor.recordGPUFrame(seconds:)`. `averageGPUFrameMs` had always been nil:
+`draw(in:)` called `endFrame` with `gpuFrameSeconds: nil`. All of it stays behind the existing
+`isEnabled` gate.
+
+### Phase R1 — `--benchmark-render` / `--benchmark-render-detached`
+Runs the flood through the real path — `SessionManager.openLocalSession`, the 4 ms batching reader,
+`publishGridState`, SwiftUI, the Metal surface — in a real window, and times both "to sentinel"
+(parser done) and "to settled" (renderer drained). Completion is detected from a benchmark-gated tap
+in `SessionShellIOCoordinator.recordParsedChunk`, reusing the existing split-sentinel command and
+`BenchmarkSentinelMatcher`.
+
+Three separate problems each produced a confidently wrong number before being fixed:
+1. Launching the binary directly gives a process with **zero windows**; rendered runs must go
+   through `open -n`, which detaches stdout — hence `--benchmark-out`, polled by the script.
+2. Restored window state came back as **149x129 at x=-234**, off-screen. That measured ~16x too
+   fast. `prepareWindow` now forces a usable on-screen frame and makes it key (an unfocused surface
+   is throttled to 30 FPS).
+3. Reopening the session per run left the surface bound only for run 1; runs 2+ drew **zero frames**
+   while printing identical-looking results. One session is now shared across runs.
+
+### Results (Release, 1 MB, /bin/sh, 1100x750 active window)
+| Path | Rendering | MB/s |
+|---|---|---|
+| Parser/grid only | none | 36.44 |
+| PTY -> `engine.feed` (`--pty-local`) | none | 19.20 |
+| Real app path, hosts tab (`--render-detached`) | none | **0.14** |
+| Real app path, terminal tab (`--render`) | full | **0.03-0.05** |
+| Terminal.app (peer) | full | 26.5 |
+
+Renderer per-frame cost: ~3000 frames/run at 74-83 fps, CPU avg 3.76-5.91 ms, GPU avg ~1.05 ms,
+glyph cache hit 100%.
+
+### The two findings that matter
+1. **`parse + grid` is 0.1% of wall on the real path** (40.93 ms of a 31.6 s run).
+   `FasterThenYouWillEverLiveToBe` Phase 4 proposed optimising exactly that stage next. It is a
+   rounding error — Phase 4 is abandoned, not optional.
+2. **The Metal draw loop is not the bottleneck.** Runs where the surface was unbound drew zero
+   frames and were just as slow as runs drawing 2987. `publish` is 23-25% of wall at 4-8.5 ms per
+   call, and the stage budget sums to well under wall time — ~18 s of a 31.6 s run is spent waiting.
+
+Also learned: **`--perf-signposts` is free when off but costs ~19x when on** on this path
+(detached: 2.81 -> 0.15 MB/s), unlike the parser-only benchmark. Signpost-on numbers are only
+comparable to other signpost-on numbers.
+
+### Files Modified
+- New: `ProSSHMac/App/ThroughputBenchmarkRunner+Render.swift`,
+  `ProSSHMacTests/Terminal/Tests/TerminalPerfTests.swift`, `docs/RenderCost.md`
+- `Terminal/Diagnostics/TerminalPerf.swift`, `Terminal/Renderer/MetalTerminalRenderer.swift`,
+  `Terminal/Renderer/MetalTerminalRenderer+DrawLoop.swift`,
+  `Terminal/Renderer/RendererPerformanceMonitor.swift`,
+  `Services/SessionShellIOCoordinator.swift`, `App/AppDependencies.swift`,
+  `App/ThroughputBenchmarkRunner.swift`, `scripts/benchmark-throughput.sh`,
+  `ProSSHMacTests/ThroughputBenchmarkRunnerTests.swift`, `CLAUDE.md`
+
+### Build/Test
+`xcodebuild build` succeeds (Debug and Release). Targeted suites green: **24 tests, 0 failures,
+1 skipped** (`TerminalPerfTests`, `ThroughputBenchmarkRunnerTests`, `ZshStartupWarningFilterTests`).
+The skip is a `TerminalPerfTests` case that only runs with stage timers enabled.
+Regression check: parser/grid **36.44 MB/s** (was 36.38) and PTY-local **19.20 MB/s** (was 17.97) —
+both unchanged or better, so the instrumentation costs nothing when off.
+
+
+## 2026-09-06/07 — RenderCost R2b candidate: actor reads coalesced, performance validation still open
+
+### Starting Point
+R2a had removed the history-index bottleneck. Four post-feed engine reads and repeated
+publish/housekeeping reads were the next measured targets. The working tree was clean at af933f4.
+
+### End Point
+Preserve terminal semantics while reducing actor calls, pass focused regressions/builds, and
+establish a repeatable interleaved Release performance result. The final performance condition
+has **not** been met, so R2b remains open and these changes remain a local candidate.
+
+### What was implemented
+- Added `TerminalEngine.feedAndCollectOutcome` while preserving ordinary `feed(Data) -> Bool`
+  and its queueing/non-consuming behavior for existing callers. The reader applies modes,
+  sync exits and optional live sync fallback in one MainActor handoff.
+- Added composite viewport, snapshot and housekeeping reads. MainActor still resolves scroll
+  anchors. Ordinary publishes take two engine calls; the drain loop skips intermediate
+  housekeeping and consumes bells once at the end in a single additional engine call.
+- Apply captured metadata before the history-observation await to avoid overwriting newer modes.
+- Added four parser regressions and routed the existing early-input-mode rendering test through
+  the actual combined feed-result path. Existing sync, follow-up, bell and scroll tests pass.
+- Instrumentation still has 19 stages. `visibleTextScan` now sums extraction and observation
+  separately; outcome capture is included in `feedCall`, and ordinary-publish metadata capture
+  is inside `publishEngineWait`. These boundaries are documented in `Docs/RenderCost.md`.
+
+### Exact verification
+- Fresh baseline Release af933f4: BUILD SUCCEEDED. Candidate Debug and Release: BUILD SUCCEEDED.
+- Focused Debug suites: **167 tests, 0 failures, 2 instrumentation-only skips**. Rendering 21,
+  parser 125, history 8, perf 7, benchmark 6. No full-suite claim.
+- Three instrumented A/B pairs, three runs per binary per pair: median to-sentinel ratios
+  5.01x, 0.33x, 1.02x. Three direct-launch, instrumentation-off pairs: 0.88x, 0.29x, 0.87x.
+  Every launch had zero windows; none is a rendered or peer-comparable measurement.
+- Parser-only Release control: baseline fullscreen/partial averages 35.21/35.21 MB/s;
+  candidate 33.94/31.76. Sequential control, not a statistically reliable comparison.
+- Exact commands and all raw performance reports: `Docs/R2bBenchmarkResults.md`.
+- Temporary build/test logs, bundles and host snapshots: `/tmp/prossh-r2b-*`.
+
+### Pending and next action
+Do not claim a repeatable speedup: the first pair's apparent fivefold gain reverses in later
+pairs, and every direct/off pair median favors baseline. A performance regression cannot be
+ruled out. In a single candidate launch the parse/grid timer itself rose from ~270 to 780 ms;
+this is not only a publish-stage slowdown. Direct launch with timers off also varies, ruling
+out those two factors as sole explanations. Compare thread CPU and elapsed time around
+synchronous ground-text/grid work and correlate burst transitions, batch sizes and activity.
+Do not measure thread CPU across async suspension or tune debounce constants without evidence.
+Restore window acquisition before making rendered-throughput claims. `AGENTS.md`, the intact
+`CLAUDE.md` plan block and `Docs/RenderCost.md` point to this remaining work.

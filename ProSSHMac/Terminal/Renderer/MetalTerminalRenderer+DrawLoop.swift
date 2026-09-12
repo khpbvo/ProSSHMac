@@ -19,6 +19,9 @@ extension MetalTerminalRenderer {
             return
         }
 
+        let drawFrameStart = TerminalPerf.now()
+        defer { TerminalPerf.record(.drawFrame, since: drawFrameStart) }
+
         if usesNativeRefreshRate {
             let targetFPS = max(60, currentScreenMaximumFPS())
             if view.preferredFramesPerSecond != targetFPS {
@@ -27,18 +30,22 @@ extension MetalTerminalRenderer {
         }
 
         // Wait on in-flight semaphore before reusing cell buffers.
+        let drawableWaitStart = TerminalPerf.now()
         _ = inflightSemaphore.wait(timeout: .distantFuture)
 
         // Get current drawable and render pass descriptor.
         guard let drawable = view.currentDrawable else {
+            TerminalPerf.record(.drawableWait, since: drawableWaitStart)
             inflightSemaphore.signal()
             return
         }
 
         guard let drawableRenderPassDescriptor = view.currentRenderPassDescriptor else {
+            TerminalPerf.record(.drawableWait, since: drawableWaitStart)
             inflightSemaphore.signal()
             return
         }
+        TerminalPerf.record(.drawableWait, since: drawableWaitStart)
 
         // Create command buffer.
         guard let commandBuffer = commandQueue.makeCommandBuffer() else {
@@ -65,8 +72,12 @@ extension MetalTerminalRenderer {
             previousFrameTexture != nil
 
         // Apply latest pending snapshot in a buffer-safe context.
+        let snapshotApplyStart = TerminalPerf.now()
         applyPendingSnapshotIfNeeded()
         drainPendingGlyphKeysIfNeeded()
+        TerminalPerf.record(.snapshotApply, since: snapshotApplyStart)
+
+        let frameEncodeStart = TerminalPerf.now()
 
         // Update uniforms for this frame via the TerminalUniformBuffer.
         let cursorFrame = cursorRenderer.frame(at: frameNow)
@@ -222,12 +233,21 @@ extension MetalTerminalRenderer {
                 + " | GlyphCache hit=\(hr)%")
         }
         #endif
-        commandBuffer.addCompletedHandler { _ in
+        // GPU time is only known once the buffer completes, so it is recorded out of
+        // band from the CPU frame sample. The handler runs on a Metal thread: capture
+        // only Sendable values, never `self` (this type is MainActor-isolated).
+        let monitor = performanceMonitor
+        commandBuffer.addCompletedHandler { buffer in
             semaphore.signal()
+            let gpuSeconds = buffer.gpuEndTime - buffer.gpuStartTime
+            guard gpuSeconds > 0 else { return }
+            TerminalPerf.add(.gpuExecute, nanoseconds: UInt64(gpuSeconds * 1_000_000_000))
+            monitor.recordGPUFrame(seconds: gpuSeconds)
         }
 
         // Commit the command buffer.
         commandBuffer.commit()
+        TerminalPerf.record(.frameEncode, since: frameEncodeStart)
 
         isDirty = false
     }
