@@ -196,11 +196,11 @@ enum RawShellInputSource: String {
                 if Task.isCancelled { break }
                 TerminalSchedulingDiagnostics.recordBatch(bytes: batch.count)
                 let recordStart = TerminalPerf.now()
-                await self?.recordParsedChunk(sessionID: sessionID, chunk: batch)
+                let visibleBatch = await self?.recordParsedChunk(sessionID: sessionID, chunk: batch) ?? batch
                 TerminalPerf.record(.chunkRecord, since: recordStart, byteCount: batch.count)
 
                 let feedStart = TerminalPerf.now()
-                let outcome = await engine.feedAndCollectOutcome(batch)
+                let outcome = await engine.feedAndCollectOutcome(visibleBatch)
                 TerminalPerf.record(.feedCall, since: feedStart, byteCount: batch.count)
 
                 // One MainActor handoff applies the state already captured by feed.
@@ -237,23 +237,25 @@ enum RawShellInputSource: String {
     /// MB). Everything it does concatenates, so batching is equivalent — and it also
     /// fixes a latent defect, since a raw chunk can split a UTF-8 sequence that
     /// `TerminalHistoryIndex` decodes.
-    private func recordParsedChunk(sessionID: UUID, chunk: Data) async {
+    private func recordParsedChunk(sessionID: UUID, chunk: Data) async -> Data {
         // No-op outside `--benchmark-render`; the rendered benchmark cannot drain
         // the PTY stream itself, so it watches for its sentinel here. The matcher
         // handles a sentinel split across inputs, so batching delays detection by at
         // most one batch window.
         ThroughputBenchmarkRunner.observeBenchmarkChunk(chunk)
-        guard let manager else { return }
+        guard let manager else { return chunk }
         manager.lastActivityBySessionID[sessionID] = .now
         manager.bytesReceivedBySessionID[sessionID, default: 0] += Int64(chunk.count)
+        let visibleChunk = manager.aiToolCoordinator.filterToolOutput(sessionID: sessionID, chunk: chunk)
         let historyStart = TerminalPerf.now()
         await manager.terminalHistoryIndex.recordOutputChunk(
             sessionID: sessionID,
-            data: chunk,
+            data: visibleChunk,
             at: .now
         )
-        TerminalPerf.record(.historyIndex, since: historyStart, byteCount: chunk.count)
-        manager.recordingCoordinator.recordIfActive(sessionID: sessionID, chunk: chunk, throughputModeEnabled: manager.throughputModeEnabled)
+        TerminalPerf.record(.historyIndex, since: historyStart, byteCount: visibleChunk.count)
+        manager.recordingCoordinator.recordIfActive(sessionID: sessionID, chunk: visibleChunk, throughputModeEnabled: manager.throughputModeEnabled)
+        return visibleChunk
     }
 }
 

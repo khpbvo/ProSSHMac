@@ -3,6 +3,7 @@ import Foundation
 
 @MainActor final class SessionAIToolCoordinator {
     weak var manager: SessionManager?
+    private var pendingCommands: [UUID: PendingToolCommand] = [:]
 
     init() {}
 
@@ -17,8 +18,11 @@ import Foundation
             .replacingOccurrences(of: "-", with: "")
             .prefix(10)
             .uppercased()
-        let marker = "__PSW_\(markerToken)__"
-        let wrappedCommand = "{ \(command); __ps=$?; printf '\\n\(marker):%s\\n' \"$__ps\"; }"
+        let token = String(markerToken)
+        // Eval the quoted command after PSB: even malformed user shell syntax
+        // cannot prevent the start marker from executing and hiding the echo.
+        let quotedCommand = "'" + command.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        let wrappedCommand = "{ printf '\\033]7777;PSB;%s\\007' '\(token)'; eval \(quotedCommand); __ps=$?; printf '\\033]7777;PSW;%s;%s\\007' '\(token)' \"$__ps\"; }"
 
         guard let manager else {
             return CommandExecutionResult(output: "Session is not connected.", exitCode: nil, timedOut: false, blockID: nil)
@@ -29,7 +33,12 @@ import Foundation
             return CommandExecutionResult(output: "Session is not connected.", exitCode: nil, timedOut: false, blockID: nil)
         }
 
+        let pending = PendingToolCommand(token: token)
         do {
+            if let previous = pendingCommands.removeValue(forKey: sessionID) {
+                previous.finish(CommandExecutionResult(output: "A newer command started in this session.", exitCode: nil, timedOut: true, blockID: nil))
+            }
+            pendingCommands[sessionID] = pending
             let payload = wrappedCommand + "\n"
             try await shell.send(payload)
             manager.lastActivityBySessionID[sessionID] = .now
@@ -37,62 +46,30 @@ import Foundation
             manager.recordingCoordinator.recordInput(sessionID: sessionID, text: payload)
             await manager.terminalHistoryIndex.recordCommandInput(
                 sessionID: sessionID,
-                command: wrappedCommand,
+                command: command,
                 at: .now,
                 source: .userInput
             )
         } catch {
+            pendingCommands.removeValue(forKey: sessionID)
             return CommandExecutionResult(output: "Error sending command: \(error.localizedDescription)", exitCode: nil, timedOut: false, blockID: nil)
         }
 
-        let deadline = Date().addingTimeInterval(timeoutSeconds)
-        while Date() < deadline {
-            if let visibleLines = manager.shellBuffers[sessionID], !visibleLines.isEmpty {
-                let screenText = visibleLines.joined(separator: "\n")
-                if screenText.contains(marker) {
-                    let parsed = parseWrappedCommandOutput(screenText, marker: marker)
-                    if parsed.exitCode != nil {
-                        return CommandExecutionResult(
-                            output: parsed.output,
-                            exitCode: parsed.exitCode,
-                            timedOut: false,
-                            blockID: nil
-                        )
-                    }
+        let result = await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                pending.continuation = continuation
+                Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(max(0, timeoutSeconds)))
+                    self?.timeoutToolCommand(sessionID: sessionID, token: token)
                 }
             }
-
-            if let liveOutput = await manager.terminalHistoryIndex.activeCommandRawOutput(sessionID: sessionID),
-               liveOutput.contains(marker) {
-                let parsed = parseWrappedCommandOutput(liveOutput, marker: marker)
-                if parsed.exitCode != nil {
-                    return CommandExecutionResult(
-                        output: parsed.output,
-                        exitCode: parsed.exitCode,
-                        timedOut: false,
-                        blockID: nil
-                    )
-                }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.timeoutToolCommand(sessionID: sessionID, token: token)
             }
-
-            let blocks = await manager.terminalHistoryIndex.searchCommands(
-                sessionID: sessionID,
-                query: marker,
-                limit: 8
-            )
-            if let block = blocks.first(where: { $0.output.contains(marker) }) {
-                let parsed = parseWrappedCommandOutput(block.output, marker: marker)
-                if parsed.exitCode != nil {
-                    return CommandExecutionResult(
-                        output: parsed.output,
-                        exitCode: parsed.exitCode,
-                        timedOut: false,
-                        blockID: block.id
-                    )
-                }
-            }
-            try? await Task.sleep(nanoseconds: 150_000_000)
         }
+
+        guard result.timedOut else { return result }
 
         // Defense-in-depth: reset terminal SGR attributes on timeout to prevent
         // stuck hidden/color state from a command that failed to complete its reset.
@@ -100,24 +77,28 @@ import Foundation
             try? await shell.send("\u{1B}[0m\n")
         }
 
-        return CommandExecutionResult(output: "", exitCode: nil, timedOut: true, blockID: nil)
+        return result
     }
 
-    private func parseWrappedCommandOutput(_ output: String, marker: String) -> (output: String, exitCode: Int?) {
-        let normalized = output
-            .replacingOccurrences(of: "\r\n", with: "\n")
-            .replacingOccurrences(of: "\r", with: "\n")
-        let markerPrefix = "\(marker):"
-        guard let markerRange = normalized.range(of: markerPrefix, options: .backwards) else {
-            return (normalized.trimmingCharacters(in: .whitespacesAndNewlines), nil)
-        }
-        let statusStart = markerRange.upperBound
-        let statusSlice = normalized[statusStart...]
-        let statusValue = statusSlice.prefix { $0.isNumber || $0 == "-" }
-        let exitCode = Int(statusValue)
-        let cleanOutput = normalized[..<markerRange.lowerBound]
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return (String(cleanOutput), exitCode)
+    func filterToolOutput(sessionID: UUID, chunk: Data) -> Data {
+        pendingCommands[sessionID]?.filter(chunk) ?? chunk
+    }
+
+    func completeToolCommand(sessionID: UUID, token: String, exitCode: Int) {
+        guard let pending = pendingCommands[sessionID], pending.token == token else { return }
+        pendingCommands.removeValue(forKey: sessionID)
+        pending.finish(CommandExecutionResult(
+            output: pending.commandOutput,
+            exitCode: exitCode,
+            timedOut: false,
+            blockID: nil
+        ))
+    }
+
+    private func timeoutToolCommand(sessionID: UUID, token: String) {
+        guard let pending = pendingCommands[sessionID], pending.token == token else { return }
+        pendingCommands.removeValue(forKey: sessionID)
+        pending.finish(CommandExecutionResult(output: pending.commandOutput, exitCode: nil, timedOut: true, blockID: nil))
     }
 
     func publishCommandCompletion(_ block: CommandBlock) {
@@ -129,5 +110,97 @@ import Foundation
         manager.latestPublishedCommandBlockIDBySessionID[sessionID] = block.id
         manager.latestCompletedCommandBlockBySessionID[sessionID] = block
         manager.commandCompletionNonceBySessionID[sessionID, default: 0] += 1
+    }
+}
+
+/// Holds one shell command's output until its private OSC completion arrives.
+/// Shell line editors may repaint the input repeatedly. Discard everything
+/// before the private start marker, then pass real command output through.
+@MainActor private final class PendingToolCommand {
+    let token: String
+    private var prelude: [UInt8] = []
+    private var started = false
+    private var outputBytes: [UInt8] = []
+    private var resolvedResult: CommandExecutionResult?
+    var continuation: CheckedContinuation<CommandExecutionResult, Never>? {
+        didSet {
+            if let resolvedResult, let continuation {
+                self.continuation = nil
+                continuation.resume(returning: resolvedResult)
+            }
+        }
+    }
+
+    init(token: String) {
+        self.token = token
+    }
+
+    func filter(_ chunk: Data) -> Data {
+        var visible = Array(chunk)
+        if !started {
+            prelude.append(contentsOf: visible)
+            let startMarker = Array("\u{1B}]7777;PSB;\(token)\u{07}".utf8)
+            if let markerRange = prelude.firstRange(of: startMarker) {
+                visible = Array(prelude[markerRange.upperBound...])
+                started = true
+            } else if prelude.count > 64_000 {
+                // A shell rejected the wrapper or never ran it. Keep the
+                // terminal usable, including its error text, with bounded memory.
+                visible = prelude
+                started = true
+            } else {
+                return Data()
+            }
+            prelude.removeAll(keepingCapacity: false)
+        }
+
+        outputBytes.append(contentsOf: visible)
+        // Amortize the front trim for large outputs instead of shifting the
+        // entire retained window on every parser batch.
+        if outputBytes.count > 960_000 {
+            outputBytes.removeFirst(outputBytes.count - 480_000)
+        }
+        return Data(visible)
+    }
+
+    var commandOutput: String {
+        let oscStart = Array("\u{1B}]7777;PSW;\(token);".utf8)
+        let commandBytes = outputBytes.firstRange(of: oscStart).map { Array(outputBytes[..<$0.lowerBound]) } ?? outputBytes
+        return Self.plainText(commandBytes).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func finish(_ result: CommandExecutionResult) {
+        guard resolvedResult == nil else { return }
+        resolvedResult = result
+        if let continuation {
+            self.continuation = nil
+            continuation.resume(returning: result)
+        }
+    }
+
+    private static func plainText(_ bytes: [UInt8]) -> String {
+        enum EscapeState { case text, escape, csi, osc, oscEscape }
+        var state = EscapeState.text
+        var cleaned: [UInt8] = []
+        cleaned.reserveCapacity(bytes.count)
+        for byte in bytes {
+            switch state {
+            case .text:
+                if byte == 0x1B { state = .escape }
+                else if byte == 0x0A || byte == 0x0D || byte == 0x09 || byte >= 0x20 { cleaned.append(byte) }
+            case .escape:
+                state = byte == 0x5B ? .csi : byte == 0x5D ? .osc : .text
+            case .csi:
+                if (0x40...0x7E).contains(byte) { state = .text }
+            case .osc:
+                if byte == 0x07 { state = .text }
+                else if byte == 0x1B { state = .oscEscape }
+            case .oscEscape:
+                state = byte == 0x5C ? .text : .osc
+            }
+        }
+        return String(decoding: cleaned, as: UTF8.self)
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
     }
 }

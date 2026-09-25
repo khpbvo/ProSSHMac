@@ -18,6 +18,8 @@ final class AIToolDefinitionsTests: XCTestCase {
                       "Developer prompt should mention execute_and_wait tool")
         XCTAssertTrue(prompt.lowercased().contains("terminal"),
                       "Developer prompt should mention terminal")
+        XCTAssertTrue(prompt.contains("Do not truncate diagnostic output"))
+        XCTAssertTrue(prompt.contains("compressed pages, swap usage and memory pressure"))
     }
 
     // MARK: - isDirectActionPrompt

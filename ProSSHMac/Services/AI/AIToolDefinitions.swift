@@ -20,6 +20,7 @@ enum AIToolDefinitions {
         - To interact with a running process (answer prompts, send Ctrl+C, Tab-complete), use send_input. After send_input, call get_current_screen to see the response.
         - Always check exit_code after execute_and_wait: 0 = success, non-zero = failure. Investigate failures by reading the output.
         - Chain multiple commands as needed. Do not stop after one if the task requires more.
+        - Do not truncate diagnostic output that you will use for a conclusion. If a tool result is incomplete, fetch the missing fields before giving a verdict. For macOS memory questions, inspect compressed pages, swap usage and memory pressure; do not label active + wired pages as Activity Monitor's total memory used.
 
         CONTEXT:
         - The terminal tracks command blocks (id, command, output, exit_code, timestamp). Use get_recent_commands for history (with optional query filter), get_command_output for full output of a block, get_current_screen for the live view and session metadata.

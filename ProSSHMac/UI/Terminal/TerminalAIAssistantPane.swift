@@ -368,21 +368,14 @@ private struct AIAssistantMessageCard: View {
             }
             .foregroundStyle(.secondary)
 
-            if message.isStreaming {
-                Text(AIAssistantRenderer.markdownText(message.content))
-                    .font(.system(size: 13))
-                    .lineSpacing(2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
-            } else {
-                ForEach(AIAssistantRenderer.parseSegments(from: message.content)) { segment in
-                    switch segment.kind {
-                    case let .text(text):
-                        AIAssistantMarkdownText(markdown: text)
-                    case let .code(language, code):
-                        AIAssistantCodeBlock(language: language, code: code)
-                    }
+            ForEach(AIAssistantRenderer.parseSegments(from: message.content)) { segment in
+                switch segment.kind {
+                case let .text(text):
+                    AIAssistantMarkdownText(markdown: text)
+                case let .code(language, code):
+                    AIAssistantCodeBlock(language: language, code: code)
+                case let .table(table):
+                    AIAssistantTable(table: table)
                 }
             }
         }
@@ -500,6 +493,40 @@ private struct AIAssistantMarkdownText: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .fixedSize(horizontal: false, vertical: true)
             .textSelection(.enabled)
+    }
+}
+
+private struct AIAssistantTable: View {
+    let table: AIAssistantRenderer.Table
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: true) {
+            Grid(alignment: .leading, horizontalSpacing: 0, verticalSpacing: 0) {
+                tableRow(table.headers, isHeader: true)
+                ForEach(table.rows.indices, id: \.self) { index in
+                    tableRow(table.rows[index], isHeader: false)
+                }
+            }
+            .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 6))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func tableRow(_ cells: [String], isHeader: Bool) -> some View {
+        GridRow {
+            ForEach(table.headers.indices, id: \.self) { column in
+                Text(AIAssistantRenderer.markdownText(column < cells.count ? cells[column] : ""))
+                    .font(.system(size: 12, weight: isHeader ? .semibold : .regular))
+                    .fixedSize(horizontal: true, vertical: false)
+                    .frame(minWidth: 72, alignment: .leading)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .textSelection(.enabled)
+                    .background(isHeader ? Color.accentColor.opacity(0.12) : Color.clear)
+                    .overlay(alignment: .trailing) { Rectangle().fill(Color.primary.opacity(0.10)).frame(width: 1) }
+                    .overlay(alignment: .bottom) { Rectangle().fill(Color.primary.opacity(0.10)).frame(height: 1) }
+            }
+        }
     }
 }
 
@@ -734,15 +761,26 @@ private final class ComposerTextView: NSTextView {
     }
 }
 
-private enum AIAssistantRenderer {
+enum AIAssistantRenderer {
+    struct Table {
+        let headers: [String]
+        let rows: [[String]]
+    }
+
     struct Segment: Identifiable {
         enum Kind {
             case text(String)
             case code(language: String?, code: String)
+            case table(Table)
         }
 
-        let id = UUID()
+        let id: Int
         let kind: Kind
+
+        init(id: Int = 0, kind: Kind) {
+            self.id = id
+            self.kind = kind
+        }
     }
 
     static func parseSegments(from content: String) -> [Segment] {
@@ -754,8 +792,10 @@ private enum AIAssistantRenderer {
         var currentLanguage: String?
         var inCodeBlock = false
 
-        for line in content.split(separator: "\n", omittingEmptySubsequences: false) {
-            let stringLine = String(line)
+        let lines = content.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        var index = 0
+        while index < lines.count {
+            let stringLine = lines[index]
             let trimmed = stringLine.trimmingCharacters(in: .whitespaces)
 
             if trimmed.hasPrefix("```") {
@@ -776,14 +816,31 @@ private enum AIAssistantRenderer {
                     currentLanguage = lang.isEmpty ? nil : lang
                     inCodeBlock = true
                 }
+                index += 1
                 continue
             }
 
             if inCodeBlock {
                 currentCode.append(stringLine)
+            } else if index + 1 < lines.count,
+                      let headers = tableCells(stringLine),
+                      isTableDivider(lines[index + 1], columns: headers.count) {
+                if !currentText.isEmpty {
+                    segments.append(Segment(kind: .text(currentText.joined(separator: "\n"))))
+                    currentText.removeAll(keepingCapacity: true)
+                }
+                index += 2
+                var rows: [[String]] = []
+                while index < lines.count, let cells = tableCells(lines[index]), !cells.isEmpty {
+                    rows.append(cells)
+                    index += 1
+                }
+                segments.append(Segment(kind: .table(Table(headers: headers, rows: rows))))
+                continue
             } else {
                 currentText.append(stringLine)
             }
+            index += 1
         }
 
         if inCodeBlock {
@@ -795,13 +852,49 @@ private enum AIAssistantRenderer {
             segments.append(Segment(kind: .text(currentText.joined(separator: "\n"))))
         }
 
-        return segments.filter { segment in
+        let nonemptySegments = segments.filter { segment in
             switch segment.kind {
             case let .text(text):
                 return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             case let .code(_, code):
                 return !code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            case .table:
+                return true
             }
+        }
+        return nonemptySegments.enumerated().map { Segment(id: $0.offset, kind: $0.element.kind) }
+    }
+
+    private static func tableCells(_ line: String) -> [String]? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.contains("|") else { return nil }
+        var cells: [String] = []
+        var current = ""
+        var escaped = false
+        for character in trimmed {
+            if escaped {
+                current.append(character)
+                escaped = false
+            } else if character == "\\" {
+                escaped = true
+            } else if character == "|" {
+                cells.append(current.trimmingCharacters(in: .whitespaces))
+                current = ""
+            } else {
+                current.append(character)
+            }
+        }
+        cells.append(current.trimmingCharacters(in: .whitespaces))
+        if trimmed.first == "|" { cells.removeFirst() }
+        if trimmed.last == "|" { cells.removeLast() }
+        return cells.isEmpty ? nil : cells
+    }
+
+    private static func isTableDivider(_ line: String, columns: Int) -> Bool {
+        guard let cells = tableCells(line), cells.count == columns else { return false }
+        return cells.allSatisfy { cell in
+            let core = cell.trimmingCharacters(in: CharacterSet(charactersIn: ":"))
+            return core.count >= 3 && core.allSatisfy { $0 == "-" }
         }
     }
 
@@ -861,8 +954,7 @@ private enum AIAssistantRenderer {
 
         for (index, line) in lines.enumerated() {
             if line.trimmingCharacters(in: .whitespaces).isEmpty {
-                // Preserve blank lines as paragraph breaks.
-                result += AttributedString("\n")
+                continue
             } else if let parsed = try? AttributedString(markdown: line, options: options) {
                 result += parsed
             } else {

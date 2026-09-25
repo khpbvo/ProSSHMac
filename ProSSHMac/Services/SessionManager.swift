@@ -780,6 +780,9 @@ final class SessionManager: ObservableObject {
                 await self?.publishCommandCompletion(completedBlock)
             }
         }
+        await engine.setToolCompletionEventHandler { [weak self] token, status in
+            await self?.aiToolCoordinator.completeToolCommand(sessionID: session.id, token: token, exitCode: status)
+        }
     }
 
     func handleShellStreamEndedInternal(sessionID: UUID) async {

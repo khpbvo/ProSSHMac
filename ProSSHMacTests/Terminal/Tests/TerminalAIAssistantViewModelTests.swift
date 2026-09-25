@@ -4,6 +4,29 @@ import XCTest
 
 @MainActor
 final class TerminalAIAssistantViewModelTests: XCTestCase {
+    func testMarkdownTableIsParsedWithoutLeakingPipeRowsIntoText() {
+        let segments = AIAssistantRenderer.parseSegments(from: """
+        Current usage:
+
+        | Category | Pages | Approx. |
+        |:---|---:|:---:|
+        | Active | 640,160 | ~9.8 GiB |
+
+        Summary follows.
+        """)
+        XCTAssertEqual(segments.count, 3)
+        guard case let .table(table) = segments[1].kind else {
+            return XCTFail("Expected a rendered table segment")
+        }
+        XCTAssertEqual(table.headers, ["Category", "Pages", "Approx."])
+        XCTAssertEqual(table.rows, [["Active", "640,160", "~9.8 GiB"]])
+    }
+
+    func testMarkdownParagraphBreakDoesNotDoubleSpace() {
+        let rendered = AIAssistantRenderer.markdownText("First paragraph.\n\nSecond paragraph.")
+        XCTAssertEqual(String(rendered.characters), "First paragraph.\nSecond paragraph.")
+    }
+
     func testSubmitPromptAppendsUserAndAssistantMessages() async throws {
         let sessionID = UUID()
         let service = MockAgentService(

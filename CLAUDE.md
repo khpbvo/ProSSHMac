@@ -286,6 +286,10 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-09-0
   `OpenRouterModelStore` requires explicit selection and refreshes the tool-capable text-model catalog.
   `AIConversationContext` stores per-session structured turns; a model switch drops reasoning blocks
   but keeps messages and tool history. `OpenRouterAPIKeyStore` owns the single Keychain entry.
+- **AI terminal tool completion**: `SessionAIToolCoordinator` wraps one-shot commands with private
+  OSC 7777 completion, filters the echoed wrapper in the parser reader, and takes the exit code
+  from `TerminalEngine`'s event callback. Remote filesystem helpers use the same command path.
+  The chat pane renders pipe tables and collapses blank paragraph spacing.
   `Docs/multiprovider-architecture.md` is superseded historical context.
 - **AI agent tools**: 10 exposed schemas — 8 in `AIToolDefinitions` (`get_command_output`,
   `get_current_screen`, `search_filesystem`, `search_file_contents`, `read_files`,
@@ -450,7 +454,7 @@ at `Docs/featurelist.md`. Keep it in sync when process guidance changes.
 
 ## Next Session Plan
 
-**OpenRouter migration (2026-09-25):** implementation and mocked verification are complete. The only OpenRouter-specific validation still pending is a small live streamed reply, a real terminal tool-call cycle, and a model switch preserving context after an OpenRouter test key is configured. The current machine had no such key. See `Docs/OpenRouterArchitecture.md` and the dated `Docs/featurelist.md` entry. The installed Xcode lacks the Metal Toolchain, so the Debug/Release compile checks excluded `TerminalShaders.metal`; the separate full-suite build also stops on existing actor-conformance test doubles before tests run.
+**OpenRouter follow-up (2026-09-25):** a user screenshot confirms a live GLM 5.3 Flash terminal tool cycle and exposed four presentation/evidence issues. The wrapper is now filtered by private OSC start/completion events, tables render in the chat pane, paragraph spacing is compact, and the prompt asks for complete diagnostic evidence. A real local zsh cycle and focused parser/chat/AI tests pass. Next, visually verify the updated running app and compare the same memory question with a stronger OpenRouter model when a test key is accessible to this process; this session could not run that network comparison. See `Docs/OpenRouterArchitecture.md` and `Docs/featurelist.md`. The installed Xcode lacks the Metal Toolchain, so app build checks exclude `TerminalShaders.metal`. The previous full-suite attempt stopped on actor-conformance test doubles before the documented load-sensitive test; the coordinator test double was fixed in this follow-up, while two unrelated files remain.
 
 **Last completed milestone (2026-09-06/07): RenderCost R2b implementation and focused verification.**
 R2b stays open for the throughput-variability investigation; do not reimplement the actor-call changes.

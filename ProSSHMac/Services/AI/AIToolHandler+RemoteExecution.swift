@@ -158,41 +158,15 @@ extension AIToolHandler {
         commandBody: String,
         timeoutSeconds: TimeInterval = 20
     ) async -> RemoteToolExecutionResult {
-        let marker = "__PROSSH_AI_TOOL_EXIT_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))__"
-        let wrappedCommand =
-            "{ \(commandBody); __prossh_ai_tool_status=$?; printf '\\n\(marker):%s\\n' \"$__prossh_ai_tool_status\"; }"
-
-        await provider.sendShellInput(
+        let result = await provider.executeCommandAndWait(
             sessionID: sessionID,
-            input: wrappedCommand,
-            suppressEcho: true
+            command: commandBody,
+            timeoutSeconds: timeoutSeconds
         )
-
-        let deadline = Date().addingTimeInterval(timeoutSeconds)
-        while Date() < deadline {
-            let blocks = await provider.searchCommandHistory(
-                sessionID: sessionID,
-                query: marker,
-                limit: 8
-            )
-            if let block = blocks.first(where: { $0.command.contains(marker) }) {
-                let parsed = Self.parseRemoteWrappedCommandOutput(
-                    block.output,
-                    marker: marker
-                )
-                return RemoteToolExecutionResult(
-                    output: parsed.output,
-                    exitCode: parsed.exitCode,
-                    timedOut: false
-                )
-            }
-            try? await Task.sleep(nanoseconds: 150_000_000)
-        }
-
         return RemoteToolExecutionResult(
-            output: "",
-            exitCode: nil,
-            timedOut: true
+            output: result.output,
+            exitCode: result.exitCode,
+            timedOut: result.timedOut
         )
     }
 
@@ -201,31 +175,6 @@ extension AIToolHandler {
     static let remotePathNotFoundToken = "__PROSSH_PATH_NOT_FOUND__"
     static let remoteNotRegularFileToken = "__PROSSH_NOT_REGULAR_FILE__"
     static let remoteContentLineRegex = try! NSRegularExpression(pattern: #":([0-9]+):"#) // swiftlint:disable:this force_try
-
-    static func parseRemoteWrappedCommandOutput(
-        _ output: String,
-        marker: String
-    ) -> (output: String, exitCode: Int?) {
-        let normalized = output
-            .replacingOccurrences(of: "\r\n", with: "\n")
-            .replacingOccurrences(of: "\r", with: "\n")
-        let markerPrefix = "\(marker):"
-        guard let markerRange = normalized.range(of: markerPrefix, options: .backwards) else {
-            return (
-                normalized.trimmingCharacters(in: .whitespacesAndNewlines),
-                nil
-            )
-        }
-
-        let statusStart = markerRange.upperBound
-        let statusSlice = normalized[statusStart...]
-        let statusValue = statusSlice.prefix { $0.isNumber || $0 == "-" }
-        let exitCode = Int(statusValue)
-
-        let cleanOutput = normalized[..<markerRange.lowerBound]
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return (String(cleanOutput), exitCode)
-    }
 
     static func parseRemoteFilesystemSearchOutput(
         _ output: String,

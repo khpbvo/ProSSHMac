@@ -698,7 +698,8 @@ actor TerminalEngine {
             oscString: oscString,
             grid: grid,
             responseHandler: responseHandler,
-            semanticPromptHandler: semanticPromptEventHandler
+            semanticPromptHandler: semanticPromptEventHandler,
+            toolCompletionHandler: toolCompletionEventHandler
         )
     }
 
@@ -720,6 +721,7 @@ actor TerminalEngine {
     /// Send a response back through the SSH channel.
     private var responseHandler: (@Sendable ([UInt8]) async -> Void)?
     private var semanticPromptEventHandler: (@Sendable (SemanticPromptEvent) async -> Void)?
+    private var toolCompletionEventHandler: (@Sendable (String, Int) async -> Void)?
 
     /// Set the handler for sending responses back to the remote host.
     func setResponseHandler(_ handler: @escaping @Sendable ([UInt8]) async -> Void) {
@@ -728,6 +730,10 @@ actor TerminalEngine {
 
     func setSemanticPromptEventHandler(_ handler: (@Sendable (SemanticPromptEvent) async -> Void)?) {
         semanticPromptEventHandler = handler
+    }
+
+    func setToolCompletionEventHandler(_ handler: (@Sendable (String, Int) async -> Void)?) {
+        toolCompletionEventHandler = handler
     }
 
     /// Set an optional mode tracker and initialize it from current grid state.

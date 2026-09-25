@@ -16,6 +16,12 @@ At the first ordinary app launch after upgrade, `LegacyProviderKeyCleanup` delet
 
 The assistant has no automatic model fallback and no `previous_response_id` continuation. All tool execution, session targeting, direct-action filtering, and patch approval live in the existing tool handler.
 
+## Terminal command completion and chat display
+
+`execute_and_wait` and the remote filesystem helpers share `SessionAIToolCoordinator`'s command path. Each command emits private `OSC 7777;PSB;<random token>` before execution and `OSC 7777;PSW;<token>;<exit status>` on completion. The shell command is quoted and evaluated after the start event, so even malformed command syntax cannot expose the wrapper. The parser reader discards shell echo and repaint output until the start event, then passes real output to the terminal. `TerminalEngine` consumes the completion event without placing it in the grid and passes the status to the matching session's pending command. Tool output comes from the same filtered byte stream, so no screen-text marker search or periodic polling is needed. A timeout still resets terminal SGR attributes.
+
+The chat pane parses fenced code and GFM-style pipe tables into separate views; table cells can scroll horizontally in a narrow sidebar. Paragraph breaks use one line break. The developer prompt asks the model to gather complete diagnostic evidence before drawing conclusions, including compressed memory, swap and pressure on macOS.
+
 ## Verification
 
 `OpenRouterClientTests` uses mocked HTTP/SSE fixtures. `OpenRouterSettingsTests`, `AIConversationContextTests`, and `AIAgentServiceTests` cover selection, cleanup/retry, replay, session separation, model changes, and tool approval. See the current OpenRouter migration entry and dated loop log in `Docs/featurelist.md` for build, test, and live-validation status.

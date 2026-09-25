@@ -112,11 +112,8 @@ private final class MockAgentSessionProvider: AIAgentSessionProviding {
     var bytesReceivedBySessionID: [UUID: Int64]
     var bytesSentBySessionID: [UUID: Int64]
     var sentCommands: [String] = []
-    var sentCommandsSuppressEcho: [Bool] = []
     var commandBlocks: [CommandBlock]
     var commandOutputByBlockID: [UUID: String]
-    var simulatedRemoteFilesystemLines: [String] = []
-    var simulatedRemoteFileContentLines: [String] = []
     var simulatedExecuteAndWaitOutput: String = ""
     var simulatedExecuteAndWaitExitCode: Int? = 0
     var simulatedExecuteAndWaitTimedOut: Bool = false
@@ -166,47 +163,10 @@ private final class MockAgentSessionProvider: AIAgentSessionProviding {
 
     func sendRawShellInput(sessionID: UUID, input: String) async {
         sentCommands.append(input)
-        sentCommandsSuppressEcho.append(false)
     }
 
     func sendShellInput(sessionID: UUID, input: String, suppressEcho: Bool) async {
         sentCommands.append(input)
-        sentCommandsSuppressEcho.append(suppressEcho)
-        guard let marker = Self.extractRemoteToolMarker(from: input) else {
-            return
-        }
-
-        let simulatedLines: [String]
-        if input.contains("__prossh_find_pattern") {
-            simulatedLines = simulatedRemoteFilesystemLines
-        } else if input.contains("rg --line-number") || input.contains("grep -RIn") {
-            simulatedLines = simulatedRemoteFileContentLines
-        } else if !simulatedRemoteFilesystemLines.isEmpty {
-            simulatedLines = simulatedRemoteFilesystemLines
-        } else if !simulatedRemoteFileContentLines.isEmpty {
-            simulatedLines = simulatedRemoteFileContentLines
-        } else {
-            simulatedLines = []
-        }
-
-        var output = simulatedLines.joined(separator: "\n")
-        if !output.isEmpty {
-            output += "\n"
-        }
-        output += "\(marker):0"
-
-        let block = CommandBlock(
-            id: UUID(),
-            sessionID: sessionID,
-            command: input,
-            output: output,
-            startedAt: .now,
-            completedAt: .now,
-            exitCode: 0,
-            boundarySource: .userInput
-        )
-        commandBlocks.append(block)
-        commandOutputByBlockID[block.id] = block.output
     }
 
     func executeCommandAndWait(
@@ -215,7 +175,6 @@ private final class MockAgentSessionProvider: AIAgentSessionProviding {
         timeoutSeconds: TimeInterval
     ) async -> CommandExecutionResult {
         sentCommands.append(command)
-        sentCommandsSuppressEcho.append(true)
 
         if !simulatedExecuteAndWaitResultsQueue.isEmpty {
             return simulatedExecuteAndWaitResultsQueue.removeFirst()
@@ -247,18 +206,6 @@ private final class MockAgentSessionProvider: AIAgentSessionProviding {
         )
     }
 
-    private static func extractRemoteToolMarker(from command: String) -> String? {
-        let pattern = #"__PROSSH_AI_TOOL_EXIT_[A-F0-9]+__"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else {
-            return nil
-        }
-        let nsCommand = command as NSString
-        let range = NSRange(location: 0, length: nsCommand.length)
-        guard let match = regex.firstMatch(in: command, options: [], range: range) else {
-            return nil
-        }
-        return nsCommand.substring(with: match.range)
-    }
 }
 
 @MainActor

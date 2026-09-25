@@ -31,7 +31,8 @@ nonisolated enum OSCHandler {
         oscString: [UInt8],
         grid: TerminalGrid,
         responseHandler: (([UInt8]) async -> Void)?,
-        semanticPromptHandler: ((SemanticPromptEvent) async -> Void)? = nil
+        semanticPromptHandler: ((SemanticPromptEvent) async -> Void)? = nil,
+        toolCompletionHandler: ((String, Int) async -> Void)? = nil
     ) async {
         // Parse: <number> ; <string>
         // Some OSC commands have no semicolon (e.g., OSC 112 for cursor color reset)
@@ -109,6 +110,14 @@ nonisolated enum OSCHandler {
         case OSCCommand.semanticPrompt:
             if let event = parseSemanticPromptEvent(text) {
                 await semanticPromptHandler?(event)
+            }
+
+        // Private ProSSH tool completion. Only a matching in-flight token is
+        // accepted by the session coordinator; this sequence never enters the grid.
+        case 7777:
+            let parts = text.split(separator: ";", omittingEmptySubsequences: false)
+            if parts.count == 3, parts[0] == "PSW", let status = Int(parts[2]) {
+                await toolCompletionHandler?(String(parts[1]), status)
             }
 
         default:
