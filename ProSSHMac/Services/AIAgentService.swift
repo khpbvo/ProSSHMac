@@ -31,7 +31,6 @@ extension AIAgentServicing {
 
 struct AIAgentReply: Sendable, Equatable {
     var text: String
-    var responseID: String
     var toolCallsExecuted: Int
 }
 
@@ -93,14 +92,14 @@ struct CommandExecutionResult: Sendable {
 extension SessionManager: AIAgentSessionProviding {}
 
 @MainActor
-final class OpenAIAgentService: AIAgentServicing {
+final class AIAgentService: AIAgentServicing {
     var toolDefinitions: [LLMToolDefinition] {
         AIToolDefinitions.buildToolDefinitions(patchToolEnabled: patchToolEnabled)
     }
 
-    let responsesService: any OpenAIResponsesServicing
+    let openRouterClient: any OpenRouterServicing
     let sessionProvider: any AIAgentSessionProviding
-    let providerRegistry: LLMProviderRegistry
+    let modelStore: OpenRouterModelStore
     let requestTimeoutSeconds: Int
     let maxToolIterations: Int
     let persistConversationContext: Bool
@@ -132,16 +131,16 @@ final class OpenAIAgentService: AIAgentServicing {
     }
 
     init(
-        responsesService: any OpenAIResponsesServicing,
+        openRouterClient: any OpenRouterServicing,
         sessionProvider: any AIAgentSessionProviding,
-        providerRegistry: LLMProviderRegistry = LLMProviderRegistry(),
+        modelStore: OpenRouterModelStore,
         requestTimeoutSeconds: Int = 60,
         maxToolIterations: Int = 50,
         persistConversationContext: Bool = true
     ) {
-        self.responsesService = responsesService
+        self.openRouterClient = openRouterClient
         self.sessionProvider = sessionProvider
-        self.providerRegistry = providerRegistry
+        self.modelStore = modelStore
         self.requestTimeoutSeconds = max(10, requestTimeoutSeconds)
         self.maxToolIterations = max(1, maxToolIterations)
         self.persistConversationContext = persistConversationContext
@@ -204,114 +203,4 @@ final class OpenAIAgentService: AIAgentServicing {
         )
     }
 
-    // MARK: - Provider Translation
-
-    func sendProviderRequest(
-        _ request: LLMRequest,
-        streamHandler: (@Sendable (LLMStreamEvent) -> Void)?
-    ) async throws -> LLMResponse {
-        // Non-OpenAI providers go through LLMProvider protocol
-        if providerRegistry.activeProviderID != .openai {
-            guard let provider = providerRegistry.activeProvider else {
-                throw LLMProviderError.providerNotConfigured(providerRegistry.activeProviderID)
-            }
-            let model = providerRegistry.activeModelID
-            if let streamHandler {
-                return try await provider.sendRequestStreaming(
-                    request, model: model, onEvent: streamHandler
-                )
-            } else {
-                return try await provider.sendRequest(request, model: model)
-            }
-        }
-
-        // OpenAI path: translate LLMRequest → OpenAIResponsesRequest
-        let messages = request.messages.map { msg in
-            OpenAIResponsesMessage(
-                role: {
-                    switch msg.role {
-                    case .system: return .system
-                    case .developer: return .developer
-                    case .user: return .user
-                    case .assistant: return .assistant
-                    }
-                }(),
-                text: msg.content
-            )
-        }
-
-        let tools = request.tools.map { tool in
-            OpenAIResponsesToolDefinition(
-                name: tool.name,
-                description: tool.description,
-                parameters: tool.parameters,
-                strict: tool.strict
-            )
-        }
-
-        let toolOutputs = request.toolOutputs.map { output in
-            OpenAIResponsesToolOutput(callID: output.callID, output: output.output)
-        }
-
-        let previousResponseID = request.conversationState?.stringValue
-
-        let openAIRequest = OpenAIResponsesRequest(
-            messages: messages,
-            previousResponseID: previousResponseID,
-            tools: tools,
-            toolOutputs: toolOutputs
-        )
-
-        do {
-            let response: OpenAIResponsesResponse
-            if let streamHandler {
-                response = try await responsesService.createResponseStreaming(openAIRequest) { streamEvent in
-                    // Translate OpenAIResponsesStreamEvent → LLMStreamEvent
-                    switch streamEvent {
-                    case let .outputTextDelta(delta):
-                        streamHandler(.textDelta(delta))
-                    case let .outputTextDone(text):
-                        streamHandler(.textDone(text))
-                    case let .reasoningTextDelta(delta):
-                        streamHandler(.reasoningDelta(delta))
-                    case let .reasoningTextDone(text):
-                        streamHandler(.reasoningDone(text))
-                    case let .reasoningSummaryTextDelta(delta):
-                        streamHandler(.reasoningSummaryDelta(delta))
-                    case let .reasoningSummaryTextDone(text):
-                        streamHandler(.reasoningSummaryDone(text))
-                    }
-                }
-            } else {
-                response = try await responsesService.createResponse(openAIRequest)
-            }
-
-            // Translate OpenAIResponsesResponse → LLMResponse
-            let llmToolCalls = response.toolCalls.map { tc in
-                LLMToolCall(id: tc.id, name: tc.name, arguments: tc.arguments)
-            }
-
-            return LLMResponse(
-                text: response.text,
-                toolCalls: llmToolCalls,
-                updatedConversationState: .string(response.id, provider: .openai)
-            )
-        } catch let error as OpenAIResponsesServiceError {
-            // Re-throw as LLMProviderError
-            switch error {
-            case .missingAPIKey:
-                throw LLMProviderError.missingAPIKey(provider: "OpenAI")
-            case .invalidResponse:
-                throw LLMProviderError.invalidResponse
-            case let .httpError(statusCode, message):
-                throw LLMProviderError.httpError(statusCode: statusCode, message: message)
-            case let .encodingFailure(message):
-                throw LLMProviderError.encodingFailure(message)
-            case let .decodingFailure(message):
-                throw LLMProviderError.decodingFailure(message)
-            case let .transportFailure(message):
-                throw LLMProviderError.transportFailure(message)
-            }
-        }
-    }
 }

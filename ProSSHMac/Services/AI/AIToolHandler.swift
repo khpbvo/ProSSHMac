@@ -1,4 +1,4 @@
-// Extracted from OpenAIAgentService.swift
+// Extracted from AIAgentService.swift
 import Foundation
 import os.log
 
@@ -12,7 +12,7 @@ struct BroadcastContext: Sendable {
 
 @MainActor final class AIToolHandler {
     private static let logger = Logger(subsystem: "com.prossh", category: "AICopilot.ToolHandler")
-    weak var service: OpenAIAgentService?
+    weak var service: AIAgentService?
     private let iso8601Formatter = ISO8601DateFormatter()
 
     init() {}

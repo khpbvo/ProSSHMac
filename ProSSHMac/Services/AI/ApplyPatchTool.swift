@@ -476,8 +476,7 @@ enum ApplyPatchToolDefinition {
 
     /// The JSON Schema tool definition for the apply_patch tool.
     ///
-    /// This produces a definition compatible with OpenAI, Anthropic, and Ollama
-    /// tool calling formats (all use JSON Schema for parameters).
+    /// JSON Schema parameters for the OpenRouter tool calling request.
     static func definition() -> LLMToolDefinition {
         LLMToolDefinition(
             name: "apply_patch",

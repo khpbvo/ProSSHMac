@@ -2,714 +2,104 @@
 import XCTest
 @testable import ProSSHMac
 
-// MARK: - Test Support
-
-/// A provider registry pinned to OpenAI and backed by a throwaway defaults suite.
-///
-/// `LLMProviderRegistry` restores the persisted provider choice from
-/// `UserDefaults.standard`, so without this every one of these tests routes to
-/// whichever provider the developer last selected in the real app and fails with
-/// `providerNotConfigured` instead of exercising the mock responses service.
-@MainActor
-func makeIsolatedOpenAIRegistry() -> LLMProviderRegistry {
-    let suiteName = "ProSSHMacTests.\(UUID().uuidString)"
-    let defaults = UserDefaults(suiteName: suiteName) ?? .standard
-    defaults.removePersistentDomain(forName: suiteName)
-    return LLMProviderRegistry(defaultProvider: .openai, userDefaults: defaults)
-}
-
 @MainActor
 final class AIAgentServiceTests: XCTestCase {
-    func testGenerateReplyRunsToolLoopAndReturnsAssistantAnswer() async throws {
-        let sessionProvider = MockAgentSessionProvider()
-        let responses = MockOpenAIResponsesService()
-        responses.enqueueResponse(
-            makeFunctionCallResponse(
-                id: "resp_1",
-                callID: "call_1",
-                toolName: "get_session_info",
-                arguments: "{}"
-            )
-        )
-        responses.enqueueResponse(
-            makeTextResponse(id: "resp_2", text: "Session looks healthy.")
-        )
+    private func store(client: MockOpenRouterService) async throws -> OpenRouterModelStore {
+        let suite = "OpenRouterAgentTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        let store = OpenRouterModelStore(client: client, defaults: defaults)
+        await store.refresh()
+        try store.select("test/one")
+        return store
+    }
 
-        let service = OpenAIAgentService(
-            responsesService: responses,
-            sessionProvider: sessionProvider,
-            providerRegistry: makeIsolatedOpenAIRegistry()
-        )
+    private func completion(_ text: String, id: String = UUID().uuidString) -> OpenRouterCompletion {
+        .init(id: id, model: "test/one", choices: [.init(message: .init(role: "assistant", content: text), finishReason: "stop")], usage: nil)
+    }
 
-        let reply = try await service.generateReply(
-            sessionID: sessionProvider.sessionID,
-            prompt: "How is this session?"
-        )
+    private func toolCompletion(_ name: String, arguments: String, id: String = "call_1") -> OpenRouterCompletion {
+        let call = OpenRouterToolCall(id: id, function: .init(name: name, arguments: arguments))
+        return .init(id: UUID().uuidString, model: "test/one", choices: [.init(message: .init(role: "assistant", content: nil, toolCalls: [call]), finishReason: "tool_calls")], usage: nil)
+    }
 
-        XCTAssertEqual(reply.text, "Session looks healthy.")
+    func testToolLoopKeepsCallAndResultInTranscript() async throws {
+        let client = MockOpenRouterService()
+        let session = MockAgentSessionProvider()
+        client.enqueue(toolCompletion("get_session_info", arguments: "{}"))
+        client.enqueue(completion("Session healthy"))
+        let service = AIAgentService(openRouterClient: client, sessionProvider: session, modelStore: try await store(client: client))
+        let reply = try await service.generateReply(sessionID: session.sessionID, prompt: "status")
+        XCTAssertEqual(reply.text, "Session healthy")
         XCTAssertEqual(reply.toolCallsExecuted, 1)
-
-        let requests = responses.capturedRequests
-        XCTAssertEqual(requests.count, 2)
-        XCTAssertNil(requests[0].previousResponseID)
-        XCTAssertEqual(requests[1].previousResponseID, "resp_1")
-        XCTAssertEqual(requests[1].toolOutputs.count, 1)
-        XCTAssertEqual(requests[1].toolOutputs[0].callID, "call_1")
-        XCTAssertTrue(requests[1].toolOutputs[0].output.contains("\"ok\":true"))
+        XCTAssertEqual(client.requests.count, 2)
+        let replay = client.requests[1].messages
+        XCTAssertEqual(replay.first { $0.role == "assistant" }?.toolCalls?.first?.id, "call_1")
+        XCTAssertEqual(replay.first { $0.role == "tool" }?.toolCallID, "call_1")
+        XCTAssertTrue(replay.first { $0.role == "tool" }?.content?.contains("\"ok\":true") == true)
     }
 
-    func testGetCommandOutputToolCapsOutputAndMarksTruncated() async throws {
-        let sessionProvider = MockAgentSessionProvider()
-        guard let blockID = sessionProvider.commandBlocks.first?.id else {
-            XCTFail("Expected seeded command block")
-            return
-        }
-        sessionProvider.commandOutputByBlockID[blockID] = String(repeating: "x", count: 2000)
-
-        let responses = MockOpenAIResponsesService()
-        responses.enqueueResponse(
-            makeFunctionCallResponse(
-                id: "resp_1",
-                callID: "call_out",
-                toolName: "get_command_output",
-                arguments: #"{"block_id":"\#(blockID.uuidString.lowercased())","max_chars":300}"#
-            )
-        )
-        responses.enqueueResponse(
-            makeTextResponse(id: "resp_2", text: "Done.")
-        )
-
-        let service = OpenAIAgentService(
-            responsesService: responses,
-            sessionProvider: sessionProvider,
-            providerRegistry: makeIsolatedOpenAIRegistry()
-        )
-
-        _ = try await service.generateReply(
-            sessionID: sessionProvider.sessionID,
-            prompt: "show output"
-        )
-
-        let toolOutput = responses.capturedRequests[1].toolOutputs.first?.output ?? ""
-        XCTAssertTrue(toolOutput.contains(#""truncated":true"#))
-        XCTAssertTrue(toolOutput.contains(#""max_chars":300"#))
-        XCTAssertTrue(toolOutput.contains(#""total_chars":2000"#))
-        XCTAssertTrue(toolOutput.contains(#""returned_chars":300"#))
+    func testModelSwitchContinuesHistoryWithoutReasoning() async throws {
+        let client = MockOpenRouterService()
+        let session = MockAgentSessionProvider()
+        let modelStore = try await store(client: client)
+        var first = completion("The code is blue")
+        first = .init(id: first.id, model: "test/one", choices: [.init(message: .init(role: "assistant", content: "The code is blue", reasoningDetails: [.object(["type": .string("reasoning.text"), "text": .string("private")])]), finishReason: "stop")], usage: nil)
+        client.enqueue(first)
+        client.enqueue(completion("blue"))
+        let service = AIAgentService(openRouterClient: client, sessionProvider: session, modelStore: modelStore)
+        _ = try await service.generateReply(sessionID: session.sessionID, prompt: "Remember the code")
+        try modelStore.select("test/two")
+        _ = try await service.generateReply(sessionID: session.sessionID, prompt: "What is the code?")
+        let second = client.requests[1]
+        XCTAssertEqual(second.model, "test/two")
+        XCTAssertTrue(second.messages.contains { $0.content == "The code is blue" })
+        XCTAssertNil(second.messages.first { $0.content == "The code is blue" }?.reasoningDetails)
     }
 
-    func testExecuteCommandToolRunsWhenRequested() async throws {
-        let sessionProvider = MockAgentSessionProvider()
-        let responses = MockOpenAIResponsesService()
-        responses.enqueueResponse(
-            makeFunctionCallResponse(
-                id: "resp_1",
-                callID: "call_exec",
-                toolName: "execute_command",
-                arguments: #"{"command":"ls -la"}"#
-            )
-        )
-        responses.enqueueResponse(
-            makeTextResponse(id: "resp_2", text: "Done.")
-        )
-
-        let service = OpenAIAgentService(
-            responsesService: responses,
-            sessionProvider: sessionProvider,
-            providerRegistry: makeIsolatedOpenAIRegistry()
-        )
-
-        _ = try await service.generateReply(
-            sessionID: sessionProvider.sessionID,
-            prompt: "run ls"
-        )
-
-        XCTAssertEqual(sessionProvider.sentCommands, ["ls -la"])
-        let toolOutput = responses.capturedRequests[1].toolOutputs.first?.output ?? ""
-        XCTAssertTrue(toolOutput.contains("\"queued\""))
+    func testModelSwitchKeepsCompletedToolCycle() async throws {
+        let client = MockOpenRouterService()
+        let session = MockAgentSessionProvider()
+        let modelStore = try await store(client: client)
+        client.enqueue(toolCompletion("get_session_info", arguments: "{}"))
+        client.enqueue(completion("Local shell"))
+        client.enqueue(completion("It is a local shell"))
+        let service = AIAgentService(openRouterClient: client, sessionProvider: session, modelStore: modelStore)
+        _ = try await service.generateReply(sessionID: session.sessionID, prompt: "Inspect this session")
+        try modelStore.select("test/two")
+        _ = try await service.generateReply(sessionID: session.sessionID, prompt: "What did you inspect?")
+        let replay = client.requests[2].messages
+        XCTAssertEqual(replay.first { $0.role == "assistant" && $0.toolCalls != nil }?.toolCalls?.first?.id, "call_1")
+        XCTAssertEqual(replay.first { $0.role == "tool" }?.toolCallID, "call_1")
+        XCTAssertTrue(replay.contains { $0.content == "Local shell" })
     }
 
-    func testExecuteCommandToolMissingCommandReturnsValidationErrorOutput() async throws {
-        let sessionProvider = MockAgentSessionProvider()
-        let responses = MockOpenAIResponsesService()
-        responses.enqueueResponse(
-            makeFunctionCallResponse(
-                id: "resp_1",
-                callID: "call_exec",
-                toolName: "execute_command",
-                arguments: "{}"
-            )
-        )
-        responses.enqueueResponse(
-            makeTextResponse(id: "resp_2", text: "Handled.")
-        )
-
-        let service = OpenAIAgentService(
-            responsesService: responses,
-            sessionProvider: sessionProvider,
-            providerRegistry: makeIsolatedOpenAIRegistry()
-        )
-
-        let reply = try await service.generateReply(
-            sessionID: sessionProvider.sessionID,
-            prompt: "execute"
-        )
-
-        XCTAssertEqual(reply.text, "Handled.")
-        XCTAssertTrue(sessionProvider.sentCommands.isEmpty)
-        let toolOutput = responses.capturedRequests[1].toolOutputs.first?.output ?? ""
-        XCTAssertTrue(toolOutput.contains("invalid arguments"))
-        XCTAssertTrue(toolOutput.contains("execute_command"))
+    func testPatchDenialDoesNotWrite() async throws {
+        let client = MockOpenRouterService()
+        let session = MockAgentSessionProvider()
+        client.enqueue(toolCompletion("apply_patch", arguments: #"{"operation":"create","path":"/tmp/denied.txt","content":"blocked"}"#))
+        client.enqueue(completion("Denied"))
+        let service = AIAgentService(openRouterClient: client, sessionProvider: session, modelStore: try await store(client: client))
+        service.patchApprovalCallback = { _, _ in (false, false) }
+        _ = try await service.generateReply(sessionID: session.sessionID, prompt: "create a file")
+        XCTAssertTrue(client.requests[1].messages.first { $0.role == "tool" }?.content?.contains("Patch denied by user") == true)
+        XCTAssertFalse(session.sentCommands.contains { $0.contains("denied.txt") })
     }
 
-    func testExecuteCommandToolBlocksUnboundedFileReads() async throws {
-        let sessionProvider = MockAgentSessionProvider()
-        let responses = MockOpenAIResponsesService()
-        responses.enqueueResponse(
-            makeFunctionCallResponse(
-                id: "resp_1",
-                callID: "call_exec",
-                toolName: "execute_command",
-                arguments: #"{"command":"cat Makefile"}"#
-            )
-        )
-        responses.enqueueResponse(
-            makeTextResponse(id: "resp_2", text: "Handled.")
-        )
-
-        let service = OpenAIAgentService(
-            responsesService: responses,
-            sessionProvider: sessionProvider,
-            providerRegistry: makeIsolatedOpenAIRegistry()
-        )
-
-        let reply = try await service.generateReply(
-            sessionID: sessionProvider.sessionID,
-            prompt: "show me the makefile"
-        )
-
-        XCTAssertEqual(reply.text, "Handled.")
-        XCTAssertTrue(sessionProvider.sentCommands.isEmpty)
-        let toolOutput = responses.capturedRequests[1].toolOutputs.first?.output ?? ""
-        XCTAssertTrue(toolOutput.contains(#""ok":false"#))
-        XCTAssertTrue(toolOutput.contains("read_files"))
-    }
-
-    func testGenerateReplyThrowsToolLoopExceededWhenNoTerminalResponse() async throws {
-        let sessionProvider = MockAgentSessionProvider()
-        let responses = MockOpenAIResponsesService()
-        responses.enqueueResponse(
-            makeFunctionCallResponse(
-                id: "resp_1",
-                callID: "call_1",
-                toolName: "get_session_info",
-                arguments: "{}"
-            )
-        )
-        responses.enqueueResponse(
-            makeFunctionCallResponse(
-                id: "resp_2",
-                callID: "call_2",
-                toolName: "get_session_info",
-                arguments: "{}"
-            )
-        )
-
-        let service = OpenAIAgentService(
-            responsesService: responses,
-            sessionProvider: sessionProvider,
-            providerRegistry: makeIsolatedOpenAIRegistry(),
-            requestTimeoutSeconds: 60,
-            maxToolIterations: 2
-        )
-
-        do {
-            _ = try await service.generateReply(
-                sessionID: sessionProvider.sessionID,
-                prompt: "status"
-            )
-            XCTFail("Expected tool loop exceeded")
-        } catch let error as AIAgentServiceError {
-            XCTAssertEqual(error, .toolLoopExceeded(limit: 2))
-        } catch {
-            XCTFail("Unexpected error: \(error)")
-        }
-    }
-
-    func testInvalidPreviousResponseIDIsClearedAndRetried() async throws {
-        let sessionProvider = MockAgentSessionProvider()
-        let responses = MockOpenAIResponsesService()
-        responses.enqueueResponse(
-            makeTextResponse(id: "resp_prev", text: "First response")
-        )
-        responses.enqueueError(
-            OpenAIResponsesServiceError.httpError(
-                statusCode: 400,
-                message: "Invalid previous_response_id"
-            )
-        )
-        responses.enqueueResponse(
-            makeTextResponse(id: "resp_new", text: "Recovered response")
-        )
-
-        let service = OpenAIAgentService(
-            responsesService: responses,
-            sessionProvider: sessionProvider,
-            providerRegistry: makeIsolatedOpenAIRegistry()
-        )
-
-        _ = try await service.generateReply(
-            sessionID: sessionProvider.sessionID,
-            prompt: "first"
-        )
-        let recovered = try await service.generateReply(
-            sessionID: sessionProvider.sessionID,
-            prompt: "second"
-        )
-
-        XCTAssertEqual(recovered.text, "Recovered response")
-        let requests = responses.capturedRequests
-        XCTAssertEqual(requests.count, 3)
-        XCTAssertEqual(requests[1].previousResponseID, "resp_prev")
-        XCTAssertNil(requests[2].previousResponseID)
-    }
-
-    func testGenerateReplyDoesNotPersistPreviousResponseWhenDisabled() async throws {
-        let sessionProvider = MockAgentSessionProvider()
-        let responses = MockOpenAIResponsesService()
-        responses.enqueueResponse(
-            makeTextResponse(id: "resp_one", text: "First response")
-        )
-        responses.enqueueResponse(
-            makeTextResponse(id: "resp_two", text: "Second response")
-        )
-
-        let service = OpenAIAgentService(
-            responsesService: responses,
-            sessionProvider: sessionProvider,
-            providerRegistry: makeIsolatedOpenAIRegistry(),
-            persistConversationContext: false
-        )
-
-        _ = try await service.generateReply(
-            sessionID: sessionProvider.sessionID,
-            prompt: "first"
-        )
-        _ = try await service.generateReply(
-            sessionID: sessionProvider.sessionID,
-            prompt: "second"
-        )
-
-        let requests = responses.capturedRequests
-        XCTAssertEqual(requests.count, 2)
-        XCTAssertNil(requests[0].previousResponseID)
-        XCTAssertNil(requests[1].previousResponseID)
-    }
-
-    func testDirectActionPromptUsesMinimalToolSet() async throws {
-        let sessionProvider = MockAgentSessionProvider()
-        let responses = MockOpenAIResponsesService()
-        responses.enqueueResponse(
-            makeFunctionCallResponse(
-                id: "resp_1",
-                callID: "call_exec",
-                toolName: "execute_command",
-                arguments: #"{"command":"cd ~/Documents/Testing"}"#
-            )
-        )
-        responses.enqueueResponse(
-            makeTextResponse(id: "resp_2", text: "Done.")
-        )
-
-        let service = OpenAIAgentService(
-            responsesService: responses,
-            sessionProvider: sessionProvider,
-            providerRegistry: makeIsolatedOpenAIRegistry()
-        )
-
-        _ = try await service.generateReply(
-            sessionID: sessionProvider.sessionID,
-            prompt: "cd ~/Documents/Testing"
-        )
-
-        let firstTools = responses.capturedRequests.first?.tools.map(\.name) ?? []
-        XCTAssertTrue(firstTools.contains("execute_command"))
-        XCTAssertTrue(firstTools.contains("execute_and_wait"))
-        XCTAssertTrue(firstTools.contains("get_current_screen"))
-        XCTAssertTrue(firstTools.contains("read_files"))
-        XCTAssertTrue(firstTools.contains("get_recent_commands"))
-        XCTAssertTrue(firstTools.contains("get_command_output"))
-        XCTAssertFalse(firstTools.contains("search_terminal_history"))
-        XCTAssertFalse(firstTools.contains("search_filesystem"))
-        XCTAssertFalse(firstTools.contains("get_session_info"))
-    }
-
-    func testExecuteAndWaitReturnsOutputDirectly() async throws {
-        let sessionProvider = MockAgentSessionProvider()
-        sessionProvider.simulatedExecuteAndWaitOutput = "total 42\ndrwxr-xr-x  5 kevin staff 160 Feb 23 10:00 ."
-        sessionProvider.simulatedExecuteAndWaitExitCode = 0
-
-        let responses = MockOpenAIResponsesService()
-        responses.enqueueResponse(
-            makeFunctionCallResponse(
-                id: "resp_1",
-                callID: "call_exec",
-                toolName: "execute_and_wait",
-                arguments: #"{"command":"ls -la","timeout_seconds":30}"#
-            )
-        )
-        responses.enqueueResponse(
-            makeTextResponse(id: "resp_2", text: "Listed files.")
-        )
-
-        let service = OpenAIAgentService(
-            responsesService: responses,
-            sessionProvider: sessionProvider,
-            providerRegistry: makeIsolatedOpenAIRegistry()
-        )
-
-        let reply = try await service.generateReply(
-            sessionID: sessionProvider.sessionID,
-            prompt: "list files"
-        )
-
-        XCTAssertEqual(reply.text, "Listed files.")
-        let toolOutput = responses.capturedRequests[1].toolOutputs.first?.output ?? ""
-        XCTAssertTrue(toolOutput.contains(#""ok":true"#))
-        XCTAssertTrue(toolOutput.contains("total 42"))
-        XCTAssertTrue(toolOutput.contains(#""exit_code":0"#))
-        XCTAssertTrue(toolOutput.contains(#""truncated":false"#))
-    }
-
-    func testExecuteAndWaitReturnsTimeoutWhenCommandHangs() async throws {
-        let sessionProvider = MockAgentSessionProvider()
-        sessionProvider.simulatedExecuteAndWaitTimedOut = true
-
-        let responses = MockOpenAIResponsesService()
-        responses.enqueueResponse(
-            makeFunctionCallResponse(
-                id: "resp_1",
-                callID: "call_exec",
-                toolName: "execute_and_wait",
-                arguments: #"{"command":"sleep 999","timeout_seconds":5}"#
-            )
-        )
-        responses.enqueueResponse(
-            makeTextResponse(id: "resp_2", text: "Timed out.")
-        )
-
-        let service = OpenAIAgentService(
-            responsesService: responses,
-            sessionProvider: sessionProvider,
-            providerRegistry: makeIsolatedOpenAIRegistry()
-        )
-
-        let reply = try await service.generateReply(
-            sessionID: sessionProvider.sessionID,
-            prompt: "sleep forever"
-        )
-
-        XCTAssertEqual(reply.text, "Timed out.")
-        let toolOutput = responses.capturedRequests[1].toolOutputs.first?.output ?? ""
-        XCTAssertTrue(toolOutput.contains(#""ok":false"#))
-        XCTAssertTrue(toolOutput.contains("timed out"))
-    }
-
-    func testReadFilesToolReturnsBatchResults() async throws {
-        let sessionProvider = MockAgentSessionProvider()
-        let responses = MockOpenAIResponsesService()
-        responses.enqueueResponse(
-            makeFunctionCallResponse(
-                id: "resp_1",
-                callID: "call_batch",
-                toolName: "read_files",
-                arguments: #"{"files":[{"path":"/tmp/test_batch_a.txt","start_line":1,"line_count":50},{"path":"/tmp/test_batch_b.txt","start_line":1,"line_count":50}]}"#
-            )
-        )
-        responses.enqueueResponse(
-            makeTextResponse(id: "resp_2", text: "Batch done.")
-        )
-
-        let service = OpenAIAgentService(
-            responsesService: responses,
-            sessionProvider: sessionProvider,
-            providerRegistry: makeIsolatedOpenAIRegistry()
-        )
-
-        let reply = try await service.generateReply(
-            sessionID: sessionProvider.sessionID,
-            prompt: "read these files"
-        )
-
-        XCTAssertEqual(reply.text, "Batch done.")
-        XCTAssertEqual(reply.toolCallsExecuted, 1)
-        let toolOutput = responses.capturedRequests[1].toolOutputs.first?.output ?? ""
-        XCTAssertTrue(toolOutput.contains(#""ok":true"#))
-        XCTAssertTrue(toolOutput.contains(#""results":"#))
-    }
-
-    func testSearchFilesystemToolRunsInRemoteSession() async throws {
-        let sessionProvider = MockAgentSessionProvider(isLocal: false)
-        sessionProvider.simulatedRemoteFilesystemLines = [
-            "d    /home/kevin/projects",
-            "f    ./ProSSH prd.md",
-        ]
-
-        let responses = MockOpenAIResponsesService()
-        responses.enqueueResponse(
-            makeFunctionCallResponse(
-                id: "resp_1",
-                callID: "call_fs",
-                toolName: "search_filesystem",
-                arguments: #"{"path":"/home/kevin","name_pattern":"read","max_results":20}"#
-            )
-        )
-        responses.enqueueResponse(
-            makeTextResponse(id: "resp_2", text: "Found.")
-        )
-
-        let service = OpenAIAgentService(
-            responsesService: responses,
-            sessionProvider: sessionProvider,
-            providerRegistry: makeIsolatedOpenAIRegistry()
-        )
-
-        let reply = try await service.generateReply(
-            sessionID: sessionProvider.sessionID,
-            prompt: "find files"
-        )
-
-        XCTAssertEqual(reply.text, "Found.")
-        XCTAssertEqual(reply.toolCallsExecuted, 1)
-        XCTAssertTrue(sessionProvider.sentCommands.contains { $0.contains("__PROSSH_AI_TOOL_EXIT_") })
-        XCTAssertTrue(sessionProvider.sentCommandsSuppressEcho.contains(true))
-        let toolOutput = responses.capturedRequests[1].toolOutputs.first?.output ?? ""
-        let normalizedOutput = toolOutput.replacingOccurrences(of: #"\/"#, with: "/")
-        XCTAssertTrue(toolOutput.contains(#""ok":true"#))
-        XCTAssertTrue(toolOutput.contains(#""source":"remote_command""#))
-        XCTAssertTrue(normalizedOutput.contains("./ProSSH prd.md"))
-        XCTAssertFalse(toolOutput.contains("local sessions only"))
-    }
-
-    func testSearchFileContentsToolRunsInRemoteSession() async throws {
-        let sessionProvider = MockAgentSessionProvider(isLocal: false)
-        sessionProvider.simulatedRemoteFileContentLines = [
-            "/home/kevin/projects/README.md:12:OpenAI key setup",
-        ]
-
-        let responses = MockOpenAIResponsesService()
-        responses.enqueueResponse(
-            makeFunctionCallResponse(
-                id: "resp_1",
-                callID: "call_content",
-                toolName: "search_file_contents",
-                arguments: #"{"path":"/home/kevin/projects","text_pattern":"key","max_results":20}"#
-            )
-        )
-        responses.enqueueResponse(
-            makeTextResponse(id: "resp_2", text: "Done.")
-        )
-
-        let service = OpenAIAgentService(
-            responsesService: responses,
-            sessionProvider: sessionProvider,
-            providerRegistry: makeIsolatedOpenAIRegistry()
-        )
-
-        _ = try await service.generateReply(
-            sessionID: sessionProvider.sessionID,
-            prompt: "search in files"
-        )
-
-        XCTAssertTrue(sessionProvider.sentCommands.contains { $0.contains("__PROSSH_AI_TOOL_EXIT_") })
-        XCTAssertTrue(sessionProvider.sentCommandsSuppressEcho.contains(true))
-        let toolOutput = responses.capturedRequests[1].toolOutputs.first?.output ?? ""
-        let normalizedOutput = toolOutput.replacingOccurrences(of: #"\/"#, with: "/")
-        XCTAssertTrue(toolOutput.contains(#""ok":true"#))
-        XCTAssertTrue(toolOutput.contains(#""source":"remote_command""#))
-        XCTAssertTrue(normalizedOutput.contains("/home/kevin/projects/README.md"))
-        XCTAssertTrue(toolOutput.contains(#""n":12"#))
-        XCTAssertFalse(toolOutput.contains("local sessions only"))
-    }
-
-    func testApplyPatchRemoteUpdateQueuesInteractiveSudoWhenPasswordRequired() async throws {
-        let sessionProvider = MockAgentSessionProvider(isLocal: false)
-        let original = "PermitRootLogin no\n"
-        let base64Original = Data(original.utf8).base64EncodedString()
-
-        sessionProvider.simulatedExecuteAndWaitResultsQueue = [
-            CommandExecutionResult(output: base64Original, exitCode: 0, timedOut: false, blockID: nil),
-            CommandExecutionResult(
-                output: "base64: /etc/ssh/sshd_config: Permission denied",
-                exitCode: 1,
-                timedOut: false,
-                blockID: nil
-            ),
-            CommandExecutionResult(
-                output: "sudo: a password is required",
-                exitCode: 1,
-                timedOut: false,
-                blockID: nil
-            ),
-        ]
-
-        let responses = MockOpenAIResponsesService()
-        responses.enqueueResponse(
-            makeFunctionCallResponse(
-                id: "resp_1",
-                callID: "call_patch",
-                toolName: "apply_patch",
-                arguments: #"{"operation":"update","path":"/etc/ssh/sshd_config","diff":"-PermitRootLogin no\n+PermitRootLogin prohibit-password"}"#
-            )
-        )
-        responses.enqueueResponse(
-            makeTextResponse(id: "resp_2", text: "Awaiting sudo auth.")
-        )
-
-        let service = OpenAIAgentService(
-            responsesService: responses,
-            sessionProvider: sessionProvider,
-            providerRegistry: makeIsolatedOpenAIRegistry()
-        )
-
-        _ = try await service.generateReply(
-            sessionID: sessionProvider.sessionID,
-            prompt: "patch sshd config"
-        )
-
-        let toolOutput = responses.capturedRequests[1].toolOutputs.first?.output ?? ""
-        XCTAssertTrue(toolOutput.contains(#""status":"sudo_password_required""#))
-        XCTAssertTrue(toolOutput.contains("Sudo password required"))
-        XCTAssertTrue(sessionProvider.sentCommands.contains("sudo -n true"))
-        XCTAssertTrue(sessionProvider.sentCommands.contains { $0.contains("sudo tee '/etc/ssh/sshd_config' > /dev/null") })
-        XCTAssertTrue(sessionProvider.sentCommandsSuppressEcho.contains(false))
-    }
-
-    func testApplyPatchRemoteUpdateRetriesWithSudoNWhenCredentialsCached() async throws {
-        let sessionProvider = MockAgentSessionProvider(isLocal: false)
-        let original = "PermitRootLogin no\n"
-        let base64Original = Data(original.utf8).base64EncodedString()
-
-        sessionProvider.simulatedExecuteAndWaitResultsQueue = [
-            CommandExecutionResult(output: base64Original, exitCode: 0, timedOut: false, blockID: nil),
-            CommandExecutionResult(
-                output: "base64: /etc/ssh/sshd_config: Permission denied",
-                exitCode: 1,
-                timedOut: false,
-                blockID: nil
-            ),
-            CommandExecutionResult(output: "", exitCode: 0, timedOut: false, blockID: nil), // sudo -n true
-            CommandExecutionResult(output: "", exitCode: 0, timedOut: false, blockID: nil), // sudo write
-        ]
-
-        let responses = MockOpenAIResponsesService()
-        responses.enqueueResponse(
-            makeFunctionCallResponse(
-                id: "resp_1",
-                callID: "call_patch",
-                toolName: "apply_patch",
-                arguments: #"{"operation":"update","path":"/etc/ssh/sshd_config","diff":"-PermitRootLogin no\n+PermitRootLogin prohibit-password"}"#
-            )
-        )
-        responses.enqueueResponse(
-            makeTextResponse(id: "resp_2", text: "Patched.")
-        )
-
-        let service = OpenAIAgentService(
-            responsesService: responses,
-            sessionProvider: sessionProvider,
-            providerRegistry: makeIsolatedOpenAIRegistry()
-        )
-
-        _ = try await service.generateReply(
-            sessionID: sessionProvider.sessionID,
-            prompt: "patch sshd config"
-        )
-
-        let toolOutput = responses.capturedRequests[1].toolOutputs.first?.output ?? ""
-        XCTAssertTrue(toolOutput.contains(#""ok":true"#))
-        XCTAssertTrue(toolOutput.contains("using sudo"))
-        XCTAssertFalse(toolOutput.contains("sudo_password_required"))
-        XCTAssertTrue(sessionProvider.sentCommands.contains("sudo -n true"))
-        XCTAssertTrue(sessionProvider.sentCommands.contains { $0.contains("sudo -n tee '/etc/ssh/sshd_config' > /dev/null") })
-        XCTAssertFalse(sessionProvider.sentCommands.contains("sudo -v"))
-        XCTAssertFalse(sessionProvider.sentCommandsSuppressEcho.contains(false))
-    }
-
-    func testGenerateReplyForwardsStreamingAssistantAndReasoningEvents() async throws {
-        let sessionProvider = MockAgentSessionProvider()
-        let responses = MockOpenAIResponsesService()
-        responses.enqueueResponse(
-            makeTextResponse(id: "resp_stream", text: "Final answer")
-        )
-        responses.enqueueStreamEvents([
-            .reasoningSummaryTextDelta("Planning... "),
-            .reasoningSummaryTextDone("Planning... done."),
-            .outputTextDelta("Final "),
-            .outputTextDone("Final answer"),
-        ])
-
-        let service = OpenAIAgentService(
-            responsesService: responses,
-            sessionProvider: sessionProvider,
-            providerRegistry: makeIsolatedOpenAIRegistry()
-        )
-
-        var streamed: [AIAgentStreamEvent] = []
-        let reply = try await service.generateReply(
-            sessionID: sessionProvider.sessionID,
-            prompt: "status",
-            streamHandler: { streamed.append($0) }
-        )
-
-        XCTAssertEqual(reply.text, "Final answer")
-        XCTAssertEqual(streamed.count, 4)
-        XCTAssertEqual(streamed[0], .reasoningSummaryDelta("Planning... "))
-        XCTAssertEqual(streamed[1], .reasoningSummaryDone("Planning... done."))
-        XCTAssertEqual(streamed[2], .assistantTextDelta("Final "))
-        XCTAssertEqual(streamed[3], .assistantTextDone("Final answer"))
-    }
-
-    private func makeTextResponse(id: String, text: String) -> OpenAIResponsesResponse {
-        OpenAIResponsesResponse(
-            id: id,
-            status: "completed",
-            outputText: nil,
-            output: [
-                .init(
-                    type: "message",
-                    id: nil,
-                    role: "assistant",
-                    content: [.init(type: "output_text", text: text)],
-                    name: nil,
-                    callID: nil,
-                    arguments: nil
-                ),
-            ]
-        )
-    }
-
-    private func makeFunctionCallResponse(
-        id: String,
-        callID: String,
-        toolName: String,
-        arguments: String
-    ) -> OpenAIResponsesResponse {
-        OpenAIResponsesResponse(
-            id: id,
-            status: "completed",
-            outputText: nil,
-            output: [
-                .init(
-                    type: "function_call",
-                    id: nil,
-                    role: nil,
-                    content: nil,
-                    name: toolName,
-                    callID: callID,
-                    arguments: arguments
-                ),
-            ]
-        )
+    func testSessionHistoryIsIsolatedAndClearable() async throws {
+        let client = MockOpenRouterService()
+        let session = MockAgentSessionProvider()
+        let secondID = UUID()
+        session.sessions.append(Session(id: secondID, kind: .local, hostLabel: "Second", username: "u", hostname: "localhost", port: 0, state: .connected))
+        let service = AIAgentService(openRouterClient: client, sessionProvider: session, modelStore: try await store(client: client))
+        client.enqueue(completion("first answer"))
+        client.enqueue(completion("second answer"))
+        client.enqueue(completion("new answer"))
+        _ = try await service.generateReply(sessionID: session.sessionID, prompt: "first")
+        _ = try await service.generateReply(sessionID: secondID, prompt: "second")
+        XCTAssertFalse(client.requests[1].messages.contains { $0.content == "first answer" })
+        service.clearConversation(sessionID: session.sessionID)
+        _ = try await service.generateReply(sessionID: session.sessionID, prompt: "new")
+        XCTAssertFalse(client.requests[2].messages.contains { $0.content == "first answer" })
     }
 }
 
@@ -872,61 +262,20 @@ private final class MockAgentSessionProvider: AIAgentSessionProviding {
 }
 
 @MainActor
-private final class MockOpenAIResponsesService: OpenAIResponsesServicing {
-    enum Event {
-        case response(OpenAIResponsesResponse)
-        case failure(Error)
+private final class MockOpenRouterService: OpenRouterServicing {
+    struct Request { var model: String; var messages: [OpenRouterMessage]; var tools: [LLMToolDefinition] }
+    var requests: [Request] = []
+    var responses: [OpenRouterCompletion] = []
+    func enqueue(_ response: OpenRouterCompletion) { responses.append(response) }
+    func fetchModels() async throws -> [OpenRouterModel] {
+        ["test/one", "test/two"].map { OpenRouterModel(id: $0, name: $0, contextLength: 32_768, supportedParameters: ["tools"], architecture: .init(inputModalities: ["text"], outputModalities: ["text"]), pricing: nil) }
     }
-
-    private(set) var capturedRequests: [OpenAIResponsesRequest] = []
-    private var events: [Event] = []
-    private var streamEventsByCall: [[OpenAIResponsesStreamEvent]] = []
-
-    func enqueueResponse(_ response: OpenAIResponsesResponse) {
-        events.append(.response(response))
-    }
-
-    func enqueueError(_ error: Error) {
-        events.append(.failure(error))
-    }
-
-    func enqueueStreamEvents(_ events: [OpenAIResponsesStreamEvent]) {
-        streamEventsByCall.append(events)
-    }
-
-    func createResponse(_ request: OpenAIResponsesRequest) async throws -> OpenAIResponsesResponse {
-        capturedRequests.append(request)
-        guard !streamEventsByCall.isEmpty else {
-            return try popNextResponseEvent()
-        }
-        _ = streamEventsByCall.removeFirst()
-        return try popNextResponseEvent()
-    }
-
-    func createResponseStreaming(
-        _ request: OpenAIResponsesRequest,
-        onEvent: @escaping @Sendable (OpenAIResponsesStreamEvent) -> Void
-    ) async throws -> OpenAIResponsesResponse {
-        capturedRequests.append(request)
-        let streamEvents = streamEventsByCall.isEmpty ? [] : streamEventsByCall.removeFirst()
-        for event in streamEvents {
-            onEvent(event)
-        }
-        return try popNextResponseEvent()
-    }
-
-    private func popNextResponseEvent() throws -> OpenAIResponsesResponse {
-        guard !events.isEmpty else {
-            XCTFail("No mocked response event enqueued")
-            throw OpenAIResponsesServiceError.invalidResponse
-        }
-        let event = events.removeFirst()
-        switch event {
-        case let .response(response):
-            return response
-        case let .failure(error):
-            throw error
-        }
+    func complete(model: String, messages: [OpenRouterMessage], tools: [LLMToolDefinition], onEvent: @escaping @Sendable (LLMStreamEvent) -> Void) async throws -> OpenRouterCompletion {
+        requests.append(.init(model: model, messages: messages, tools: tools))
+        guard !responses.isEmpty else { throw OpenRouterError.invalidResponse }
+        let response = responses.removeFirst()
+        if let text = response.choices.first?.message.content { onEvent(.textDone(text)) }
+        return response
     }
 }
 #endif

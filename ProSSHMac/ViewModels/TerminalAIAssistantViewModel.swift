@@ -84,7 +84,7 @@ final class TerminalAIAssistantViewModel: ObservableObject {
         self.minChunkSize = minChunkSize
         self.maxChunkSize = maxChunkSize
 
-        if let svc = agentService as? OpenAIAgentService {
+        if let svc = agentService as? AIAgentService {
             svc.patchApprovalCallback = { [weak self] operation, fingerprint in
                 await self?.requestPatchApproval(operation: operation, fingerprint: fingerprint)
                     ?? (false, false)

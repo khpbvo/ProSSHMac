@@ -1,10 +1,9 @@
-// Extracted from OpenAIAgentService.swift
 import Foundation
 import os.log
 
 @MainActor final class AIAgentRunner {
     private static let logger = Logger(subsystem: "com.prossh", category: "AICopilot.AgentRunner")
-    weak var service: OpenAIAgentService?
+    weak var service: AIAgentService?
 
     init() {}
     nonisolated deinit {}
@@ -48,18 +47,16 @@ import os.log
             "[\(traceID, privacy: .public)] turn_mode direct_action=\(directActionMode) tools=\(activeToolDefinitions.count) iteration_limit=\(iterationLimit)"
         )
 
-        var conversationState: LLMConversationState? = service.persistConversationContext
-            ? service.conversationContext.state(for: sessionID)
-            : nil
-
-        // Clear conversation state if provider changed mid-conversation
-        if let existingState = conversationState,
-           existingState.providerID != service.providerRegistry.activeProviderID {
-            Self.logger.warning(
-                "[\(traceID, privacy: .public)] provider_mismatch state_provider=\(existingState.providerID.rawValue, privacy: .public) active_provider=\(service.providerRegistry.activeProviderID.rawValue, privacy: .public) — clearing state"
-            )
-            conversationState = nil
-            service.conversationContext.clear(sessionID: sessionID)
+        // Snapshot the selection so a Settings change cannot split one tool loop
+        // across two models. The next user turn may continue with the new model.
+        let modelID = try service.modelStore.requireSelection()
+        var conversationState = service.persistConversationContext
+            ? service.conversationContext.state(for: sessionID) ?? AIConversationState()
+            : AIConversationState()
+        let priorModelID = conversationState.lastModelID
+        conversationState.prepare(for: modelID)
+        if service.persistConversationContext, priorModelID != nil, priorModelID != modelID {
+            service.conversationContext.update(state: conversationState, for: sessionID)
         }
 
         let screenLines = service.sessionProvider.shellBuffers[sessionID] ?? []
@@ -83,70 +80,75 @@ import os.log
             userMessageText = broadcastPreamble + trimmedPrompt
         }
 
-        var pendingMessages: [LLMMessage] = [
-            LLMMessage(role: .developer, content: AIToolDefinitions.developerPrompt()),
-            LLMMessage(role: .user, content: userMessageText),
-        ]
-        var pendingToolOutputs: [LLMToolOutput] = []
+        var currentTurn = [OpenRouterMessage.user(userMessageText)]
         var totalToolCalls = 0
 
         for iteration in 1...iterationLimit {
             let iterationStart = DispatchTime.now().uptimeNanoseconds
-            let request = LLMRequest(
-                messages: pendingMessages,
+            let messages = try conversationState.replay(
+                systemPrompt: AIToolDefinitions.developerPrompt(),
+                currentTurn: currentTurn,
                 tools: activeToolDefinitions,
-                toolOutputs: pendingToolOutputs,
-                conversationState: conversationState
+                contextLength: service.modelStore.contextLength(for: modelID)
             )
             Self.logger.debug(
-                "[\(traceID, privacy: .public)] iteration_start i=\(iteration) prev_id_present=\(request.conversationState != nil) pending_messages=\(request.messages.count) pending_tool_outputs=\(request.toolOutputs.count)"
+                "[\(traceID, privacy: .public)] iteration_start i=\(iteration) model=\(modelID, privacy: .public) messages=\(messages.count)"
             )
 
-            let response = try await createResponseWithRecovery(
-                request: request,
-                conversationState: &conversationState,
-                traceID: traceID,
-                streamHandler: streamHandler
-            )
-            let responseMs = AIToolDefinitions.elapsedMillis(since: iterationStart)
-
-            conversationState = response.updatedConversationState
-            if service.persistConversationContext {
-                service.conversationContext.update(state: response.updatedConversationState, for: sessionID)
-            } else {
-                service.conversationContext.clear(sessionID: sessionID)
+            let response = try await runWithTimeout(timeoutSeconds: service.requestTimeoutSeconds) {
+                try await service.openRouterClient.complete(
+                    model: modelID,
+                    messages: messages,
+                    tools: activeToolDefinitions
+                ) { event in
+                    Self.forward(streamEvent: event, to: streamHandler)
+                }
             }
-
-            let toolCalls = response.toolCalls
-            let responseIDString = response.updatedConversationState.stringValue ?? ""
+            try Task.checkCancellation()
+            let responseMs = AIToolDefinitions.elapsedMillis(since: iterationStart)
+            guard let choice = response.choices.first else { throw OpenRouterError.invalidResponse }
+            currentTurn.append(choice.message)
+            let toolCalls = (choice.message.toolCalls ?? []).map {
+                LLMToolCall(id: $0.id, name: $0.function.name, arguments: $0.function.arguments)
+            }
+            let replyText = choice.message.content ?? ""
             Self.logger.debug(
-                "[\(traceID, privacy: .public)] iteration_response i=\(iteration) response_ms=\(responseMs) response_id=\(responseIDString, privacy: .public) tool_calls=\(toolCalls.count) text_chars=\(response.text.count)"
+                "[\(traceID, privacy: .public)] iteration_response i=\(iteration) response_ms=\(responseMs) tool_calls=\(toolCalls.count) text_chars=\(replyText.count)"
             )
             guard !toolCalls.isEmpty else {
+                conversationState.appendTurn(currentTurn)
+                if service.persistConversationContext {
+                    service.conversationContext.update(state: conversationState, for: sessionID)
+                }
                 let totalMs = AIToolDefinitions.elapsedMillis(since: turnStart)
                 Self.logger.info(
-                    "[\(traceID, privacy: .public)] turn_complete session=\(AIToolDefinitions.shortSessionID(sessionID), privacy: .public) iterations=\(iteration) tool_calls=\(totalToolCalls) total_ms=\(totalMs) reply_chars=\(response.text.count)"
+                    "[\(traceID, privacy: .public)] turn_complete session=\(AIToolDefinitions.shortSessionID(sessionID), privacy: .public) iterations=\(iteration) tool_calls=\(totalToolCalls) total_ms=\(totalMs) reply_chars=\(replyText.count)"
                 )
                 return AIAgentReply(
-                    text: response.text,
-                    responseID: responseIDString,
+                    text: replyText,
                     toolCallsExecuted: totalToolCalls
                 )
             }
 
             totalToolCalls += toolCalls.count
             let toolStart = DispatchTime.now().uptimeNanoseconds
-            pendingToolOutputs = await service.toolHandler.executeToolCalls(
+            let toolOutputs = await service.toolHandler.executeToolCalls(
                 sessionID: sessionID,
                 broadcastContext: broadcastContext,
                 toolCalls: toolCalls,
                 traceID: traceID
             )
+            currentTurn += toolOutputs.map { OpenRouterMessage.tool($0.output, callID: $0.callID) }
+            if service.persistConversationContext {
+                var persisted = conversationState
+                persisted.appendTurn(currentTurn)
+                service.conversationContext.update(state: persisted, for: sessionID)
+            }
+            try Task.checkCancellation()
             let toolMs = AIToolDefinitions.elapsedMillis(since: toolStart)
             Self.logger.debug(
                 "[\(traceID, privacy: .public)] iteration_tools i=\(iteration) tool_calls=\(toolCalls.count) tool_ms=\(toolMs)"
             )
-            pendingMessages = []
         }
 
         let totalMs = AIToolDefinitions.elapsedMillis(since: turnStart)
@@ -154,53 +156,6 @@ import os.log
             "[\(traceID, privacy: .public)] turn_failed_tool_loop session=\(AIToolDefinitions.shortSessionID(sessionID), privacy: .public) limit=\(iterationLimit) total_ms=\(totalMs)"
         )
         throw AIAgentServiceError.toolLoopExceeded(limit: iterationLimit)
-    }
-
-    // MARK: - Response Recovery
-
-    private func createResponseWithRecovery(
-        request: LLMRequest,
-        conversationState: inout LLMConversationState?,
-        traceID: String,
-        streamHandler: (@Sendable (AIAgentStreamEvent) -> Void)?
-    ) async throws -> LLMResponse {
-        guard let service else {
-            throw AIAgentServiceError.sessionNotFound
-        }
-        let timeoutSeconds = service.requestTimeoutSeconds
-        do {
-            return try await runWithTimeout(timeoutSeconds: timeoutSeconds) {
-                try await service.sendProviderRequest(request) { streamEvent in
-                    Self.forward(streamEvent: streamEvent, to: streamHandler)
-                }
-            }
-        } catch let error as LLMProviderError {
-            guard case let .httpError(statusCode, message) = error,
-                  statusCode == 400 || statusCode == 404,
-                  request.conversationState != nil,
-                  AIToolDefinitions.isPreviousResponseIDError(message: message) else {
-                Self.logger.error(
-                    "[\(traceID, privacy: .public)] response_failed status_recoverable=false error=\(error.localizedDescription, privacy: .public)"
-                )
-                throw error
-            }
-
-            Self.logger.warning(
-                "[\(traceID, privacy: .public)] previous_response_recovery triggered=true status=\(statusCode) message=\(message, privacy: .public)"
-            )
-            conversationState = nil
-            let retryRequest = LLMRequest(
-                messages: request.messages,
-                tools: request.tools,
-                toolOutputs: request.toolOutputs,
-                conversationState: nil
-            )
-            return try await runWithTimeout(timeoutSeconds: timeoutSeconds) {
-                try await service.sendProviderRequest(retryRequest) { streamEvent in
-                    Self.forward(streamEvent: streamEvent, to: streamHandler)
-                }
-            }
-        }
     }
 
     nonisolated private static func forward(

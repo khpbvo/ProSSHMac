@@ -37,7 +37,7 @@ That last part matters. The AI can SSH into a MikroTik router, inspect the curre
 
 ### AI Terminal Copilot
 
-The AI sidebar (`Cmd+Option+I`) runs a multi-step agent loop powered by the OpenAI Responses API. It has access to a full tool set and works in both local shell sessions and remote SSH sessions.
+The AI sidebar (`Cmd+Option+I`) runs a multi-step agent loop through OpenRouter Chat Completions. Choose a tool-capable text model in Settings. It works in both local shell sessions and remote SSH sessions.
 
 **Context tools** — read what's on screen, retrieve command history, search past output:
 
@@ -72,7 +72,7 @@ The AI sidebar (`Cmd+Option+I`) runs a multi-step agent loop powered by the Open
 |---|---|
 | `apply_patch` | Apply a V4A unified diff to local or remote files. Shows a diff preview card inline — the change only lands after you click Approve. |
 
-The agent runs up to 200 iterations per request and maintains context across turns via the OpenAI Responses API `previous_response_id` chain. Direct action prompts (starting with "run" or "execute") use a restricted tool set with a 15-iteration cap.
+The agent runs up to 200 iterations per request and maintains a per-session conversation, including tool calls and results. Changing the selected model takes effect on the next turn and keeps the conversation. Direct action prompts (starting with "run" or "execute") use a restricted tool set with a 15-iteration cap.
 
 **Device support:** The copilot understands Linux, macOS, and MikroTik RouterOS prompts and command patterns. Cisco IOS, Juniper JunOS, Arista EOS, and other SSH-accessible network devices are possibly supported just not yet tested.
 
@@ -133,7 +133,6 @@ These are the open priorities. If any of these excite you, read the [contributio
 - [ ] **Inline image protocol** — Kitty graphics protocol support. Metal textures composited into the cell grid during the render pass. Ghostty and Kitty set the bar; ProSSHMac's existing glyph atlas pipeline is the blueprint.
 - [ ] **More network device support** — Cisco IOS/IOS-XE, Juniper JunOS, Arista EOS, Ubiquiti EdgeOS, Palo Alto PAN-OS. You don't need to write Swift — if you can document the CLI patterns and prompt formats, that alone is valuable.
 - [ ] **Multi-session AI orchestration** — The AI currently operates on one session. The next milestone is letting it reason across multiple connected devices and coordinate changes. ProSSHMac already supports 4 simultaneous sessions.
-- [ ] **AI provider abstraction** — Support for Anthropic (Claude), Ollama (local models), and Gemini alongside the current OpenAI backend. BYOK, no vendor lock-in.
 - [ ] **iCloud sync** — Host configurations, key metadata, settings, and quick commands synced via CloudKit private database. Free, native, no subscription.
 - [ ] **Command palette + snippets** — `Cmd+Shift+P` searchable snippet library with per-host scoping, variable interpolation, and multi-exec (broadcast a command to multiple sessions simultaneously).
 
@@ -184,19 +183,19 @@ xcodebuild -project ProSSHMac.xcodeproj \
 
 ### AI Assistant Setup
 
-The AI Terminal Copilot requires an OpenAI API key:
+The AI Terminal Copilot requires an OpenRouter API key and an explicit model choice:
 
-1. Open **Settings** in ProSSHMac
-2. Navigate to the **AI Assistant** section
-3. Enter your OpenAI API key and click Save
+1. Open **Settings** in ProSSHMac and find **AI Assistant**.
+2. Save your OpenRouter API key.
+3. Choose a model from the searchable catalog. The list includes text models that advertise tool calling, with context size and published input/output prices.
 
-The key is stored securely in the macOS Keychain.
+The key is stored in the macOS Keychain. You can refresh the catalog from Settings. If a model disappears from a successful refresh, choose another before the next request.
 
 ---
 
 ## Installation
 
-> **Current version: 0.9.0** — first public release. The core (SSH, AI copilot, Metal renderer, security features) is stable. `1.0.0` will ship once known critical bugs are cleared and at least one additional AI provider (Anthropic/Ollama) is supported. See the [roadmap](#whats-being-built-next).
+> **Current version: 0.9.0** — first public release. The core (SSH, AI copilot, Metal renderer, security features) is stable. `1.0.0` will ship once known critical bugs are cleared. See the [roadmap](#whats-being-built-next).
 
 Download the latest `.dmg` from the [Releases](https://github.com/khpbvo/ProSSHMac/releases) page, open it, and drag **ProSSHMac** into your **Applications** folder.
 
@@ -258,7 +257,7 @@ ProSSHMac/
 | **VT Parser** | State-machine parser (array-indexed, O(1) per byte) handling CSI, SGR, OSC 133, ESC, DCS |
 | **SSH Transport** | Full SSH via libssh — password, public key, certificate, and keyboard-interactive auth |
 | **Local Shell** | PTY-backed local terminal using `forkpty` with nonblocking I/O and data coalescing |
-| **AI Agent** | OpenAI Responses API tool loop — 12 tools, up to 200 iterations, context-persistent via `previous_response_id` |
+| **AI Agent** | OpenRouter Chat Completions tool loop — up to 200 iterations, per-session structured transcript |
 | **Apply Patch** | V4A unified diff parser and applicator with inline approval card — local and remote targets |
 | **Command History** | Ring-buffer command block index with OSC 133 semantic boundary detection and heuristic fallback |
 | **Pane Manager** | Tree-based split-node layout engine with persistent layout storage |

@@ -12,12 +12,11 @@ final class AppDependencies: ObservableObject {
     let keyForgeViewModel: KeyForgeViewModel
     let certificatesViewModel: CertificatesViewModel
     let idleScreensaverManager: IdleScreensaverManager
-    let aiProviderSettingsViewModel: AIProviderSettingsViewModel
+    let openRouterSettingsViewModel: OpenRouterSettingsViewModel
     let terminalAIAssistantViewModel: TerminalAIAssistantViewModel
-    let openAIResponsesService: any OpenAIResponsesServicing
-    let openAIAgentService: any AIAgentServicing
-    let llmAPIKeyStore: KeychainLLMAPIKeyStore
-    let llmProviderRegistry: LLMProviderRegistry
+    let aiAgentService: any AIAgentServicing
+    let openRouterAPIKeyStore: KeychainOpenRouterAPIKeyStore
+    let openRouterModelStore: OpenRouterModelStore
 
     static var isScreenshotMode: Bool {
         ProcessInfo.processInfo.arguments.contains("--screenshot-mode")
@@ -107,52 +106,38 @@ final class AppDependencies: ObservableObject {
 
         self.idleScreensaverManager = IdleScreensaverManager()
 
-        // Multi-provider LLM infrastructure
-        let llmAPIKeyStore = KeychainLLMAPIKeyStore()
-        self.llmAPIKeyStore = llmAPIKeyStore
-        let llmAPIKeyProvider = DefaultLLMAPIKeyProvider(store: llmAPIKeyStore)
-
-        let openAIResponsesService = OpenAIResponsesService(apiKeyProvider: llmAPIKeyProvider)
-        self.openAIResponsesService = openAIResponsesService
-
-        // Provider registry
-        let llmProviderRegistry = LLMProviderRegistry()
-        self.llmProviderRegistry = llmProviderRegistry
-
-        // Register Mistral provider
-        let mistralProvider = MistralProvider(apiKeyProvider: llmAPIKeyProvider)
-        llmProviderRegistry.register(mistralProvider)
-
-        // Register Ollama provider (local inference, no API key needed)
-        let ollamaProvider = OllamaProvider()
-        llmProviderRegistry.register(ollamaProvider)
-
-        // Register Anthropic provider
-        let anthropicProvider = AnthropicProvider(apiKeyProvider: llmAPIKeyProvider)
-        llmProviderRegistry.register(anthropicProvider)
-
-        // Register DeepSeek provider
-        let deepseekProvider = DeepSeekProvider(apiKeyProvider: llmAPIKeyProvider)
-        llmProviderRegistry.register(deepseekProvider)
-
-        // Agent service with registry
-        self.openAIAgentService = OpenAIAgentService(
-            responsesService: openAIResponsesService,
+        let keyStore = KeychainOpenRouterAPIKeyStore()
+        self.openRouterAPIKeyStore = keyStore
+        let client = OpenRouterClient(keyStore: keyStore)
+        let modelStore = OpenRouterModelStore(client: client)
+        self.openRouterModelStore = modelStore
+        self.aiAgentService = AIAgentService(
+            openRouterClient: client,
             sessionProvider: sessionManager,
-            providerRegistry: llmProviderRegistry,
+            modelStore: modelStore,
             requestTimeoutSeconds: 600,
             maxToolIterations: 200,
             persistConversationContext: true
         )
 
-        // Settings ViewModel
-        self.aiProviderSettingsViewModel = AIProviderSettingsViewModel(
-            registry: llmProviderRegistry,
-            apiKeyStore: llmAPIKeyStore
+        self.openRouterSettingsViewModel = OpenRouterSettingsViewModel(
+            modelStore: modelStore,
+            keyStore: keyStore
         )
         self.terminalAIAssistantViewModel = TerminalAIAssistantViewModel(
-            agentService: self.openAIAgentService
+            agentService: self.aiAgentService
         )
+
+        if !runningTests && !screenshotMode && !ThroughputBenchmarkRunner.isEnabled
+            && !ThroughputBenchmarkRunner.isRenderBenchmarkEnabled {
+            Task {
+                do {
+                    try await LegacyProviderKeyCleanup(deleter: keyStore).runIfNeeded()
+                } catch {
+                    // Keep the marker unset so the next launch retries.
+                }
+            }
+        }
 
         if ThroughputBenchmarkRunner.isEnabled {
             Task { @MainActor in

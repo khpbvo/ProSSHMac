@@ -6,7 +6,8 @@ struct SettingsView: View {
     @Environment(\.openWindow) private var openWindow
     @EnvironmentObject private var sessionManager: SessionManager
     @EnvironmentObject private var auditLogManager: AuditLogManager
-    @EnvironmentObject private var aiProviderSettingsViewModel: AIProviderSettingsViewModel
+    @EnvironmentObject private var openRouterSettingsViewModel: OpenRouterSettingsViewModel
+    @EnvironmentObject private var openRouterModelStore: OpenRouterModelStore
     @AppStorage("app.appearance") private var appAppearanceRawValue = AppAppearance.system.rawValue
     @AppStorage("terminal.effects.crtEnabled") private var terminalCRTEffectEnabled = false
     @AppStorage(BellEffectController.settingsKey) private var terminalBellFeedbackMode = BellFeedbackMode.none.rawValue
@@ -21,6 +22,7 @@ struct SettingsView: View {
     @AppStorage("ai.patchTool.allowDelete") private var patchAllowDelete: Bool = false
     @State private var operationMessage: String?
     @State private var showingClearAuditConfirmation = false
+    @State private var showingModelPicker = false
 
     var body: some View {
         ScrollView {
@@ -219,51 +221,51 @@ struct SettingsView: View {
                 }
 
                 Section("AI Assistant") {
-                    Picker("Provider", selection: $aiProviderSettingsViewModel.selectedProviderID) {
-                        ForEach(aiProviderSettingsViewModel.availableProviders) { provider in
-                            Text(provider.displayName).tag(provider)
-                        }
-                    }
+                    Text("Connection: OpenRouter")
 
-                    Picker("Model", selection: $aiProviderSettingsViewModel.selectedModelID) {
-                        ForEach(aiProviderSettingsViewModel.modelsForSelectedProvider) { model in
-                            Text(model.displayName).tag(model.id)
-                        }
-                    }
-
-                    if aiProviderSettingsViewModel.selectedProviderID == .ollama {
-                        HStack(spacing: 6) {
-                            Circle()
-                                .fill(ollamaStatusColor)
-                                .frame(width: 8, height: 8)
-                            Text(ollamaStatusText)
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
+                    if openRouterSettingsViewModel.hasStoredAPIKey {
+                        HStack {
+                            Button {
+                                showingModelPicker = true
+                            } label: {
+                                HStack {
+                                    Text("Model")
+                                    Spacer()
+                                    Text(openRouterModelStore.selectedModel?.name ?? openRouterModelStore.selectedModelID ?? "Choose a model")
+                                        .foregroundStyle(openRouterModelStore.selectedModelID == nil ? .secondary : .primary)
+                                }
+                            }
+                            .buttonStyle(.plain)
                             Spacer()
                             Button("Refresh Models") {
-                                Task { await aiProviderSettingsViewModel.refreshOllamaModels() }
+                                Task { await openRouterModelStore.refresh() }
                             }
-                            .buttonStyle(.borderless)
-                            .disabled(aiProviderSettingsViewModel.isRefreshingModels)
+                            .disabled(openRouterModelStore.isRefreshing)
                         }
-
-                        Text("Ollama runs locally — no API key needed. Make sure Ollama is running on your Mac.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                        if openRouterModelStore.selectedModelUnavailable {
+                            Text("This model is no longer listed. Choose another model to continue.")
+                                .font(.footnote)
+                                .foregroundStyle(.orange)
+                        }
+                        if let error = openRouterModelStore.catalogError {
+                            Text("Could not refresh models: \(error). Your previous selection remains available.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
                     }
 
-                    if aiProviderSettingsViewModel.requiresAPIKey {
+                    Group {
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("\(aiProviderSettingsViewModel.selectedProviderID.displayName) API Key")
+                            Text("OpenRouter API Key")
                                 .font(.subheadline)
 
-                            SecureField("API key...", text: $aiProviderSettingsViewModel.apiKeyInput)
+                            SecureField("API key...", text: $openRouterSettingsViewModel.apiKeyInput)
                                 .textFieldStyle(.roundedBorder)
                                 .font(.body.monospaced())
 
                             HStack {
                                 Button("Paste from Clipboard") {
-                                    aiProviderSettingsViewModel.pasteFromClipboard()
+                                    openRouterSettingsViewModel.pasteFromClipboard()
                                 }
                                 .buttonStyle(.borderless)
 
@@ -275,9 +277,9 @@ struct SettingsView: View {
                             .font(.footnote)
                             .foregroundStyle(.secondary)
 
-                        if aiProviderSettingsViewModel.hasStoredAPIKey {
+                        if openRouterSettingsViewModel.hasStoredAPIKey {
                             Label(
-                                "Saved key: \(aiProviderSettingsViewModel.storedKeyHint ?? "••••")",
+                                "Saved key: \(openRouterSettingsViewModel.storedKeyHint ?? "••••")",
                                 systemImage: "checkmark.circle.fill"
                             )
                             .font(.footnote)
@@ -291,20 +293,20 @@ struct SettingsView: View {
                         HStack {
                             Button("Save API Key") {
                                 Task {
-                                    await aiProviderSettingsViewModel.saveAPIKey()
+                                    await openRouterSettingsViewModel.saveAPIKey()
                                 }
                             }
-                            .disabled(aiProviderSettingsViewModel.apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            .disabled(openRouterSettingsViewModel.apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
                             Button("Remove API Key", role: .destructive) {
                                 Task {
-                                    await aiProviderSettingsViewModel.removeAPIKey()
+                                    await openRouterSettingsViewModel.removeAPIKey()
                                 }
                             }
-                            .disabled(!aiProviderSettingsViewModel.hasStoredAPIKey)
+                            .disabled(!openRouterSettingsViewModel.hasStoredAPIKey)
                         }
 
-                        if let statusMessage = aiProviderSettingsViewModel.statusMessage {
+                        if let statusMessage = openRouterSettingsViewModel.statusMessage {
                             Text(statusMessage)
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
@@ -458,7 +460,10 @@ struct SettingsView: View {
         .task {
             await auditLogManager.refresh()
             await sessionManager.refreshKnownHosts()
-            await aiProviderSettingsViewModel.refresh()
+            await openRouterSettingsViewModel.refresh()
+        }
+        .sheet(isPresented: $showingModelPicker) {
+            OpenRouterModelPicker(modelStore: openRouterModelStore)
         }
         .confirmationDialog(
             "Clear audit log?",
@@ -487,22 +492,6 @@ struct SettingsView: View {
             }
         } message: {
             Text(operationMessage ?? "")
-        }
-    }
-
-    private var ollamaStatusColor: Color {
-        switch aiProviderSettingsViewModel.ollamaConnectionStatus {
-        case .unknown: return .gray
-        case .connected: return .green
-        case .notRunning: return .red
-        }
-    }
-
-    private var ollamaStatusText: String {
-        switch aiProviderSettingsViewModel.ollamaConnectionStatus {
-        case .unknown: return "Checking..."
-        case .connected(let count): return "Connected (\(count) models)"
-        case .notRunning: return "Not detected"
         }
     }
 

@@ -4,66 +4,44 @@ import XCTest
 
 @MainActor
 final class AIConversationContextTests: XCTestCase {
-    private var context: AIConversationContext!
-
-    override func setUp() async throws {
-        context = AIConversationContext()
+    func testSessionIsolationAndClear() {
+        let context = AIConversationContext()
+        let first = UUID(), second = UUID()
+        context.update(state: AIConversationState(turns: [[.user("one")]], lastModelID: "a"), for: first)
+        context.update(state: AIConversationState(turns: [[.user("two")]], lastModelID: "a"), for: second)
+        XCTAssertEqual(context.state(for: first)?.turns[0][0].content, "one")
+        XCTAssertEqual(context.state(for: second)?.turns[0][0].content, "two")
+        context.clear(sessionID: first)
+        XCTAssertNil(context.state(for: first))
+        XCTAssertNotNil(context.state(for: second))
     }
 
-    override func tearDown() async throws {
-        context = nil
+    func testModelSwitchRemovesOnlyReasoning() {
+        let call = OpenRouterToolCall(id: "c", function: .init(name: "get_session_info", arguments: "{}"))
+        var state = AIConversationState(turns: [[
+            .user("question"),
+            .init(role: "assistant", content: "", toolCalls: [call], reasoningDetails: [.object(["type": .string("reasoning.text")])]),
+            .tool("result", callID: "c"),
+            .init(role: "assistant", content: "answer")
+        ]], lastModelID: "a")
+        state.prepare(for: "a")
+        XCTAssertNotNil(state.turns[0][1].reasoningDetails)
+        state.prepare(for: "b")
+        XCTAssertNil(state.turns[0][1].reasoningDetails)
+        XCTAssertEqual(state.turns[0][1].toolCalls?.first?.id, "c")
+        XCTAssertEqual(state.turns[0][2].toolCallID, "c")
     }
 
-    func testStateReturnsNilForUnknownSession() {
-        let id = UUID()
-        XCTAssertNil(context.state(for: id))
-    }
-
-    func testUpdateAndRetrieveState() {
-        let id = UUID()
-        context.update(state: .string("resp_1", provider: .openai), for: id)
-        XCTAssertEqual(context.state(for: id)?.stringValue, "resp_1")
-    }
-
-    func testUpdateWithNilSetsNil() {
-        let id = UUID()
-        context.update(state: .string("resp_1", provider: .openai), for: id)
-        context.update(state: nil, for: id)
-        XCTAssertNil(context.state(for: id))
-    }
-
-    func testClearRemovesEntry() {
-        let id = UUID()
-        context.update(state: .string("resp_1", provider: .openai), for: id)
-        context.clear(sessionID: id)
-        XCTAssertNil(context.state(for: id))
-    }
-
-    func testClearNonexistentSessionIsSafe() {
-        // Should not crash
-        context.clear(sessionID: UUID())
-    }
-
-    func testMultipleSessionsAreIndependent() {
-        let id1 = UUID()
-        let id2 = UUID()
-        context.update(state: .string("resp_A", provider: .openai), for: id1)
-        context.update(state: .string("resp_B", provider: .openai), for: id2)
-        XCTAssertEqual(context.state(for: id1)?.stringValue, "resp_A")
-        XCTAssertEqual(context.state(for: id2)?.stringValue, "resp_B")
-    }
-
-    func testStateBySessionIDReflectsState() {
-        let id1 = UUID()
-        let id2 = UUID()
-        context.update(state: .string("resp_X", provider: .openai), for: id1)
-        context.update(state: .string("resp_Y", provider: .openai), for: id2)
-        XCTAssertEqual(context.stateBySessionID.count, 2)
-        XCTAssertEqual(context.stateBySessionID[id1]?.stringValue, "resp_X")
-        XCTAssertEqual(context.stateBySessionID[id2]?.stringValue, "resp_Y")
-        context.clear(sessionID: id1)
-        XCTAssertEqual(context.stateBySessionID.count, 1)
+    func testReplayTrimsCompleteOldestExchange() throws {
+        let call = OpenRouterToolCall(id: "c", function: .init(name: "lookup", arguments: "{}"))
+        var state = AIConversationState(turns: [
+            [.user(String(repeating: "old", count: 100)), .init(role: "assistant", content: nil, toolCalls: [call]), .tool("result", callID: "c")],
+            [.user("recent"), .init(role: "assistant", content: "answer")]
+        ], lastModelID: "a")
+        let replay = try state.replay(systemPrompt: "system", currentTurn: [.user("current")], tools: [], contextLength: 256)
+        XCTAssertEqual(state.turns.count, 1)
+        XCTAssertFalse(replay.contains { $0.toolCallID == "c" })
+        XCTAssertTrue(replay.contains { $0.content == "recent" })
     }
 }
-
 #endif

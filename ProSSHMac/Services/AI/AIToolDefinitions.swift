@@ -1,4 +1,3 @@
-// Extracted from OpenAIAgentService.swift
 import Foundation
 import os.log
 
@@ -312,9 +311,4 @@ enum AIToolDefinitions {
         return Int(delta / 1_000_000)
     }
 
-    static func isPreviousResponseIDError(message: String) -> Bool {
-        let lowercased = message.lowercased()
-        return lowercased.contains("previous_response_id") ||
-            lowercased.contains("previous response")
-    }
 }

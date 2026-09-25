@@ -85,7 +85,7 @@ Key capabilities:
 - SSH connections via libssh (C wrapper in `CLibSSH/`, vendored libs in `Vendor/`)
 - Local shell sessions via PTY (`LocalPTYProcess` + `LocalShellBootstrap`)
 - SFTP file browser sidebar (left, toggle `Cmd+B`)
-- AI Terminal Copilot sidebar (right, toggle `Cmd+Opt+I`) — multi-provider LLM support
+- AI Terminal Copilot sidebar (right, toggle `Cmd+Opt+I`) — OpenRouter Chat Completions
 - Pane splitting, session tabs, broadcast input routing (`Cmd+Shift+B`), session recording/playback
 - KeyForge (SSH key generation), certificate management + KRL, port forwarding
 - TOTP 2FA (`TOTPStore`/`TOTPGenerator`), biometric password store, Secure Enclave keys
@@ -130,9 +130,12 @@ xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform
 - **Full-suite baseline: 883 tests, 1 failure** — see the flaky-test gotcha below. The last
   clean full-suite run recorded 870/0 on 2026-09-03, before later tests were added. A red run in a
   suite you touched is yours; a red `SessionManagerRenderingPathTests` under full-suite load is not.
-- Tests must not depend on the developer's real `UserDefaults`. `LLMProviderRegistry` takes an
-  injectable `userDefaults:`; agent tests build one via `makeIsolatedOpenAIRegistry()` in
-  `AIAgentServiceTests.swift`. Follow that pattern for any new defaults-backed type.
+- On the current Xcode 27 installation, the full test target stops compiling on actor
+  conformance errors in `SessionAIToolCoordinatorTests`, `SessionManagerRenderingPathTests`,
+  and `SessionManagerSFTPSidebarTests` before reaching that runtime baseline. The OpenRouter
+  focused run excluded those three unrelated test files and passed 25 tests.
+- Tests must not depend on the developer's real `UserDefaults`. `OpenRouterModelStore` and
+  `LegacyProviderKeyCleanup` accept an injected defaults suite; AI tests use isolated suites.
 - **Throughput baseline, Release** (state the configuration with every number — Release is ~20x
   Debug, and never compare across the two):
 
@@ -182,14 +185,13 @@ ProSSHMac/
 │   │                     #   CertificateAuthorityService (+3 ext), AuditLogManager/Store,
 │   │                     #   TOTPGenerator/Store, BiometricPasswordStore, SecureEnclaveKeyManager,
 │   │                     #   HostStore, HostSpotlightIndexer, SSHConfig{Parser,Mapper,Importer,
-│   │                     #   Exporter,TokenExpander}, OpenAIAgentService, OpenAIResponses*
+│   │                     #   Exporter,TokenExpander}, AIAgentService
 │   ├── SSH/              #   LibSSHTransport, LibSSH{Shell,Forward}Channel, MockSSHTransport,
 │   │                     #   SSHTransportProtocol/Types, SSHAlgorithmPolicy, SSHCredentialResolver,
 │   │                     #   SSHBinaryReader, RemotePath
 │   ├── AI/               #   AIToolHandler (+5 ext), AIAgentRunner, AIToolDefinitions,
-│   │                     #   AIConversationContext, ApplyPatchTool, UnifiedDiffPatcher, apply_diff
-│   └── LLM/              #   LLMTypes, LLMProvider, LLMProviderRegistry, LLMAPIKeyStore
-│       └── Providers/    #   ChatCompletionsClient, Mistral/Ollama/Anthropic/DeepSeek providers
+│   │                     #   AIConversationContext, OpenRouterClient/Types/ModelStore/APIKeyStore,
+│   │                     #   ApplyPatchTool, UnifiedDiffPatcher, apply_diff
 ├── Terminal/
 │   ├── Diagnostics/      # TerminalPerf (runtime-gated signposts + stage timers)
 │   ├── Grid/             # TerminalGrid + 11 extensions, TerminalCell, CursorState, CharacterWidth,
@@ -219,7 +221,7 @@ ProSSHMac/
 │   ├── Settings/         # SettingsView + 8 effect settings subviews
 │   ├── KeyForge/         # KeyForgeView, KeyInspectorView
 │   └── Certificates/     # CertificatesView, CertificateInspectorView
-├── ViewModels/           # HostListVM, KeyForgeVM, CertificatesVM, AIProviderSettingsVM,
+├── ViewModels/           # HostListVM, KeyForgeVM, CertificatesVM, OpenRouterSettingsVM,
 │                         #   TerminalAIAssistantVM
 └── Platform/             # PlatformCompatibility (macOS/iOS shims)
 ```
@@ -250,12 +252,12 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-09-0
 | `Terminal/Features/PaneManager.swift` | Split-pane tree, input routing, broadcast/solo mode (444L) |
 | `UI/Terminal/ExternalTerminalWindowView.swift` | Separate-window terminal session view (341L) |
 | `Services/AI/AIToolDefinitions.swift` | Developer prompt, 8 tool schemas, direct-action filter, error helpers (320L) |
-| `Services/OpenAIAgentService.swift` | Agent-layer protocols, provider routing, tool definition assembly (317L) |
+| `Services/AIAgentService.swift` | Agent-layer protocols and tool definition assembly |
 | `Services/LocalPTYProcess.swift` | Actor wrapping forkpty, async output stream (301L) |
 | `Services/SessionShellIOCoordinator.swift` | Shell input, the batched parser reader, per-batch bookkeeping (330L). The four post-`feed` engine round-trips here are 46.7% of wall — the R2b target |
-| `Services/AI/AIAgentRunner.swift` | Agent iteration loop, direct-action mode, provider mismatch (249L) |
+| `Services/AI/AIAgentRunner.swift` | Agent iteration loop, direct-action mode, structured transcript replay |
 | `Terminal/Renderer/TerminalMetalView.swift` | NSViewRepresentable wrapping MTKView, gesture recognizers (239L) |
-| `ViewModels/AIProviderSettingsViewModel.swift` | Multi-provider settings VM (236L) |
+| `ViewModels/OpenRouterSettingsViewModel.swift` | OpenRouter key state and catalog refresh |
 | `Services/LocalShellBootstrap.swift` | Child env for local PTY, ZDOTDIR/BASH_ENV injection (202L) |
 | `ViewModels/TerminalAIAssistantViewModel.swift` | AI sidebar VM: messages, streaming, patch approval (379L) |
 | `UI/Terminal/PatchApprovalCardView.swift` | Inline patch approval card for `apply_patch` (177L) |
@@ -264,8 +266,8 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-09-0
 | `App/ThroughputBenchmarkRunner+Render.swift` | End-to-end benchmark through the real app path (413L): `--benchmark-render`, `--benchmark-render-detached`, `--benchmark-window WxH`, windowless warning |
 | `Terminal/Features/TerminalHistoryIndex.swift` | Command blocks, prompt heuristics, output capture (484L). Raw output is a bounded UTF-8 byte buffer — see gotchas before touching `recordOutputChunk` |
 | `Services/ZshStartupWarningFilter.swift` | Bounded zsh startup-warning filter for the PTY path (120L) |
-| `Services/LLM/` (4 files) | LLMTypes, LLMProvider protocol, LLMProviderRegistry, LLMAPIKeyStore |
-| `Services/LLM/Providers/` (5 files) | ChatCompletionsClient, Mistral/Ollama/Anthropic/DeepSeek providers |
+| `Services/AI/OpenRouterClient.swift` | OpenRouter catalog and streamed Chat Completions transport |
+| `Services/AI/OpenRouterModelStore.swift` | Explicit model selection and catalog disappearance checks |
 
 ---
 
@@ -280,9 +282,11 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-09-0
 - **Terminal keyboard input**: `DirectTerminalInputNSView` (transparent NSView overlay, `hitTest` returns `nil`).
 - **Focus management**: `isAIAssistantComposerFocused` state. `focusSessionAndPane()` resigns at AppKit
   level, then re-arms terminal. See Known Issues.
-- **AI service stack**: `OpenAIAgentService.sendProviderRequest()` routes by
-  `providerRegistry.activeProviderID`. OpenAI → Responses API; others → `LLMProvider` protocol.
-  Provider-agnostic types in `LLMTypes.swift`. See `Docs/multiprovider-architecture.md`.
+- **AI service stack**: `AIAgentService` uses one `OpenRouterClient` for Chat Completions.
+  `OpenRouterModelStore` requires explicit selection and refreshes the tool-capable text-model catalog.
+  `AIConversationContext` stores per-session structured turns; a model switch drops reasoning blocks
+  but keeps messages and tool history. `OpenRouterAPIKeyStore` owns the single Keychain entry.
+  `Docs/multiprovider-architecture.md` is superseded historical context.
 - **AI agent tools**: 10 exposed schemas — 8 in `AIToolDefinitions` (`get_command_output`,
   `get_current_screen`, `search_filesystem`, `search_file_contents`, `read_files`,
   `get_recent_commands`, `execute_command`, `execute_and_wait`) plus `apply_patch` (gated on
@@ -343,10 +347,8 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-09-0
 - **`TerminalGrid` partial-region `scrollUp`** rotates the row map in place (fast paths for ±1 line,
   cycle rotation otherwise). Avoid reintroducing per-scroll `regionKeys`/`regionPhysicalRows` arrays —
   that was the 32 MB partial-throughput cliff.
-- **Tests read real `UserDefaults`**: `LLMProviderRegistry` restores the persisted active provider,
-  so all 17 `AIAgentServiceTests` fail with `providerNotConfigured(...)` on a machine whose last
-  selected provider (e.g. DeepSeek) has no API key. The tests do not inject an isolated defaults
-  suite — treat these failures as environment leakage, not agent-layer regressions.
+- **AI test isolation**: Agent and model-store tests use isolated defaults suites, mock
+  OpenRouter responses, and never read the developer's saved model or API key.
 - **Bounded startup filters**: `ZshStartupWarningFilter` strips zsh's one-off `can't set tty pgrp`
   warning and **switches off after 32 KB**. Its predecessor only switched off when the warning was
   actually found, so under `sh`/`bash` it scanned every chunk forever — 92.6% of local-shell wall
@@ -426,7 +428,8 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-09-0
 | `Docs/optimizationspart2.md` | Throughput recovery playbook (Part 2) |
 | `Docs/OptimizeP2.md` / `Docs/OptimizeP3.md` | P2 / P3 optimization phased checklists — **COMPLETE** |
 | `Docs/PhaseB.md` | Local Input V2 Phase B checklist (make byte-first local input the only path) |
-| `Docs/multiprovider-architecture.md` | Multi-provider LLM architecture overview |
+| `Docs/OpenRouterArchitecture.md` | Current OpenRouter AI architecture, settings, transcript, and verification |
+| `Docs/multiprovider-architecture.md` | Superseded historical multi-provider design |
 | `Docs/AIpatchfeatureIntegration.md` | `apply_patch` integration guide |
 | `Docs/RemotePatchingFix.md` | Remote patching fix (base64 read/write approach) |
 | `Docs/Issue15.md` | Multi-session broadcast input routing |
@@ -446,6 +449,8 @@ at `Docs/featurelist.md`. Keep it in sync when process guidance changes.
 <!-- NEXT SESSION PLAN -->
 
 ## Next Session Plan
+
+**OpenRouter migration (2026-09-25):** implementation and mocked verification are complete. The only OpenRouter-specific validation still pending is a small live streamed reply, a real terminal tool-call cycle, and a model switch preserving context after an OpenRouter test key is configured. The current machine had no such key. See `Docs/OpenRouterArchitecture.md` and the dated `Docs/featurelist.md` entry. The installed Xcode lacks the Metal Toolchain, so the Debug/Release compile checks excluded `TerminalShaders.metal`; the separate full-suite build also stops on existing actor-conformance test doubles before tests run.
 
 **Last completed milestone (2026-09-06/07): RenderCost R2b implementation and focused verification.**
 R2b stays open for the throughput-variability investigation; do not reimplement the actor-call changes.

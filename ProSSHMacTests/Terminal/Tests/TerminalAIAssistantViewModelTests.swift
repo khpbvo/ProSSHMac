@@ -6,10 +6,9 @@ import XCTest
 final class TerminalAIAssistantViewModelTests: XCTestCase {
     func testSubmitPromptAppendsUserAndAssistantMessages() async throws {
         let sessionID = UUID()
-        let service = MockOpenAIAgentService(
+        let service = MockAgentService(
             nextReply: AIAgentReply(
                 text: "Use `tail -f /var/log/system.log` for live logs.",
-                responseID: "resp_123",
                 toolCallsExecuted: 2
             )
         )
@@ -36,8 +35,8 @@ final class TerminalAIAssistantViewModelTests: XCTestCase {
 
     func testClearConversationResetsMessagesAndCallsService() throws {
         let sessionID = UUID()
-        let service = MockOpenAIAgentService(
-            nextReply: AIAgentReply(text: "ok", responseID: "resp", toolCallsExecuted: 0)
+        let service = MockAgentService(
+            nextReply: AIAgentReply(text: "ok", toolCallsExecuted: 0)
         )
         let viewModel = TerminalAIAssistantViewModel(
             agentService: service,
@@ -62,10 +61,9 @@ final class TerminalAIAssistantViewModelTests: XCTestCase {
         let denseReply = """
         This repository contains a CLI orchestrator for document workflows. It includes configuration and runtime integration for external tools. The project also wires approval-aware execution paths for safe editing. It supports retrieval and summarization flows for large document sets.
         """
-        let service = MockOpenAIAgentService(
+        let service = MockAgentService(
             nextReply: AIAgentReply(
                 text: "  \n" + denseReply + "\n  ",
-                responseID: "resp_456",
                 toolCallsExecuted: 3
             )
         )
@@ -87,8 +85,8 @@ final class TerminalAIAssistantViewModelTests: XCTestCase {
     }
 
     func testRequestPatchApprovalUsesModalStateWithoutInlineMessage() async throws {
-        let service = MockOpenAIAgentService(
-            nextReply: AIAgentReply(text: "ok", responseID: "resp_patch", toolCallsExecuted: 0)
+        let service = MockAgentService(
+            nextReply: AIAgentReply(text: "ok", toolCallsExecuted: 0)
         )
         let viewModel = TerminalAIAssistantViewModel(
             agentService: service,
@@ -122,8 +120,8 @@ final class TerminalAIAssistantViewModelTests: XCTestCase {
     }
 
     func testPatchApprovalSheetDismissDeniesPendingApproval() async throws {
-        let service = MockOpenAIAgentService(
-            nextReply: AIAgentReply(text: "ok", responseID: "resp_patch_dismiss", toolCallsExecuted: 0)
+        let service = MockAgentService(
+            nextReply: AIAgentReply(text: "ok", toolCallsExecuted: 0)
         )
         let viewModel = TerminalAIAssistantViewModel(
             agentService: service,
@@ -149,10 +147,9 @@ final class TerminalAIAssistantViewModelTests: XCTestCase {
 
     func testSubmitPromptStreamsReasoningBubbleMessages() async throws {
         let sessionID = UUID()
-        let service = MockOpenAIAgentService(
+        let service = MockAgentService(
             nextReply: AIAgentReply(
                 text: "Done.",
-                responseID: "resp_stream",
                 toolCallsExecuted: 0
             )
         )
@@ -184,10 +181,9 @@ final class TerminalAIAssistantViewModelTests: XCTestCase {
 
     func testSubmitPromptCapturesLateReasoningInFixedPanel() async throws {
         let sessionID = UUID()
-        let service = MockOpenAIAgentService(
+        let service = MockAgentService(
             nextReply: AIAgentReply(
                 text: "Final answer.",
-                responseID: "resp_late_reasoning",
                 toolCallsExecuted: 0
             )
         )
@@ -216,10 +212,9 @@ final class TerminalAIAssistantViewModelTests: XCTestCase {
 
     func testSubmitPromptKeepsStreamedAssistantTextWhenFinalReplyTextEmpty() async throws {
         let sessionID = UUID()
-        let service = MockOpenAIAgentService(
+        let service = MockAgentService(
             nextReply: AIAgentReply(
                 text: "",
-                responseID: "resp_stream_empty_final",
                 toolCallsExecuted: 0
             )
         )
@@ -260,7 +255,7 @@ final class TerminalAIAssistantViewModelTests: XCTestCase {
 }
 
 @MainActor
-private final class MockOpenAIAgentService: AIAgentServicing {
+private final class MockAgentService: AIAgentServicing {
     var toolDefinitions: [LLMToolDefinition] = []
     var nextReply: AIAgentReply
     var replyDelayNanoseconds: UInt64

@@ -1,5 +1,8 @@
 # ProSSHMac Multi-Provider LLM Architecture
 
+> **Superseded 2026-09-25.** This is historical design material. The current AI stack uses one OpenRouter Chat Completions client, one Keychain key, a live tool-capable text-model catalog, and per-session structured transcripts. See `CLAUDE.md` and `Docs/featurelist.md` for current guidance. Do not implement the provider phases below.
+
+
 ## Problem
 
 The AI integration is hardwired to OpenAI's Responses API across ~9 files.

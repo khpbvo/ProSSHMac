@@ -28,6 +28,7 @@ This file is the project working memory for future assistants in this repository
 
 ## Current Status Snapshot
 
+- AI migration (2026-09-25): the current app AI path is OpenRouter Chat Completions with one Keychain key, an explicitly chosen model from the live tool-capable text catalog, and per-session structured transcripts. The former OpenAI Responses and other provider adapters have been removed; `Docs/multiprovider-architecture.md` is historical. See `Docs/OpenRouterArchitecture.md` and the OpenRouter entry in `Docs/featurelist.md` for verification and any live-test limitation.
 - Latest status refresh (2026-03-05): this file should be read as a high-signal snapshot only; `Docs/featurelist.md` remains the authoritative long-term record and still requires `gpt-5.1-codex-max` for long-running implementation tasks.
 - Latest terminal scroll stabilization (2026-03-05): live-output scrolling now preserves/clamps the current scrollback offset during publish cycles, compensates for scrollback growth, and avoids stale-offset races in `scrollTerminal`, so users can stay scrolled up while commands such as `ping` continue printing.
 - Latest scrollbar regression fix (2026-03-05): `TerminalScrollbarView` interaction is constrained to a narrow trailing strip (`interactionWidth = 18`), restoring wheel scrolling in Metal terminal panes while keeping drag-to-scroll available.
