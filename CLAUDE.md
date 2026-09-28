@@ -301,6 +301,9 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-09-2
   `OpenRouterModelStore` requires explicit selection and refreshes the tool-capable text-model catalog.
   `AIConversationContext` stores per-session structured turns; a model switch drops reasoning blocks
   but keeps messages and tool history. `OpenRouterAPIKeyStore` owns the single Keychain entry.
+- **AI reasoning panel**: `ReasoningStreamView` bridges a native `ReasoningStreamScrollView`;
+  TextKit owns viewport-width wrapping, document height, selection and autoscroll across thinking chains.
+  `ReasoningStreamViewTests` check actual line fragments over ten chain replacements and sidebar resizes.
 - **AI terminal tool completion**: `SessionAIToolCoordinator` wraps one-shot commands with private
   OSC 7777 completion, filters the echoed wrapper in the parser reader, and takes the exit code
   from `TerminalEngine`'s event callback. Remote filesystem helpers use the same command path.
@@ -539,6 +542,11 @@ instrumentation off also varies. All runs had zero windows; no rendered-throughp
 rendering and paragraph spacing in the running app, and compare the GLM 5.3 Flash memory answer
 against a stronger OpenRouter model once a test key is available. See
 `Docs/OpenRouterArchitecture.md`.
+
+**Reasoning wrapping confirmation pending:** the viewport-width-only fix was intermittent in live
+thinking chains. The native TextKit replacement passes 15 focused tests and the Debug build, but
+the exact live glitch was not reproduced in controlled fixtures and app-control access timed out.
+If the user supplies a copied faulty chain, distinguish real newline characters from visual wrapping.
 
 Raw R2b reports and exact reproduction commands are in `Docs/R2bBenchmarkResults.md`; the
 `/tmp/prossh-r2b-*` bundles were never durable and may be gone.

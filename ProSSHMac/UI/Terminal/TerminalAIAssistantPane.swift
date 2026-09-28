@@ -6,7 +6,6 @@ struct TerminalAIAssistantPane: View {
     @EnvironmentObject private var modelStore: OpenRouterModelStore
     @ObservedObject var viewModel: TerminalAIAssistantViewModel
     @State private var composerHeight: CGFloat = 38
-    private let reasoningBottomID = "reasoning-stream-bottom"
     var session: Session?
     var onClose: () -> Void
     var onSend: (UUID) -> Void
@@ -131,7 +130,6 @@ struct TerminalAIAssistantPane: View {
     private var reasoningStreamPanel: some View {
         let summaryText = viewModel.formattedReasoningSummary
         let detailText = viewModel.formattedReasoningDetails
-        let hasContent = !summaryText.isEmpty || !detailText.isEmpty
 
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
@@ -150,48 +148,8 @@ struct TerminalAIAssistantPane: View {
             }
             .foregroundStyle(.secondary)
 
-            GeometryReader { geometry in
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 8) {
-                            if !hasContent {
-                                Text("Reasoning summaries will appear here while the assistant is working.")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                            } else {
-                                if !summaryText.isEmpty {
-                                    reasoningSection(title: "Summary", text: summaryText)
-                                }
-                                if !detailText.isEmpty {
-                                    reasoningSection(title: "Thinking", text: detailText)
-                                }
-                            }
-                            Color.clear
-                                .frame(height: 1)
-                                .id(reasoningBottomID)
-                        }
-                        // Give text a concrete wrapping width as streamed
-                        // content grows and the sidebar is resized.
-                        .frame(width: geometry.size.width, alignment: .leading)
-                    }
-                    .onChange(of: viewModel.formattedReasoningSummary) { _, _ in
-                        withAnimation(.linear(duration: 0.08)) {
-                            proxy.scrollTo(reasoningBottomID, anchor: .bottom)
-                        }
-                    }
-                    .onChange(of: viewModel.formattedReasoningDetails) { _, _ in
-                        withAnimation(.linear(duration: 0.08)) {
-                            proxy.scrollTo(reasoningBottomID, anchor: .bottom)
-                        }
-                    }
-                    .onChange(of: viewModel.isReasoningStreaming) { _, _ in
-                        withAnimation(.linear(duration: 0.08)) {
-                            proxy.scrollTo(reasoningBottomID, anchor: .bottom)
-                        }
-                    }
-                }
-            }
+            ReasoningStreamView(summary: summaryText, details: detailText)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(height: 170)
         .padding(10)
@@ -204,23 +162,6 @@ struct TerminalAIAssistantPane: View {
                 .strokeBorder(colorScheme == .dark ? Color.orange.opacity(0.4) : Color.orange.opacity(0.45), lineWidth: 1)
         )
         .padding(.horizontal, 12)
-    }
-
-    private func reasoningSection(title: String, text: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .textCase(.uppercase)
-                .tracking(0.4)
-            Text(AIAssistantRenderer.markdownText(text))
-                .font(.system(size: 13))
-                .lineSpacing(2)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var visibleMessages: [TerminalAIAssistantMessage] {
