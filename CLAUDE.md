@@ -543,10 +543,11 @@ rendering and paragraph spacing in the running app, and compare the GLM 5.3 Flas
 against a stronger OpenRouter model once a test key is available. See
 `Docs/OpenRouterArchitecture.md`.
 
-**Reasoning wrapping confirmation pending:** the viewport-width-only fix was intermittent in live
-thinking chains. The native TextKit replacement passes 15 focused tests and the Debug build, but
-the exact live glitch was not reproduced in controlled fixtures and app-control access timed out.
-If the user supplies a copied faulty chain, distinguish real newline characters from visual wrapping.
+**Reasoning wrapping confirmation pending:** the viewport-width-only fix was intermittent on a
+second prompt. The native TextKit replacement passes 16 focused tests (including the screenshot
+fragments streamed on a second prompt) and the Debug build. The screenshot/running process predates
+the native build (21:51:55 process start vs 21:58:16 binary build); quit/reopen before live validation.
+The exact old-renderer glitch was not reproduced in controlled fixtures; app-control access timed out.
 
 Raw R2b reports and exact reproduction commands are in `Docs/R2bBenchmarkResults.md`; the
 `/tmp/prossh-r2b-*` bundles were never durable and may be gone.

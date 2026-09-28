@@ -1,4 +1,6 @@
 #if canImport(XCTest)
+import AppKit
+import Combine
 import XCTest
 @testable import ProSSHMac
 
@@ -251,6 +253,58 @@ final class TerminalAIAssistantViewModelTests: XCTestCase {
         XCTAssertEqual(String(AIAssistantRenderer.markdownText(viewModel.formattedReasoningDetails).characters), expected)
     }
 
+    func testSecondLLMTurnRendersScreenshotFragmentsAsNormalProse() async throws {
+        let sessionID = UUID()
+        let service = MockAgentService(nextReply: AIAgentReply(text: "Done.", toolCallsExecuted: 0))
+        service.streamEventDelayNanoseconds = 2_000_000
+        let viewModel = TerminalAIAssistantViewModel(agentService: service, streamChunkDelayNanoseconds: 0)
+        let panel = ReasoningStreamScrollView()
+        panel.setFrameSize(NSSize(width: 400, height: 150))
+        let expected = "User wants to cd into the test folder. There's a \"Test\" folder in Documents"
+        var checkingSecondTurn = false
+        var observedPrefixes: [String] = []
+        let observation = viewModel.$reasoningDetails.sink { text in
+            panel.update(summary: "", details: text)
+            panel.layoutSubtreeIfNeeded()
+            guard checkingSecondTurn, !text.isEmpty else { return }
+            observedPrefixes.append(text)
+            XCTAssertTrue(expected.hasPrefix(text))
+            XCTAssertFalse(text.contains("\n"))
+            guard let container = panel.reasoningTextView.textContainer,
+                  let manager = panel.reasoningTextView.layoutManager else {
+                return XCTFail("Missing text layout")
+            }
+            manager.ensureLayout(for: container)
+            var lineCount = 0
+            manager.enumerateLineFragments(forGlyphRange: manager.glyphRange(for: container)) { _, _, _, _, _ in
+                lineCount += 1
+            }
+            // One heading line and at most two body lines at this viewport width.
+            XCTAssertLessThanOrEqual(lineCount, 3, "Stacked prefix: \(text)")
+        }
+        defer { observation.cancel() }
+
+        let firstReasoning = String(repeating: "Inspecting the Documents directory. ", count: 20)
+        service.streamEvents = [.reasoningTextDelta(firstReasoning), .reasoningTextDone(firstReasoning)]
+        viewModel.draftPrompt = "cd into Documents/"
+        viewModel.submitPrompt(for: sessionID)
+        try await waitUntil(timeout: 1.5) { !viewModel.isSending }
+        XCTAssertGreaterThan(panel.contentView.bounds.origin.y, 0)
+
+        checkingSecondTurn = true
+        let fragments = ["User", " wants to cd into", " the", " test folder", ". There", "'s a \"Test\" folder", " in Documents"]
+        service.streamEvents = fragments.map(AIAgentStreamEvent.reasoningTextDelta) + [.reasoningTextDone(expected)]
+        viewModel.draftPrompt = "cd into the test folder"
+        viewModel.submitPrompt(for: sessionID)
+        try await waitUntil(timeout: 1.5) { !viewModel.isSending }
+
+        XCTAssertGreaterThanOrEqual(observedPrefixes.count, fragments.count)
+        XCTAssertEqual(viewModel.messages.count, 4)
+        XCTAssertEqual(viewModel.formattedReasoningDetails, expected)
+        XCTAssertEqual(panel.reasoningTextView.string, "THINKING\n" + expected)
+        XCTAssertEqual(panel.contentView.bounds.origin.y, 0, accuracy: 0.5)
+    }
+
     func testSubmitPromptKeepsStreamedAssistantTextWhenFinalReplyTextEmpty() async throws {
         let sessionID = UUID()
         let service = MockAgentService(
@@ -301,6 +355,7 @@ private final class MockAgentService: AIAgentServicing {
     var nextReply: AIAgentReply
     var replyDelayNanoseconds: UInt64
     var streamEvents: [AIAgentStreamEvent] = []
+    var streamEventDelayNanoseconds: UInt64 = 0
     private(set) var capturedPrompts: [String] = []
     private(set) var clearedSessionIDs: [UUID] = []
 
@@ -340,6 +395,9 @@ private final class MockAgentService: AIAgentServicing {
         if let streamHandler {
             for event in streamEvents {
                 streamHandler(event)
+                if streamEventDelayNanoseconds > 0 {
+                    try await Task.sleep(nanoseconds: streamEventDelayNanoseconds)
+                }
             }
         }
         return nextReply
