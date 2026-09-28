@@ -99,7 +99,7 @@ final class SessionManagerSFTPSidebarTests: XCTestCase {
     }
 }
 
-private actor SidebarKnownHostsStore: KnownHostsStoreProtocol {
+@MainActor private final class SidebarKnownHostsStore: KnownHostsStoreProtocol {
     func allEntries() async throws -> [KnownHostEntry] { [] }
 
     func evaluate(
@@ -116,7 +116,7 @@ private actor SidebarKnownHostsStore: KnownHostsStoreProtocol {
     func clearAll() async throws {}
 }
 
-private actor SidebarSFTPTransportStub: SSHTransporting {
+@MainActor private final class SidebarSFTPTransportStub: SSHTransporting {
     private var connectedSessionIDs: Set<UUID> = []
     private var authenticatedSessionIDs: Set<UUID> = []
     private var listResponsesByPath: [String: [SFTPDirectoryEntry]]
@@ -220,7 +220,7 @@ private final class SidebarSFTPShellChannel: SSHShellChannel, @unchecked Sendabl
     func close() async {}
 }
 
-private actor SidebarSFTPForwardChannel: SSHForwardChannel {
+@MainActor private final class SidebarSFTPForwardChannel: SSHForwardChannel {
     func read() async throws -> Data? { nil }
 
     func write(_ data: Data) async throws {}

@@ -130,13 +130,13 @@ xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform
 - **Full-suite baseline: 883 tests, 1 failure** — see the flaky-test gotcha below. The last
   clean full-suite run recorded 870/0 on 2026-09-03, before later tests were added. A red run in a
   suite you touched is yours; a red `SessionManagerRenderingPathTests` under full-suite load is not.
-- **The test target does not compile on Xcode 27.0 / Swift 6.4** (verified 2026-09-28 with
-  `build-for-testing`): four "actor cannot conform to global-actor-isolated protocol" errors, in
-  test-double actors in `SessionManagerRenderingPathTests` (`InMemoryKnownHostsStore`) and
-  `SessionManagerSFTPSidebarTests` (`SidebarKnownHostsStore`, `SidebarSFTPTransportStub`,
-  `SidebarSFTPForwardChannel`). `SessionAIToolCoordinatorTests` had the same problem and was
-  fixed on 2026-09-25. So no `test` run, focused or full, works until those two files are fixed
-  or excluded, and the 883-test baseline above is from before Xcode 27.
+- **Test doubles for app protocols must be `@MainActor final class`, not `actor`.** Under Xcode
+  27.0 / Swift 6.4 the test module sees `KnownHostsStoreProtocol`, `SSHTransporting`,
+  `SSHForwardChannel` and `SSHShellChannel` as `MainActor`-isolated (the diagnostic points at
+  `<unknown>:0`, i.e. the imported module), so `private actor Fake: KnownHostsStoreProtocol` fails
+  with "actor cannot conform to global-actor-isolated protocol" — even though the app's own
+  actors conform fine. The test target compiles again as of 2026-09-28. The 883-test baseline
+  above predates Xcode 27; no full suite has run since.
 - Tests must not depend on the developer's real `UserDefaults`. `OpenRouterModelStore` and
   `LegacyProviderKeyCleanup` accept an injected defaults suite; AI tests use isolated suites.
 - **Throughput baseline, Release** (state the configuration with every number — Release is ~20x
@@ -384,6 +384,10 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-09-2
   timing out** when four suites run in one `xcodebuild test` invocation. It is not only full-suite
   load — four suites is enough. Last full-suite figure: 883 tests, 1 failure, this one. Treat a
   failure as environment; confirm by re-running the suite alone before believing a regression.
+  **2026-09-28: it also fails alone.** Three isolated runs at load average ~7: pass 0.696s, fail
+  8.119s, pass 0.688s. The outcome is binary — sub-second or the full 8s timeout, never slow —
+  which points to a startup race (input sent before zsh is ready?) rather than CPU starvation.
+  Uninvestigated; "load-flaky" may be the wrong diagnosis.
 - **The rendered benchmark gets no window when launched with arguments.** `open -n App.app` restores
   a window; `open -n App.app --args <anything at all>` yields a process with `NSApp.windows.count ==
   0` — a harmless unused flag reproduces it, and `applicationShouldHandleReopen` does not recover it.
@@ -482,11 +486,13 @@ actor-call changes whose performance `Docs/R2bBenchmarkResults.md` could not val
 direct/off pair medians favored baseline `af933f4` (0.88x, 0.29x, 0.87x), so a regression is
 possible. The OpenRouter migration (`005b677`, `e1f5d96`) landed on top.
 
-**Blocker for any test run:** the test target does not compile on Xcode 27 / Swift 6.4 — four
-actor-conformance errors in test doubles in `SessionManagerRenderingPathTests` and
-`SessionManagerSFTPSidebarTests` (see Build & Test). Fixing those two files first is cheap and
-unblocks every focused suite, including the 21 rendering-path tests R2b depends on. The Metal
-Toolchain is installed again; stop excluding `TerminalShaders.metal` from builds.
+**Test build fixed (2026-09-28):** the four actor test doubles in `SessionManagerRenderingPathTests`
+and `SessionManagerSFTPSidebarTests` are now `@MainActor final class` (see Build & Test), and
+`build-for-testing` succeeds on Xcode 27. The merged R2b code passes on Xcode 27: `VTParserTests`
+125/0, `SessionManagerRenderingPathTests` 20/21 with only the known local-zsh test failing
+(it now fails alone too — see its gotcha), `SessionManagerSFTPSidebarTests` 3/0,
+`SessionAIToolCoordinatorTests` 3/0. The Metal Toolchain is installed again; stop excluding
+`TerminalShaders.metal` from builds.
 
 **R2b — what was done (2026-09-06/07); do not reimplement:**
 - `TerminalEngine.feedAndCollectOutcome(Data)` preserves ordinary `feed`'s Bool/queueing contract
@@ -508,8 +514,7 @@ medians: **5.01x, 0.33x, 1.02x**. In one unchanged candidate launch, parse/grid 
 instrumentation off also varies. All runs had zero windows; no rendered-throughput claim holds.
 
 **Next actions / end point:**
-1. Fix the two test files so focused suites compile; re-run `SessionManagerRenderingPathTests`
-   and `VTParserTests` to confirm the merged R2b code still passes on Xcode 27.
+1. ~~Fix the two test files; confirm the merged R2b code passes on Xcode 27.~~ Done 2026-09-28.
 2. Run `--render-detached --perf-scheduling` on the current Release build, several launches,
    recording `sysctl -n vm.loadavg` and top CPU consumers. In slow runs, does ground-text CPU
    stay flat while wall grows (scheduler/placement), or does CPU itself grow (real work)?

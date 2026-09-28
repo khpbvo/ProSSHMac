@@ -977,7 +977,7 @@ final class SessionManagerRenderingPathTests: XCTestCase {
     }
 }
 
-private actor InMemoryKnownHostsStore: KnownHostsStoreProtocol {
+@MainActor private final class InMemoryKnownHostsStore: KnownHostsStoreProtocol {
     func allEntries() async throws -> [KnownHostEntry] { [] }
 
     func evaluate(
