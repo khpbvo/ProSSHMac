@@ -124,16 +124,19 @@ xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform
 ./scripts/benchmark-ssh.sh --host <hostname> --user <username>
 ```
 
-- Test bundle: `ProSSHMacTests` — 4 files at the bundle root plus 47 in `ProSSHMacTests/Terminal/Tests/`.
+- Test bundle: `ProSSHMacTests` — 5 files at the bundle root plus 48 in `ProSSHMacTests/Terminal/Tests/`.
   Migration out of the app target is **complete**; no test sources remain under `ProSSHMac/`.
 - Some tests require the host app process (UI/AppKit-backed suites).
 - **Full-suite baseline: 883 tests, 1 failure** — see the flaky-test gotcha below. The last
   clean full-suite run recorded 870/0 on 2026-09-03, before later tests were added. A red run in a
   suite you touched is yours; a red `SessionManagerRenderingPathTests` under full-suite load is not.
-- On the current Xcode 27 installation, the full test target stops compiling on actor
-  conformance errors in `SessionAIToolCoordinatorTests`, `SessionManagerRenderingPathTests`,
-  and `SessionManagerSFTPSidebarTests` before reaching that runtime baseline. The OpenRouter
-  focused run excluded those three unrelated test files and passed 25 tests.
+- **The test target does not compile on Xcode 27.0 / Swift 6.4** (verified 2026-09-28 with
+  `build-for-testing`): four "actor cannot conform to global-actor-isolated protocol" errors, in
+  test-double actors in `SessionManagerRenderingPathTests` (`InMemoryKnownHostsStore`) and
+  `SessionManagerSFTPSidebarTests` (`SidebarKnownHostsStore`, `SidebarSFTPTransportStub`,
+  `SidebarSFTPForwardChannel`). `SessionAIToolCoordinatorTests` had the same problem and was
+  fixed on 2026-09-25. So no `test` run, focused or full, works until those two files are fixed
+  or excluded, and the 883-test baseline above is from before Xcode 27.
 - Tests must not depend on the developer's real `UserDefaults`. `OpenRouterModelStore` and
   `LegacyProviderKeyCleanup` accept an injected defaults suite; AI tests use isolated suites.
 - **Throughput baseline, Release** (state the configuration with every number — Release is ~20x
@@ -162,6 +165,14 @@ xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform
   that column is what finally attributed R1's missing 18 s. Several stages are deliberate
   caller/callee pairs (`feedCall` vs `parse`, `publish` vs `publishEngineWait`); the difference
   between a pair is actor-hop and queue wait rather than work.
+- **Scheduling diagnostics:** `TerminalSchedulingDiagnostics`
+  (`Terminal/Diagnostics/TerminalSchedulingDiagnostics.swift`) is a separate opt-in gate —
+  `--perf-scheduling` / `PROSSH_PERF_SCHEDULING=1`. It samples thread CPU vs wall time (per QoS)
+  around synchronous ground-text/grid work only, plus batch sizes and burst events. Thread clocks
+  are never read across an `await`: a suspension can resume on another thread. **It also switches
+  on `TerminalPerf`** (`TerminalPerf.swift:32`), so its runs are only comparable with
+  signpost-on runs. `benchmark-throughput.sh` forwards unknown flags, so append `--perf-scheduling`;
+  the report prints after the stage budget.
 
 ---
 
@@ -193,7 +204,8 @@ ProSSHMac/
 │   │                     #   AIConversationContext, OpenRouterClient/Types/ModelStore/APIKeyStore,
 │   │                     #   ApplyPatchTool, UnifiedDiffPatcher, apply_diff
 ├── Terminal/
-│   ├── Diagnostics/      # TerminalPerf (runtime-gated signposts + stage timers)
+│   ├── Diagnostics/      # TerminalPerf (runtime-gated signposts + stage timers),
+│   │                     #   TerminalSchedulingDiagnostics (thread CPU vs wall, opt-in)
 │   ├── Grid/             # TerminalGrid + 11 extensions, TerminalCell, CursorState, CharacterWidth,
 │   │                     #   GridReflow, GridSnapshot, ScrollbackBuffer
 │   ├── Parser/           # TerminalEngine, VTParserTables, VTConstants, CSI/OSC/SGR/ESC/DCS/Charset
@@ -218,7 +230,7 @@ ProSSHMac/
 │   │                     #   TerminalKeyboardShortcutLayer, TerminalSidebarLayoutStore
 │   ├── Hosts/            # HostsView, HostFormView, PortForwardingRuleEditor, SSHConfigImportPreviewView
 │   ├── Transfers/        # TransfersView
-│   ├── Settings/         # SettingsView + 8 effect settings subviews
+│   ├── Settings/         # SettingsView + 8 effect settings subviews, OpenRouterModelPicker
 │   ├── KeyForge/         # KeyForgeView, KeyInspectorView
 │   └── Certificates/     # CertificatesView, CertificateInspectorView
 ├── ViewModels/           # HostListVM, KeyForgeVM, CertificatesVM, OpenRouterSettingsVM,
@@ -230,31 +242,32 @@ ProSSHMac/
 
 ## Key Files
 
-All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-09-06.
+All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-09-28.
 
 | File / Group | What it does |
 |---|---|
 | `Services/AI/AIToolHandler.swift` + 5 extensions | Tool dispatch (1,119L) — largest file. Extensions: ArgumentParsing, RemoteExecution, LocalFilesystem, InteractiveInput, OutputHelpers |
 | `UI/Terminal/TerminalView.swift` | Main terminal UI, sidebar layout, focus, input capture (1,066L) |
-| `Services/SessionManager.swift` + Queries | Session lifecycle, shell I/O, SFTP, grid snapshots (1,017L) |
-| `UI/Terminal/TerminalAIAssistantPane.swift` | AI copilot sidebar, composer, message rendering (966L) |
-| `Services/TerminalRenderingCoordinator.swift` | Snapshot publishing, scroll state, resize debounce, alt-buffer policy (972L). `publishGridState` + `publishHousekeeping` make ~7 engine round-trips per publish — the R2b target |
+| `UI/Terminal/TerminalAIAssistantPane.swift` | AI copilot sidebar, composer, message rendering, pipe tables (1,046L) |
+| `Services/TerminalRenderingCoordinator.swift` | Snapshot publishing, scroll state, resize debounce, alt-buffer policy (1,025L). Since R2b an ordinary publish is two engine calls (`publishViewportState`, then `publishSnapshot` carrying housekeeping) with MainActor scroll-anchor policy between them |
+| `Services/SessionManager.swift` + Queries | Session lifecycle, shell I/O, SFTP, grid snapshots (1,020L) |
 | `Services/SSH/LibSSHTransport.swift` | LibSSH transport actor (822L); channels in `LibSSHShellChannel`/`LibSSHForwardChannel` |
-| `Terminal/Parser/TerminalEngine.swift` | VT parser hot path, merged parse/apply loop (733L) |
-| `Terminal/Renderer/MetalTerminalRenderer.swift` + 8 extensions | Metal renderer (496L): glyph resolution, snapshot update, font management, draw loop, view config, selection, post-processing, diagnostics |
+| `Terminal/Parser/TerminalEngine.swift` | VT parser hot path, merged parse/apply loop, `feedAndCollectOutcome` (834L) |
+| `Terminal/Renderer/MetalTerminalRenderer.swift` + 8 extensions | Metal renderer (510L): glyph resolution, snapshot update, font management, draw loop, view config, selection, post-processing, diagnostics |
 | `Terminal/Renderer/SmoothScrollEngine.swift` | CPU scroll physics, rubber-band, jumpTo, frame-rate independence |
-| `Terminal/Grid/TerminalGrid.swift` + 11 extensions | Grid state (457L): modes, OSC, tabs, cursor, scroll, erase, line ops, screen buffer, lifecycle, printing, snapshot |
+| `Terminal/Grid/TerminalGrid.swift` + 11 extensions | Grid state (453L): modes, OSC, tabs, cursor, scroll, erase, line ops, screen buffer, lifecycle, printing, snapshot |
 | `Services/Session*Coordinator.swift` (6) + `TerminalRenderingCoordinator.swift` | 7 extracted coordinators: AITool, SFTP, ShellIO, Reconnect, Keepalive, Recording, Rendering |
-| `Services/AI/ApplyPatchTool.swift` | PatchApprovalTracker, LocalWorkspacePatcher, RemotePatchCommandBuilder (605L) |
+| `Services/AI/ApplyPatchTool.swift` | PatchApprovalTracker, LocalWorkspacePatcher, RemotePatchCommandBuilder (604L) |
 | `Services/AI/UnifiedDiffPatcher.swift` | V4A unified diff parser and applicator (491L) |
 | `UI/Terminal/MetalTerminalSessionSurface.swift` | SwiftUI-Metal bridge, snapshot application, selection, tap-to-deselect (406L) |
 | `UI/Terminal/TerminalInputCaptureView.swift` | NSViewRepresentable keyboard bridge for local sessions (422L) |
 | `Terminal/Features/PaneManager.swift` | Split-pane tree, input routing, broadcast/solo mode (444L) |
 | `UI/Terminal/ExternalTerminalWindowView.swift` | Separate-window terminal session view (341L) |
-| `Services/AI/AIToolDefinitions.swift` | Developer prompt, 8 tool schemas, direct-action filter, error helpers (320L) |
+| `Services/AI/AIToolDefinitions.swift` | Developer prompt, 8 tool schemas, direct-action filter, error helpers (315L) |
 | `Services/AIAgentService.swift` | Agent-layer protocols and tool definition assembly |
-| `Services/LocalPTYProcess.swift` | Actor wrapping forkpty, async output stream (301L) |
-| `Services/SessionShellIOCoordinator.swift` | Shell input, the batched parser reader, per-batch bookkeeping (330L). The four post-`feed` engine round-trips here are 46.7% of wall — the R2b target |
+| `Services/LocalPTYProcess.swift` | Actor wrapping forkpty, async output stream (274L) |
+| `Services/SessionShellIOCoordinator.swift` | Shell input, the batched parser reader, per-batch bookkeeping (307L). Since R2b each batch is one `feedAndCollectOutcome` call, applied in one MainActor handoff with no post-feed engine reads; also filters the AI tool wrapper echo |
+| `Services/SessionAIToolCoordinator.swift` | AI one-shot command wrapping with private OSC 7777 start/completion events (206L) |
 | `Services/AI/AIAgentRunner.swift` | Agent iteration loop, direct-action mode, structured transcript replay |
 | `Terminal/Renderer/TerminalMetalView.swift` | NSViewRepresentable wrapping MTKView, gesture recognizers (239L) |
 | `ViewModels/OpenRouterSettingsViewModel.swift` | OpenRouter key state and catalog refresh |
@@ -262,8 +275,9 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-09-0
 | `ViewModels/TerminalAIAssistantViewModel.swift` | AI sidebar VM: messages, streaming, patch approval (379L) |
 | `UI/Terminal/PatchApprovalCardView.swift` | Inline patch approval card for `apply_patch` (177L) |
 | `App/ThroughputBenchmarkRunner.swift` | Parser/grid + PTY-local benchmarks, `BenchmarkSentinelMatcher`, stage-budget print |
-| `Terminal/Diagnostics/TerminalPerf.swift` | Runtime-gated signposts + 19 in-process stage timers with span/busy tracking (233L). Start here for any perf work |
-| `App/ThroughputBenchmarkRunner+Render.swift` | End-to-end benchmark through the real app path (413L): `--benchmark-render`, `--benchmark-render-detached`, `--benchmark-window WxH`, windowless warning |
+| `Terminal/Diagnostics/TerminalPerf.swift` | Runtime-gated signposts + 19 in-process stage timers with span/busy tracking (236L). Start here for any perf work |
+| `Terminal/Diagnostics/TerminalSchedulingDiagnostics.swift` | Opt-in (`--perf-scheduling`) thread CPU vs wall sampling around synchronous grid work, batch sizes, burst events (96L). Built for the R2b variability investigation; no results recorded yet |
+| `App/ThroughputBenchmarkRunner+Render.swift` | End-to-end benchmark through the real app path (419L): `--benchmark-render`, `--benchmark-render-detached`, `--benchmark-window WxH`, windowless warning |
 | `Terminal/Features/TerminalHistoryIndex.swift` | Command blocks, prompt heuristics, output capture (484L). Raw output is a bounded UTF-8 byte buffer — see gotchas before touching `recordOutputChunk` |
 | `Services/ZshStartupWarningFilter.swift` | Bounded zsh startup-warning filter for the PTY path (120L) |
 | `Services/AI/OpenRouterClient.swift` | OpenRouter catalog and streamed Chat Completions transport |
@@ -315,7 +329,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-09-0
 - **Local PTY**: `LocalPTYProcess` (actor, forkpty) + `LocalShellBootstrap` (env, ZDOTDIR).
   `LocalTerminalSubsystem` translates NSEvent → PTY bytes.
 - **`nonisolated deinit`**: required on `@MainActor` types that may deallocate off the main actor —
-  used on ~18 types (coordinators, `SessionManager`, `PaneManager`, `SessionTabManager`,
+  used on 17 types (coordinators, `SessionManager`, `PaneManager`, `SessionTabManager`,
   `AIToolHandler`, `AIAgentRunner`, `TerminalAIAssistantViewModel`, `V4AParserState`, …).
 
 ---
@@ -329,11 +343,17 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-09-0
   Restored 2026-09-06 from 2c99912^. When you edit the Next Session Plan, replace only the text
   below the `## Next Session Plan` heading.
 
-- **Swift 6.3 / Xcode 26.6**: declaration-level `nonisolated` on an `actor` is invalid and fails to
-  compile. Actors keep their isolated state; await their initializers at cross-isolation call sites.
-  (Bit `LibSSHShellChannel`/`LibSSHForwardChannel` — see the 2026-07-13 featurelist entry.)
-- **`AIToolHandler.swift` (1,119L)** is now the largest file, ahead of `TerminalView.swift` (1,066L)
-  and `SessionManager.swift` (1,017L). Read surrounding context before modifying.
+- **Toolchain: Xcode 27.0 (27A266a), Swift 6.4.** Since Swift 6.3, declaration-level `nonisolated`
+  on an `actor` is invalid and fails to compile. Actors keep their isolated state; await their
+  initializers at cross-isolation call sites. (Bit `LibSSHShellChannel`/`LibSSHForwardChannel` — see
+  the 2026-07-13 featurelist entry.) Relatedly, under default `MainActor` isolation an `actor` cannot
+  conform to a protocol that is implicitly `@MainActor` — that is what currently breaks the test build.
+- **Metal Toolchain is installed again** (`xcodebuild -showComponent metalToolchain`: installed,
+  27A266a). The 2026-09-25 OpenRouter builds excluded `TerminalShaders.metal` because it was missing
+  then; do not keep excluding it. If a build fails on the shader, re-check the component first.
+- **Five files are over 1,000 lines**: `AIToolHandler.swift` (1,119L), `TerminalView.swift` (1,066L),
+  `TerminalAIAssistantPane.swift` (1,046L), `TerminalRenderingCoordinator.swift` (1,025L),
+  `SessionManager.swift` (1,020L). Read surrounding context before modifying.
 - **Focus management** between AI composer (NSTextView) and terminal (DirectTerminalInputNSView) is
   delicate. Must resign at AppKit level, not just SwiftUI state. See `focusSessionAndPane()`.
 - **SwiftUI state mutations during `updateNSView`** cause warnings. Use `DispatchQueue.main.async` or
@@ -399,7 +419,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-09-0
 - **Terminal selection**: `selectedText()` skips wide-char continuation cells. Plain-tap deselection
   lives in `MetalTerminalSessionSurface` (shared by embedded and external windows).
   `handleDrag` processes `.ended`/`.cancelled` before the `gridCell(at:)` guard.
-- **Docs directory case**: git tracks **21 files under `Docs/`** and **4 under `docs/`**
+- **Docs directory case**: git tracks **23 files under `Docs/`** and **4 under `docs/`**
   (`FutureFeatures.md`, `Optimization.md`, `RefactorTheFinalRun.md`, `screenshots/`). This only works
   because macOS is case-insensitive — a case-sensitive checkout will split them into two directories.
   Paths in this file are written as the docs themselves reference them; resolve by basename.
@@ -427,7 +447,8 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-09-0
 | `Docs/bugs.md` | Bug audit by subsystem/severity — 50 of 79 still open; paths are pre-refactor |
 | `docs/FutureFeatures.md` | Prioritized feature roadmap (competitive analysis) |
 | `docs/Optimization.md` | Performance bottleneck analysis, benchmark commands, current numbers |
-| `Docs/RenderCost.md` | **Active spec.** What rendering actually costs — R0/R1/R2a done, **R2b open**. Read its "Measurement caveats" before any perf measurement |
+| `Docs/RenderCost.md` | **Active spec.** What rendering actually costs — R0/R1/R2a done, **R2b open** (code merged, performance unvalidated). Read its "Measurement caveats" before any perf measurement |
+| `Docs/R2bBenchmarkResults.md` | R2b A/B evidence: exact commands and all raw reports for the six baseline/candidate pairs |
 | `Docs/FasterThenYouWillEverLiveToBe.md` | Throughput gap profiling — Phases 0,1,2,3,5 done. **Phase 4 is abandoned, not optional**: it proposed optimising `parse + grid`, which measures 0.1-24% depending on configuration but was never the constraint |
 | `Docs/optimizationspart2.md` | Throughput recovery playbook (Part 2) |
 | `Docs/OptimizeP2.md` / `Docs/OptimizeP3.md` | P2 / P3 optimization phased checklists — **COMPLETE** |
@@ -454,11 +475,20 @@ at `Docs/featurelist.md`. Keep it in sync when process guidance changes.
 
 ## Next Session Plan
 
-**OpenRouter follow-up (2026-09-25):** a user screenshot confirms a live GLM 5.3 Flash terminal tool cycle and exposed four presentation/evidence issues. The wrapper is now filtered by private OSC start/completion events, tables render in the chat pane, paragraph spacing is compact, and the prompt asks for complete diagnostic evidence. A real local zsh cycle and 152 focused parser/chat/AI tests pass. Next, visually verify the updated running app and compare the same memory question with a stronger OpenRouter model when a test key or app UI is accessible; this session could not run that network comparison because Keychain access was unavailable and the app-control connection timed out before returning UI state. See `Docs/OpenRouterArchitecture.md` and `Docs/featurelist.md`. The installed Xcode lacks the Metal Toolchain, so app build checks exclude `TerminalShaders.metal`. The previous full-suite attempt stopped on actor-conformance test doubles before the documented load-sensitive test; the coordinator test double was fixed in this follow-up, while two unrelated files remain.
+**State of `master` (checked 2026-09-28):** the R2b candidate is **merged**, not a local candidate.
+Commit `c685d73` committed it together with `TerminalSchedulingDiagnostics`, and PR #28 merged
+`perf/throughput-profiling-and-pty-fix` into `master` on 2026-09-12. Master therefore ships the
+actor-call changes whose performance `Docs/R2bBenchmarkResults.md` could not validate — all three
+direct/off pair medians favored baseline `af933f4` (0.88x, 0.29x, 0.87x), so a regression is
+possible. The OpenRouter migration (`005b677`, `e1f5d96`) landed on top.
 
-**Last completed milestone (2026-09-06/07): RenderCost R2b implementation and focused verification.**
-R2b stays open for the throughput-variability investigation; do not reimplement the actor-call changes.
+**Blocker for any test run:** the test target does not compile on Xcode 27 / Swift 6.4 — four
+actor-conformance errors in test doubles in `SessionManagerRenderingPathTests` and
+`SessionManagerSFTPSidebarTests` (see Build & Test). Fixing those two files first is cheap and
+unblocks every focused suite, including the 21 rendering-path tests R2b depends on. The Metal
+Toolchain is installed again; stop excluding `TerminalShaders.metal` from builds.
 
+**R2b — what was done (2026-09-06/07); do not reimplement:**
 - `TerminalEngine.feedAndCollectOutcome(Data)` preserves ordinary `feed`'s Bool/queueing contract
   while collecting modes, sync exits and the live sync fallback frame for the streaming reader.
   `handleFeedOutcome` applies them in one MainActor handoff with no post-feed engine reads.
@@ -466,35 +496,37 @@ R2b stays open for the throughput-variability investigation; do not reimplement 
   Ordinary publishes include housekeeping in the second result. The drain loop collects
   housekeeping once after the final snapshot, preserving bell consumption and throttled text.
 - Metadata is applied before history observation awaits, avoiding a stale-mode overwrite.
-- `visibleTextScan` now sums extraction and observation separately (two timer calls per refresh).
+- `visibleTextScan` sums extraction and observation separately (two timer calls per refresh).
   Outcome collection is inside `feedCall`; ordinary-publish collection is in `publishEngineWait`.
-- Debug and Release builds succeeded. Focused tests: **167 tests, 0 failures, 2 instrumentation-only
-  skips**: rendering 21, parser 125, history 8, perf 7, benchmark 6. No full-suite run or claim.
+- Opt-in `--perf-scheduling` diagnostics exist (thread CPU vs wall around
+  `processGroundTextBytes`, batch sizes, `burstEnter`/`burstRevert`/`suspendedPublish` events)
+  but **have never been run** — no results are recorded anywhere.
 
-**Starting point for the next task:** fresh baseline `af933f4` and the R2b candidate both remain
-bimodal. Three instrumented interleaved pairs gave median to-sentinel ratios **5.01x, 0.33x,
-1.02x**. In a single unchanged candidate launch, parse/grid elapsed time rose from ~270 ms to
-780 ms while to-sentinel throughput fell from ~19 to 5.88 MB/s. Direct launch with instrumentation
-off also varies, so neither signposts nor LaunchServices alone explains it. All three direct/off
-pair medians favor baseline (0.88x, 0.29x, 0.87x); a performance regression cannot be ruled out. All runs had zero
-windows; no real rendered-throughput claim is supported.
+**Why R2b is open:** both baseline `af933f4` and the candidate are bimodal. Instrumented pair
+medians: **5.01x, 0.33x, 1.02x**. In one unchanged candidate launch, parse/grid time rose from
+~270 ms to 780 ms while to-sentinel throughput fell from ~19 to 5.88 MB/s. Direct launch with
+instrumentation off also varies. All runs had zero windows; no rendered-throughput claim holds.
 
 **Next actions / end point:**
-1. Read `Docs/RenderCost.md` and `Docs/R2bBenchmarkResults.md`, including all pairs, not just the
-   first apparent win. Preserve the current changes and inspect git status before proceeding.
-2. Distinguish CPU work from scheduler suspension: add opt-in thread CPU versus wall timing around
-   synchronous `grid.processGroundTextBytes` calls (not across async suspension/thread migration).
-   Correlate with burst entry/revert counts, batch sizes, process activity and host load.
-3. Establish whether the slow regime is scheduler/CPU placement or application scheduling before
-   changing the 8/16/24/40 ms publish intervals or burst thresholds. Leave visible-text extraction
-   alone unless new evidence changes its ranking; it remained below 0.4% in the candidate.
-4. Compare interleaved Release runs with identical launch/window/instrumentation conditions.
-   Restore genuine window acquisition before claiming rendered or peer-comparable throughput.
-5. Close R2b only when the remaining variability is explained or bounded enough for a repeatable
-   comparison; update `Docs/featurelist.md`, `Docs/RenderCost.md`, this plan and `AGENTS.md`.
+1. Fix the two test files so focused suites compile; re-run `SessionManagerRenderingPathTests`
+   and `VTParserTests` to confirm the merged R2b code still passes on Xcode 27.
+2. Run `--render-detached --perf-scheduling` on the current Release build, several launches,
+   recording `sysctl -n vm.loadavg` and top CPU consumers. In slow runs, does ground-text CPU
+   stay flat while wall grows (scheduler/placement), or does CPU itself grow (real work)?
+   Correlate with burst transitions and batch-size distribution.
+3. Only with that evidence, decide between tuning the 8/16/24/40 ms publish intervals / burst
+   thresholds and reverting R2b. Leave visible-text extraction alone (<0.4% in the candidate).
+4. Repeat interleaved Release A/B against `af933f4` under identical launch/window/instrumentation
+   conditions. Restore genuine window acquisition before any rendered or peer-comparable claim.
+5. Close R2b when the variability is explained or bounded; update `Docs/featurelist.md`,
+   `Docs/RenderCost.md`, this plan and `AGENTS.md`.
 
-Build/test logs and comparison bundles are `/tmp/prossh-r2b-baseline*` and
-`/tmp/prossh-r2b-candidate*`; raw reports and the exact reproduction commands are preserved in
-`Docs/R2bBenchmarkResults.md`. `/tmp` files are conveniences, not durable evidence.
+**Also pending (OpenRouter, 2026-09-25):** visually verify the tool-wrapper hiding, table
+rendering and paragraph spacing in the running app, and compare the GLM 5.3 Flash memory answer
+against a stronger OpenRouter model once a test key is available. See
+`Docs/OpenRouterArchitecture.md`.
+
+Raw R2b reports and exact reproduction commands are in `Docs/R2bBenchmarkResults.md`; the
+`/tmp/prossh-r2b-*` bundles were never durable and may be gone.
 
 Unrelated open work remains in `Docs/bugs.md`, `Docs/PhaseB.md` and the `Docs/` vs `docs/` case split.
