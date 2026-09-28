@@ -31,6 +31,9 @@ import os.signpost
     var cachedScrollbackCountBySessionID: [UUID: Int] = [:]
     /// Throttles expensive visible-text extraction/publishing during heavy output.
     var lastShellBufferPublishAtBySessionID: [UUID: Date] = [:]
+    /// Trailing refresh for a throttled shell-buffer update, so the last output
+    /// before a quiet period is never left out of `shellBuffers`.
+    private var deferredShellBufferRefreshTasksBySessionID: [UUID: Task<Void, Never>] = [:]
     /// Tracks last bell event time per session for throughput mode rate-limiting.
     var lastBellTimeBySessionID: [UUID: Date] = [:]
     var pendingResizeTasks: [UUID: Task<Void, Never>] = [:]
@@ -117,6 +120,8 @@ import os.signpost
         cancelPendingSnapshotPublish(for: sessionID)
         desiredPTYBySessionID.removeValue(forKey: sessionID)
         lastShellBufferPublishAtBySessionID.removeValue(forKey: sessionID)
+        deferredShellBufferRefreshTasksBySessionID[sessionID]?.cancel()
+        deferredShellBufferRefreshTasksBySessionID.removeValue(forKey: sessionID)
         lastBellTimeBySessionID.removeValue(forKey: sessionID)
         pendingSnapshotPublishStartedAtBySessionID.removeValue(forKey: sessionID)
         scrollOffsetBySessionID.removeValue(forKey: sessionID)
@@ -688,17 +693,22 @@ import os.signpost
         // Apply captured metadata before history observation suspends MainActor,
         // so a newer feed's input modes cannot be overwritten after that await.
         if let visibleLines = state.visibleLines {
-            let visibleTextStart = TerminalPerf.now()
-            manager.shellBuffers[sessionID] = visibleLines
-            if let completedBlock = await manager.terminalHistoryIndex.observeVisibleLines(
-                sessionID: sessionID,
-                lines: visibleLines,
-                at: .now
-            ) {
-                manager.publishCommandCompletion(completedBlock)
-            }
-            TerminalPerf.record(.visibleTextScan, since: visibleTextStart)
+            await applyVisibleLines(visibleLines, for: sessionID)
         }
+    }
+
+    private func applyVisibleLines(_ visibleLines: [String], for sessionID: UUID) async {
+        guard let manager else { return }
+        let visibleTextStart = TerminalPerf.now()
+        manager.shellBuffers[sessionID] = visibleLines
+        if let completedBlock = await manager.terminalHistoryIndex.observeVisibleLines(
+            sessionID: sessionID,
+            lines: visibleLines,
+            at: .now
+        ) {
+            manager.publishCommandCompletion(completedBlock)
+        }
+        TerminalPerf.record(.visibleTextScan, since: visibleTextStart)
     }
 
     // MARK: - Scroll state publishing
@@ -951,12 +961,43 @@ import os.signpost
         let publishInterval = isInBurstMode(for: sessionID)
             ? throughputShellBufferPublishInterval
             : shellBufferPublishInterval
-        if let lastPublished = lastShellBufferPublishAtBySessionID[sessionID],
-           now.timeIntervalSince(lastPublished) < publishInterval {
-            return false
+        if let lastPublished = lastShellBufferPublishAtBySessionID[sessionID] {
+            let elapsed = now.timeIntervalSince(lastPublished)
+            if elapsed < publishInterval {
+                // Defer rather than drop: if output stops here, no later publish
+                // would bring shellBuffers up to date.
+                scheduleDeferredShellBufferRefresh(for: sessionID, after: publishInterval - elapsed)
+                return false
+            }
         }
         lastShellBufferPublishAtBySessionID[sessionID] = now
+        deferredShellBufferRefreshTasksBySessionID[sessionID]?.cancel()
+        deferredShellBufferRefreshTasksBySessionID.removeValue(forKey: sessionID)
         return true
+    }
+
+    private func scheduleDeferredShellBufferRefresh(for sessionID: UUID, after delay: TimeInterval) {
+        guard deferredShellBufferRefreshTasksBySessionID[sessionID] == nil else { return }
+        deferredShellBufferRefreshTasksBySessionID[sessionID] = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled, let self else { return }
+            self.deferredShellBufferRefreshTasksBySessionID.removeValue(forKey: sessionID)
+            await self.refreshDeferredShellBuffer(for: sessionID)
+        }
+    }
+
+    private func refreshDeferredShellBuffer(for sessionID: UUID) async {
+        guard let manager, let engine = manager.engines[sessionID] else { return }
+        if isPublishingSuspended {
+            // The resume catch-up publish clears the throttle and refreshes text.
+            suspendedDirtySessionIDs.insert(sessionID)
+            return
+        }
+        // Any publish racing this refresh is throttled and defers again.
+        lastShellBufferPublishAtBySessionID[sessionID] = .now
+        guard let visibleLines = await engine.primaryBufferVisibleText() else { return }
+        guard manager.engines[sessionID] != nil else { return }
+        await applyVisibleLines(visibleLines, for: sessionID)
     }
 
     private func publishInterval(for debounceMode: PublishDebounceMode) -> Duration {

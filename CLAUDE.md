@@ -127,9 +127,10 @@ xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform
 - Test bundle: `ProSSHMacTests` — 5 files at the bundle root plus 48 in `ProSSHMacTests/Terminal/Tests/`.
   Migration out of the app target is **complete**; no test sources remain under `ProSSHMac/`.
 - Some tests require the host app process (UI/AppKit-backed suites).
-- **Full-suite baseline: 883 tests, 1 failure** — see the flaky-test gotcha below. The last
-  clean full-suite run recorded 870/0 on 2026-09-03, before later tests were added. A red run in a
-  suite you touched is yours; a red `SessionManagerRenderingPathTests` under full-suite load is not.
+- **Full-suite baseline: 883 tests, 1 failure** (pre-Xcode 27). That one failure was
+  `testLocalSessionStreamsProgressiveCommandOutput`, which was a real bug, not flakiness, fixed
+  2026-09-28 — see the dropped-refresh gotcha below. A red run in a suite you touched is yours;
+  so is a red `SessionManagerRenderingPathTests` — it is no longer an expected failure.
 - **Test doubles for app protocols must be `@MainActor final class`, not `actor`.** Under Xcode
   27.0 / Swift 6.4 the test module sees `KnownHostsStoreProtocol`, `SSHTransporting`,
   `SSHForwardChannel` and `SSHShellChannel` as `MainActor`-isolated (the diagnostic points at
@@ -378,16 +379,24 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-09-2
   actually found, so under `sh`/`bash` it scanned every chunk forever — 92.6% of local-shell wall
   time. Any "scan the opening output for X" filter added to the PTY path must be bounded the same
   way. Tests: `ZshStartupWarningFilterTests`.
-- **`SessionManagerRenderingPathTests.testLocalSessionStreamsProgressiveCommandOutput` is
-  load-flaky.** It spawns a real `/bin/zsh` and waits 8s for output. Measured 2026-09-06 on an
-  unchanged tree: **0.689s passing alone**, 21/21 green running its own suite twice, and **8.094s
-  timing out** when four suites run in one `xcodebuild test` invocation. It is not only full-suite
-  load — four suites is enough. Last full-suite figure: 883 tests, 1 failure, this one. Treat a
-  failure as environment; confirm by re-running the suite alone before believing a regression.
-  **2026-09-28: it also fails alone.** Three isolated runs at load average ~7: pass 0.696s, fail
-  8.119s, pass 0.688s. The outcome is binary — sub-second or the full 8s timeout, never slow —
-  which points to a startup race (input sent before zsh is ready?) rather than CPU starvation.
-  Uninvestigated; "load-flaky" may be the wrong diagnosis.
+- **The `shellBuffers` throttle must defer, never drop.** `shouldPublishShellBuffer` limits
+  visible-text extraction to one per 33 ms, or per **200 ms in burst mode**. Burst mode switches on
+  at shell startup (4 publish requests in 16 ms) and stays on while output arrives <200 ms apart.
+  Until 2026-09-28 a throttled refresh was simply dropped, so when a command's final output landed
+  inside the window, `shellBuffers` stayed stale until the *next* output, while the engine
+  held the right screen. That breaks terminal search, copy-last-line, the AI's
+  `get_current_screen` and per-turn screen snapshot, and history-index command completion. It also
+  made `testLocalSessionStreamsProgressiveCommandOutput` fail 9/12 even alone, for years blamed on
+  "load": pass/fail tracked the final-publish gap (196/199 ms failed, 204-211 ms passed). Now a
+  throttled refresh schedules one trailing `refreshDeferredShellBuffer` at window end (alt-buffer
+  safe via `TerminalEngine.primaryBufferVisibleText()`). Tests:
+  `testThrottledShellBufferRefreshCatchesUpAfterOutputStops`,
+  `testDeferredShellBufferRefreshSkipsAlternateBuffer`. A failure of the local-zsh test is now a
+  real regression. Lesson: a pass-or-full-timeout (never merely slow) test is a lost update, not load.
+- **`testAlternateBufferSplitRedrawPublishesOnlyAfterQuiescentWindow` has thin timing margins** —
+  12 ms sleeps against a 16 ms reschedule interval. It failed once in a suite run on 2026-09-28,
+  then passed 15/15 alone and 8/8 suite runs, both with and without the deferred-refresh change.
+  If it goes red, re-run before suspecting code.
 - **The rendered benchmark gets no window when launched with arguments.** `open -n App.app` restores
   a window; `open -n App.app --args <anything at all>` yields a process with `NSApp.windows.count ==
   0` — a harmless unused flag reproduces it, and `applicationShouldHandleReopen` does not recover it.
@@ -489,8 +498,8 @@ possible. The OpenRouter migration (`005b677`, `e1f5d96`) landed on top.
 **Test build fixed (2026-09-28):** the four actor test doubles in `SessionManagerRenderingPathTests`
 and `SessionManagerSFTPSidebarTests` are now `@MainActor final class` (see Build & Test), and
 `build-for-testing` succeeds on Xcode 27. The merged R2b code passes on Xcode 27: `VTParserTests`
-125/0, `SessionManagerRenderingPathTests` 20/21 with only the known local-zsh test failing
-(it now fails alone too — see its gotcha), `SessionManagerSFTPSidebarTests` 3/0,
+125/0, `SessionManagerRenderingPathTests` 23/23 after the same-day dropped-refresh fix (the
+old "flaky" local-zsh test was a real bug — see its gotcha), `SessionManagerSFTPSidebarTests` 3/0,
 `SessionAIToolCoordinatorTests` 3/0. The Metal Toolchain is installed again; stop excluding
 `TerminalShaders.metal` from builds.
 

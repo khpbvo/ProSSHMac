@@ -786,6 +786,15 @@ actor TerminalEngine {
         )
     }
 
+    /// Visible text for a deferred shell-buffer refresh. Nil in the alternate
+    /// buffer, and unlike housekeeping it consumes no bells.
+    func primaryBufferVisibleText() -> [String]? {
+        guard !grid.usingAlternateBuffer else { return nil }
+        let start = TerminalPerf.now()
+        defer { TerminalPerf.record(.visibleTextScan, since: start) }
+        return grid.visibleText()
+    }
+
     func snapshot() -> GridSnapshot { grid.snapshot() }
     func liveSnapshot() -> GridSnapshot { grid.liveSnapshot() }
     func snapshot(scrollOffset: Int) -> GridSnapshot { grid.snapshot(scrollOffset: scrollOffset) }

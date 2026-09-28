@@ -422,6 +422,76 @@ final class SessionManagerRenderingPathTests: XCTestCase {
     }
 
     @MainActor
+    func testThrottledShellBufferRefreshCatchesUpAfterOutputStops() async {
+        let manager = SessionManager(
+            transport: MockSSHTransport(),
+            knownHostsStore: InMemoryKnownHostsStore()
+        )
+        await manager.injectScreenshotSessions()
+
+        guard let session = manager.sessions.first,
+              let engine = manager.engines[session.id] else {
+            XCTFail("Expected an injected session with an engine")
+            return
+        }
+        let coordinator = manager.renderingCoordinator
+
+        _ = await engine.feed(Data("\r\nTHROTTLE_FIRST\r\n".utf8))
+        coordinator.lastShellBufferPublishAtBySessionID.removeValue(forKey: session.id)
+        await coordinator.publishGridState(for: session.id, engine: engine)
+        XCTAssertTrue(shellBufferText(manager, session.id).contains("THROTTLE_FIRST"))
+
+        // The final output of a command lands inside the shell-buffer throttle window.
+        _ = await engine.feed(Data("THROTTLE_LAST\r\n".utf8))
+        coordinator.lastShellBufferPublishAtBySessionID[session.id] = .now
+        await coordinator.publishGridState(for: session.id, engine: engine)
+        XCTAssertFalse(
+            shellBufferText(manager, session.id).contains("THROTTLE_LAST"),
+            "Precondition: this publish should have been throttled."
+        )
+
+        // No further output arrives, so nothing else will publish.
+        let caughtUp = await waitForShellBufferContains(
+            manager: manager,
+            sessionID: session.id,
+            text: "THROTTLE_LAST",
+            timeout: .seconds(1)
+        )
+        XCTAssertTrue(caughtUp, "A throttled shell-buffer refresh must be deferred, not dropped.")
+    }
+
+    @MainActor
+    func testDeferredShellBufferRefreshSkipsAlternateBuffer() async {
+        let manager = SessionManager(
+            transport: MockSSHTransport(),
+            knownHostsStore: InMemoryKnownHostsStore()
+        )
+        await manager.injectScreenshotSessions()
+
+        guard let session = manager.sessions.first,
+              let engine = manager.engines[session.id] else {
+            XCTFail("Expected an injected session with an engine")
+            return
+        }
+        let coordinator = manager.renderingCoordinator
+
+        _ = await engine.feed(Data("\r\nMAIN_SCREEN\r\n".utf8))
+        coordinator.lastShellBufferPublishAtBySessionID[session.id] = .now
+        await coordinator.publishGridState(for: session.id, engine: engine)
+        manager.shellBuffers[session.id] = ["KEEP_MAIN_BUFFER"]
+
+        // A TUI takes over before the deferred refresh fires.
+        _ = await engine.feed(Data("\u{1B}[?1049h\u{1B}[2J\u{1B}[1;1HALT_SCREEN".utf8))
+
+        try? await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(
+            manager.shellBuffers[session.id],
+            ["KEEP_MAIN_BUFFER"],
+            "A deferred refresh must not copy alternate-buffer contents into the shell buffer."
+        )
+    }
+
+    @MainActor
     func testSemanticPromptRedrawPublishesOnlyAfterQuiescentWindow() async {
         let manager = SessionManager(
             transport: MockSSHTransport(),
@@ -954,6 +1024,10 @@ final class SessionManagerRenderingPathTests: XCTestCase {
         }
 
         return manager.shellBuffers[sessionID, default: []].joined(separator: "\n").contains(text)
+    }
+
+    private func shellBufferText(_ manager: SessionManager, _ sessionID: UUID) -> String {
+        manager.shellBuffers[sessionID, default: []].joined(separator: "\n")
     }
 
     private func snapshotText(
