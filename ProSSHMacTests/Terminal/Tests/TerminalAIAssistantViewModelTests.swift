@@ -233,6 +233,24 @@ final class TerminalAIAssistantViewModelTests: XCTestCase {
         XCTAssertTrue(viewModel.reasoningPanelText.contains("Thinking done."))
     }
 
+    func testReasoningWordFragmentsRenderAsSentencesWithIntentionalNewlines() async throws {
+        let service = MockAgentService(nextReply: AIAgentReply(text: "Done.", toolCallsExecuted: 0))
+        let fragments = ["Hel", "lo ", "how ", "can ", "I ", "help ", "you?", "\nNext line."]
+        service.streamEvents = fragments.flatMap {
+            [.reasoningTextDelta($0), .reasoningSummaryDelta($0)]
+        }
+        let viewModel = TerminalAIAssistantViewModel(agentService: service, streamChunkDelayNanoseconds: 0)
+        viewModel.draftPrompt = "Say hello"
+        viewModel.submitPrompt(for: UUID())
+
+        try await waitUntil(timeout: 1.5) { !viewModel.isSending }
+
+        let expected = "Hello how can I help you?\nNext line."
+        XCTAssertEqual(viewModel.formattedReasoningSummary, expected)
+        XCTAssertEqual(viewModel.formattedReasoningDetails, expected)
+        XCTAssertEqual(String(AIAssistantRenderer.markdownText(viewModel.formattedReasoningDetails).characters), expected)
+    }
+
     func testSubmitPromptKeepsStreamedAssistantTextWhenFinalReplyTextEmpty() async throws {
         let sessionID = UUID()
         let service = MockAgentService(

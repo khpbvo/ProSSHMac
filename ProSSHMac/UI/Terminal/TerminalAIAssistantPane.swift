@@ -150,40 +150,45 @@ struct TerminalAIAssistantPane: View {
             }
             .foregroundStyle(.secondary)
 
-            ScrollViewReader { proxy in
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 8) {
-                        if !hasContent {
-                            Text("Reasoning summaries will appear here while the assistant is working.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        } else {
-                            if !summaryText.isEmpty {
-                                reasoningSection(title: "Summary", text: summaryText)
+            GeometryReader { geometry in
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 8) {
+                            if !hasContent {
+                                Text("Reasoning summaries will appear here while the assistant is working.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            } else {
+                                if !summaryText.isEmpty {
+                                    reasoningSection(title: "Summary", text: summaryText)
+                                }
+                                if !detailText.isEmpty {
+                                    reasoningSection(title: "Thinking", text: detailText)
+                                }
                             }
-                            if !detailText.isEmpty {
-                                reasoningSection(title: "Thinking", text: detailText)
-                            }
+                            Color.clear
+                                .frame(height: 1)
+                                .id(reasoningBottomID)
                         }
-                        Color.clear
-                            .frame(height: 1)
-                            .id(reasoningBottomID)
+                        // Give text a concrete wrapping width as streamed
+                        // content grows and the sidebar is resized.
+                        .frame(width: geometry.size.width, alignment: .leading)
                     }
-                }
-                .onChange(of: viewModel.formattedReasoningSummary) { _, _ in
-                    withAnimation(.linear(duration: 0.08)) {
-                        proxy.scrollTo(reasoningBottomID, anchor: .bottom)
+                    .onChange(of: viewModel.formattedReasoningSummary) { _, _ in
+                        withAnimation(.linear(duration: 0.08)) {
+                            proxy.scrollTo(reasoningBottomID, anchor: .bottom)
+                        }
                     }
-                }
-                .onChange(of: viewModel.formattedReasoningDetails) { _, _ in
-                    withAnimation(.linear(duration: 0.08)) {
-                        proxy.scrollTo(reasoningBottomID, anchor: .bottom)
+                    .onChange(of: viewModel.formattedReasoningDetails) { _, _ in
+                        withAnimation(.linear(duration: 0.08)) {
+                            proxy.scrollTo(reasoningBottomID, anchor: .bottom)
+                        }
                     }
-                }
-                .onChange(of: viewModel.isReasoningStreaming) { _, _ in
-                    withAnimation(.linear(duration: 0.08)) {
-                        proxy.scrollTo(reasoningBottomID, anchor: .bottom)
+                    .onChange(of: viewModel.isReasoningStreaming) { _, _ in
+                        withAnimation(.linear(duration: 0.08)) {
+                            proxy.scrollTo(reasoningBottomID, anchor: .bottom)
+                        }
                     }
                 }
             }
