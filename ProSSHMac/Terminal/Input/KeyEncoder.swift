@@ -228,6 +228,11 @@ struct KeyEncoder: Sendable {
     }
 
     private func encodeEnter(modifiers: KeyModifiers) -> [UInt8] {
+        // Keep Shift+Enter distinct from submit for multiline terminal inputs.
+        // CSI-u uses Enter's codepoint (13) and Shift's modifier parameter (2).
+        if modifiers == .shift {
+            return csi("13;2u")
+        }
         let base: [UInt8] = options.enterSendsCRLF ? [0x0D, 0x0A] : [0x0D]
         return maybePrefixEscape(base, modifiers: modifiers)
     }

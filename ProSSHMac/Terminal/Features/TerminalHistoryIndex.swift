@@ -71,6 +71,12 @@ actor TerminalHistoryIndex {
         }
     }
 
+    private enum InputEscapeState: Sendable {
+        case none
+        case escape
+        case controlSequence
+    }
+
     private struct SessionHistoryState: Sendable {
         var blocks: [CommandBlock] = []
         var activeCommand: ActiveCommandContext?
@@ -78,7 +84,7 @@ actor TerminalHistoryIndex {
         var semanticPromptSeen = false
         var promptHints: PromptHints?
         var rawInputBuffer = ""
-        var escapeSequenceInProgress = false
+        var inputEscapeState: InputEscapeState = .none
     }
 
     private var sessionStates: [UUID: SessionHistoryState] = [:]
@@ -122,7 +128,7 @@ actor TerminalHistoryIndex {
         var state = sessionStates[sessionID] ?? SessionHistoryState()
         startCommand(command: command, for: sessionID, at: at, source: source, state: &state)
         state.rawInputBuffer.removeAll(keepingCapacity: true)
-        state.escapeSequenceInProgress = false
+        state.inputEscapeState = .none
         sessionStates[sessionID] = state
     }
 
@@ -131,15 +137,29 @@ actor TerminalHistoryIndex {
         for scalar in input.unicodeScalars {
             let value = scalar.value
 
-            if state.escapeSequenceInProgress {
-                if (0x40...0x7E).contains(value) {
-                    state.escapeSequenceInProgress = false
+            switch state.inputEscapeState {
+            case .escape:
+                // '[' and 'O' introduce CSI/SS3; neither ends the sequence.
+                // Keep the state across input chunks until the actual final byte.
+                if value == 0x5B || value == 0x4F {
+                    state.inputEscapeState = .controlSequence
+                } else if value != 0x1B {
+                    state.inputEscapeState = .none
                 }
                 continue
+            case .controlSequence:
+                if value == 0x1B {
+                    state.inputEscapeState = .escape
+                } else if (0x40...0x7E).contains(value) {
+                    state.inputEscapeState = .none
+                }
+                continue
+            case .none:
+                break
             }
 
             if value == 0x1B { // ESC
-                state.escapeSequenceInProgress = true
+                state.inputEscapeState = .escape
                 continue
             }
 

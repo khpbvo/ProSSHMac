@@ -125,6 +125,32 @@ final class KeyEncoderTests: XCTestCase {
     }
 
     @MainActor
+    func testShiftEnterIsDistinctFromSubmitInBothEnterModes() {
+        for crlf in [false, true] {
+            let encoder = KeyEncoder(options: .init(enterSendsCRLF: crlf))
+            assertEncoded(
+                encoder,
+                event: KeyEvent(key: .enter, modifiers: .shift),
+                expected: [0x1B, 0x5B, 0x31, 0x33, 0x3B, 0x32, 0x75]
+            )
+        }
+    }
+
+    @MainActor
+    func testOtherEnterModifiersPreserveLegacyEncoding() {
+        for crlf in [false, true] {
+            let encoder = KeyEncoder(options: .init(enterSendsCRLF: crlf))
+            let base: [UInt8] = crlf ? [0x0D, 0x0A] : [0x0D]
+            for modifiers: KeyModifiers in [[], .ctrl, [.shift, .ctrl]] {
+                assertEncoded(encoder, event: KeyEvent(key: .enter, modifiers: modifiers), expected: base)
+            }
+            for modifiers: KeyModifiers in [.alt, [.shift, .alt], [.ctrl, .alt], [.shift, .ctrl, .alt]] {
+                assertEncoded(encoder, event: KeyEvent(key: .enter, modifiers: modifiers), expected: [0x1B] + base)
+            }
+        }
+    }
+
+    @MainActor
     func testTabAndEscape() {
         let encoder = KeyEncoder()
         assertEncoded(encoder, event: KeyEvent(key: .tab), expected: [0x09])

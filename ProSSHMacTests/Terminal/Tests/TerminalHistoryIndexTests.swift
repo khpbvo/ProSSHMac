@@ -98,6 +98,28 @@ final class TerminalHistoryIndexTests: XCTestCase {
     }
 
     @MainActor
+    func testShiftEnterAndOtherKeySequencesDoNotPolluteOrSubmitCommandHistory() async {
+        for sequence in ["\u{1B}[13;2u", "\u{1B}[1;2A", "\u{1B}OP"] {
+            for splitIntoScalars in [false, true] {
+                let index = TerminalHistoryIndex()
+                let sessionID = UUID()
+                await index.registerSession(sessionID: sessionID, username: "kevin", hostname: "box")
+                await index.recordRawInput(sessionID: sessionID, input: "echo ")
+                let chunks = splitIntoScalars ? sequence.unicodeScalars.map { String($0) } : [sequence]
+                for chunk in chunks {
+                    await index.recordRawInput(sessionID: sessionID, input: chunk)
+                }
+                let outputBeforeSubmit = await index.activeCommandRawOutput(sessionID: sessionID)
+                XCTAssertNil(outputBeforeSubmit, "A key sequence must not submit the pending command")
+                await index.recordRawInput(sessionID: sessionID, input: "hello\r")
+                _ = await index.recordSemanticEvent(sessionID: sessionID, event: .commandEnd(exitCode: 0))
+                let recent = await index.recentCommands(sessionID: sessionID, limit: 10)
+                XCTAssertEqual(recent.map(\.command), ["echo hello"])
+            }
+        }
+    }
+
+    @MainActor
     func testSearchMatchesCommandAndOutput() async {
         let index = TerminalHistoryIndex(maxBlocksPerSession: 20)
         let sessionID = UUID()
