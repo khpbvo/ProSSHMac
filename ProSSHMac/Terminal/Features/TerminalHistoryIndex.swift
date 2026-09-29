@@ -85,6 +85,7 @@ actor TerminalHistoryIndex {
         var promptHints: PromptHints?
         var rawInputBuffer = ""
         var inputEscapeState: InputEscapeState = .none
+        var quotedInputPending = false
     }
 
     private var sessionStates: [UUID: SessionHistoryState] = [:]
@@ -129,6 +130,7 @@ actor TerminalHistoryIndex {
         startCommand(command: command, for: sessionID, at: at, source: source, state: &state)
         state.rawInputBuffer.removeAll(keepingCapacity: true)
         state.inputEscapeState = .none
+        state.quotedInputPending = false
         sessionStates[sessionID] = state
     }
 
@@ -136,6 +138,14 @@ actor TerminalHistoryIndex {
         var state = sessionStates[sessionID] ?? SessionHistoryState()
         for scalar in input.unicodeScalars {
             let value = scalar.value
+
+            if state.quotedInputPending {
+                state.quotedInputPending = false
+                if value >= 0x20 || value == 0x0A || value == 0x0D {
+                    state.rawInputBuffer.unicodeScalars.append(scalar)
+                }
+                continue
+            }
 
             switch state.inputEscapeState {
             case .escape:
@@ -156,6 +166,11 @@ actor TerminalHistoryIndex {
                 continue
             case .none:
                 break
+            }
+
+            if value == 0x16 { // quoted-insert: the next newline is editing, not submit
+                state.quotedInputPending = true
+                continue
             }
 
             if value == 0x1B { // ESC

@@ -49,6 +49,14 @@ enum LocalTerminalSubsystem {
             )
         }
 
+        if options.keyboardDisambiguation,
+           !modifiers.intersection([.ctrl, .alt]).isEmpty,
+           let raw = event.characters(byApplyingModifiers: []), let ch = raw.first,
+           let bytes = encoder.encode(KeyEvent(key: .character(ch), modifiers: modifiers)) {
+            return LocalTerminalInputPayload(bytes: bytes,
+                                             eventType: localInputEventType(for: event, modifiers: modifiers))
+        }
+
         if modifiers.contains(.ctrl),
            let raw = event.charactersIgnoringModifiers,
            !raw.isEmpty {

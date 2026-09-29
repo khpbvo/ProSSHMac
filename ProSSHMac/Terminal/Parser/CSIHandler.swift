@@ -32,6 +32,36 @@ nonisolated enum CSIHandler {
     ) async {
         let isPrivate = privateMarker == ByteRange.questionMark
 
+        // Application-requested keyboard reporting. Handle these before DEC
+        // modes, cursor restore and SGR, which share the same final bytes.
+        if intermediates.isEmpty && byte == 0x75 && privateMarker != 0 {
+            if isPrivate {
+                await responseHandler?(Array("\u{1B}[?\(grid.keyboardDisambiguation ? 1 : 0)u".utf8))
+            } else if [UInt8(0x3E), 0x3C, 0x3D].contains(privateMarker) {
+                let value = params.first?.first ?? (privateMarker == 0x3C ? 1 : 0)
+                grid.updateKeyboardMode(marker: privateMarker, value: value,
+                                        mode: params.dropFirst().first?.first ?? 1)
+                await inputModeState?.syncFromSnapshot(grid.inputModeSnapshot())
+            }
+            return
+        }
+
+        if intermediates.isEmpty && privateMarker == ByteRange.greaterThan {
+            if byte == 0x6D { // XTMODKEYS: CSI > 4 ; level m
+                if params.isEmpty || params.first?.first == 4 {
+                    let level = params.dropFirst().first?.first ?? 0
+                    grid.modifyOtherKeys = (1...2).contains(level) ? level : 0
+                    await inputModeState?.syncFromSnapshot(grid.inputModeSnapshot())
+                }
+                return
+            }
+            if byte == 0x6E && params.first?.first == 4 { // CSI > 4 n
+                grid.modifyOtherKeys = 0
+                await inputModeState?.syncFromSnapshot(grid.inputModeSnapshot())
+                return
+            }
+        }
+
         // DECRQM: CSI ? Ps $ p — Request Mode (DEC private).
         // Must be checked before dispatchPrivateMode because that path
         // doesn't receive intermediates and would silently ignore this.
@@ -71,11 +101,9 @@ nonisolated enum CSIHandler {
             return
         }
 
-        // Other private markers (>, <, =) from Kitty keyboard protocol,
-        // xterm key modifier options, etc. — silently ignore.
-        // Without this guard, sequences like CSI > 1 u (Kitty push mode)
-        // would be misinterpreted as CSI u (restore cursor), and
-        // CSI > 4;1 m (xterm modifier) would corrupt SGR attributes.
+        // Other unsupported private-marker sequences — silently ignore.
+        // Unknown private sequences must never fall through to cursor restore
+        // or SGR attribute changes.
         if privateMarker != 0 {
             return
         }

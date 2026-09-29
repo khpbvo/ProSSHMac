@@ -12,7 +12,7 @@ final class TerminalInputCaptureViewTests: XCTestCase {
                     view.isEnabled = true
                     view.sessionID = sessionID
                     view.isLocalSession = isLocal
-                    view.keyEncoderOptions = { .init(enterSendsCRLF: crlf) }
+                    view.keyEncoderOptions = { .init(enterSendsCRLF: crlf, keyboardDisambiguation: true) }
                     var deliveries: [[UInt8]] = []
                     view.onSendBytes = { id, bytes, _ in
                         XCTAssertEqual(id, sessionID)
@@ -57,6 +57,18 @@ final class TerminalInputCaptureViewTests: XCTestCase {
             view.keyDown(with: event)
             XCTAssertFalse(view.performKeyEquivalent(with: event))
         }
+    }
+
+    func testDisambiguatedControlCharacterUsesPhysicalKeyInsteadOfControlByte() throws {
+        let event = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: .control, timestamp: 0,
+            windowNumber: 0, context: nil, characters: "\u{03}", charactersIgnoringModifiers: "c",
+            isARepeat: false, keyCode: 8
+        ))
+        let legacy = LocalTerminalSubsystem.encodeKeyEvent(event, options: .default)
+        XCTAssertEqual(legacy?.bytes, [0x03])
+        let extended = LocalTerminalSubsystem.encodeKeyEvent(event, options: .init(keyboardDisambiguation: true))
+        XCTAssertEqual(extended?.bytes, Array("\u{1B}[99;5u".utf8))
     }
 
     private func enterEvent(keyCode: UInt16, modifiers: NSEvent.ModifierFlags) throws -> NSEvent {

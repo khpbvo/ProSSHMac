@@ -229,8 +229,41 @@ extension TerminalGrid {
             applicationKeypad: applicationKeypad,
             bracketedPasteMode: bracketedPasteMode,
             mouseTracking: mouseTracking,
-            mouseEncoding: mouseEncoding
+            mouseEncoding: mouseEncoding,
+            keyboardDisambiguation: keyboardDisambiguation,
+            modifyOtherKeys: modifyOtherKeys
         )
+    }
+
+    /// Kitty push/pop/set operations. Support bit 1 and bound both screen stacks.
+    nonisolated func updateKeyboardMode(marker: UInt8, value: Int, mode: Int = 1) {
+        var stack = usingAlternateBuffer ? alternateKeyboardModeStack : primaryKeyboardModeStack
+        let enabled = value & 1 != 0
+        switch marker {
+        case 0x3E: // > push
+            if stack.count >= 16 { stack.removeFirst() }
+            stack.append(enabled)
+        case 0x3C: // < pop
+            let count = max(1, value)
+            if count >= stack.count { stack = [false] }
+            else { stack.removeLast(count) }
+        case 0x3D: // = set/enable/disable supported bits
+            switch mode {
+            case 1: stack[stack.count - 1] = enabled
+            case 2: stack[stack.count - 1] = (stack.last ?? false) || enabled
+            case 3: stack[stack.count - 1] = (stack.last ?? false) && !enabled
+            default: return
+            }
+        default: return
+        }
+        if usingAlternateBuffer { alternateKeyboardModeStack = stack }
+        else { primaryKeyboardModeStack = stack }
+    }
+
+    nonisolated func resetKeyboardModes() {
+        primaryKeyboardModeStack = [false]
+        alternateKeyboardModeStack = [false]
+        modifyOtherKeys = 0
     }
 
     /// Get the current cursor position.

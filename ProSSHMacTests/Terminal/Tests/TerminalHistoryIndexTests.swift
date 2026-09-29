@@ -99,7 +99,7 @@ final class TerminalHistoryIndexTests: XCTestCase {
 
     @MainActor
     func testShiftEnterAndOtherKeySequencesDoNotPolluteOrSubmitCommandHistory() async {
-        for sequence in ["\u{1B}[13;2u", "\u{1B}[1;2A", "\u{1B}OP"] {
+        for sequence in ["\u{1B}[13;2u", "\u{1B}[27;2;13~", "\u{1B}[1;2A", "\u{1B}OP"] {
             for splitIntoScalars in [false, true] {
                 let index = TerminalHistoryIndex()
                 let sessionID = UUID()
@@ -117,6 +117,23 @@ final class TerminalHistoryIndexTests: XCTestCase {
                 XCTAssertEqual(recent.map(\.command), ["echo hello"])
             }
         }
+    }
+
+    @MainActor
+    func testQuotedNewlineKeepsMultilineCommandPendingUntilOrdinaryEnter() async {
+        let index = TerminalHistoryIndex()
+        let sessionID = UUID()
+        await index.registerSession(sessionID: sessionID, username: "kevin", hostname: "box")
+        await index.recordRawInput(sessionID: sessionID, input: "printf first")
+        await index.recordRawInput(sessionID: sessionID, input: "\u{16}")
+        await index.recordRawInput(sessionID: sessionID, input: "\n")
+        await index.recordRawInput(sessionID: sessionID, input: "printf second")
+        let beforeSubmit = await index.activeCommandRawOutput(sessionID: sessionID)
+        XCTAssertNil(beforeSubmit)
+        await index.recordRawInput(sessionID: sessionID, input: "\r")
+        _ = await index.recordSemanticEvent(sessionID: sessionID, event: .commandEnd(exitCode: 0))
+        let commands = await index.recentCommands(sessionID: sessionID, limit: 10)
+        XCTAssertEqual(commands.map(\.command), ["printf first\nprintf second"])
     }
 
     @MainActor

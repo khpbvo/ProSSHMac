@@ -221,7 +221,7 @@ struct ExternalTerminalWindowView: View {
 
     private func keyEncoderOptions(for sessionID: UUID) -> KeyEncoderOptions {
         let modeSnapshot = sessionManager.inputModeSnapshotsBySessionID[sessionID] ?? .default
-        return KeyEncoderOptions(applicationCursorKeys: modeSnapshot.applicationCursorKeys)
+        return modeSnapshot.keyEncoderOptions
     }
 
     private func shouldRouteWheelToViewport(for sessionID: UUID, deltaY: CGFloat) -> Bool {

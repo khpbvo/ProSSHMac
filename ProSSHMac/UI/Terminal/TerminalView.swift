@@ -900,9 +900,7 @@ struct TerminalView: View {
         let targetSessionID = paneManager.focusedSessionID ?? focusedSessionID ?? tabManager.selectedSessionID
         guard let sessionID = targetSessionID else { return .default }
         let modeSnapshot = inputModeSnapshot(for: sessionID)
-        return KeyEncoderOptions(
-            applicationCursorKeys: modeSnapshot.applicationCursorKeys
-        )
+        return modeSnapshot.keyEncoderOptions
     }
 
     private func hardwareBracketedPasteEnabled() -> Bool {

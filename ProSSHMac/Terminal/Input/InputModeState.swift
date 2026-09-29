@@ -11,6 +11,13 @@ struct InputModeSnapshot: Sendable, Equatable {
     var bracketedPasteMode: Bool
     var mouseTracking: MouseTrackingMode
     var mouseEncoding: MouseEncoding
+    var keyboardDisambiguation: Bool = false
+    var modifyOtherKeys: Int = 0
+
+    var keyEncoderOptions: KeyEncoderOptions {
+        .init(applicationCursorKeys: applicationCursorKeys,
+              keyboardDisambiguation: keyboardDisambiguation, modifyOtherKeys: modifyOtherKeys)
+    }
 
     static let `default` = InputModeSnapshot(
         applicationCursorKeys: false,
@@ -27,6 +34,8 @@ actor InputModeState {
     private(set) var bracketedPasteMode: Bool = false
     private(set) var mouseTracking: MouseTrackingMode = .none
     private(set) var mouseEncoding: MouseEncoding = .x10
+    private(set) var keyboardDisambiguation = false
+    private(set) var modifyOtherKeys = 0
 
     func snapshot() -> InputModeSnapshot {
         InputModeSnapshot(
@@ -34,7 +43,9 @@ actor InputModeState {
             applicationKeypad: applicationKeypad,
             bracketedPasteMode: bracketedPasteMode,
             mouseTracking: mouseTracking,
-            mouseEncoding: mouseEncoding
+            mouseEncoding: mouseEncoding,
+            keyboardDisambiguation: keyboardDisambiguation,
+            modifyOtherKeys: modifyOtherKeys
         )
     }
 
@@ -60,6 +71,8 @@ actor InputModeState {
 
     /// DECSTR (soft reset): reset cursor/keypad input modes; bracketed paste remains unchanged.
     func applySoftReset() {
+        keyboardDisambiguation = false
+        modifyOtherKeys = 0
         applicationCursorKeys = false
         applicationKeypad = false
         mouseTracking = .none
@@ -68,6 +81,8 @@ actor InputModeState {
 
     /// RIS (full reset): reset all tracked input modes.
     func applyFullReset() {
+        keyboardDisambiguation = false
+        modifyOtherKeys = 0
         applicationCursorKeys = false
         applicationKeypad = false
         bracketedPasteMode = false
@@ -82,5 +97,7 @@ actor InputModeState {
         bracketedPasteMode = snap.bracketedPasteMode
         mouseTracking = snap.mouseTracking
         mouseEncoding = snap.mouseEncoding
+        keyboardDisambiguation = snap.keyboardDisambiguation
+        modifyOtherKeys = snap.modifyOtherKeys
     }
 }

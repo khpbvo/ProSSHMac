@@ -54,6 +54,8 @@ struct KeyEncoderOptions: Sendable {
     var applicationCursorKeys: Bool = false
     var backspaceSendsDelete: Bool = true // DEL (0x7F). If false, sends BS (0x08).
     var enterSendsCRLF: Bool = false
+    var keyboardDisambiguation: Bool = false
+    var modifyOtherKeys: Int = 0
 
     static let `default` = KeyEncoderOptions()
 }
@@ -89,6 +91,12 @@ struct KeyEncoder: Sendable {
     // MARK: - Character Encoding
 
     private func encodeCharacter(_ character: Character, modifiers: KeyModifiers) -> [UInt8]? {
+        if options.keyboardDisambiguation, !modifiers.intersection([.ctrl, .alt]).isEmpty {
+            let text = String(character).lowercased()
+            if text.unicodeScalars.count == 1, let scalar = text.unicodeScalars.first {
+                return csi("\(scalar.value);\(xtermModifierParameter(from: modifiers) ?? 1)u")
+            }
+        }
         if modifiers.contains(.ctrl) {
             guard let byte = controlByte(for: character) else {
                 return nil
@@ -145,7 +153,7 @@ struct KeyEncoder: Sendable {
             return csi("1;\(mod)\(final)")
         }
 
-        if options.applicationCursorKeys {
+        if options.applicationCursorKeys && !options.keyboardDisambiguation {
             return escO(final)
         }
 
@@ -162,6 +170,7 @@ struct KeyEncoder: Sendable {
             if let mod = xtermModifierParameter(from: modifiers) {
                 return csi("1;\(mod)\(final)")
             }
+            if options.keyboardDisambiguation { return csi("1\(final)") }
             return escO(final)
         }
 
@@ -215,6 +224,9 @@ struct KeyEncoder: Sendable {
     }
 
     private func encodeBackspace(modifiers: KeyModifiers) -> [UInt8] {
+        if options.keyboardDisambiguation, let mod = xtermModifierParameter(from: modifiers) {
+            return csi("127;\(mod)u")
+        }
         // Ctrl+Backspace sends the opposite of the normal backspace byte,
         // so users can distinguish Ctrl+Backspace from plain Backspace.
         // This applies regardless of whether Alt is also held (Alt adds ESC prefix).
@@ -228,16 +240,23 @@ struct KeyEncoder: Sendable {
     }
 
     private func encodeEnter(modifiers: KeyModifiers) -> [UInt8] {
-        // Keep Shift+Enter distinct from submit for multiline terminal inputs.
-        // CSI-u uses Enter's codepoint (13) and Shift's modifier parameter (2).
-        if modifiers == .shift {
-            return csi("13;2u")
+        // Extended encodings are opt-in. At a shell prompt, quoted-insert
+        // followed by LF inserts an editable newline without submitting.
+        if options.keyboardDisambiguation, let mod = xtermModifierParameter(from: modifiers) {
+            return csi("13;\(mod)u")
         }
+        if options.modifyOtherKeys > 0, modifiers == .shift {
+            return csi("27;2;13~")
+        }
+        if modifiers == .shift { return [0x16, 0x0A] }
         let base: [UInt8] = options.enterSendsCRLF ? [0x0D, 0x0A] : [0x0D]
         return maybePrefixEscape(base, modifiers: modifiers)
     }
 
     private func encodeTab(modifiers: KeyModifiers) -> [UInt8] {
+        if options.keyboardDisambiguation, let mod = xtermModifierParameter(from: modifiers) {
+            return csi("9;\(mod)u")
+        }
         if modifiers == .shift {
             return csi("Z") // Back-tab
         }
@@ -246,7 +265,10 @@ struct KeyEncoder: Sendable {
     }
 
     private func encodeEscape(modifiers: KeyModifiers) -> [UInt8] {
-        maybePrefixEscape([0x1B], modifiers: modifiers)
+        if options.keyboardDisambiguation {
+            return csi("27;\(xtermModifierParameter(from: modifiers) ?? 1)u")
+        }
+        return maybePrefixEscape([0x1B], modifiers: modifiers)
     }
 
     // MARK: - Helpers

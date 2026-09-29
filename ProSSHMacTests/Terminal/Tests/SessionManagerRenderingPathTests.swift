@@ -381,7 +381,7 @@ final class SessionManagerRenderingPathTests: XCTestCase {
             return
         }
 
-        let outcome = await engine.feedAndCollectOutcome(Data("\u{1B}[?1049h\u{1B}[?1000h\u{1B}[?1006h".utf8))
+        let outcome = await engine.feedAndCollectOutcome(Data("\u{1B}[?1049h\u{1B}[?1000h\u{1B}[?1006h\u{1B}[>5u\u{1B}[>4;2m".utf8))
 
         let baselineNonce = manager.gridSnapshotNonceBySessionID[session.id, default: -1]
         await manager.renderingCoordinator.handleFeedOutcome(sessionID: session.id, engine: engine, outcome: outcome)
@@ -393,6 +393,19 @@ final class SessionManagerRenderingPathTests: XCTestCase {
         )
         XCTAssertEqual(manager.inputModeSnapshotsBySessionID[session.id]?.mouseTracking, .x10)
         XCTAssertEqual(manager.inputModeSnapshotsBySessionID[session.id]?.mouseEncoding, .sgr)
+        let activeOptions = manager.inputModeSnapshotsBySessionID[session.id]?.keyEncoderOptions ?? .default
+        XCTAssertTrue(activeOptions.keyboardDisambiguation)
+        XCTAssertEqual(activeOptions.modifyOtherKeys, 2)
+        XCTAssertEqual(KeyEncoder(options: activeOptions).encode(.init(key: .enter, modifiers: .shift)),
+                       Array("\u{1B}[13;2u".utf8))
+
+        // Actual Claude exit controls must restore shell input immediately.
+        let exit = await engine.feedAndCollectOutcome(Data("\u{1B}[<u\u{1B}[?1049l\u{1B}[>4m".utf8))
+        await manager.renderingCoordinator.handleFeedOutcome(sessionID: session.id, engine: engine, outcome: exit)
+        let shellOptions = manager.inputModeSnapshotsBySessionID[session.id]?.keyEncoderOptions ?? .default
+        XCTAssertFalse(shellOptions.keyboardDisambiguation)
+        XCTAssertEqual(shellOptions.modifyOtherKeys, 0)
+        XCTAssertEqual(KeyEncoder(options: shellOptions).encode(.init(key: .enter, modifiers: .shift)), [0x16, 0x0A])
     }
 
     @MainActor

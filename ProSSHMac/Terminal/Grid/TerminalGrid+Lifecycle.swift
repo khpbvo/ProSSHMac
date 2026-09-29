@@ -31,6 +31,7 @@ extension TerminalGrid {
         insertMode = false
         applicationCursorKeys = false
         applicationKeypad = false
+        resetKeyboardModes()
         bracketedPasteMode = false
         synchronizedOutput = false
         lastSnapshot = nil
@@ -68,6 +69,7 @@ extension TerminalGrid {
 
     /// Soft terminal reset (DECSTR — CSI ! p).
     nonisolated func softReset() {
+        resetKeyboardModes()
         cursor.visible = true
         cursor.style = .block
         cursor.pendingWrap = false

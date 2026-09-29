@@ -287,6 +287,49 @@ final class ShellIntegrationTests: XCTestCase {
         }
     }
 
+    func testShiftEnterAtNormalZshPromptInsertsNewlineWithoutSubmitting() async throws {
+        let harness = try await LocalShellTestHarness.spawn()
+        defer { Task { await harness.close() } }
+        let unique = UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        let readyMarker = "READY_\(unique)"
+        try await harness.send("printf 'READY_%s\\n' '\(unique)'\n")
+        let ready = await harness.waitFor(readyMarker, timeout: .seconds(10))
+        XCTAssertTrue(ready)
+        // ZLE's raw input mode must be active: during shell startup the tty's
+        // canonical input translations can turn quoted LF into a literal CR.
+        let clock = ContinuousClock()
+        let deadline = clock.now + .seconds(3)
+        var editorReady = false
+        while clock.now < deadline {
+            let output = await harness.snapshot()
+            if let readyRange = output.range(of: readyMarker),
+               output[readyRange.upperBound...].contains("\u{1B}[?2004h") {
+                editorReady = true
+                break
+            }
+            try await Task.sleep(for: .milliseconds(40))
+        }
+        XCTAssertTrue(editorReady)
+        await harness.clearOutput()
+        // The full marker never occurs in echoed input; only executed output.
+        let marker = "SHIFT_OK_\(unique)"
+        let secondMarker = "SECOND_OK_\(unique)"
+        try await harness.send("printf 'SHIFT_%s\\n' 'OK_\(unique)'")
+        let bytes = try XCTUnwrap(KeyEncoder().encode(.init(key: .enter, modifiers: .shift)))
+        try await harness.send(bytes: bytes)
+        try await harness.send("printf 'SECOND_%s\\n' 'OK_\(unique)'")
+        let submittedEarly = await harness.waitFor(marker, timeout: .milliseconds(250))
+        XCTAssertFalse(submittedEarly, "Shift+Enter must keep the command editable instead of executing it")
+        try await harness.send(bytes: try XCTUnwrap(KeyEncoder().encode(.init(key: .enter))))
+        let submitted = await harness.waitFor(marker, timeout: .seconds(10))
+        let secondSubmitted = await harness.waitFor(secondMarker, timeout: .seconds(3))
+        let output = await harness.snapshot()
+        XCTAssertTrue(submitted)
+        XCTAssertTrue(secondSubmitted, "Both editable lines should execute only after ordinary Enter. Output: \(output.suffix(2000).debugDescription)")
+        XCTAssertFalse(output.contains("13;2u"))
+        XCTAssertFalse(output.contains("3;2u"))
+    }
+
     func testLocalShellEscapeIsDeliveredToForegroundRead() async throws {
         let harness = try await LocalShellTestHarness.spawn()
         defer {

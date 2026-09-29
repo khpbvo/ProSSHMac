@@ -127,7 +127,7 @@ final class KeyEncoderTests: XCTestCase {
     @MainActor
     func testShiftEnterIsDistinctFromSubmitInBothEnterModes() {
         for crlf in [false, true] {
-            let encoder = KeyEncoder(options: .init(enterSendsCRLF: crlf))
+            let encoder = KeyEncoder(options: .init(enterSendsCRLF: crlf, keyboardDisambiguation: true))
             assertEncoded(
                 encoder,
                 event: KeyEvent(key: .enter, modifiers: .shift),
@@ -148,6 +148,34 @@ final class KeyEncoderTests: XCTestCase {
                 assertEncoded(encoder, event: KeyEvent(key: .enter, modifiers: modifiers), expected: [0x1B] + base)
             }
         }
+    }
+
+    @MainActor
+    func testShiftEnterUsesQuotedNewlineUnlessApplicationEnablesExtendedKeys() {
+        for crlf in [false, true] {
+            let encoder = KeyEncoder(options: .init(enterSendsCRLF: crlf))
+            assertEncoded(encoder, event: .init(key: .enter, modifiers: .shift),
+                          expected: [0x16, 0x0A])
+        }
+        for level in [1, 2] {
+            let encoder = KeyEncoder(options: .init(modifyOtherKeys: level))
+            assertEncoded(encoder, event: .init(key: .enter, modifiers: .shift),
+                          expected: Array("\u{1B}[27;2;13~".utf8))
+        }
+    }
+
+    @MainActor
+    func testKeyboardDisambiguationPreservesTextAndEncodesControlKeys() {
+        let encoder = KeyEncoder(options: .init(applicationCursorKeys: true, keyboardDisambiguation: true))
+        assertEncoded(encoder, event: .init(key: .character("A"), modifiers: .shift), expected: [0x41])
+        assertEncoded(encoder, event: .init(key: .character("c"), modifiers: .ctrl), expected: Array("\u{1B}[99;5u".utf8))
+        assertEncoded(encoder, event: .init(key: .character("["), modifiers: .alt), expected: Array("\u{1B}[91;3u".utf8))
+        assertEncoded(encoder, event: .init(key: .escape), expected: Array("\u{1B}[27;1u".utf8))
+        assertEncoded(encoder, event: .init(key: .arrow(.up)), expected: Array("\u{1B}[A".utf8))
+        assertEncoded(encoder, event: .init(key: .function(1)), expected: Array("\u{1B}[1P".utf8))
+        assertEncoded(encoder, event: .init(key: .enter), expected: [0x0D])
+        assertEncoded(encoder, event: .init(key: .tab), expected: [0x09])
+        assertEncoded(encoder, event: .init(key: .backspace), expected: [0x7F])
     }
 
     @MainActor

@@ -86,6 +86,14 @@ nonisolated final class TerminalGrid: @unchecked Sendable {
     var insertMode: Bool = false              // IRM
     var applicationCursorKeys: Bool = false   // DECCKM
     var applicationKeypad: Bool = false       // DECKPAM/DECKPNM
+    // Only kitty's disambiguation enhancement (bit 1) is supported.
+    // Each screen owns a bounded mode stack; other enhancements stay disabled.
+    var primaryKeyboardModeStack = [false]
+    var alternateKeyboardModeStack = [false]
+    var modifyOtherKeys = 0
+    var keyboardDisambiguation: Bool {
+        (usingAlternateBuffer ? alternateKeyboardModeStack.last : primaryKeyboardModeStack.last) ?? false
+    }
     var bracketedPasteMode: Bool = false      // Mode 2004
     var synchronizedOutput: Bool = false // Mode 2026
     /// Snapshots captured at the moment synchronized output is re-enabled.
