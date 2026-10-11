@@ -7,13 +7,17 @@ sequentially, and tagged by severity: **Critical**, **High**, **Medium**, or **L
 
 ## Summary
 
-| Severity | Count |
-|----------|-------|
-| Critical | 1     |
-| High     | 16    |
-| Medium   | 30    |
-| Low      | 21    |
-| **Total**| **68**|
+| Severity | Total | Fixed | Open |
+|----------|-------|-------|------|
+| Critical | 1     | 1     | 0    |
+| High     | 20    | 7     | 13   |
+| Medium   | 32    | 16    | 16   |
+| Low      | 26    | 5     | 21   |
+| **Total**| **79**| **29**| **50**|
+
+Counts recomputed 2026-10-11 from the bug headings. The `**File:**` paths below predate the
+refactors (`Views/` → `UI/`, `SSH/` → `Services/SSH/`, `Services/Security/` → `Services/`) and some
+files no longer exist — resolve by basename.
 
 ---
 
