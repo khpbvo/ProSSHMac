@@ -485,9 +485,6 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 The strict-concurrency refactor (RefactorTheActor, which produced `Services/SSH/`, `Services/AI/`
 and the session coordinators) has no spec file left; see `Docs/featurelist.md`.
 
-Note: `AGENTS.md` (repo root) is a parallel working-memory file for non-Claude assistants and points
-at `Docs/featurelist.md`. Keep it in sync when process guidance changes.
-
 ---
 
 ## Next Session Plan
