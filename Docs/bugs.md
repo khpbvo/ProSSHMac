@@ -11,11 +11,11 @@ sequentially, and tagged by severity: **Critical**, **High**, **Medium**, or **L
 |----------|-------|-------|------|
 | Critical | 1     | 1     | 0    |
 | High     | 20    | 7     | 13   |
-| Medium   | 32    | 16    | 16   |
+| Medium   | 33    | 16    | 17   |
 | Low      | 26    | 5     | 21   |
-| **Total**| **79**| **29**| **50**|
+| **Total**| **80**| **29**| **51**|
 
-Counts recomputed 2026-10-11 from the bug headings. The `**File:**` paths below predate the
+Counts recomputed 2026-10-11 from the bug headings; Bug 80 added 2026-10-12. The `**File:**` paths below predate the
 refactors (`Views/` → `UI/`, `SSH/` → `Services/SSH/`, `Services/Security/` → `Services/`) and some
 files no longer exist — resolve by basename.
 
@@ -1338,6 +1338,31 @@ The Matrix screensaver settings panel calls `load()` both in `init` and in `onAp
 performing redundant file I/O on the main thread.
 
 **Impact:** Minor redundant work; no functional impact.
+
+---
+
+### Bug 80 — Terminal Copy Is Implemented Twice and Silently Copies a Fallback (Medium)
+
+**Files:** `UI/Terminal/TerminalView.swift` (`copyActiveContentToClipboard`, `copyContentToClipboard`),
+`UI/Terminal/ExternalTerminalWindowView.swift` (same two functions), `UI/Terminal/MetalTerminalSessionSurface.swift`
+(`TerminalSelectionCoordinator`)
+
+The main window and the pop-out window each have their own copy functions and their own
+`TerminalSelectionCoordinator`. The two copies were duplicated rather than shared and have already
+drifted: the main window falls back to the unsent input draft, the pop-out window does not. Within
+the main window all layouts (single, split, maximized pane, terminal-only) share one copy function,
+but each layout branch can build a fresh surface/renderer for the session, and the selection lives
+in that renderer.
+
+Both copies also share a silent fallback: when the selection lookup returns nothing, Copy writes
+the input draft or the last line of `shellBuffers` (often just the prompt) instead of doing nothing,
+so a broken selection lookup looks like "copy copied the wrong thing" rather than failing visibly.
+
+**Impact:** Behaviour differs between windows, fixes must be made twice, and selection failures are
+masked. Found while debugging "copy from the terminal does nothing" (2026-10-12).
+
+**Later:** move copy into one shared path used by both windows, and decide whether the fallback
+should exist at all (Terminal.app/iTerm2 copy nothing without a selection).
 
 ---
 

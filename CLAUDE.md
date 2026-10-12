@@ -445,7 +445,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
   responses, and never read the developer's saved model or API key.
 - **`Docs/bugs.md` file paths predate the refactors** (`Views/` → `UI/`, `SSH/` → `Services/SSH/`,
   `Services/Security/` → `Services/`; some files no longer exist). Resolve by basename before
-  trusting an entry. 50 of 79 bugs are open.
+  trusting an entry. Open/fixed counts are in its Summary table.
 - **Docs directory case**: git tracks 23 files under `Docs/` and 4 under `docs/`
   (`FutureFeatures.md`, `Optimization.md`, `RefactorTheFinalRun.md`, `screenshots/`). This only works
   because macOS is case-insensitive — a case-sensitive checkout splits them. Resolve by basename.
@@ -459,7 +459,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 | `Docs/featurelist.md` | **Long-term memory** — dated work log, phase progress, loop-log entries |
 | `Docs/RenderCost.md` | **Active spec.** What rendering actually costs — R0/R1/R2a done, **R2b open** (code merged, performance unvalidated). Read its "Measurement caveats" before any perf measurement |
 | `Docs/R2bBenchmarkResults.md` | R2b A/B evidence: exact commands and all raw reports for the six baseline/candidate pairs |
-| `Docs/bugs.md` | Bug audit by subsystem/severity — 50 of 79 still open; paths are pre-refactor |
+| `Docs/bugs.md` | Bug and tech-debt register by subsystem/severity (counts in its Summary table); paths are pre-refactor |
 | `Docs/PhaseB.md` | Local Input V2 Phase B checklist (make byte-first local input the only path) — open |
 | `Docs/OpenRouterArchitecture.md` | Current OpenRouter AI architecture, settings, transcript, and verification |
 | `docs/FutureFeatures.md` | Prioritized feature roadmap (competitive analysis) |
