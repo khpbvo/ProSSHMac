@@ -75,7 +75,7 @@ struct MetalTerminalSessionSurface: View {
                 }
                 .onDisappear {
                     model.setRendererPaused(true)
-                    selectionCoordinator?.unregister(sessionID: sessionID)
+                    selectionCoordinator?.unregister(sessionID: sessionID, model: model)
                 }
                 .onChange(of: snapshotNonce) { _, _ in
                     let snapshot = snapshotProvider()
@@ -125,8 +125,14 @@ final class TerminalSelectionCoordinator: ObservableObject {
         models[sessionID] = WeakModel(model: model)
     }
 
-    func unregister(sessionID: UUID) {
-        models.removeValue(forKey: sessionID)
+    /// Removes `model`'s registration only if it is still the registered surface. A rebuilt
+    /// surface (e.g. after a resize) registers before the old one disappears, so the old one
+    /// must not remove its replacement.
+    func unregister(sessionID: UUID, model: MetalTerminalSurfaceModel) {
+        let registered = models[sessionID]?.model
+        if registered == nil || registered === model {
+            models.removeValue(forKey: sessionID)
+        }
     }
 
     func copySelection(sessionID: UUID) -> String? {

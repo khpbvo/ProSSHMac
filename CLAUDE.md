@@ -414,6 +414,11 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 - **Terminal selection**: `selectedText()` skips wide-char continuation cells. Plain-tap deselection
   lives in `MetalTerminalSessionSurface` (shared by embedded and external windows).
   `handleDrag` processes `.ended`/`.cancelled` before the `gridCell(at:)` guard.
+- **View-keyed registries must remove by identity, not by key.** When SwiftUI rebuilds a view (a
+  window resize does this to the terminal surface), the new view's `onAppear` can run *before* the
+  old view's `onDisappear`. `TerminalSelectionCoordinator.unregister(sessionID:model:)` therefore
+  removes an entry only if it still belongs to the caller; removing by session ID alone broke all
+  terminal copy after any resize (Bug 81). Apply the same rule to any registry filled in `onAppear`.
 
 ### UI
 - **Four files are over 1,000 lines**: `AIToolHandler.swift` (1,119L),
@@ -505,6 +510,11 @@ list is in `Docs/RenderCost.md` and the raw reports in `Docs/R2bBenchmarkResults
    conditions. Restore genuine window acquisition before any rendered or peer-comparable claim.
 4. Close R2b when the variability is explained or bounded; update `Docs/featurelist.md`,
    `Docs/RenderCost.md` and this plan.
+
+**Terminal copy follow-ups:** Bug 81 (copy dead after a resize) is fixed on `master` and verified
+live for right-click and Cmd+C. Queued next:
+Bug 82 (a resize rebuilds the whole terminal surface), Bug 83 (registry audit), then Bug 80 (one
+shared copy path for both windows, reconsider the silent fallback). All in `Docs/bugs.md`.
 
 **Pending live checks (need a relaunched app and a user at the keyboard):**
 - Shift+Enter: inserts a newline at a plain zsh prompt and is distinguished inside Claude Code;

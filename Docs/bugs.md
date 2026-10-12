@@ -11,11 +11,11 @@ sequentially, and tagged by severity: **Critical**, **High**, **Medium**, or **L
 |----------|-------|-------|------|
 | Critical | 1     | 1     | 0    |
 | High     | 20    | 7     | 13   |
-| Medium   | 33    | 16    | 17   |
-| Low      | 26    | 5     | 21   |
-| **Total**| **80**| **29**| **51**|
+| Medium   | 35    | 17    | 18   |
+| Low      | 27    | 5     | 22   |
+| **Total**| **83**| **30**| **53**|
 
-Counts recomputed 2026-10-11 from the bug headings; Bug 80 added 2026-10-12. The `**File:**` paths below predate the
+Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12. The `**File:**` paths below predate the
 refactors (`Views/` → `UI/`, `SSH/` → `Services/SSH/`, `Services/Security/` → `Services/`) and some
 files no longer exist — resolve by basename.
 
@@ -1363,6 +1363,52 @@ masked. Found while debugging "copy from the terminal does nothing" (2026-10-12)
 
 **Later:** move copy into one shared path used by both windows, and decide whether the fallback
 should exist at all (Terminal.app/iTerm2 copy nothing without a selection).
+
+---
+
+### Bug 81 — ~~Terminal Copy Stops Working After a Window Resize~~ [FIXED] (Medium)
+
+**File:** `UI/Terminal/MetalTerminalSessionSurface.swift` (`TerminalSelectionCoordinator.unregister`)
+
+A resize rebuilds the terminal surface. SwiftUI ran the new surface's `onAppear` (register) before
+the old surface's `onDisappear`, and `unregister(sessionID:)` removed the entry by session ID
+without checking whose it was — so the old surface deleted the new surface's registration. From then
+on every copy route (context menu, Cmd+C) found no surface for the session and wrote nothing, while
+the selection stayed visibly highlighted. Confirmed with debug logging on 2026-10-12: `register
+model=6dfa49 replacing=dfbdc3`, then 19 ms later `unregister caller=dfbdc3 removing=6dfa49`, then
+`lookup found=nil registered=[]`.
+
+**Fix:** `unregister(sessionID:model:)` removes the entry only if it is still that model's (or the
+weak reference is dead). Test: `TerminalSelectionInteractionTests.testReplacedSurfaceUnregisteringDoesNotRemoveItsReplacement`.
+
+---
+
+### Bug 82 — A Window Resize Rebuilds the Whole Terminal Surface (Medium)
+
+**File:** `UI/Terminal/TerminalView.swift` (layout branches that build `TerminalSurfaceView`), `UI/Terminal/MetalTerminalSessionSurface.swift`
+
+Resizing the main window replaces the session's `MetalTerminalSurfaceModel` — and with it the
+`MetalTerminalRenderer` — instead of resizing the existing one (seen in the Bug 81 log: a new model
+and a new renderer after a plain resize). Verified consequence: the selection is lost on resize.
+Likely but unverified: smooth-scroll state reset, glyph atlas rebuild and a redraw hitch per rebuild.
+The rebuild is what triggered Bug 81.
+
+**Next:** find what changes view identity on resize (a layout branch switch in `TerminalView`, a
+geometry-dependent `if`, or an `.id(...)` change) and keep one surface per session across resizes.
+
+---
+
+### Bug 83 — Audit for Other "Register on Appear, Remove by Key on Disappear" Registries (Low)
+
+Bug 81's pattern — a shared registry keyed by session ID, filled in `onAppear` and cleared by key in
+`onDisappear` — breaks whenever SwiftUI rebuilds a view, because the new view's `onAppear` can run
+before the old view's `onDisappear`. A first search (2026-10-12) of `.onDisappear`,
+`dismantleNSView` and `removeValue(forKey: sessionID)` under `UI/` and `Terminal/` found no other
+view-lifecycle instance; the remaining per-session removals (`TerminalHistoryIndex`,
+`SessionRecorder`) run on session close, not view disappearance.
+
+**Next:** extend the audit to `Services/` coordinators and AppKit bridges (first-responder and
+input-capture state per pane), and check any registry added later against this rule.
 
 ---
 
