@@ -11,11 +11,11 @@ sequentially, and tagged by severity: **Critical**, **High**, **Medium**, or **L
 |----------|-------|-------|------|
 | Critical | 1     | 1     | 0    |
 | High     | 20    | 7     | 13   |
-| Medium   | 35    | 17    | 18   |
+| Medium   | 37    | 18    | 19   |
 | Low      | 27    | 5     | 22   |
-| **Total**| **83**| **30**| **53**|
+| **Total**| **85**| **31**| **54**|
 
-Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12. The `**File:**` paths below predate the
+Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13. The `**File:**` paths below predate the
 refactors (`Views/` → `UI/`, `SSH/` → `Services/SSH/`, `Services/Security/` → `Services/`) and some
 files no longer exist — resolve by basename.
 
@@ -1370,7 +1370,8 @@ should exist at all (Terminal.app/iTerm2 copy nothing without a selection).
 
 **File:** `UI/Terminal/MetalTerminalSessionSurface.swift` (`TerminalSelectionCoordinator.unregister`)
 
-A resize rebuilds the terminal surface. SwiftUI ran the new surface's `onAppear` (register) before
+Toggling Maximize Terminal rebuilds the terminal surface (Bug 82; reported as "after resizing the
+window", since the toggle resizes the terminal). SwiftUI ran the new surface's `onAppear` (register) before
 the old surface's `onDisappear`, and `unregister(sessionID:)` removed the entry by session ID
 without checking whose it was — so the old surface deleted the new surface's registration. From then
 on every copy route (context menu, Cmd+C) found no surface for the session and wrote nothing, while
@@ -1383,18 +1384,33 @@ weak reference is dead). Test: `TerminalSelectionInteractionTests.testReplacedSu
 
 ---
 
-### Bug 82 — A Window Resize Rebuilds the Whole Terminal Surface (Medium)
+### Bug 82 — ~~Maximize Terminal Rebuilds the Whole Terminal Surface~~ [FIXED] (Medium)
 
-**File:** `UI/Terminal/TerminalView.swift` (layout branches that build `TerminalSurfaceView`), `UI/Terminal/MetalTerminalSessionSurface.swift`
+**File:** `UI/Terminal/TerminalView.swift` (`macOSBody`, `sessionPanel`)
 
-Resizing the main window replaces the session's `MetalTerminalSurfaceModel` — and with it the
-`MetalTerminalRenderer` — instead of resizing the existing one (seen in the Bug 81 log: a new model
-and a new renderer after a plain resize). Verified consequence: the selection is lost on resize.
-Likely but unverified: smooth-scroll state reset, glyph atlas rebuild and a redraw hitch per rebuild.
-The rebuild is what triggered Bug 81.
+Filed as "a window resize rebuilds the surface"; the 2026-10-13 debug log disproved that. Dragging the
+window edge (~15 resizes) and entering/leaving full screen all kept the same renderer. The one rebuild
+came with no window event and a single layout change, `terminalOnly=false → true`: the Maximize
+Terminal toolbar button (or its shortcut), which resizes the terminal and so reads as a resize.
 
-**Next:** find what changes view identity on resize (a layout branch switch in `TerminalView`, a
-geometry-dependent `if`, or an `.id(...)` change) and keep one surface per session across resizes.
+**Cause:** `macOSBody` built the session's `TerminalSurfaceView` at two different places in the view
+tree — inside the `sessionPanel` card normally, and a separate copy when maximized (one for the single
+layout, one for split panes). SwiftUI keys `@StateObject` state to a view's structural position;
+`.id(session.id)` only distinguishes views at the *same* position. Toggling maximize therefore
+destroyed the `MetalTerminalSurfaceModel` and its `MetalTerminalRenderer` and built new ones: selection,
+smooth-scroll offset, cursor animation and CRT afterglow were lost, all pipelines and the glyph atlas
+were rebuilt, and the new renderer briefly requested a grid from its 8×16 placeholder metrics (158×55,
+cancelled by the 150 ms resize debounce). It also triggered Bug 81.
+
+**Fix:** `sessionPanel(…, terminalOnly:)` is now the only place the surface is built, in both the
+single and split layouts. Maximize hides the header, metadata, search and actions bars and drops the
+padding; the surface keeps its slot. It is shown when `terminalOnly || session.state == .connected`,
+matching the previous behaviour of each mode. Test:
+`TerminalSurfaceIdentityTests.testMaximizeTerminalKeepsTheSameRenderer` hosts the real `TerminalView`
+in a window, toggles maximize both ways and asserts the same renderer instance; it failed on both
+toggles before the fix.
+
+Other layout changes still rebuild the surface — see Bug 84.
 
 ---
 
@@ -1409,6 +1425,47 @@ view-lifecycle instance; the remaining per-session removals (`TerminalHistoryInd
 
 **Next:** extend the audit to `Services/` coordinators and AppKit bridges (first-responder and
 input-capture state per pane), and check any registry added later against this rule.
+
+---
+
+### Bug 84 — Tab Switches and Split Changes Rebuild the Terminal Surface (Medium)
+
+**Files:** `UI/Terminal/TerminalView.swift` (`macOSBody`), `UI/Terminal/SplitNodeView.swift`,
+`UI/Terminal/MetalTerminalSessionSurface.swift`
+
+The surface model (and its renderer) is a `@StateObject` of `MetalTerminalSessionSurface`, so it lives
+exactly as long as SwiftUI keeps that view's identity. Expected from the code, not yet measured live:
+switching tabs in the single layout replaces the surface (`.id(session.id)` changes), and splitting,
+unsplitting or maximizing a pane moves the session between the single branch and `SplitNodeView`. Each
+time the selection and scroll state are lost and the renderer is rebuilt from scratch.
+
+**Plan:** `Docs/Bug84.md` — move model ownership out of the view into a per-session store, with the
+Bug 81 identity rule for attach/detach.
+
+---
+
+### Bug 85 — A Click Can Leave a One-Cell Selection That Another Click Won't Clear (Medium)
+
+**Files:** `Terminal/Renderer/TerminalMetalView.swift` (gesture recognizers, `Coordinator.handlePan`),
+`UI/Terminal/MetalTerminalSessionSurface.swift` (`MetalTerminalSurfaceModel.handleDrag`/`handleTap`)
+
+Reported 2026-10-13 with a screenshot: after clicking in the terminal a small blue one-cell
+rectangle stays highlighted (here in the empty area right of a ping line), and clicking again does
+not remove it. Expected (Terminal.app, iTerm2): a plain click never leaves a highlight, and any click
+clears an existing selection; a selection only appears once the pointer is dragged.
+
+**Likely cause (from the code, not yet confirmed with logging):** `TerminalMetalView` attaches an
+`NSClickGestureRecognizer` and an `NSPanGestureRecognizer` to the `MTKView`. A click with the slightest
+pointer movement (common on a trackpad) is recognised as a pan instead of a click. `handleDrag(.began)`
+then immediately calls `setSelection(start: cell, end: cell)` — a one-cell selection — and since the
+pan claimed the gesture, the click recognizer fails and `handleTap()` (which clears the selection)
+never runs. `.ended` keeps the selection. Each later wobbly click repeats this at the new spot, so the
+highlight seems impossible to dismiss; a perfectly still click should still clear it.
+
+**Next:** confirm with debug logging (which recognizer fires per click, the begin/end cells), then
+make a drag create a selection only once the pointer leaves the starting cell, and treat a pan that
+ends in its starting cell as a click (clear the selection). Add a model-level test: began and ended
+in the same cell leaves no selection; began in one cell and changed to another selects the range.
 
 ---
 

@@ -136,8 +136,8 @@ xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform
 - **Toolchain: Xcode 27.0 (27A266a), Swift 6.4.** The Metal Toolchain component must be installed
   (`xcodebuild -showComponent metalToolchain`). Never exclude `TerminalShaders.metal` from a build;
   if the shader fails to compile, check the component first.
-- Test bundle: `ProSSHMacTests` — 5 files at the bundle root plus 49 in `ProSSHMacTests/Terminal/Tests/`,
-  ~909 test methods. No test sources live under `ProSSHMac/`.
+- Test bundle: `ProSSHMacTests` — 5 files at the bundle root plus 50 in `ProSSHMacTests/Terminal/Tests/`,
+  ~910 test methods. No test sources live under `ProSSHMac/`.
 - Some tests require the host app process (UI/AppKit-backed suites).
 - **No full-suite baseline exists on Xcode 27.** Every suite touched since has been run targeted and
   green. Treat any red result in a suite you touched as yours, including
@@ -252,7 +252,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 |---|---|
 | `Services/AI/AIToolHandler.swift` + 5 extensions | Tool dispatch (1,119L) — largest file. Extensions: ArgumentParsing, RemoteExecution, LocalFilesystem, InteractiveInput, OutputHelpers |
 | `Services/TerminalRenderingCoordinator.swift` | Snapshot publishing, scroll state, resize debounce, alt-buffer policy, shell-buffer throttle (1,066L). An ordinary publish is two engine calls (`publishViewportState`, then `publishSnapshot` carrying housekeeping) with MainActor scroll-anchor policy between them |
-| `UI/Terminal/TerminalView.swift` | Main terminal UI, sidebar layout, focus, input capture (1,064L) |
+| `UI/Terminal/TerminalView.swift` | Main terminal UI, sidebar layout, focus, input capture (1,034L). `sessionPanel` is the only place a session's terminal surface is built |
 | `Services/SessionManager.swift` + Queries | Session lifecycle, shell I/O, SFTP, grid snapshots (1,020L) |
 | `UI/Terminal/TerminalAIAssistantPane.swift` | AI copilot sidebar, composer, message rendering, pipe tables (992L) |
 | `Terminal/Parser/TerminalEngine.swift` | VT parser hot path, merged parse/apply loop, `feedAndCollectOutcome`, `primaryBufferVisibleText` (843L) |
@@ -414,15 +414,23 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 - **Terminal selection**: `selectedText()` skips wide-char continuation cells. Plain-tap deselection
   lives in `MetalTerminalSessionSurface` (shared by embedded and external windows).
   `handleDrag` processes `.ended`/`.cancelled` before the `gridCell(at:)` guard.
-- **View-keyed registries must remove by identity, not by key.** When SwiftUI rebuilds a view (a
-  window resize does this to the terminal surface), the new view's `onAppear` can run *before* the
-  old view's `onDisappear`. `TerminalSelectionCoordinator.unregister(sessionID:model:)` therefore
-  removes an entry only if it still belongs to the caller; removing by session ID alone broke all
-  terminal copy after any resize (Bug 81). Apply the same rule to any registry filled in `onAppear`.
+- **View-keyed registries must remove by identity, not by key.** When SwiftUI rebuilds a view, the
+  new view's `onAppear` can run *before* the old view's `onDisappear`.
+  `TerminalSelectionCoordinator.unregister(sessionID:model:)` therefore removes an entry only if it
+  still belongs to the caller; removing by session ID alone broke all terminal copy after the surface
+  was rebuilt (Bug 81). Apply the same rule to any registry filled in `onAppear`.
+- **The terminal surface owns the renderer, so its view identity is the renderer's lifetime.**
+  `MetalTerminalSurfaceModel` (and its `MetalTerminalRenderer`) is a `@StateObject`; SwiftUI keys it
+  to the view's structural position, and `.id(session.id)` only matches within one position. Build
+  the surface in exactly one place per layout (`TerminalView.sessionPanel`) and express layout modes
+  (`terminalOnly`) as conditional *siblings* and modifier values, never as a second build site — a
+  second site made Maximize Terminal rebuild the renderer (Bug 82). Window resizes do not rebuild it.
+  Tab switches and split/unsplit still do (Bug 84, `Docs/Bug84.md`). Regression test:
+  `TerminalSurfaceIdentityTests` (hosts the real `TerminalView`; assert renderer identity).
 
 ### UI
 - **Four files are over 1,000 lines**: `AIToolHandler.swift` (1,119L),
-  `TerminalRenderingCoordinator.swift` (1,066L), `TerminalView.swift` (1,064L),
+  `TerminalRenderingCoordinator.swift` (1,066L), `TerminalView.swift` (1,034L),
   `SessionManager.swift` (1,020L). Read surrounding context before modifying.
 - **Focus management** between AI composer (NSTextView) and terminal (DirectTerminalInputNSView) is
   delicate. Must resign at AppKit level, not just SwiftUI state. See `focusSessionAndPane()`.
@@ -464,6 +472,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 | `Docs/featurelist.md` | **Long-term memory** — dated work log, phase progress, loop-log entries |
 | `Docs/RenderCost.md` | **Active spec.** What rendering actually costs — R0/R1/R2a done, **R2b open** (code merged, performance unvalidated). Read its "Measurement caveats" before any perf measurement |
 | `Docs/R2bBenchmarkResults.md` | R2b A/B evidence: exact commands and all raw reports for the six baseline/candidate pairs |
+| `Docs/Bug84.md` | **Queued.** One terminal renderer per session across tab switches and split changes (per-session model store) — Phase 0 next |
 | `Docs/bugs.md` | Bug and tech-debt register by subsystem/severity (counts in its Summary table); paths are pre-refactor |
 | `Docs/PhaseB.md` | Local Input V2 Phase B checklist (make byte-first local input the only path) — open |
 | `Docs/OpenRouterArchitecture.md` | Current OpenRouter AI architecture, settings, transcript, and verification |
@@ -511,10 +520,13 @@ list is in `Docs/RenderCost.md` and the raw reports in `Docs/R2bBenchmarkResults
 4. Close R2b when the variability is explained or bounded; update `Docs/featurelist.md`,
    `Docs/RenderCost.md` and this plan.
 
-**Terminal copy follow-ups:** Bug 81 (copy dead after a resize) is fixed on `master` and verified
-live for right-click and Cmd+C. Queued next:
-Bug 82 (a resize rebuilds the whole terminal surface), Bug 83 (registry audit), then Bug 80 (one
-shared copy path for both windows, reconsider the silent fallback). All in `Docs/bugs.md`.
+**Terminal selection and surface follow-ups** (Bug 82, Maximize Terminal rebuilding the renderer, is
+fixed on `master` and verified live). Queued, in order:
+1. Bug 85 — a click can leave a one-cell selection that another click won't clear (likely the pan
+   recognizer winning over the click on tiny pointer movement; confirm with logging first).
+2. `Docs/Bug84.md` Phase 0 — measure which layout changes still rebuild the surface, and renderer memory.
+3. Bug 83 (registry audit), then Bug 80 (one shared copy path — Bug 84 Phase 3 may absorb it).
+All in `Docs/bugs.md`.
 
 **Pending live checks (need a relaunched app and a user at the keyboard):**
 - Shift+Enter: inserts a newline at a plain zsh prompt and is distinguished inside Claude Code;

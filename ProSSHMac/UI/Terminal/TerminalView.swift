@@ -296,32 +296,13 @@ struct TerminalView: View {
                 ) { pane in
                     if let session = sessionForPane(pane) {
                         let paneFocused = pane.id == paneManager.focusedPaneId
-                        if terminalOnlyMode {
-                            TerminalSurfaceView(
-                                session: session,
-                                isFocused: paneFocused,
-                                paneID: pane.id,
-                                bellEffect: bellEffect,
-                                resizeEffect: resizeEffect,
-                                selectionCoordinator: selectionCoordinator,
-                                terminalSearch: terminalSearch,
-                                paneManager: paneManager,
-                                tabManager: tabManager,
-                                onFocusTap: { focusSessionAndPane(session.id, paneID: pane.id) },
-                                onPaste: { sid in pasteClipboardToSession(sid) },
-                                onCopy: { sid in copyContentToClipboard(sessionID: sid) },
-                                onSplitWithExisting: { sid, pid, dir in splitWithExistingSession(sid, beside: pid, direction: dir) }
-                            )
-                            .id(session.id)
-                            .overlay {
-                                directTerminalInputOverlay(for: session)
-                            }
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        } else {
-                            sessionPanel(for: session, paneID: pane.id, includeSearch: paneFocused, isFocused: paneFocused)
-                                .padding(.horizontal)
-                                .padding(.bottom, 8)
-                        }
+                        sessionPanel(
+                            for: session,
+                            paneID: pane.id,
+                            includeSearch: paneFocused,
+                            isFocused: paneFocused,
+                            terminalOnly: terminalOnlyMode
+                        )
                     } else {
                         noSessionPlaceholder
                     }
@@ -339,50 +320,31 @@ struct TerminalView: View {
                 }
 
                 if let session = selectedSession {
-                    if terminalOnlyMode {
-                        TerminalSurfaceView(
-                            session: session,
-                            isFocused: true,
-                            paneID: nil,
-                            bellEffect: bellEffect,
-                            resizeEffect: resizeEffect,
-                            selectionCoordinator: selectionCoordinator,
-                            terminalSearch: terminalSearch,
-                            paneManager: paneManager,
-                            tabManager: tabManager,
-                            onFocusTap: { focusSessionAndPane(session.id, paneID: nil) },
-                            onPaste: { sid in pasteClipboardToSession(sid) },
-                            onCopy: { sid in copyContentToClipboard(sessionID: sid) },
-                            onSplitWithExisting: { sid, pid, dir in splitWithExistingSession(sid, beside: pid, direction: dir) }
-                        )
-                        .id(session.id)
-                        .overlay {
-                            directTerminalInputOverlay(for: session)
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else {
-                        sessionPanel(for: session, includeSearch: true)
-                            .padding(.horizontal)
-                            .padding(.bottom, 8)
-                    }
+                    sessionPanel(for: session, includeSearch: true, terminalOnly: terminalOnlyMode)
                 }
             }
         }
     }
 
+    /// The one place a session's terminal surface is built. Maximizing the terminal
+    /// (`terminalOnly`) only hides the surrounding bars: the surface must keep its position in the
+    /// view tree, or SwiftUI replaces it and its renderer (selection, scroll, glyph atlas). Bug 82.
     @ViewBuilder
     private func sessionPanel(
         for session: Session,
         paneID: UUID? = nil,
         includeSearch: Bool,
-        isFocused: Bool = true
+        isFocused: Bool = true,
+        terminalOnly: Bool = false
     ) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            TerminalSessionHeaderView(session: session)
+            if !terminalOnly {
+                TerminalSessionHeaderView(session: session)
 
-            TerminalSessionMetadataView(session: session)
+                TerminalSessionMetadataView(session: session)
+            }
 
-            if includeSearch, terminalSearch.isPresented {
+            if includeSearch, !terminalOnly, terminalSearch.isPresented {
                 TerminalSearchBarView(
                     terminalSearch: terminalSearch,
                     focusFieldNonce: searchFocusNonce,
@@ -391,7 +353,7 @@ struct TerminalView: View {
                 )
             }
 
-            if session.state == .connected {
+            if terminalOnly || session.state == .connected {
                 TerminalSurfaceView(
                     session: session,
                     isFocused: isFocused,
@@ -411,10 +373,18 @@ struct TerminalView: View {
                 .overlay {
                     directTerminalInputOverlay(for: session)
                 }
+                .frame(
+                    maxWidth: terminalOnly ? .infinity : nil,
+                    maxHeight: terminalOnly ? .infinity : nil
+                )
             }
 
-            TerminalSessionActionsBar(session: session, onRestartLocal: { s in restartLocalSession(s) })
+            if !terminalOnly {
+                TerminalSessionActionsBar(session: session, onRestartLocal: { s in restartLocalSession(s) })
+            }
         }
+        .padding(.horizontal, terminalOnly ? 0 : nil)
+        .padding(.bottom, terminalOnly ? 0 : 8)
     }
 
     private var selectedSession: Session? {
