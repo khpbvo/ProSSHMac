@@ -11,11 +11,11 @@ sequentially, and tagged by severity: **Critical**, **High**, **Medium**, or **L
 |----------|-------|-------|------|
 | Critical | 1     | 1     | 0    |
 | High     | 20    | 7     | 13   |
-| Medium   | 37    | 19    | 18   |
+| Medium   | 38    | 19    | 19   |
 | Low      | 27    | 5     | 22   |
-| **Total**| **85**| **32**| **53**|
+| **Total**| **86**| **32**| **54**|
 
-Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13, Bug 85 fixed 2026-10-14. The `**File:**` paths below predate the
+Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13, Bug 85 fixed and Bug 86 added 2026-10-14. The `**File:**` paths below predate the
 refactors (`Views/` → `UI/`, `SSH/` → `Services/SSH/`, `Services/Security/` → `Services/`) and some
 files no longer exist — resolve by basename.
 
@@ -1434,10 +1434,14 @@ input-capture state per pane), and check any registry added later against this r
 `UI/Terminal/MetalTerminalSessionSurface.swift`
 
 The surface model (and its renderer) is a `@StateObject` of `MetalTerminalSessionSurface`, so it lives
-exactly as long as SwiftUI keeps that view's identity. Expected from the code, not yet measured live:
-switching tabs in the single layout replaces the surface (`.id(session.id)` changes), and splitting,
-unsplitting or maximizing a pane moves the session between the single branch and `SplitNodeView`. Each
-time the selection and scroll state are lost and the renderer is rebuilt from scratch.
+exactly as long as SwiftUI keeps that view's identity. Measured 2026-10-14 (`Docs/Bug84.md` Phase 0
+results), with a probe hosting the real `TerminalView` and a live debug log. Every one of these
+rebuilds it: a tab switch, including switching back; split, which rebuilds *every* visible session,
+not only the one that moved; unsplit, which rebuilds twice, with an interim renderer living
+~300 ms; pane maximize and restore; and move to new tab. Each time the selection and scroll state
+are lost and the renderer is rebuilt from scratch, costing 50–70 MB of Metal allocations at 2x.
+Maximize Terminal (Bug 82) no longer rebuilds. Pop-out builds a second renderer in its own window,
+which is expected.
 
 **Plan:** `Docs/Bug84.md` — move model ownership out of the view into a per-session store, with the
 Bug 81 identity rule for attach/detach.
@@ -1475,6 +1479,25 @@ forwarding synthetic `NSEvent`s with their click count and carrying no gesture r
 **Not covered:** a double-click on empty (never-written) cells still selects just the clicked cell,
 because word expansion (`TerminalSelectionTextExtractor.isWordCell`) stops at empty cells;
 Terminal.app selects the whole blank run. Left as is — it needs a deliberate double-click.
+
+---
+
+### Bug 86 — Colour Emoji Render as Single-Colour Silhouettes; Some Show as `[?]` Boxes (Medium)
+
+**Files:** `Terminal/Renderer/GlyphRasterizer.swift` (`isColorGlyph`, the CTLine slow path),
+`Terminal/Renderer/TerminalShaders.metal`; check also `GlyphCache`/atlas colour flags
+
+Seen 2026-10-14 in a screenshot during the Bug 84 Phase 0 atlas fill (`cat` of U+1F300–U+1F5FF in a
+local zsh session, macOS 26, 2x). Every emoji rendered as a solid foreground-coloured silhouette
+instead of its Apple Color Emoji colours, and many cells showed a boxed `?` instead. CJK, Hangul and
+box-drawing in the same output rendered as expected. `GlyphRasterizer` has an explicit colour path:
+emoji are rasterized as premultiplied BGRA and flagged as colour glyphs, so the shader should sample
+them rather than tint them.
+
+**Not yet diagnosed.** Candidates: `isColorGlyph` returns false, so the glyph takes the alpha-mask
+path; the colour flag is lost between the rasterizer, the cache and the cell buffer; or the shader
+ignores it. The `[?]` cells may be codepoints that need a variation selector (U+FE0F) or that have
+no glyph in the fallback chain. Expected (Terminal.app, iTerm2): colour emoji.
 
 ---
 

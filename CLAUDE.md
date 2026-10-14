@@ -432,8 +432,11 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
   the surface in exactly one place per layout (`TerminalView.sessionPanel`) and express layout modes
   (`terminalOnly`) as conditional *siblings* and modifier values, never as a second build site — a
   second site made Maximize Terminal rebuild the renderer (Bug 82). Window resizes do not rebuild it.
-  Tab switches and split/unsplit still do (Bug 84, `Docs/Bug84.md`). Regression test:
-  `TerminalSurfaceIdentityTests` (hosts the real `TerminalView`; assert renderer identity).
+  Every other layout change still does (measured: tab switch, split, which rebuilds every visible
+  pane, unsplit, pane maximize, move to new tab). Each rebuild costs 50–70 MB of Metal allocations
+  at 2x, and the new surface appears *before* the old one disappears (Bug 84, `Docs/Bug84.md`).
+  Regression test: `TerminalSurfaceIdentityTests` (hosts the real `TerminalView`; assert renderer
+  identity).
 
 ### UI
 - **Four files are over 1,000 lines**: `AIToolHandler.swift` (1,119L),
@@ -479,7 +482,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 | `Docs/featurelist.md` | **Long-term memory** — dated work log, phase progress, loop-log entries |
 | `Docs/RenderCost.md` | **Active spec.** What rendering actually costs — R0/R1/R2a done, **R2b open** (code merged, performance unvalidated). Read its "Measurement caveats" before any perf measurement |
 | `Docs/R2bBenchmarkResults.md` | R2b A/B evidence: exact commands and all raw reports for the six baseline/candidate pairs |
-| `Docs/Bug84.md` | **Queued.** One terminal renderer per session across tab switches and split changes (per-session model store) — Phase 0 next |
+| `Docs/Bug84.md` | **Active.** One terminal renderer per session across tab switches and split changes (per-session model store) — Phase 0 measured, Phase 1 next |
 | `Docs/bugs.md` | Bug and tech-debt register by subsystem/severity (counts in its Summary table); paths are pre-refactor |
 | `Docs/PhaseB.md` | Local Input V2 Phase B checklist (make byte-first local input the only path) — open |
 | `Docs/OpenRouterArchitecture.md` | Current OpenRouter AI architecture, settings, transcript, and verification |
@@ -510,7 +513,26 @@ and the session coordinators) has no spec file left; see `Docs/featurelist.md`.
 
 ## Next Session Plan
 
-**Active work: `Docs/RenderCost.md` R2b — explain or bound the throughput variability.**
+**Active work: `Docs/Bug84.md` Phase 1 — `TerminalSurfaceModelStore`, with no view changes yet.**
+Phase 0 (2026-10-14) measured that every main-window layout change rebuilds the renderer: tab
+switch, split (which rebuilds every visible pane), unsplit (twice), pane maximize and move to new
+tab. Pop-out correctly gets its own renderer. Read "Phase 0 results" in the spec before starting.
+1. Write the store (`@MainActor final class`, `ObservableObject`, `nonisolated deinit`):
+   create-on-demand `model(for:)`, `release(sessionID:)`, `prune(keeping:)`.
+2. Unit tests: same model for the same session; a released model deallocates (weak ref); prune
+   drops closed sessions. `MetalTerminalSurfaceModel()` without a view costs ~0.1 MB, so tests can
+   create several.
+3. Keep in mind for Phase 2 (don't build it yet): on detach, release the drawable-sized
+   offscreen textures, keep the atlas, and reset `hasCapturedPreviousFrame`.
+The instrumentation and the rebuild probe are on `debug/bug84-surface-rebuild` (`0f163cc`, never
+merge). Its `Bug84RebuildProbeTests` steps are the starting point for the Phase 2 regression tests.
+Delete the branch once Phase 2 no longer needs it.
+
+**Queued after Bug 84:** Bug 83 (registry audit), then Bug 80 (one shared copy path — Bug 84
+Phase 3 may absorb it), then Bug 86 (colour emoji render as silhouettes; not diagnosed). All in
+`Docs/bugs.md`.
+
+**Paused: `Docs/RenderCost.md` R2b — explain or bound the throughput variability.**
 R2b (fewer engine actor calls per batch and per publish) is merged on `master` but unvalidated:
 both it and baseline `af933f4` are bimodal, and every instrumentation-off A/B pair median favored
 the baseline (0.88x, 0.29x, 0.87x), so a regression is possible. Don't reimplement it — the change
@@ -526,11 +548,6 @@ list is in `Docs/RenderCost.md` and the raw reports in `Docs/R2bBenchmarkResults
    conditions. Restore genuine window acquisition before any rendered or peer-comparable claim.
 4. Close R2b when the variability is explained or bounded; update `Docs/featurelist.md`,
    `Docs/RenderCost.md` and this plan.
-
-**Terminal selection and surface follow-ups** (Bugs 82 and 85 fixed and verified live). Queued, in order:
-1. `Docs/Bug84.md` Phase 0 — measure which layout changes still rebuild the surface, and renderer memory.
-2. Bug 83 (registry audit), then Bug 80 (one shared copy path — Bug 84 Phase 3 may absorb it).
-All in `Docs/bugs.md`.
 
 **Pending live checks (need a relaunched app and a user at the keyboard):**
 - Shift+Enter: inserts a newline at a plain zsh prompt and is distinguished inside Claude Code;
