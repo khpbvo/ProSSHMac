@@ -16,7 +16,7 @@ final class TerminalSelectionInteractionTests: XCTestCase {
         )
         XCTAssertTrue(model.hasSelection)
 
-        model.handleTap()
+        model.handleMouseDown(at: SelectionPoint(row: 0, col: 0), clickCount: 1)
 
         XCTAssertFalse(model.hasSelection)
     }

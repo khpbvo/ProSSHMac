@@ -7,20 +7,13 @@ import SwiftUI
 import MetalKit
 import AppKit
 
-enum TerminalPointerPhase {
-    case began
-    case changed
-    case ended
-    case cancelled
-}
-
 struct TerminalMetalView: NSViewRepresentable {
     let renderer: MetalTerminalRenderer
     var onTerminalResize: ((Int, Int) -> Void)?
-    var onTap: ((CGPoint) -> Void)?
-    var onDrag: ((CGPoint, TerminalPointerPhase) -> Void)?
-    var onDoubleTap: ((CGPoint) -> Void)?
-    var onTripleTap: ((CGPoint) -> Void)?
+    /// Left-button press with AppKit's click count (2 = double-click, 3 = triple-click).
+    var onMouseDown: ((CGPoint, Int) -> Void)?
+    var onMouseDragged: ((CGPoint) -> Void)?
+    var onMouseUp: (() -> Void)?
     /// Called when user scrolls (positive = up/scrollback, negative = down/toward live).
     var onScroll: ((Int) -> Void)?
     /// Decide whether the current wheel event should drive emulator scrollback
@@ -30,10 +23,6 @@ struct TerminalMetalView: NSViewRepresentable {
     var accessibilityHint: String = "Interactive SSH terminal"
     var backgroundOpacityPercent: Double = TransparencyManager.defaultBackgroundOpacityPercent
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator(parent: self)
-    }
-
     func makeNSView(context: Context) -> TerminalMetalContainerView {
         let container = TerminalMetalContainerView(frame: .zero)
         let mtkView = container.metalView
@@ -42,21 +31,11 @@ struct TerminalMetalView: NSViewRepresentable {
 
         mtkView.clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
 
-        let tripleClick = NSClickGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTripleClick(_:)))
-        tripleClick.numberOfClicksRequired = 3
-
-        let doubleClick = NSClickGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleDoubleClick(_:)))
-        doubleClick.numberOfClicksRequired = 2
-
-        let click = NSClickGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleClick(_:)))
-        click.numberOfClicksRequired = 1
-
-        let pan = NSPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePan(_:)))
-
-        mtkView.addGestureRecognizer(tripleClick)
-        mtkView.addGestureRecognizer(doubleClick)
-        mtkView.addGestureRecognizer(click)
-        mtkView.addGestureRecognizer(pan)
+        // Mouse events, not gesture recognizers: a pan recognizer claimed every trackpad click
+        // (sub-pixel movement), so click, double- and triple-click never fired (Bug 85).
+        mtkView.onMouseDown = onMouseDown
+        mtkView.onMouseDragged = onMouseDragged
+        mtkView.onMouseUp = onMouseUp
 
         container.onScroll = onScroll
         container.shouldRouteWheelToViewport = shouldRouteWheelToViewport
@@ -70,7 +49,9 @@ struct TerminalMetalView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: TerminalMetalContainerView, context: Context) {
-        context.coordinator.parent = self
+        nsView.metalView.onMouseDown = onMouseDown
+        nsView.metalView.onMouseDragged = onMouseDragged
+        nsView.metalView.onMouseUp = onMouseUp
         renderer.onGridSizeChange = onTerminalResize
         nsView.onScroll = onScroll
         nsView.shouldRouteWheelToViewport = shouldRouteWheelToViewport
@@ -85,50 +66,34 @@ struct TerminalMetalView: NSViewRepresentable {
     private var backgroundOpacity: CGFloat {
         CGFloat(TransparencyManager.normalizedOpacity(fromPercent: backgroundOpacityPercent))
     }
+}
 
-    final class Coordinator: NSObject {
-        var parent: TerminalMetalView
+/// The terminal's Metal view. Reports left-button events in its own coordinate space, then passes
+/// them up the responder chain as `MTKView` does, so enclosing SwiftUI tap gestures still see them.
+final class TerminalMTKView: MTKView {
+    var onMouseDown: ((CGPoint, Int) -> Void)?
+    var onMouseDragged: ((CGPoint) -> Void)?
+    var onMouseUp: (() -> Void)?
 
-        init(parent: TerminalMetalView) {
-            self.parent = parent
-        }
+    override func mouseDown(with event: NSEvent) {
+        onMouseDown?(convert(event.locationInWindow, from: nil), event.clickCount)
+        super.mouseDown(with: event)
+    }
 
-        @objc
-        func handleClick(_ recognizer: NSClickGestureRecognizer) {
-            guard let view = recognizer.view else { return }
-            parent.onTap?(recognizer.location(in: view))
-        }
+    override func mouseDragged(with event: NSEvent) {
+        onMouseDragged?(convert(event.locationInWindow, from: nil))
+        super.mouseDragged(with: event)
+    }
 
-        @objc
-        func handleDoubleClick(_ recognizer: NSClickGestureRecognizer) {
-            guard let view = recognizer.view else { return }
-            parent.onDoubleTap?(recognizer.location(in: view))
-        }
-
-        @objc
-        func handleTripleClick(_ recognizer: NSClickGestureRecognizer) {
-            guard let view = recognizer.view else { return }
-            parent.onTripleTap?(recognizer.location(in: view))
-        }
-
-        @objc
-        func handlePan(_ recognizer: NSPanGestureRecognizer) {
-            guard let view = recognizer.view else { return }
-            let phase: TerminalPointerPhase
-            switch recognizer.state {
-            case .began: phase = .began
-            case .changed: phase = .changed
-            case .ended: phase = .ended
-            default: phase = .cancelled
-            }
-            parent.onDrag?(recognizer.location(in: view), phase)
-        }
+    override func mouseUp(with event: NSEvent) {
+        onMouseUp?()
+        super.mouseUp(with: event)
     }
 }
 
 final class TerminalMetalContainerView: NSView {
     let blurView = NSVisualEffectView(frame: .zero)
-    let metalView = MTKView(frame: .zero)
+    let metalView = TerminalMTKView(frame: .zero)
     var onScroll: ((Int) -> Void)?
     var shouldRouteWheelToViewport: ((CGFloat) -> Bool)?
     var cellHeight: CGFloat = 16

@@ -11,11 +11,11 @@ sequentially, and tagged by severity: **Critical**, **High**, **Medium**, or **L
 |----------|-------|-------|------|
 | Critical | 1     | 1     | 0    |
 | High     | 20    | 7     | 13   |
-| Medium   | 37    | 18    | 19   |
+| Medium   | 37    | 19    | 18   |
 | Low      | 27    | 5     | 22   |
-| **Total**| **85**| **31**| **54**|
+| **Total**| **85**| **32**| **53**|
 
-Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13. The `**File:**` paths below predate the
+Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13, Bug 85 fixed 2026-10-14. The `**File:**` paths below predate the
 refactors (`Views/` → `UI/`, `SSH/` → `Services/SSH/`, `Services/Security/` → `Services/`) and some
 files no longer exist — resolve by basename.
 
@@ -1444,28 +1444,37 @@ Bug 81 identity rule for attach/detach.
 
 ---
 
-### Bug 85 — A Click Can Leave a One-Cell Selection That Another Click Won't Clear (Medium)
+### Bug 85 — ~~A Click Can Leave a One-Cell Selection That Another Click Won't Clear~~ [FIXED] (Medium)
 
-**Files:** `Terminal/Renderer/TerminalMetalView.swift` (gesture recognizers, `Coordinator.handlePan`),
-`UI/Terminal/MetalTerminalSessionSurface.swift` (`MetalTerminalSurfaceModel.handleDrag`/`handleTap`)
+**Files:** `Terminal/Renderer/TerminalMetalView.swift` (`TerminalMTKView`),
+`Terminal/Input/TerminalPointerSelection.swift`, `UI/Terminal/MetalTerminalSessionSurface.swift`
 
 Reported 2026-10-13 with a screenshot: after clicking in the terminal a small blue one-cell
 rectangle stays highlighted (here in the empty area right of a ping line), and clicking again does
 not remove it. Expected (Terminal.app, iTerm2): a plain click never leaves a highlight, and any click
 clears an existing selection; a selection only appears once the pointer is dragged.
 
-**Likely cause (from the code, not yet confirmed with logging):** `TerminalMetalView` attaches an
-`NSClickGestureRecognizer` and an `NSPanGestureRecognizer` to the `MTKView`. A click with the slightest
-pointer movement (common on a trackpad) is recognised as a pan instead of a click. `handleDrag(.began)`
-then immediately calls `setSelection(start: cell, end: cell)` — a one-cell selection — and since the
-pan claimed the gesture, the click recognizer fails and `handleTap()` (which clears the selection)
-never runs. `.ended` keeps the selection. Each later wobbly click repeats this at the new spot, so the
-highlight seems impossible to dismiss; a perfectly still click should still clear it.
+**Cause (confirmed 2026-10-14 with debug logging on a trackpad):** `TerminalMetalView` attached
+single/double/triple `NSClickGestureRecognizer`s and an `NSPanGestureRecognizer` to the `MTKView`.
+In ~33 clicks the log recorded 198 pan callbacks and **no** click, double-click or triple-click
+callback at all: a trackpad press reports sub-pixel drags (0.0–0.3 pt), the pan began on the first
+one and the click recognizers failed. `handleDrag(.began)` selected the clicked cell and `.ended`
+kept it, while `handleTap()` (which clears) never ran — so every click moved the one-cell highlight
+instead of clearing it. Double-click word selection and triple-click line selection were dead for
+the same reason.
 
-**Next:** confirm with debug logging (which recognizer fires per click, the begin/end cells), then
-make a drag create a selection only once the pointer leaves the starting cell, and treat a pan that
-ends in its starting cell as a click (clear the selection). Add a model-level test: began and ended
-in the same cell leaves no selection; began in one cell and changed to another selects the range.
+**Fix:** the recognizers are gone. `TerminalMTKView` overrides `mouseDown`/`mouseDragged`/`mouseUp`
+(forwarding AppKit's `clickCount`, then passing the event up the responder chain as before), and
+`TerminalPointerSelection` decides the selection the way Terminal.app does: a single press clears,
+a double/triple press selects the word/line, and a drag selects only once the pointer leaves its
+start cell (word/line drags extend by word/line). Mouse reporting to TUIs is unaffected — the
+`MouseInputCaptureView` overlay still takes the events first when enabled. Tests:
+`TerminalPointerSelectionTests` (10: the tracker, the model on a real renderer, and the view
+forwarding synthetic `NSEvent`s with their click count and carrying no gesture recognizers).
+
+**Not covered:** a double-click on empty (never-written) cells still selects just the clicked cell,
+because word expansion (`TerminalSelectionTextExtractor.isWordCell`) stops at empty cells;
+Terminal.app selects the whole blank run. Left as is — it needs a deliberate double-click.
 
 ---
 

@@ -136,8 +136,8 @@ xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform
 - **Toolchain: Xcode 27.0 (27A266a), Swift 6.4.** The Metal Toolchain component must be installed
   (`xcodebuild -showComponent metalToolchain`). Never exclude `TerminalShaders.metal` from a build;
   if the shader fails to compile, check the component first.
-- Test bundle: `ProSSHMacTests` — 5 files at the bundle root plus 50 in `ProSSHMacTests/Terminal/Tests/`,
-  ~910 test methods. No test sources live under `ProSSHMac/`.
+- Test bundle: `ProSSHMacTests` — 5 files at the bundle root plus 51 in `ProSSHMacTests/Terminal/Tests/`,
+  ~920 test methods. No test sources live under `ProSSHMac/`.
 - Some tests require the host app process (UI/AppKit-backed suites).
 - **No full-suite baseline exists on Xcode 27.** Every suite touched since has been run targeted and
   green. Treat any red result in a suite you touched as yours, including
@@ -213,7 +213,7 @@ ProSSHMac/
 │   │                     #   GridReflow, GridSnapshot, ScrollbackBuffer
 │   ├── Parser/           # TerminalEngine, VTParserTables, VTConstants, CSI/OSC/SGR/ESC/DCS/Charset
 │   ├── Input/            # KeyEncoder, MouseEncoder, HardwareKeyHandler, LocalTerminalSubsystem,
-│   │                     #   InputModeState, PasteHandler, KeyboardToolbar
+│   │                     #   InputModeState, PasteHandler, KeyboardToolbar, TerminalPointerSelection
 │   ├── Renderer/         # MetalTerminalRenderer + 8 extensions, TerminalMetalView, CellBuffer,
 │   │                     #   GlyphAtlas/Cache/Rasterizer, FontManager, Cursor/SelectionRenderer,
 │   │                     #   SmoothScrollEngine, TerminalUniforms, TerminalShaders.metal,
@@ -267,14 +267,14 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 | `Terminal/Features/PaneManager.swift` | Split-pane tree, input routing, broadcast/solo mode (444L) |
 | `UI/Terminal/TerminalInputCaptureView.swift` | NSViewRepresentable keyboard bridge for local sessions (422L) |
 | `App/ThroughputBenchmarkRunner+Render.swift` | End-to-end benchmark through the real app path (419L): `--benchmark-render`, `--benchmark-render-detached`, `--benchmark-window WxH`, windowless warning |
-| `UI/Terminal/MetalTerminalSessionSurface.swift` | SwiftUI-Metal bridge, snapshot application, selection, tap-to-deselect (406L) |
+| `UI/Terminal/MetalTerminalSessionSurface.swift` | SwiftUI-Metal bridge, snapshot application, selection from mouse events (394L) |
 | `ViewModels/TerminalAIAssistantViewModel.swift` | AI sidebar VM: messages, streaming, patch approval (379L) |
 | `UI/Terminal/ExternalTerminalWindowView.swift` | Separate-window terminal session view (341L) |
 | `Terminal/Input/KeyEncoder.swift` | Key → byte encoding driven by `KeyEncoderOptions` (application cursor keys, kitty disambiguation, `modifyOtherKeys`); Shift+Enter fallback (315L) |
 | `Services/AI/AIToolDefinitions.swift` | Developer prompt, 8 tool schemas, direct-action filter, error helpers (315L) |
 | `Services/SessionShellIOCoordinator.swift` | Shell input, the batched parser reader, per-batch bookkeeping (307L). Each batch is one `feedAndCollectOutcome` call, applied in one MainActor handoff with no post-feed engine reads; also filters the AI tool wrapper echo |
 | `Services/LocalPTYProcess.swift` | Actor wrapping forkpty, async output stream (274L) |
-| `Terminal/Renderer/TerminalMetalView.swift` | NSViewRepresentable wrapping MTKView, gesture recognizers (239L) |
+| `Terminal/Renderer/TerminalMetalView.swift` | NSViewRepresentable wrapping `TerminalMTKView` (left-mouse events with click count), wheel scrolling (204L) |
 | `Terminal/Diagnostics/TerminalPerf.swift` | Runtime-gated signposts + 19 in-process stage timers with span/busy tracking (236L). Start here for any perf work |
 | `Services/SessionAIToolCoordinator.swift` | AI one-shot command wrapping with private OSC 7777 start/completion events (206L) |
 | `Services/LocalShellBootstrap.swift` | Child env for local PTY, ZDOTDIR/BASH_ENV injection (202L) |
@@ -368,6 +368,9 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
   before calling it flaky.
 - **`testAlternateBufferSplitRedrawPublishesOnlyAfterQuiescentWindow` has thin timing margins** —
   12 ms sleeps against a 16 ms reschedule interval. If it goes red once, re-run before suspecting code.
+- **Every `XCTestCase` subclass warns** "main actor-isolated initializer 'init()' has different actor
+  isolation from nonisolated overridden declaration" — target-wide, from default MainActor
+  isolation. Not caused by your change; don't chase it per file.
 - **SourceKit false positives**: "Cannot find type" errors across files. Always verify with
   `xcodebuild build`.
 
@@ -411,9 +414,13 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
   `cell.fgColor` is a lossy reverse lookup, and `TerminalDefaults.boldIsBright` (true, xterm-style)
   is **pre-applied at write time**. So bold + red reads back as `.indexed(9)`, and `.rgb(0,0,0)`
   reads back as `.indexed(16)`. Assert rendered RGB via `XCTAssertRendersAs`, never the enum case.
-- **Terminal selection**: `selectedText()` skips wide-char continuation cells. Plain-tap deselection
-  lives in `MetalTerminalSessionSurface` (shared by embedded and external windows).
-  `handleDrag` processes `.ended`/`.cancelled` before the `gridCell(at:)` guard.
+- **Terminal selection comes from mouse events, never gesture recognizers.** An
+  `NSPanGestureRecognizer` claimed every trackpad click (sub-pixel movement), so click-to-clear,
+  double- and triple-click never fired (Bug 85). `TerminalMTKView` forwards `mouseDown` (with
+  `clickCount`)/`mouseDragged`/`mouseUp`, and `TerminalPointerSelection` decides: a press clears or
+  selects a word/line, and a drag selects only after leaving its start cell. The model lives in
+  `MetalTerminalSessionSurface` (shared by embedded and external windows); `mouseUp` needs no grid
+  cell. `selectedText()` skips wide-char continuation cells. Tests: `TerminalPointerSelectionTests`.
 - **View-keyed registries must remove by identity, not by key.** When SwiftUI rebuilds a view, the
   new view's `onAppear` can run *before* the old view's `onDisappear`.
   `TerminalSelectionCoordinator.unregister(sessionID:model:)` therefore removes an entry only if it
@@ -520,12 +527,9 @@ list is in `Docs/RenderCost.md` and the raw reports in `Docs/R2bBenchmarkResults
 4. Close R2b when the variability is explained or bounded; update `Docs/featurelist.md`,
    `Docs/RenderCost.md` and this plan.
 
-**Terminal selection and surface follow-ups** (Bug 82, Maximize Terminal rebuilding the renderer, is
-fixed on `master` and verified live). Queued, in order:
-1. Bug 85 — a click can leave a one-cell selection that another click won't clear (likely the pan
-   recognizer winning over the click on tiny pointer movement; confirm with logging first).
-2. `Docs/Bug84.md` Phase 0 — measure which layout changes still rebuild the surface, and renderer memory.
-3. Bug 83 (registry audit), then Bug 80 (one shared copy path — Bug 84 Phase 3 may absorb it).
+**Terminal selection and surface follow-ups** (Bugs 82 and 85 fixed and verified live). Queued, in order:
+1. `Docs/Bug84.md` Phase 0 — measure which layout changes still rebuild the surface, and renderer memory.
+2. Bug 83 (registry audit), then Bug 80 (one shared copy path — Bug 84 Phase 3 may absorb it).
 All in `Docs/bugs.md`.
 
 **Pending live checks (need a relaunched app and a user at the keyboard):**

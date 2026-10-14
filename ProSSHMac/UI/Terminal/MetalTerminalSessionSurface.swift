@@ -35,18 +35,15 @@ struct MetalTerminalSessionSurface: View {
                 TerminalMetalView(
                     renderer: renderer,
                     onTerminalResize: onTerminalResize,
-                    onTap: { point in
-                        model.handleTap()
+                    onMouseDown: { point, clickCount in
+                        model.handleMouseDown(at: point, clickCount: clickCount)
                         onTap?(point)
                     },
-                    onDrag: { point, phase in
-                        model.handleDrag(point: point, phase: phase)
+                    onMouseDragged: { point in
+                        model.handleMouseDragged(to: point)
                     },
-                    onDoubleTap: { point in
-                        model.handleDoubleTap(at: point)
-                    },
-                    onTripleTap: { point in
-                        model.handleTripleTap(at: point)
+                    onMouseUp: {
+                        model.handleMouseUp()
                     },
                     onScroll: onScroll,
                     shouldRouteWheelToViewport: shouldRouteWheelToViewportProvider,
@@ -186,7 +183,7 @@ final class TerminalSelectionCoordinator: ObservableObject {
 final class MetalTerminalSurfaceModel: ObservableObject {
     nonisolated let objectWillChange = ObservableObjectPublisher()
     let renderer: MetalTerminalRenderer?
-    private var dragStart: SelectionPoint?
+    private var pointerSelection = TerminalPointerSelection()
     private var appliedFontSize: CGFloat
     private var appliedFontFamily: String
     private var cachedGradientConfiguration: GradientBackgroundConfiguration
@@ -276,50 +273,35 @@ final class MetalTerminalSurfaceModel: ObservableObject {
 
     // MARK: - Selection
 
-    func handleTap() {
-        renderer?.clearSelection()
+    func handleMouseDown(at point: CGPoint, clickCount: Int) {
+        handleMouseDown(at: renderer?.gridCell(at: point), clickCount: clickCount)
     }
 
-    func handleDrag(point: CGPoint, phase: TerminalPointerPhase) {
-        guard let renderer else { return }
+    func handleMouseDown(at cell: SelectionPoint?, clickCount: Int) {
+        apply(pointerSelection.mouseDown(at: cell, clickCount: clickCount))
+    }
 
-        // Always handle terminal phases that don't need a grid cell
-        switch phase {
-        case .ended:
-            dragStart = nil
-            return
-        case .cancelled:
-            dragStart = nil
-            renderer.clearSelection()
-            return
-        case .began, .changed:
+    func handleMouseDragged(to point: CGPoint) {
+        handleMouseDragged(to: renderer?.gridCell(at: point))
+    }
+
+    func handleMouseDragged(to cell: SelectionPoint?) {
+        apply(pointerSelection.mouseDragged(to: cell))
+    }
+
+    func handleMouseUp() {
+        apply(pointerSelection.mouseUp())
+    }
+
+    private func apply(_ action: TerminalSelectionAction) {
+        switch action {
+        case .none:
             break
+        case .clear:
+            renderer?.clearSelection()
+        case let .select(start, end, type):
+            renderer?.setSelection(start: start, end: end, type: type)
         }
-
-        guard let cell = renderer.gridCell(at: point) else { return }
-
-        switch phase {
-        case .began:
-            dragStart = cell
-            renderer.setSelection(start: cell, end: cell, type: .character)
-        case .changed:
-            guard let start = dragStart else { return }
-            renderer.setSelection(start: start, end: cell, type: .character)
-        case .ended, .cancelled:
-            break // handled above
-        }
-    }
-
-    func handleDoubleTap(at point: CGPoint) {
-        guard let renderer else { return }
-        guard let cell = renderer.gridCell(at: point) else { return }
-        renderer.setSelection(start: cell, end: cell, type: .word)
-    }
-
-    func handleTripleTap(at point: CGPoint) {
-        guard let renderer else { return }
-        guard let cell = renderer.gridCell(at: point) else { return }
-        renderer.setSelection(start: cell, end: cell, type: .line)
     }
 
     func selectAll() {
