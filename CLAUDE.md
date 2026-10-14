@@ -529,8 +529,6 @@ Verified live: selection, copy and scroll position survive tab switch, split/uns
    pane. Then delete the registry, and keep what the Bug 81 tests cover.
 2. Re-run the copy suites (`TerminalSelectionInteractionTests`, `TerminalInputCaptureViewTests`,
    `MouseInputCaptureViewTests`) and `TerminalSurfaceIdentityTests`.
-`debug/bug84-surface-rebuild` (`0f163cc`, never merge) can be deleted: its probe's steps now live
-in `TerminalSurfaceIdentityTests`.
 
 **Queued after Bug 84:** Bug 87 (Move to New Tab selects the wrong tab, confirmed live; small),
 Bug 83 (registry audit), Bug 80 (one shared copy path — Bug 84 Phase 3 may absorb it), Bug 86
