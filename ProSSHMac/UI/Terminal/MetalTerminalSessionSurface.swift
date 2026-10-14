@@ -24,7 +24,6 @@ struct MetalTerminalSessionSurface: View {
     var shouldRouteWheelToViewportProvider: ((CGFloat) -> Bool)?
     var isFocused: Bool = true
     var isLocalSession: Bool = false
-    var selectionCoordinator: TerminalSelectionCoordinator?
     /// Provides current scrollback count for scroll bounds clamping.
     var scrollbackCountProvider: (() -> Int)?
     /// Provides current scroll offset row so smooth-scroll engine can stay in sync.
@@ -66,7 +65,6 @@ struct MetalTerminalSessionSurface: View {
                     model.apply(snapshot: snapshotProvider())
                     model.setRendererPaused(false)
                     model.updateFPS(isFocused: isFocused)
-                    selectionCoordinator?.register(sessionID: sessionID, model: model)
                     // Safety net: re-apply snapshot after a short delay to catch
                     // any race where the initial apply happens before the atlas
                     // rebuild completes. If the display is already correct this
@@ -77,8 +75,7 @@ struct MetalTerminalSessionSurface: View {
                     }
                 }
                 .onDisappear {
-                    guard model.detach(surface: surfaceToken) else { return }
-                    selectionCoordinator?.unregister(sessionID: sessionID, model: model)
+                    model.detach(surface: surfaceToken)
                 }
                 .onChange(of: snapshotNonce) { _, _ in
                     let snapshot = snapshotProvider()
@@ -112,76 +109,6 @@ struct MetalTerminalSessionSurface: View {
                 .padding(10)
             }
         }
-    }
-}
-
-/// Shared coordinator allowing TerminalView to access selection from any active surface model.
-@MainActor
-final class TerminalSelectionCoordinator: ObservableObject {
-    private var models: [UUID: WeakModel] = [:]
-
-    private struct WeakModel {
-        weak var model: MetalTerminalSurfaceModel?
-    }
-
-    func register(sessionID: UUID, model: MetalTerminalSurfaceModel) {
-        models[sessionID] = WeakModel(model: model)
-    }
-
-    /// Removes `model`'s registration only if it is still the registered surface. A rebuilt
-    /// surface (e.g. after a resize) registers before the old one disappears, so the old one
-    /// must not remove its replacement.
-    func unregister(sessionID: UUID, model: MetalTerminalSurfaceModel) {
-        let registered = models[sessionID]?.model
-        if registered == nil || registered === model {
-            models.removeValue(forKey: sessionID)
-        }
-    }
-
-    func copySelection(sessionID: UUID) -> String? {
-        model(for: sessionID)?.copySelection()
-    }
-
-    func copySelection(preferredSessionID: UUID?) -> String? {
-        if let preferredSessionID,
-           let selected = model(for: preferredSessionID)?.copySelection(),
-           !selected.isEmpty {
-            return selected
-        }
-
-        for (sessionID, weakModel) in models {
-            if sessionID == preferredSessionID { continue }
-            guard let model = weakModel.model else {
-                models.removeValue(forKey: sessionID)
-                continue
-            }
-            if let selected = model.copySelection(), !selected.isEmpty {
-                return selected
-            }
-        }
-
-        return nil
-    }
-
-    func hasSelection(sessionID: UUID) -> Bool {
-        model(for: sessionID)?.hasSelection ?? false
-    }
-
-    func selectAll(sessionID: UUID) {
-        models[sessionID]?.model?.selectAll()
-    }
-
-    func clearSelection(sessionID: UUID) {
-        model(for: sessionID)?.clearSelection()
-    }
-
-    private func model(for sessionID: UUID) -> MetalTerminalSurfaceModel? {
-        guard let weakModel = models[sessionID],
-              let model = weakModel.model else {
-            models.removeValue(forKey: sessionID)
-            return nil
-        }
-        return model
     }
 }
 

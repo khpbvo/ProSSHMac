@@ -42,6 +42,16 @@ final class TerminalSurfaceModelStore: ObservableObject {
         return model
     }
 
+    /// The model `model(for:duplicateInPane:)` would return, or nil if there is none yet.
+    /// Selection actions (copy, select-all) use this: a lookup must never build a renderer.
+    func existingModel(for sessionID: UUID, duplicateInPane paneID: UUID? = nil) -> MetalTerminalSurfaceModel? {
+        if let paneID {
+            guard let entry = duplicates[paneID], entry.sessionID == sessionID else { return nil }
+            return entry.model
+        }
+        return models[sessionID]
+    }
+
     /// Drops the session's models, freeing their renderers once no view holds them.
     func release(sessionID: UUID) {
         models.removeValue(forKey: sessionID)

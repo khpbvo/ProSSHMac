@@ -21,37 +21,45 @@ final class TerminalSelectionInteractionTests: XCTestCase {
         XCTAssertFalse(model.hasSelection)
     }
 
-    /// A resize rebuilds the surface: SwiftUI runs the new surface's onAppear (register) before
-    /// the old surface's onDisappear (unregister). The old surface must not remove the new one.
-    func testReplacedSurfaceUnregisteringDoesNotRemoveItsReplacement() throws {
-        let coordinator = TerminalSelectionCoordinator()
+    /// A layout change rebuilds the surface view: SwiftUI attaches the new view before the old one
+    /// disappears. The old view's detach must leave the selection reachable for copy (Bug 81).
+    func testReplacedSurfaceDetachingKeepsTheSelectionReachable() throws {
+        let store = TerminalSurfaceModelStore()
         let sessionID = UUID()
-        let oldSurface = MetalTerminalSurfaceModel()
-        let newSurface = MetalTerminalSurfaceModel()
-        try selectText("hello", in: newSurface)
+        let model = store.model(for: sessionID)
+        try selectText("hello", in: model)
 
-        coordinator.register(sessionID: sessionID, model: oldSurface)
-        coordinator.register(sessionID: sessionID, model: newSurface)
-        coordinator.unregister(sessionID: sessionID, model: oldSurface)
+        let (oldSurface, newSurface) = (UUID(), UUID())
+        model.attach(surface: oldSurface)
+        model.attach(surface: newSurface)
+        XCTAssertFalse(model.detach(surface: oldSurface))
 
-        XCTAssertTrue(coordinator.hasSelection(sessionID: sessionID))
-        XCTAssertEqual(coordinator.copySelection(sessionID: sessionID), "hello")
-        XCTAssertEqual(coordinator.copySelection(preferredSessionID: sessionID), "hello")
+        let found = try XCTUnwrap(store.existingModel(for: sessionID))
+        XCTAssertTrue(found === model)
+        XCTAssertTrue(found.hasSelection)
+        XCTAssertEqual(found.copySelection(), "hello")
     }
 
-    func testCurrentSurfaceUnregisteringRemovesIt() throws {
-        let coordinator = TerminalSelectionCoordinator()
+    func testReleasedSessionHasNoSelectionToCopy() throws {
+        let store = TerminalSurfaceModelStore()
         let sessionID = UUID()
-        let surface = MetalTerminalSurfaceModel()
-        try selectText("hello", in: surface)
+        try selectText("hello", in: store.model(for: sessionID))
+        XCTAssertEqual(store.existingModel(for: sessionID)?.copySelection(), "hello")
 
-        coordinator.register(sessionID: sessionID, model: surface)
-        XCTAssertEqual(coordinator.copySelection(sessionID: sessionID), "hello")
+        store.release(sessionID: sessionID)
 
-        coordinator.unregister(sessionID: sessionID, model: surface)
+        XCTAssertNil(store.existingModel(for: sessionID))
+    }
 
-        XCTAssertFalse(coordinator.hasSelection(sessionID: sessionID))
-        XCTAssertNil(coordinator.copySelection(sessionID: sessionID))
+    /// A session shown in two panes has a model per pane; copy must read the targeted pane's.
+    func testDuplicatePaneCopiesItsOwnSelection() throws {
+        let store = TerminalSurfaceModelStore()
+        let (sessionID, laterPane) = (UUID(), UUID())
+        try selectText("aaa", in: store.model(for: sessionID))
+        try selectText("bbb", in: store.model(for: sessionID, duplicateInPane: laterPane))
+
+        XCTAssertEqual(store.existingModel(for: sessionID)?.copySelection(), "aaa")
+        XCTAssertEqual(store.existingModel(for: sessionID, duplicateInPane: laterPane)?.copySelection(), "bbb")
     }
 
     /// Gives the surface's renderer a one-row snapshot containing `text` and selects all of it.

@@ -1364,6 +1364,11 @@ masked. Found while debugging "copy from the terminal does nothing" (2026-10-12)
 **Later:** move copy into one shared path used by both windows, and decide whether the fallback
 should exist at all (Terminal.app/iTerm2 copy nothing without a selection).
 
+**Progress (2026-10-14, Bug 84 Phase 3):** `TerminalSelectionCoordinator` is deleted. Each window
+reads the selection from its `TerminalSurfaceModelStore` (the main window by focused pane), and the
+main window's "copy any other visible pane's selection" fallback is gone. Still open: the two
+windows' duplicated copy functions, and the draft/last-line fallback.
+
 ---
 
 ### Bug 81 — ~~Terminal Copy Stops Working After a Window Resize~~ [FIXED] (Medium)
@@ -1424,7 +1429,8 @@ view-lifecycle instance; the remaining per-session removals (`TerminalHistoryInd
 `SessionRecorder`) run on session close, not view disappearance.
 
 **Next:** extend the audit to `Services/` coordinators and AppKit bridges (first-responder and
-input-capture state per pane), and check any registry added later against this rule.
+input-capture state per pane), and check any registry added later against this rule. The Bug 81
+registry itself (`TerminalSelectionCoordinator`) was deleted in Bug 84 Phase 3.
 
 ---
 
@@ -1446,8 +1452,9 @@ which is expected.
 **Progress (2026-10-14):** Phase 2 is merged. The main window owns a `TerminalSurfaceModelStore`,
 so tab switch, split, unsplit, pane maximize and move to new tab keep the session's renderer
 (`TerminalSurfaceIdentityTests`), and hidden renderers free their drawable-sized textures. Verified
-live: the selection, copy and scroll position survive. Still open: Phase 3 (selection
-coordinator), the Phase 4 live check and Phase 5 validation.
+live: the selection, copy and scroll position survive. Phase 3 removed
+`TerminalSelectionCoordinator`: copy and select-all read the store's model for the focused pane.
+Still open: the Phase 4 live check and Phase 5 validation.
 
 **Plan:** `Docs/Bug84.md` — move model ownership out of the view into a per-session store, with the
 Bug 81 identity rule for attach/detach.

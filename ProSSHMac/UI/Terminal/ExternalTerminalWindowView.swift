@@ -11,7 +11,6 @@ struct ExternalTerminalWindowView: View {
     @AppStorage("terminal.ui.fontSize") private var terminalUIFontSize = 12.0
     @AppStorage("terminal.ui.fontFamily") private var terminalUIFontFamily = FontManager.platformDefaultFontFamily
     @AppStorage("terminal.renderer.useMetal") private var useMetalRenderer = true
-    @StateObject private var selectionCoordinator = TerminalSelectionCoordinator()
     /// This window's renderers; never shared with the main window (Bug 84).
     @StateObject private var surfaceModels = TerminalSurfaceModelStore()
     @State private var directInputActivationNonce: Int = 0
@@ -128,7 +127,6 @@ struct ExternalTerminalWindowView: View {
                 },
                 isFocused: true,
                 isLocalSession: session.isLocal,
-                selectionCoordinator: selectionCoordinator,
                 scrollbackCountProvider: {
                     sessionManager.cachedScrollbackCount(for: session.id)
                 },
@@ -263,18 +261,12 @@ struct ExternalTerminalWindowView: View {
 
     private func copyActiveContentToClipboard() {
         guard let sessionID = session?.id else { return }
-        if copyContentToClipboard(sessionID: sessionID) {
-            return
-        }
-        if let selectedText = selectionCoordinator.copySelection(preferredSessionID: sessionID) {
-            _ = PlatformClipboard.writeString(selectedText)
-            return
-        }
+        copyContentToClipboard(sessionID: sessionID)
     }
 
     @discardableResult
     private func copyContentToClipboard(sessionID: UUID) -> Bool {
-        if let selectedText = selectionCoordinator.copySelection(sessionID: sessionID), !selectedText.isEmpty {
+        if let selectedText = surfaceModels.existingModel(for: sessionID)?.copySelection(), !selectedText.isEmpty {
             _ = PlatformClipboard.writeString(selectedText)
             return true
         }

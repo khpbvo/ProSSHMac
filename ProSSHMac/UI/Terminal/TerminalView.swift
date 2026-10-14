@@ -30,7 +30,6 @@ struct TerminalView: View {
     @StateObject private var resizeEffect = ResizeEffectController()
     @StateObject private var tabManager: SessionTabManager
     @StateObject private var terminalSearch = TerminalSearch()
-    @StateObject private var selectionCoordinator = TerminalSelectionCoordinator()
     /// Each session's renderer, kept across tab switches and split changes (Bug 84).
     @StateObject private var surfaceModels = TerminalSurfaceModelStore()
     @StateObject private var paneManager: PaneManager
@@ -368,20 +367,20 @@ struct TerminalView: View {
             }
 
             if terminalOnly || session.state == .connected {
+                let model = surfaceModel(for: session.id, paneID: paneID)
                 TerminalSurfaceView(
                     session: session,
                     isFocused: isFocused,
                     paneID: paneID,
-                    surfaceModel: surfaceModel(for: session.id, paneID: paneID),
+                    surfaceModel: model,
                     bellEffect: bellEffect,
                     resizeEffect: resizeEffect,
-                    selectionCoordinator: selectionCoordinator,
                     terminalSearch: terminalSearch,
                     paneManager: paneManager,
                     tabManager: tabManager,
                     onFocusTap: { focusSessionAndPane(session.id, paneID: paneID) },
                     onPaste: { sid in pasteClipboardToSession(sid) },
-                    onCopy: { sid in copyContentToClipboard(sessionID: sid) },
+                    onCopy: { sid in copyContentToClipboard(sessionID: sid, surfaceModel: model) },
                     onSplitWithExisting: { sid, pid, dir in splitWithExistingSession(sid, beside: pid, direction: dir) }
                 )
                 .id(session.id)
@@ -407,12 +406,33 @@ struct TerminalView: View {
     /// gets one of its own, since a renderer drives one view. Decided from pane state, not from
     /// the order views appear in.
     private func surfaceModel(for sessionID: UUID, paneID: UUID?) -> MetalTerminalSurfaceModel {
-        if let paneID,
-           let firstPane = paneManager.allPanes.first(where: { $0.sessionID == sessionID }),
-           firstPane.id != paneID {
-            return surfaceModels.model(for: sessionID, duplicateInPane: paneID)
+        surfaceModels.model(for: sessionID, duplicateInPane: duplicatePaneID(for: sessionID, paneID: paneID))
+    }
+
+    /// The model `surfaceModel(for:paneID:)` would return, without creating one. Selection
+    /// actions use this, so they act on the same renderer the pane shows.
+    private func existingSurfaceModel(for sessionID: UUID, paneID: UUID?) -> MetalTerminalSurfaceModel? {
+        surfaceModels.existingModel(for: sessionID, duplicateInPane: duplicatePaneID(for: sessionID, paneID: paneID))
+    }
+
+    /// `paneID` when that pane is a later one showing the session, so it needs its own model;
+    /// nil when it uses the session's own model.
+    private func duplicatePaneID(for sessionID: UUID, paneID: UUID?) -> UUID? {
+        guard let paneID,
+              let firstPane = paneManager.allPanes.first(where: { $0.sessionID == sessionID }),
+              firstPane.id != paneID else { return nil }
+        return paneID
+    }
+
+    /// The focused terminal's model: the focused pane's when it shows the target session, else the
+    /// session's own. A session in two panes has two models, so looking up by session alone would
+    /// pick the wrong one.
+    private func focusedSurfaceModel() -> (sessionID: UUID, model: MetalTerminalSurfaceModel?)? {
+        guard let sessionID = paneManager.focusedSessionID ?? focusedSessionID ?? tabManager.selectedSessionID else {
+            return nil
         }
-        return surfaceModels.model(for: sessionID)
+        let paneID = paneManager.focusedSessionID == sessionID ? paneManager.focusedPaneId : nil
+        return (sessionID, existingSurfaceModel(for: sessionID, paneID: paneID))
     }
 
     private func pruneSurfaceModels() {
@@ -852,20 +872,14 @@ struct TerminalView: View {
     }
 
     private func copyActiveContentToClipboard() {
-        let targetSessionID = paneManager.focusedSessionID ?? focusedSessionID ?? tabManager.selectedSessionID
-        if let sessionID = targetSessionID,
-           copyContentToClipboard(sessionID: sessionID) {
-            return
-        }
-        if let selectedText = selectionCoordinator.copySelection(preferredSessionID: targetSessionID) {
-            _ = PlatformClipboard.writeString(selectedText)
-            return
-        }
+        guard let target = focusedSurfaceModel() else { return }
+        copyContentToClipboard(sessionID: target.sessionID, surfaceModel: target.model)
     }
 
+    /// Copies `surfaceModel`'s selection, else the unsent draft, else the last line (Bug 80).
     @discardableResult
-    private func copyContentToClipboard(sessionID: UUID) -> Bool {
-        if let selectedText = selectionCoordinator.copySelection(sessionID: sessionID), !selectedText.isEmpty {
+    private func copyContentToClipboard(sessionID: UUID, surfaceModel: MetalTerminalSurfaceModel?) -> Bool {
+        if let selectedText = surfaceModel?.copySelection(), !selectedText.isEmpty {
             _ = PlatformClipboard.writeString(selectedText)
             return true
         }
@@ -892,9 +906,7 @@ struct TerminalView: View {
     }
 
     private func selectAllInFocusedTerminal() {
-        let targetSessionID = paneManager.focusedSessionID ?? focusedSessionID ?? tabManager.selectedSessionID
-        guard let sessionID = targetSessionID else { return }
-        selectionCoordinator.selectAll(sessionID: sessionID)
+        focusedSurfaceModel()?.model?.selectAll()
     }
 
     private func inputModeSnapshot(for sessionID: UUID) -> InputModeSnapshot {

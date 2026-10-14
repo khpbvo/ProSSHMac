@@ -132,6 +132,24 @@ final class TerminalSurfaceModelStoreTests: XCTestCase {
         XCTAssertTrue(store.model(for: live, duplicateInPane: keptPane) === kept)
     }
 
+    /// Copy and select-all look models up; a lookup must never build a renderer.
+    func testExistingModelNeverCreatesOne() {
+        let store = TerminalSurfaceModelStore()
+        let (session, other, pane) = (UUID(), UUID(), UUID())
+
+        XCTAssertNil(store.existingModel(for: session))
+        XCTAssertNil(store.existingModel(for: session, duplicateInPane: pane))
+        XCTAssertNil(store.existingModel(for: session), "A lookup must not have created a model")
+
+        let duplicate = store.model(for: other, duplicateInPane: pane)
+        XCTAssertNil(store.existingModel(for: session, duplicateInPane: pane),
+                     "A pane's duplicate belongs to the session it was made for")
+        XCTAssertTrue(store.existingModel(for: other, duplicateInPane: pane) === duplicate)
+
+        let primary = store.model(for: session)
+        XCTAssertTrue(store.existingModel(for: session) === primary)
+    }
+
     func testPruneWithoutPanesKeepsLiveSessionsDuplicates() {
         let store = TerminalSurfaceModelStore()
         let session = UUID()

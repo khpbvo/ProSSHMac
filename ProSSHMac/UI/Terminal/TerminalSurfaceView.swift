@@ -12,7 +12,6 @@ struct TerminalSurfaceView: View {
 
     @ObservedObject var bellEffect: BellEffectController
     @ObservedObject var resizeEffect: ResizeEffectController
-    @ObservedObject var selectionCoordinator: TerminalSelectionCoordinator
     @ObservedObject var terminalSearch: TerminalSearch
     @ObservedObject var paneManager: PaneManager
     @ObservedObject var tabManager: SessionTabManager
@@ -174,7 +173,6 @@ struct TerminalSurfaceView: View {
             },
             isFocused: isFocused,
             isLocalSession: session.isLocal,
-            selectionCoordinator: selectionCoordinator,
             scrollbackCountProvider: {
                 sessionManager.cachedScrollbackCount(for: session.id)
             },
@@ -251,14 +249,14 @@ struct TerminalSurfaceView: View {
         Divider()
 
         Button {
-            selectionCoordinator.selectAll(sessionID: session.id)
+            surfaceModel.selectAll()
         } label: {
             Label("Select All", systemImage: "selection.pin.in.out")
         }
 
-        if selectionCoordinator.hasSelection(sessionID: session.id) {
+        if surfaceModel.hasSelection {
             Button {
-                selectionCoordinator.clearSelection(sessionID: session.id)
+                surfaceModel.clearSelection()
             } label: {
                 Label("Clear Selection", systemImage: "xmark.rectangle")
             }

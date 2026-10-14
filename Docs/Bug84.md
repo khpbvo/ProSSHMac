@@ -124,13 +124,25 @@ references, so that a freed renderer's address can't be reused by its replacemen
     - split then unsplit keeps the original renderer
     - pane maximize keeps the renderer
     - a closed session's renderer is released
-- [ ] **Phase 3: Fold `TerminalSelectionCoordinator` into the store.**
-  - Copy, select-all and has-selection look up the store. A session shown in two panes has two
-    models (see Phase 2), so look up by focused pane, not session alone. The coordinator
-    registry is keyed by session, so today the last-registered pane wins for copy. Delete the register/unregister
-    registry, and update the Bug 81 tests to the new API without losing what they cover.
-  - Re-run the copy suites (`TerminalSelectionInteractionTests`, `TerminalInputCaptureViewTests`,
-    `MouseInputCaptureViewTests`).
+- [x] **Phase 3: Fold `TerminalSelectionCoordinator` into the store.** Done 2026-10-14. As built:
+  - **The registry is gone.** `TerminalSelectionCoordinator` and the surface's register/unregister
+    calls are deleted; `onDisappear` only detaches. Nothing fills a selection lookup from view
+    lifecycle any more.
+  - **`TerminalSurfaceModelStore.existingModel(for:duplicateInPane:)`** returns the model
+    `model(for:duplicateInPane:)` would, or nil. It never creates one, so copy cannot allocate a
+    renderer.
+  - **Main window:** `TerminalView.duplicatePaneID(for:paneID:)` is the one "is this a later pane?"
+    rule, shared by `surfaceModel(for:paneID:)` and `existingSurfaceModel(for:paneID:)`.
+    `focusedSurfaceModel()` picks the focused pane's model when that pane shows the target session,
+    else the session's own. Cmd+C and Select All use it. `sessionPanel` binds the pane's model once
+    and passes it to the surface and to its context-menu Copy, so a duplicate pane copies its own
+    selection. The context menu's Select All / Clear Selection use the view's own model.
+  - **Dropped (user decision):** the main window's fallback that copied a selection from any other
+    visible pane when the target had nothing. The pop-out window's equivalent re-checked its only
+    session and is gone too. The draft and last-line fallbacks are unchanged (Bug 80).
+  - Tests: the two Bug 81 registry tests became store tests (a replaced surface's detach leaves the
+    selection copyable; a released session has nothing to copy), plus a duplicate pane copies its
+    own selection. `TerminalSurfaceModelStoreTests.testExistingModelNeverCreatesOne`.
 - [ ] **Phase 4: Pop-out window.**
   - Done in Phase 2, because the constructor change required it: `ExternalTerminalWindowView` owns
     its own store, so renderers are per window and never shared. What is left is a live check:
@@ -145,6 +157,8 @@ references, so that a freed renderer's address can't be reused by its replacemen
     - same for split/unsplit and maximize
     - the scroll position survives
     - no visible redraw hitch
+    - a session split into two panes ("split with existing"): select different text in each; Cmd+C
+      and the context-menu Copy each copy the pane they target (Phase 3)
   - Re-measure hidden-renderer cost with many sessions open. Add an LRU cap only if the numbers
     after Phase 2 call for one (see Phase 0 results).
   - Update `Docs/bugs.md` (Bug 84 fixed; Bug 80 status), `Docs/featurelist.md` and the CLAUDE.md

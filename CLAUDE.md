@@ -252,7 +252,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 |---|---|
 | `Services/AI/AIToolHandler.swift` + 5 extensions | Tool dispatch (1,119L) — largest file. Extensions: ArgumentParsing, RemoteExecution, LocalFilesystem, InteractiveInput, OutputHelpers |
 | `Services/TerminalRenderingCoordinator.swift` | Snapshot publishing, scroll state, resize debounce, alt-buffer policy, shell-buffer throttle (1,066L). An ordinary publish is two engine calls (`publishViewportState`, then `publishSnapshot` carrying housekeeping) with MainActor scroll-anchor policy between them |
-| `UI/Terminal/TerminalView.swift` | Main terminal UI, sidebar layout, focus, input capture (1,034L). `sessionPanel` is the only place a session's terminal surface is built |
+| `UI/Terminal/TerminalView.swift` | Main terminal UI, sidebar layout, focus, input capture (1,081L). `sessionPanel` is the only place a session's terminal surface is built |
 | `Services/SessionManager.swift` + Queries | Session lifecycle, shell I/O, SFTP, grid snapshots (1,020L) |
 | `UI/Terminal/TerminalAIAssistantPane.swift` | AI copilot sidebar, composer, message rendering, pipe tables (992L) |
 | `Terminal/Parser/TerminalEngine.swift` | VT parser hot path, merged parse/apply loop, `feedAndCollectOutcome`, `primaryBufferVisibleText` (843L) |
@@ -268,7 +268,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 | `UI/Terminal/TerminalInputCaptureView.swift` | NSViewRepresentable keyboard bridge for local sessions (422L) |
 | `App/ThroughputBenchmarkRunner+Render.swift` | End-to-end benchmark through the real app path (419L): `--benchmark-render`, `--benchmark-render-detached`, `--benchmark-window WxH`, windowless warning |
 | `UI/Terminal/MetalTerminalSessionSurface.swift` | SwiftUI-Metal bridge, snapshot application, selection from mouse events (394L) |
-| `UI/Terminal/TerminalSurfaceModelStore.swift` | Owns each window's renderers: one `MetalTerminalSurfaceModel` per session, plus pane-keyed duplicates; `model(for:duplicateInPane:)`, `release`, `prune(keeping:panes:)`. Owned by `TerminalView` and `ExternalTerminalWindowView` |
+| `UI/Terminal/TerminalSurfaceModelStore.swift` | Owns each window's renderers: one `MetalTerminalSurfaceModel` per session, plus pane-keyed duplicates; `model(for:duplicateInPane:)`, non-creating `existingModel` (selection lookups), `release`, `prune(keeping:panes:)`. Owned by `TerminalView` and `ExternalTerminalWindowView` |
 | `ViewModels/TerminalAIAssistantViewModel.swift` | AI sidebar VM: messages, streaming, patch approval (379L) |
 | `UI/Terminal/ExternalTerminalWindowView.swift` | Separate-window terminal session view (341L) |
 | `Terminal/Input/KeyEncoder.swift` | Key → byte encoding driven by `KeyEncoderOptions` (application cursor keys, kitty disambiguation, `modifyOtherKeys`); Shift+Enter fallback (315L) |
@@ -423,23 +423,27 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
   `MetalTerminalSessionSurface` (shared by embedded and external windows); `mouseUp` needs no grid
   cell. `selectedText()` skips wide-char continuation cells. Tests: `TerminalPointerSelectionTests`.
 - **View-keyed registries must remove by identity, not by key.** When SwiftUI rebuilds a view, the
-  new view's `onAppear` can run *before* the old view's `onDisappear`.
-  `TerminalSelectionCoordinator.unregister(sessionID:model:)` therefore removes an entry only if it
-  still belongs to the caller; removing by session ID alone broke all terminal copy after the surface
-  was rebuilt (Bug 81). Apply the same rule to any registry filled in `onAppear`.
+  new view's `onAppear` can run *before* the old view's `onDisappear`. Removing the selection
+  registry's entry by session ID alone broke all terminal copy after the surface was rebuilt
+  (Bug 81). That registry is gone, since selection now comes from the model store, but the
+  rule applies to any registry filled in `onAppear`. Prefer looking up state that outlives the view.
 - **Each window's `TerminalSurfaceModelStore` owns the renderers, not the surface view.**
   `MetalTerminalSessionSurface` takes its `MetalTerminalSurfaceModel` as an `@ObservedObject`, so
   tab switches, splits and maximize rebuild the *view* but keep the session's renderer (Bug 84).
   - **The new view appears before the old one disappears**, and both hold the same model. Only the
-    attached surface (`model.attach/detach(surface:)`, a per-view `@State` token) may pause,
-    release textures or unregister.
+    attached surface (`model.attach/detach(surface:)`, a per-view `@State` token) may pause or
+    release textures.
   - **Only the renderer's `configuredMTKView` may set renderer callbacks.** See `configureView` and
     `TerminalMetalView.updateNSView`.
   - **Detach clears every renderer callback a view supplies.** Those closures capture view structs
     that hold the model, so keeping one leaks the renderer through a cycle. Add any new
     view-supplied callback to `detach`.
   - **A session shown in two panes gets two models:** the first pane in `paneManager.allPanes`
-    order keeps the primary (`TerminalView.surfaceModel(for:paneID:)`).
+    order keeps the primary (`TerminalView.duplicatePaneID(for:paneID:)` decides).
+  - **Selection actions look the model up by pane and never create one.** Copy, select-all and
+    has-selection use `existingModel(for:duplicateInPane:)` (main window:
+    `focusedSurfaceModel()`), or the model the surface view already holds. Never add a second
+    registry of models.
   - Still build the surface in exactly one place per layout (`TerminalView.sessionPanel`); a
     second site rebuilt it in Bug 82.
   Regression tests: `TerminalSurfaceIdentityTests` (hosts the real `TerminalView` with injected
@@ -447,7 +451,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 
 ### UI
 - **Four files are over 1,000 lines**: `AIToolHandler.swift` (1,119L),
-  `TerminalRenderingCoordinator.swift` (1,066L), `TerminalView.swift` (1,034L),
+  `TerminalRenderingCoordinator.swift` (1,066L), `TerminalView.swift` (1,081L),
   `SessionManager.swift` (1,020L). Read surrounding context before modifying.
 - **Focus management** between AI composer (NSTextView) and terminal (DirectTerminalInputNSView) is
   delicate. Must resign at AppKit level, not just SwiftUI state. See `focusSessionAndPane()`.
@@ -520,18 +524,17 @@ and the session coordinators) has no spec file left; see `Docs/featurelist.md`.
 
 ## Next Session Plan
 
-**Active work: `Docs/Bug84.md` Phase 3 — fold `TerminalSelectionCoordinator` into the store.**
-Phase 2 (2026-10-14) made the main window keep one renderer per session; read its "As built"
-notes in the spec first.
-Verified live: selection, copy and scroll position survive tab switch, split/unsplit and maximize.
-1. Copy, select-all and has-selection should look the model up in the store instead of the
-   register/unregister registry. A session in two panes has two models, so look up by the focused
-   pane. Then delete the registry, and keep what the Bug 81 tests cover.
-2. Re-run the copy suites (`TerminalSelectionInteractionTests`, `TerminalInputCaptureViewTests`,
-   `MouseInputCaptureViewTests`) and `TerminalSurfaceIdentityTests`.
+**Active work: `Docs/Bug84.md` Phase 4 (pop-out window live check), then Phase 5.**
+Phases 0–3 are done; Phase 3 (2026-10-14) deleted `TerminalSelectionCoordinator`, so copy and
+select-all read the store's model for the focused pane. Read the spec's "As built" notes first.
+Both phases need a relaunched app and the user at the keyboard:
+1. Phase 4: the pop-out opens, draws, copies, and frees its renderer when closed; the main window
+   keeps its own model for the session while the pop-out is open.
+2. Phase 5: the live list in the spec (now including split-pane copy targeting the right pane),
+   re-measure hidden-renderer memory with many sessions, then close Bug 84 in `Docs/bugs.md`.
 
 **Queued after Bug 84:** Bug 87 (Move to New Tab selects the wrong tab, confirmed live; small),
-Bug 83 (registry audit), Bug 80 (one shared copy path — Bug 84 Phase 3 may absorb it), Bug 86
+Bug 83 (registry audit), Bug 80 (one shared copy path and the draft/last-line fallback), Bug 86
 (colour emoji render as silhouettes; not diagnosed). All in `Docs/bugs.md`.
 
 **Paused: `Docs/RenderCost.md` R2b — explain or bound the throughput variability.**
