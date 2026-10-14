@@ -136,7 +136,7 @@ xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform
 - **Toolchain: Xcode 27.0 (27A266a), Swift 6.4.** The Metal Toolchain component must be installed
   (`xcodebuild -showComponent metalToolchain`). Never exclude `TerminalShaders.metal` from a build;
   if the shader fails to compile, check the component first.
-- Test bundle: `ProSSHMacTests` — 5 files at the bundle root plus 51 in `ProSSHMacTests/Terminal/Tests/`,
+- Test bundle: `ProSSHMacTests` — 5 files at the bundle root plus 52 in `ProSSHMacTests/Terminal/Tests/`,
   ~920 test methods. No test sources live under `ProSSHMac/`.
 - Some tests require the host app process (UI/AppKit-backed suites).
 - **No full-suite baseline exists on Xcode 27.** Every suite touched since has been run targeted and
@@ -225,13 +225,13 @@ ProSSHMac/
 │                         #   TerminalSearch, QuickCommands, SessionRecorder, CommandBlock,
 │                         #   ShellIntegrationScripts, TerminalHistoryIndex, TerminalFileBrowserTree
 ├── UI/
-│   ├── Terminal/         # 22 files: TerminalView, TerminalSurfaceView, MetalTerminalSessionSurface,
+│   ├── Terminal/         # 23 files: TerminalView, TerminalSurfaceView, MetalTerminalSessionSurface,
 │   │                     #   TerminalPaneView/SplitNodeView/PaneDividerView, TerminalAIAssistantPane,
 │   │                     #   ReasoningStreamView, PatchApprovalCardView, TerminalFileBrowserSidebar,
 │   │                     #   session tab/header/actions/metadata bars, search bar, scrollbar,
 │   │                     #   quick commands, TerminalInputCaptureView, ExternalTerminalWindowView,
 │   │                     #   MatrixScreensaverView, TerminalKeyboardShortcutLayer,
-│   │                     #   TerminalSidebarLayoutStore
+│   │                     #   TerminalSidebarLayoutStore, TerminalSurfaceModelStore
 │   ├── Hosts/            # HostsView, HostFormView, PortForwardingRuleEditor, SSHConfigImportPreviewView
 │   ├── Transfers/        # TransfersView
 │   ├── Settings/         # SettingsView + 8 effect settings subviews, OpenRouterModelPicker
@@ -268,6 +268,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 | `UI/Terminal/TerminalInputCaptureView.swift` | NSViewRepresentable keyboard bridge for local sessions (422L) |
 | `App/ThroughputBenchmarkRunner+Render.swift` | End-to-end benchmark through the real app path (419L): `--benchmark-render`, `--benchmark-render-detached`, `--benchmark-window WxH`, windowless warning |
 | `UI/Terminal/MetalTerminalSessionSurface.swift` | SwiftUI-Metal bridge, snapshot application, selection from mouse events (394L) |
+| `UI/Terminal/TerminalSurfaceModelStore.swift` | One `MetalTerminalSurfaceModel` per session per window: `model(for:)`, `release`, `prune(keeping:)`. Not used by views yet (Bug 84 Phase 2) |
 | `ViewModels/TerminalAIAssistantViewModel.swift` | AI sidebar VM: messages, streaming, patch approval (379L) |
 | `UI/Terminal/ExternalTerminalWindowView.swift` | Separate-window terminal session view (341L) |
 | `Terminal/Input/KeyEncoder.swift` | Key → byte encoding driven by `KeyEncoderOptions` (application cursor keys, kitty disambiguation, `modifyOtherKeys`); Shift+Enter fallback (315L) |
@@ -482,7 +483,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 | `Docs/featurelist.md` | **Long-term memory** — dated work log, phase progress, loop-log entries |
 | `Docs/RenderCost.md` | **Active spec.** What rendering actually costs — R0/R1/R2a done, **R2b open** (code merged, performance unvalidated). Read its "Measurement caveats" before any perf measurement |
 | `Docs/R2bBenchmarkResults.md` | R2b A/B evidence: exact commands and all raw reports for the six baseline/candidate pairs |
-| `Docs/Bug84.md` | **Active.** One terminal renderer per session across tab switches and split changes (per-session model store) — Phase 0 measured, Phase 1 next |
+| `Docs/Bug84.md` | **Active.** One terminal renderer per session across tab switches and split changes (per-session model store) — Phases 0–1 done, Phase 2 next |
 | `Docs/bugs.md` | Bug and tech-debt register by subsystem/severity (counts in its Summary table); paths are pre-refactor |
 | `Docs/PhaseB.md` | Local Input V2 Phase B checklist (make byte-first local input the only path) — open |
 | `Docs/OpenRouterArchitecture.md` | Current OpenRouter AI architecture, settings, transcript, and verification |
@@ -513,20 +514,21 @@ and the session coordinators) has no spec file left; see `Docs/featurelist.md`.
 
 ## Next Session Plan
 
-**Active work: `Docs/Bug84.md` Phase 1 — `TerminalSurfaceModelStore`, with no view changes yet.**
-Phase 0 (2026-10-14) measured that every main-window layout change rebuilds the renderer: tab
-switch, split (which rebuilds every visible pane), unsplit (twice), pane maximize and move to new
-tab. Pop-out correctly gets its own renderer. Read "Phase 0 results" in the spec before starting.
-1. Write the store (`@MainActor final class`, `ObservableObject`, `nonisolated deinit`):
-   create-on-demand `model(for:)`, `release(sessionID:)`, `prune(keeping:)`.
-2. Unit tests: same model for the same session; a released model deallocates (weak ref); prune
-   drops closed sessions. `MetalTerminalSurfaceModel()` without a view costs ~0.1 MB, so tests can
-   create several.
-3. Keep in mind for Phase 2 (don't build it yet): on detach, release the drawable-sized
-   offscreen textures, keep the atlas, and reset `hasCapturedPreviousFrame`.
-The instrumentation and the rebuild probe are on `debug/bug84-surface-rebuild` (`0f163cc`, never
-merge). Its `Bug84RebuildProbeTests` steps are the starting point for the Phase 2 regression tests.
-Delete the branch once Phase 2 no longer needs it.
+**Active work: `Docs/Bug84.md` Phase 2 — the main window uses `TerminalSurfaceModelStore`.**
+Phase 0 measured that every main-window layout change rebuilds the renderer, and Phase 1 added the
+store (`UI/Terminal/TerminalSurfaceModelStore.swift`, 5 unit tests). Read Phase 2 and "Phase 0
+results" in the spec first.
+1. Tests first: extend `TerminalSurfaceIdentityTests`, each red before the change. The cases are
+   tab switch and back, split then unsplit, pane maximize, and a closed session's renderer being
+   released. `TerminalView`'s tab and pane managers are private `@StateObject`s, so the tests need
+   a seam. The debug branch's `Bug84Debug.probe` hook shows the shape, but don't merge it as is.
+2. `TerminalView` owns the store and prunes it on `sessionManager.sessions` changes. The model
+   flows `TerminalSurfaceView` → `MetalTerminalSessionSurface` as an `@ObservedObject`.
+3. Attach/detach follow a per-view token, because the new surface appears before the old one
+   disappears. On detach, release the drawable-sized offscreen textures, keep the atlas, and reset
+   `hasCapturedPreviousFrame`.
+4. Too big for one session? Split it into 2a (tests + store wiring) and 2b (texture release).
+The instrumentation and probe are on `debug/bug84-surface-rebuild` (`0f163cc`, never merge).
 
 **Queued after Bug 84:** Bug 83 (registry audit), then Bug 80 (one shared copy path — Bug 84
 Phase 3 may absorb it), then Bug 86 (colour emoji render as silhouettes; not diagnosed). All in

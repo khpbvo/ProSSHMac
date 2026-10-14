@@ -81,7 +81,8 @@ references, so that a freed renderer's address can't be reused by its replacemen
   - Measure one renderer's memory: footprint with N sessions open, before and after the atlas fills.
   - Record the results in this file, and decide whether the store needs a cap or eviction for
     background sessions.
-- [ ] **Phase 1: `TerminalSurfaceModelStore`, with no view changes yet.**
+- [x] **Phase 1: `TerminalSurfaceModelStore`, with no view changes yet.** Done 2026-10-14:
+  `UI/Terminal/TerminalSurfaceModelStore.swift`, `TerminalSurfaceModelStoreTests` (5).
   - Write the store with create-on-demand, `release(sessionID:)` and `prune(keeping:)`, plus
     unit tests:
     - the same model is returned for the same session
