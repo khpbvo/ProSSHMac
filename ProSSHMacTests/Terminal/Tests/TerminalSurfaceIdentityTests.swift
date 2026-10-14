@@ -171,6 +171,105 @@ final class TerminalSurfaceIdentityTests: XCTestCase {
     }
 }
 
+// MARK: - Pop-out window
+
+extension TerminalSurfaceIdentityTests {
+
+    /// A pop-out has its own store, so it builds its own renderer and leaves the main window's
+    /// alone (Bug 84 Phase 4).
+    @MainActor
+    func testPopOutGetsItsOwnRendererAndTheMainWindowKeepsItsOwn() async throws {
+        let harness = try await SurfaceHarness.make()
+        defer { harness.close() }
+        let a = harness.sessionIDs[0]
+
+        try await harness.select(a)
+        let main = try await harness.renderers(count: 1)[0]
+        let popOut = try await harness.popOut(a)
+        let popped = try await harness.renderers(count: 1, in: popOut)[0]
+
+        XCTAssertFalse(popped === main, "The pop-out must not drive the main window's renderer")
+        let mainAfter = try await harness.renderers(count: 1)[0]
+        XCTAssertTrue(mainAfter === main, "Popping out rebuilt the main window's renderer")
+    }
+
+    /// Guard: closing the pop-out frees its renderer, and only its renderer.
+    @MainActor
+    func testClosingPopOutFreesOnlyItsRenderer() async throws {
+        let harness = try await SurfaceHarness.make()
+        defer { harness.close() }
+        let a = harness.sessionIDs[0]
+
+        try await harness.select(a)
+        let main = try await harness.renderers(count: 1)[0]
+        let popOut = try await harness.popOut(a)
+        weak var popped: MetalTerminalRenderer?
+        do {
+            popped = try await harness.renderers(count: 1, in: popOut, retain: false)[0]
+        }
+
+        harness.closePopOut(popOut)
+        try await harness.settle()
+
+        try await harness.waitUntil("the pop-out's renderer is freed", timeout: 2) { popped == nil }
+        let mainAfter = try await harness.renderers(count: 1)[0]
+        XCTAssertTrue(mainAfter === main, "Closing the pop-out rebuilt the main window's renderer")
+    }
+
+    /// Guard: removing a surface clears the callbacks it gave the renderer, even ones set after
+    /// detach. Closing a `WindowGroup` window runs `onDisappear` (detach) and then one more
+    /// `updateNSView`, which set the resize callback again; it captured the pop-out's view and so
+    /// its store, a store -> renderer -> callback cycle that leaked every closed pop-out's
+    /// renderer. A test window cannot produce that extra update, so this sets the callback
+    /// directly, as it did.
+    @MainActor
+    func testRemovingTheSurfaceClearsCallbacksSetAfterDetach() async throws {
+        let renderer = try XCTUnwrap(MetalTerminalSurfaceModel().renderer, "Metal is required for this test")
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+            styleMask: [.titled, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = NSHostingView(rootView: TerminalMetalView(renderer: renderer))
+        window.contentView?.layoutSubtreeIfNeeded()
+        XCTAssertNotNil(renderer.configuredMTKView, "The hosted surface must configure the renderer")
+
+        renderer.onGridSizeChange = { _, _ in }
+        renderer.smoothScrollEngine.onScrollLineChange = { _ in }
+        window.contentView = nil
+        let deadline = Date().addingTimeInterval(1)
+        while renderer.onGridSizeChange != nil, Date() < deadline {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        XCTAssertNil(renderer.onGridSizeChange, "A removed surface must not leave its resize callback on the renderer")
+        XCTAssertNil(renderer.smoothScrollEngine.onScrollLineChange, "A removed surface must not leave its scroll callback on the renderer")
+    }
+
+    /// Guard: a pop-out left open on a closed session must not keep that session's renderer.
+    @MainActor
+    func testPopOutReleasesTheRendererWhenItsSessionCloses() async throws {
+        let harness = try await SurfaceHarness.make()
+        defer { harness.close() }
+        let (a, b) = (harness.sessionIDs[0], harness.sessionIDs[1])
+
+        try await harness.select(b)
+        let popOut = try await harness.popOut(a)
+        weak var popped: MetalTerminalRenderer?
+        do {
+            popped = try await harness.renderers(count: 1, in: popOut, retain: false)[0]
+        }
+
+        await harness.sessionManager.closeSession(sessionID: a)
+        try await harness.settle()
+
+        try await harness.waitUntil("the closed session's pop-out renderer is freed", timeout: 2) { popped == nil }
+    }
+}
+
 // MARK: - Harness
 
 /// Hosts the real `TerminalView` in a window with three screenshot sessions. Tab and pane
@@ -186,6 +285,7 @@ private final class SurfaceHarness {
     let sessionIDs: [UUID]
     private let suiteName: String
     private var retained: [MetalTerminalRenderer] = []
+    private var popOuts: [NSWindow] = []
 
     private init(
         window: NSWindow,
@@ -249,6 +349,7 @@ private final class SurfaceHarness {
     }
 
     func close() {
+        popOuts.forEach(closePopOut)
         window.close()
         UserDefaults(suiteName: suiteName)?.removePersistentDomain(forName: suiteName)
     }
@@ -256,8 +357,36 @@ private final class SurfaceHarness {
     func settle() async throws {
         for _ in 0..<10 {
             window.contentView?.layoutSubtreeIfNeeded()
+            popOuts.forEach { $0.contentView?.layoutSubtreeIfNeeded() }
             try await Task.sleep(nanoseconds: 20_000_000)
         }
+    }
+
+    /// Hosts the real `ExternalTerminalWindowView` for `sessionID` in a second window, as
+    /// "Pop Out to Window" does.
+    func popOut(_ sessionID: UUID) async throws -> NSWindow {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        let rootView = ExternalTerminalWindowView(sessionID: sessionID)
+            .environmentObject(sessionManager)
+            .defaultAppStorage(defaults)
+        let popOut = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
+            styleMask: [.titled, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        popOut.isReleasedWhenClosed = false
+        popOut.contentView = NSHostingView(rootView: rootView)
+        popOuts.append(popOut)
+        try await settle()
+        return popOut
+    }
+
+    /// Tears the pop-out's view hierarchy down and closes it.
+    func closePopOut(_ popOut: NSWindow) {
+        popOut.contentView = nil
+        popOut.close()
+        popOuts.removeAll { $0 === popOut }
     }
 
     func select(_ sessionID: UUID) async throws {
@@ -279,24 +408,27 @@ private final class SurfaceHarness {
         return newPane
     }
 
-    /// The renderers of the terminal surfaces in the window, once there are exactly `count`.
+    /// The renderers of the terminal surfaces in `searchWindow` (default: the main window), once
+    /// there are exactly `count`.
     /// Retained by default, so a freed renderer's address cannot be reused by its replacement.
     func renderers(
         count: Int,
+        in searchWindow: NSWindow? = nil,
         retain: Bool = true,
         timeout: TimeInterval = 5
     ) async throws -> [MetalTerminalRenderer] {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            window.contentView?.layoutSubtreeIfNeeded()
-            let found = containers(in: window.contentView).compactMap(\.renderer)
+            let searched = searchWindow ?? window
+            searched.contentView?.layoutSubtreeIfNeeded()
+            let found = containers(in: searched.contentView).compactMap(\.renderer)
             if found.count == count {
                 if retain { retained.append(contentsOf: found) }
                 return found
             }
             try await Task.sleep(nanoseconds: 10_000_000)
         }
-        let found = containers(in: window.contentView).count
+        let found = containers(in: (searchWindow ?? window).contentView).count
         XCTFail("Expected \(count) terminal surfaces in the window, found \(found)")
         throw CancellationError()
     }

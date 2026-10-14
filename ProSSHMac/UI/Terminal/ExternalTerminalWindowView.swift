@@ -47,6 +47,12 @@ struct ExternalTerminalWindowView: View {
                 dismiss()
             }
         }
+        .onChange(of: session == nil) { _, isClosed in
+            // The window stays open on its placeholder; don't keep the closed session's renderer.
+            if isClosed, let sessionID {
+                surfaceModels.release(sessionID: sessionID)
+            }
+        }
     }
 
     // MARK: - Header

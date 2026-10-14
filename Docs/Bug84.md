@@ -143,14 +143,40 @@ references, so that a freed renderer's address can't be reused by its replacemen
   - Tests: the two Bug 81 registry tests became store tests (a replaced surface's detach leaves the
     selection copyable; a released session has nothing to copy), plus a duplicate pane copies its
     own selection. `TerminalSurfaceModelStoreTests.testExistingModelNeverCreatesOne`.
-- [ ] **Phase 4: Pop-out window.**
-  - Done in Phase 2, because the constructor change required it: `ExternalTerminalWindowView` owns
-    its own store, so renderers are per window and never shared. What is left is a live check:
-    the pop-out opens, draws, copies, and frees its renderer when closed.
-  - Phase 0 measured that pop-out does not move the session out: the main window keeps showing
-    it with its own renderer while the pop-out builds a second one (~92 MB Metal at that window
-    size), and closing the pop-out frees only the pop-out's renderer. So the main window must not
-    release its model on pop-out.
+- [x] **Phase 4: Pop-out window.** Done 2026-10-14. As built:
+  - Phase 2 already gave `ExternalTerminalWindowView` its own store, so renderers are per window
+    and never shared. Phase 0 measured that pop-out does not move the session out: the main window
+    keeps its own renderer, so it must not release its model on pop-out.
+  - **A pop-out left open on a closed session releases its model.** The window stays on its
+    "Session Not Found" placeholder; `.onChange(of: session == nil)` calls
+    `surfaceModels.release(sessionID:)`, as the main window prunes.
+  - **Every closed pop-out leaked its renderer, found live.** `heap` on the Debug app counted one
+    more `MetalTerminalRenderer`, `MetalTerminalSurfaceModel`, `GlyphAtlas` and
+    `TerminalSurfaceModelStore` per closed pop-out, while its window and views were gone. Cause: a
+    cycle, store -> model -> renderer -> `onGridSizeChange` closure -> the pop-out view -> its
+    `@StateObject` store. Closing a `WindowGroup` window runs `onDisappear` (detach clears the
+    callback) and then one more `TerminalMetalView.updateNSView`, which set it again, since the
+    renderer still drew into that view. The main window never showed it: its store outlives the
+    surface and prunes the model, which breaks the loop.
+    - Misleading evidence, for next time: `leaks` reported 0 and `leaks --trace` rooted the store
+      in Combine's global `ObservableObjectTable`, which only references objects that use the
+      synthesized `objectWillChange`. Giving the store an explicit publisher (an experiment,
+      reverted) turned it into a reported ROOT CYCLE that named the callback.
+  - **Fix: `TerminalMetalView.dismantleNSView`** clears `onGridSizeChange` and
+    `smoothScrollEngine.onScrollLineChange` when the dismantled view is still the renderer's
+    `configuredMTKView`. SwiftUI calls it after the last update (asynchronously, after the view is
+    removed); a view already replaced by a newer one leaves the callbacks alone.
+  - Tests (`TerminalSurfaceIdentityTests`, "Pop-out window"): the pop-out gets its own renderer and
+    the main one is unchanged; closing the pop-out frees only its renderer; a closed session's
+    pop-out renderer is freed (red before the release change);
+    `testRemovingTheSurfaceClearsCallbacksSetAfterDetach` (red before the dismantle fix). A test
+    window cannot reproduce the post-`onDisappear` update (`NSWindow.close()` in a test does not
+    even run `onDisappear`), so that test sets the callback itself; the leak is verified live with
+    `heap <pid> | grep MetalTerminalRenderer`.
+  - Live (Debug, one local session): the pop-out opens, draws and copies its own selection.
+    Footprint 134 MB with the session, 214 MB with the pop-out open; after closing it, 165 MB and
+    graphics 37 MB before the fix, **138 MB and 21 MB** with it (counts back to 1). A second pop-out
+    left nothing behind; the main window kept drawing and copying.
 - [ ] **Phase 5: Live validation and memory policy.**
   - On a relaunched build:
     - select text, switch tabs and back: the selection is still there and copy works

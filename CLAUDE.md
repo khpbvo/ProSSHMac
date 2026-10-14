@@ -435,9 +435,15 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
     release textures.
   - **Only the renderer's `configuredMTKView` may set renderer callbacks.** See `configureView` and
     `TerminalMetalView.updateNSView`.
-  - **Detach clears every renderer callback a view supplies.** Those closures capture view structs
-    that hold the model, so keeping one leaks the renderer through a cycle. Add any new
-    view-supplied callback to `detach`.
+  - **Detach clears every renderer callback a view supplies, and so does
+    `TerminalMetalView.dismantleNSView`.** Those closures capture view structs that hold the model
+    (and the window's store), so keeping one leaks the renderer through a cycle. Closing a window
+    runs one more `updateNSView` *after* `onDisappear`, which set the resize callback again and
+    leaked every closed pop-out's renderer. Add any new view-supplied callback to both.
+  - **The pop-out releases its model when its session closes**, as the main window prunes.
+  - **Verify renderer leaks live with `heap <pid> | grep MetalTerminalRenderer`**, not `leaks`: the
+    synthesized `objectWillChange` registers objects in Combine's global table, which hides such
+    cycles from `leaks`. A test window can't reproduce a `WindowGroup` close.
   - **A session shown in two panes gets two models:** the first pane in `paneManager.allPanes`
     order keeps the primary (`TerminalView.duplicatePaneID(for:paneID:)` decides).
   - **Selection actions look the model up by pane and never create one.** Copy, select-all and
@@ -493,7 +499,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 | `Docs/featurelist.md` | **Long-term memory** — dated work log, phase progress, loop-log entries |
 | `Docs/RenderCost.md` | **Active spec.** What rendering actually costs — R0/R1/R2a done, **R2b open** (code merged, performance unvalidated). Read its "Measurement caveats" before any perf measurement |
 | `Docs/R2bBenchmarkResults.md` | R2b A/B evidence: exact commands and all raw reports for the six baseline/candidate pairs |
-| `Docs/Bug84.md` | **Active.** One terminal renderer per session across tab switches and split changes (per-session model store) — Phases 0–2 done, Phase 3 next |
+| `Docs/Bug84.md` | **Active.** One terminal renderer per session across tab switches and split changes (per-session model store) — Phases 0–4 done, Phase 5 (live validation) next |
 | `Docs/bugs.md` | Bug and tech-debt register by subsystem/severity (counts in its Summary table); paths are pre-refactor |
 | `Docs/PhaseB.md` | Local Input V2 Phase B checklist (make byte-first local input the only path) — open |
 | `Docs/OpenRouterArchitecture.md` | Current OpenRouter AI architecture, settings, transcript, and verification |
@@ -524,14 +530,15 @@ and the session coordinators) has no spec file left; see `Docs/featurelist.md`.
 
 ## Next Session Plan
 
-**Active work: `Docs/Bug84.md` Phase 4 (pop-out window live check), then Phase 5.**
-Phases 0–3 are done; Phase 3 (2026-10-14) deleted `TerminalSelectionCoordinator`, so copy and
-select-all read the store's model for the focused pane. Read the spec's "As built" notes first.
-Both phases need a relaunched app and the user at the keyboard:
-1. Phase 4: the pop-out opens, draws, copies, and frees its renderer when closed; the main window
-   keeps its own model for the session while the pop-out is open.
-2. Phase 5: the live list in the spec (now including split-pane copy targeting the right pane),
-   re-measure hidden-renderer memory with many sessions, then close Bug 84 in `Docs/bugs.md`.
+**Active work: `Docs/Bug84.md` Phase 5 (live validation, memory, close the bug).**
+Phases 0–4 are done. Phase 4 (2026-10-14) found and fixed two pop-out leaks (a callback cycle
+re-armed by the post-`onDisappear` update, now cleared in `TerminalMetalView.dismantleNSView`; a
+closed session's model kept by an open pop-out). Read the spec's "As built" notes first.
+Phase 5 needs a relaunched app and the user at the keyboard:
+1. The live list in the spec, including split-pane copy targeting the right pane.
+2. Re-measure hidden-renderer memory with many sessions (`heap <pid> | grep MetalTerminalRenderer`
+   plus `footprint`), and decide on an LRU cap only if the numbers call for one.
+3. Close Bug 84 in `Docs/bugs.md` and update the Summary counts.
 
 **Queued after Bug 84:** Bug 87 (Move to New Tab selects the wrong tab, confirmed live; small),
 Bug 83 (registry audit), Bug 80 (one shared copy path and the draft/last-line fallback), Bug 86

@@ -68,6 +68,16 @@ struct TerminalMetalView: NSViewRepresentable {
         nsView.setBackgroundOpacity(backgroundOpacity)
     }
 
+    /// SwiftUI's last call for this view. Closing a window runs `onDisappear` (which detaches the
+    /// model) and then one more `updateNSView`, setting the callbacks again; they capture the
+    /// window's view and so its model store, which then kept the renderer alive (Bug 84). Clear
+    /// them here, unless the renderer has already moved to a newer view.
+    static func dismantleNSView(_ nsView: TerminalMetalContainerView, coordinator: ()) {
+        guard let renderer = nsView.renderer, renderer.configuredMTKView === nsView.metalView else { return }
+        renderer.onGridSizeChange = nil
+        renderer.smoothScrollEngine.onScrollLineChange = nil
+    }
+
     private var backgroundOpacity: CGFloat {
         CGFloat(TransparencyManager.normalizedOpacity(fromPercent: backgroundOpacityPercent))
     }

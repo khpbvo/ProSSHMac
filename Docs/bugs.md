@@ -1454,7 +1454,9 @@ so tab switch, split, unsplit, pane maximize and move to new tab keep the sessio
 (`TerminalSurfaceIdentityTests`), and hidden renderers free their drawable-sized textures. Verified
 live: the selection, copy and scroll position survive. Phase 3 removed
 `TerminalSelectionCoordinator`: copy and select-all read the store's model for the focused pane.
-Still open: the Phase 4 live check and Phase 5 validation.
+Phase 4 checked the pop-out live and fixed two pop-out leaks: closing a pop-out leaked its
+renderer through a callback cycle (`TerminalMetalView.dismantleNSView` now clears the callbacks),
+and a pop-out left open on a closed session kept its model. Still open: Phase 5 validation.
 
 **Plan:** `Docs/Bug84.md` — move model ownership out of the view into a per-session store, with the
 Bug 81 identity rule for attach/detach.
