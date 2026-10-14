@@ -28,10 +28,12 @@ struct TerminalView: View {
     @State private var pendingInput: [UUID: String] = [:]
     @StateObject private var bellEffect = BellEffectController()
     @StateObject private var resizeEffect = ResizeEffectController()
-    @StateObject private var tabManager = SessionTabManager()
+    @StateObject private var tabManager: SessionTabManager
     @StateObject private var terminalSearch = TerminalSearch()
     @StateObject private var selectionCoordinator = TerminalSelectionCoordinator()
-    @StateObject private var paneManager = PaneManager()
+    /// Each session's renderer, kept across tab switches and split changes (Bug 84).
+    @StateObject private var surfaceModels = TerminalSurfaceModelStore()
+    @StateObject private var paneManager: PaneManager
     @State private var pendingPaneSessionCreation: Set<UUID> = []
     @StateObject private var quickCommands = QuickCommands()
     @FocusState private var focusedSessionID: UUID?
@@ -46,6 +48,14 @@ struct TerminalView: View {
     @State private var aiAssistantDragBaseWidth: Double?
     @State private var loadedSidebarLayoutContextKey: String?
     @State private var isApplyingSidebarLayout = false
+
+    /// Managers are injectable so tests can drive tabs and panes without the developer's
+    /// persisted layout. `StateObject(wrappedValue:)` builds each default only once.
+    init(tabManager: SessionTabManager? = nil, paneManager: PaneManager? = nil) {
+        _tabManager = StateObject(wrappedValue: tabManager ?? SessionTabManager())
+        _paneManager = StateObject(wrappedValue: paneManager ?? PaneManager())
+    }
+
     var body: some View {
         terminalLifecycleView
         .alert(
@@ -209,7 +219,11 @@ struct TerminalView: View {
                 updateSearchLines()
                 syncPaneManagerSessions()
                 restoreSidebarLayoutForSelection()
+                pruneSurfaceModels()
             }
+        }
+        .onChange(of: paneManager.allPanes.map(\.id)) { _, _ in
+            pruneSurfaceModels()
         }
         .onChange(of: tabManager.selectedSessionID) { _, _ in
             resizeEffect.reset()
@@ -358,6 +372,7 @@ struct TerminalView: View {
                     session: session,
                     isFocused: isFocused,
                     paneID: paneID,
+                    surfaceModel: surfaceModel(for: session.id, paneID: paneID),
                     bellEffect: bellEffect,
                     resizeEffect: resizeEffect,
                     selectionCoordinator: selectionCoordinator,
@@ -385,6 +400,26 @@ struct TerminalView: View {
         }
         .padding(.horizontal, terminalOnly ? 0 : nil)
         .padding(.bottom, terminalOnly ? 0 : 8)
+    }
+
+    /// The first pane (in tree order) showing a session uses the session's own model, so it keeps
+    /// its renderer across split, unsplit and maximize; any later pane showing the same session
+    /// gets one of its own, since a renderer drives one view. Decided from pane state, not from
+    /// the order views appear in.
+    private func surfaceModel(for sessionID: UUID, paneID: UUID?) -> MetalTerminalSurfaceModel {
+        if let paneID,
+           let firstPane = paneManager.allPanes.first(where: { $0.sessionID == sessionID }),
+           firstPane.id != paneID {
+            return surfaceModels.model(for: sessionID, duplicateInPane: paneID)
+        }
+        return surfaceModels.model(for: sessionID)
+    }
+
+    private func pruneSurfaceModels() {
+        surfaceModels.prune(
+            keeping: Set(sessionManager.sessions.map(\.id)),
+            panes: Set(paneManager.allPanes.map(\.id))
+        )
     }
 
     private var selectedSession: Session? {

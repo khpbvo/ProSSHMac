@@ -268,7 +268,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 | `UI/Terminal/TerminalInputCaptureView.swift` | NSViewRepresentable keyboard bridge for local sessions (422L) |
 | `App/ThroughputBenchmarkRunner+Render.swift` | End-to-end benchmark through the real app path (419L): `--benchmark-render`, `--benchmark-render-detached`, `--benchmark-window WxH`, windowless warning |
 | `UI/Terminal/MetalTerminalSessionSurface.swift` | SwiftUI-Metal bridge, snapshot application, selection from mouse events (394L) |
-| `UI/Terminal/TerminalSurfaceModelStore.swift` | One `MetalTerminalSurfaceModel` per session per window: `model(for:)`, `release`, `prune(keeping:)`. Not used by views yet (Bug 84 Phase 2) |
+| `UI/Terminal/TerminalSurfaceModelStore.swift` | Owns each window's renderers: one `MetalTerminalSurfaceModel` per session, plus pane-keyed duplicates; `model(for:duplicateInPane:)`, `release`, `prune(keeping:panes:)`. Owned by `TerminalView` and `ExternalTerminalWindowView` |
 | `ViewModels/TerminalAIAssistantViewModel.swift` | AI sidebar VM: messages, streaming, patch approval (379L) |
 | `UI/Terminal/ExternalTerminalWindowView.swift` | Separate-window terminal session view (341L) |
 | `Terminal/Input/KeyEncoder.swift` | Key → byte encoding driven by `KeyEncoderOptions` (application cursor keys, kitty disambiguation, `modifyOtherKeys`); Shift+Enter fallback (315L) |
@@ -427,17 +427,23 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
   `TerminalSelectionCoordinator.unregister(sessionID:model:)` therefore removes an entry only if it
   still belongs to the caller; removing by session ID alone broke all terminal copy after the surface
   was rebuilt (Bug 81). Apply the same rule to any registry filled in `onAppear`.
-- **The terminal surface owns the renderer, so its view identity is the renderer's lifetime.**
-  `MetalTerminalSurfaceModel` (and its `MetalTerminalRenderer`) is a `@StateObject`; SwiftUI keys it
-  to the view's structural position, and `.id(session.id)` only matches within one position. Build
-  the surface in exactly one place per layout (`TerminalView.sessionPanel`) and express layout modes
-  (`terminalOnly`) as conditional *siblings* and modifier values, never as a second build site — a
-  second site made Maximize Terminal rebuild the renderer (Bug 82). Window resizes do not rebuild it.
-  Every other layout change still does (measured: tab switch, split, which rebuilds every visible
-  pane, unsplit, pane maximize, move to new tab). Each rebuild costs 50–70 MB of Metal allocations
-  at 2x, and the new surface appears *before* the old one disappears (Bug 84, `Docs/Bug84.md`).
-  Regression test: `TerminalSurfaceIdentityTests` (hosts the real `TerminalView`; assert renderer
-  identity).
+- **Each window's `TerminalSurfaceModelStore` owns the renderers, not the surface view.**
+  `MetalTerminalSessionSurface` takes its `MetalTerminalSurfaceModel` as an `@ObservedObject`, so
+  tab switches, splits and maximize rebuild the *view* but keep the session's renderer (Bug 84).
+  - **The new view appears before the old one disappears**, and both hold the same model. Only the
+    attached surface (`model.attach/detach(surface:)`, a per-view `@State` token) may pause,
+    release textures or unregister.
+  - **Only the renderer's `configuredMTKView` may set renderer callbacks.** See `configureView` and
+    `TerminalMetalView.updateNSView`.
+  - **Detach clears every renderer callback a view supplies.** Those closures capture view structs
+    that hold the model, so keeping one leaks the renderer through a cycle. Add any new
+    view-supplied callback to `detach`.
+  - **A session shown in two panes gets two models:** the first pane in `paneManager.allPanes`
+    order keeps the primary (`TerminalView.surfaceModel(for:paneID:)`).
+  - Still build the surface in exactly one place per layout (`TerminalView.sessionPanel`); a
+    second site rebuilt it in Bug 82.
+  Regression tests: `TerminalSurfaceIdentityTests` (hosts the real `TerminalView` with injected
+  managers; assert renderer identity) and `TerminalSurfaceModelStoreTests`.
 
 ### UI
 - **Four files are over 1,000 lines**: `AIToolHandler.swift` (1,119L),
@@ -483,7 +489,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 | `Docs/featurelist.md` | **Long-term memory** — dated work log, phase progress, loop-log entries |
 | `Docs/RenderCost.md` | **Active spec.** What rendering actually costs — R0/R1/R2a done, **R2b open** (code merged, performance unvalidated). Read its "Measurement caveats" before any perf measurement |
 | `Docs/R2bBenchmarkResults.md` | R2b A/B evidence: exact commands and all raw reports for the six baseline/candidate pairs |
-| `Docs/Bug84.md` | **Active.** One terminal renderer per session across tab switches and split changes (per-session model store) — Phases 0–1 done, Phase 2 next |
+| `Docs/Bug84.md` | **Active.** One terminal renderer per session across tab switches and split changes (per-session model store) — Phases 0–2 done, Phase 3 next |
 | `Docs/bugs.md` | Bug and tech-debt register by subsystem/severity (counts in its Summary table); paths are pre-refactor |
 | `Docs/PhaseB.md` | Local Input V2 Phase B checklist (make byte-first local input the only path) — open |
 | `Docs/OpenRouterArchitecture.md` | Current OpenRouter AI architecture, settings, transcript, and verification |
@@ -514,25 +520,21 @@ and the session coordinators) has no spec file left; see `Docs/featurelist.md`.
 
 ## Next Session Plan
 
-**Active work: `Docs/Bug84.md` Phase 2 — the main window uses `TerminalSurfaceModelStore`.**
-Phase 0 measured that every main-window layout change rebuilds the renderer, and Phase 1 added the
-store (`UI/Terminal/TerminalSurfaceModelStore.swift`, 5 unit tests). Read Phase 2 and "Phase 0
-results" in the spec first.
-1. Tests first: extend `TerminalSurfaceIdentityTests`, each red before the change. The cases are
-   tab switch and back, split then unsplit, pane maximize, and a closed session's renderer being
-   released. `TerminalView`'s tab and pane managers are private `@StateObject`s, so the tests need
-   a seam. The debug branch's `Bug84Debug.probe` hook shows the shape, but don't merge it as is.
-2. `TerminalView` owns the store and prunes it on `sessionManager.sessions` changes. The model
-   flows `TerminalSurfaceView` → `MetalTerminalSessionSurface` as an `@ObservedObject`.
-3. Attach/detach follow a per-view token, because the new surface appears before the old one
-   disappears. On detach, release the drawable-sized offscreen textures, keep the atlas, and reset
-   `hasCapturedPreviousFrame`.
-4. Too big for one session? Split it into 2a (tests + store wiring) and 2b (texture release).
-The instrumentation and probe are on `debug/bug84-surface-rebuild` (`0f163cc`, never merge).
+**Active work: `Docs/Bug84.md` Phase 3 — fold `TerminalSelectionCoordinator` into the store.**
+Phase 2 (2026-10-14) made the main window keep one renderer per session; read its "As built"
+notes in the spec first.
+Verified live: selection, copy and scroll position survive tab switch, split/unsplit and maximize.
+1. Copy, select-all and has-selection should look the model up in the store instead of the
+   register/unregister registry. A session in two panes has two models, so look up by the focused
+   pane. Then delete the registry, and keep what the Bug 81 tests cover.
+2. Re-run the copy suites (`TerminalSelectionInteractionTests`, `TerminalInputCaptureViewTests`,
+   `MouseInputCaptureViewTests`) and `TerminalSurfaceIdentityTests`.
+`debug/bug84-surface-rebuild` (`0f163cc`, never merge) can be deleted: its probe's steps now live
+in `TerminalSurfaceIdentityTests`.
 
-**Queued after Bug 84:** Bug 83 (registry audit), then Bug 80 (one shared copy path — Bug 84
-Phase 3 may absorb it), then Bug 86 (colour emoji render as silhouettes; not diagnosed). All in
-`Docs/bugs.md`.
+**Queued after Bug 84:** Bug 87 (Move to New Tab selects the wrong tab, confirmed live; small),
+Bug 83 (registry audit), Bug 80 (one shared copy path — Bug 84 Phase 3 may absorb it), Bug 86
+(colour emoji render as silhouettes; not diagnosed). All in `Docs/bugs.md`.
 
 **Paused: `Docs/RenderCost.md` R2b — explain or bound the throughput variability.**
 R2b (fewer engine actor calls per batch and per publish) is merged on `master` but unvalidated:

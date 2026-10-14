@@ -88,7 +88,25 @@ references, so that a freed renderer's address can't be reused by its replacemen
     - the same model is returned for the same session
     - a released model is deallocated, checked with a weak reference
     - prune drops closed sessions
-- [ ] **Phase 2: The main window uses the store.**
+- [x] **Phase 2: The main window uses the store.** Done 2026-10-14. As built:
+  - **A session shown in two panes** (possible via "split with existing") gets two renderers,
+    because one renderer drives one `MTKView`. The first pane in tree order
+    (`paneManager.allPanes`, i.e. `rootNode`, which is stable across maximize) uses the session's
+    primary model, and later panes use `model(for:duplicateInPane:)`. The single layout always
+    uses the primary model. `TerminalView.surfaceModel(for:paneID:)` decides from pane state,
+    never from view order. Prune also drops duplicates whose pane is gone.
+  - **Attach/detach** live on the model: `attach(surface:)`, `detach(surface:) -> Bool`. Only the
+    attached surface's `onDisappear` pauses, releases textures and unregisters.
+  - **Detach also clears `scrollbackBoundsProvider` and `onGridSizeChange`.** They capture view
+    structs that now hold the model. Without this, renderer → closure → view → model → renderer
+    was a cycle, and a closed session's renderer was never freed (caught by the guard test).
+  - **One view drives the renderer.** `configureView` takes the delegate away from a previous
+    `MTKView`, and `TerminalMetalView.updateNSView` rebinds renderer callbacks only for the
+    renderer's configured view. A lingering old view must not take back `onScrollLineChange`,
+    which holds its container weakly, or the grid-resize callback.
+  - **Test seam:** `TerminalView(tabManager:paneManager:)`. The identity tests inject managers on
+    an isolated defaults suite.
+  - The original plan for this phase follows, implemented as written:
   - `TerminalView` owns the store and prunes it on `sessionManager.sessions` changes.
     `TerminalSurfaceView` passes the model through, and `MetalTerminalSessionSurface` takes it as
     an `@ObservedObject`.
@@ -99,21 +117,24 @@ references, so that a freed renderer's address can't be reused by its replacemen
     `previousFrameTexture`, the three bloom textures) and keep the glyph atlas — the Phase 0
     memory decision. All five are already recreated lazily on a size mismatch, which includes
     nil (`MetalTerminalRenderer+PostProcessing.swift`). Also reset `hasCapturedPreviousFrame`,
-    so the CRT pass does not sample a texture it no longer has. Test: a detached renderer holds no offscreen
-    textures, and the next draw recreates them.
+    so the CRT pass does not sample a texture it no longer has. Test: a detached renderer holds
+    no offscreen textures, and the next draw recreates them.
   - Extend `TerminalSurfaceIdentityTests` (each red before the change):
     - a tab switch and switching back keeps each session's renderer
     - split then unsplit keeps the original renderer
     - pane maximize keeps the renderer
     - a closed session's renderer is released
 - [ ] **Phase 3: Fold `TerminalSelectionCoordinator` into the store.**
-  - Copy, select-all and has-selection look up `store.model(for:)`. Delete the register/unregister
+  - Copy, select-all and has-selection look up the store. A session shown in two panes has two
+    models (see Phase 2), so look up by focused pane, not session alone. The coordinator
+    registry is keyed by session, so today the last-registered pane wins for copy. Delete the register/unregister
     registry, and update the Bug 81 tests to the new API without losing what they cover.
   - Re-run the copy suites (`TerminalSelectionInteractionTests`, `TerminalInputCaptureViewTests`,
     `MouseInputCaptureViewTests`).
 - [ ] **Phase 4: Pop-out window.**
-  - `ExternalTerminalWindowView` gets its own store. A session moved to a pop-out window gets a
-    fresh renderer there; renderers are per window, never shared across windows.
+  - Done in Phase 2, because the constructor change required it: `ExternalTerminalWindowView` owns
+    its own store, so renderers are per window and never shared. What is left is a live check:
+    the pop-out opens, draws, copies, and frees its renderer when closed.
   - Phase 0 measured that pop-out does not move the session out: the main window keeps showing
     it with its own renderer while the pop-out builds a second one (~92 MB Metal at that window
     size), and closing the pop-out frees only the pop-out's renderer. So the main window must not

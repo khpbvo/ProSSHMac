@@ -1,9 +1,9 @@
 // TerminalSurfaceIdentityTests.swift
 // ProSSHMac
 //
-// The terminal surface owns the session's Metal renderer (selection, smooth-scroll and cursor
-// state, glyph atlas). Layout changes that keep the session on screen must reuse it rather than
-// make SwiftUI build a new surface. See Docs/bugs.md Bug 82.
+// The terminal surface model owns the session's Metal renderer (selection, smooth-scroll and
+// cursor state, glyph atlas). Layout changes that keep a session on screen must reuse it rather
+// than build a new one. See Docs/bugs.md Bugs 82 and 84, and Docs/Bug84.md.
 
 #if canImport(XCTest)
 import XCTest
@@ -15,18 +15,211 @@ final class TerminalSurfaceIdentityTests: XCTestCase {
 
     @MainActor
     func testMaximizeTerminalKeepsTheSameRenderer() async throws {
+        let harness = try await SurfaceHarness.make()
+        defer { harness.close() }
+
+        // Strong references, so a freed renderer's address cannot be reused by its replacement.
+        let original = try await harness.renderers(count: 1)[0]
+
+        harness.navigationCoordinator.isTerminalMaximized = true
+        try await harness.settle()
+        let maximized = try await harness.renderers(count: 1)[0]
+        XCTAssertTrue(maximized === original, "Maximizing the terminal rebuilt its surface and renderer")
+
+        harness.navigationCoordinator.isTerminalMaximized = false
+        try await harness.settle()
+        let restored = try await harness.renderers(count: 1)[0]
+        XCTAssertTrue(restored === original, "Restoring the sidebar rebuilt the terminal surface and renderer")
+    }
+
+    @MainActor
+    func testTabSwitchKeepsEachSessionsRenderer() async throws {
+        let harness = try await SurfaceHarness.make()
+        defer { harness.close() }
+        let (a, b) = (harness.sessionIDs[0], harness.sessionIDs[1])
+
+        try await harness.select(a)
+        let a0 = try await harness.renderers(count: 1)[0]
+        try await harness.select(b)
+        let b0 = try await harness.renderers(count: 1)[0]
+        XCTAssertFalse(b0 === a0, "Each session needs its own renderer")
+
+        try await harness.select(a)
+        let a1 = try await harness.renderers(count: 1)[0]
+        XCTAssertTrue(a1 === a0, "Switching back to a tab rebuilt its renderer")
+
+        try await harness.select(b)
+        let b1 = try await harness.renderers(count: 1)[0]
+        XCTAssertTrue(b1 === b0, "Switching back to a tab rebuilt its renderer")
+    }
+
+    @MainActor
+    func testSplitUnsplitAndMoveToNewTabKeepTheRenderers() async throws {
+        let harness = try await SurfaceHarness.make()
+        defer { harness.close() }
+        let (a, b) = (harness.sessionIDs[0], harness.sessionIDs[1])
+
+        try await harness.select(a)
+        let a0 = try await harness.renderers(count: 1)[0]
+
+        let paneB = try await harness.split(with: b)
+        let split = try await harness.renderers(count: 2)
+        XCTAssertTrue(split.contains { $0 === a0 }, "Splitting rebuilt the existing session's renderer")
+        let b0 = try XCTUnwrap(split.first { $0 !== a0 })
+
+        harness.paneManager.closePane(paneB)
+        try await harness.settle()
+        let unsplit = try await harness.renderers(count: 1)[0]
+        XCTAssertTrue(unsplit === a0, "Unsplitting rebuilt the remaining session's renderer")
+
+        // Split again, then move B's pane to its own tab (TerminalView.moveToNewTab). Closing the
+        // pane moves focus to A's pane, and TerminalView's focus handler then selects A, so B is
+        // selected only once that has settled. This test is about renderers, not that race.
+        let paneB2 = try await harness.split(with: b)
+        let resplit = try await harness.renderers(count: 2)
+        XCTAssertTrue(resplit.contains { $0 === b0 }, "Splitting with B again rebuilt B's renderer")
+        harness.paneManager.closePane(paneB2)
+        try await harness.settle()
+        try await harness.select(b)
+        let moved = try await harness.renderers(count: 1)[0]
+        XCTAssertTrue(moved === b0, "Moving a pane to a new tab rebuilt its renderer")
+    }
+
+    @MainActor
+    func testPaneMaximizeAndRestoreKeepTheRenderers() async throws {
+        let harness = try await SurfaceHarness.make()
+        defer { harness.close() }
+        let (a, b) = (harness.sessionIDs[0], harness.sessionIDs[1])
+
+        try await harness.select(a)
+        let paneA = harness.paneManager.focusedPaneId
+        _ = try await harness.split(with: b)
+        let before = try await harness.renderers(count: 2)
+
+        harness.paneManager.maximizePane(paneA)
+        try await harness.settle()
+        let maximized = try await harness.renderers(count: 1)[0]
+        XCTAssertTrue(before.contains { $0 === maximized }, "Maximizing a pane rebuilt its renderer")
+
+        harness.paneManager.restoreMaximize()
+        try await harness.settle()
+        let restored = try await harness.renderers(count: 2)
+        for renderer in before {
+            XCTAssertTrue(restored.contains { $0 === renderer }, "Restoring a maximized pane rebuilt a renderer")
+        }
+    }
+
+    @MainActor
+    func testHiddenRendererReleasesOffscreenTexturesAndRecreatesThem() async throws {
+        let harness = try await SurfaceHarness.make()
+        defer { harness.close() }
+        let (a, b) = (harness.sessionIDs[0], harness.sessionIDs[1])
+
+        try await harness.select(a)
+        let a0 = try await harness.renderers(count: 1)[0]
+        try await harness.waitUntil("A draws once") { a0.postProcessTexture != nil }
+        XCTAssertNotNil(a0.previousFrameTexture)
+
+        try await harness.select(b)
+        _ = try await harness.renderers(count: 1)
+        XCTAssertNil(a0.postProcessTexture, "A hidden renderer must release its post-process texture")
+        XCTAssertNil(a0.previousFrameTexture, "A hidden renderer must release its CRT frame texture")
+        XCTAssertNil(a0.bloomBrightTexture)
+        XCTAssertNil(a0.bloomBlurH)
+        XCTAssertNil(a0.bloomBlurV)
+        XCTAssertFalse(a0.hasCapturedPreviousFrame)
+        XCTAssertGreaterThan(a0.glyphAtlas.pageCount, 0, "A hidden renderer must keep its glyph atlas")
+
+        try await harness.select(a)
+        let a1 = try await harness.renderers(count: 1)[0]
+        XCTAssertTrue(a1 === a0)
+        try await harness.waitUntil("A recreates its textures when shown again") {
+            a0.postProcessTexture != nil && a0.previousFrameTexture != nil
+        }
+    }
+
+    /// Guard: the store must not keep a closed session's renderer alive.
+    @MainActor
+    func testClosedSessionsRendererIsReleased() async throws {
+        let harness = try await SurfaceHarness.make()
+        defer { harness.close() }
+        let (a, b) = (harness.sessionIDs[0], harness.sessionIDs[1])
+
+        try await harness.select(a)
+        weak var closedRenderer: MetalTerminalRenderer?
+        do {
+            closedRenderer = try await harness.renderers(count: 1, retain: false)[0]
+        }
+        try await harness.select(b)
+        await harness.sessionManager.closeSession(sessionID: a)
+        try await harness.settle()
+
+        try await harness.waitUntil("A's renderer is freed", timeout: 2) { closedRenderer == nil }
+    }
+
+    /// Guard: one renderer can only drive one view, so a session shown in two panes needs two.
+    @MainActor
+    func testSameSessionInTwoPanesGetsTwoRenderers() async throws {
+        let harness = try await SurfaceHarness.make()
+        defer { harness.close() }
+        let a = harness.sessionIDs[0]
+
+        try await harness.select(a)
+        _ = try await harness.split(with: a)
+        let renderers = try await harness.renderers(count: 2)
+        XCTAssertFalse(renderers[0] === renderers[1], "Two panes showing one session shared a renderer")
+    }
+}
+
+// MARK: - Harness
+
+/// Hosts the real `TerminalView` in a window with three screenshot sessions. Tab and pane
+/// managers are injected on an isolated defaults suite, so the developer's layout is never read
+/// or written.
+@MainActor
+private final class SurfaceHarness {
+    let window: NSWindow
+    let sessionManager: SessionManager
+    let navigationCoordinator: AppNavigationCoordinator
+    let tabManager: SessionTabManager
+    let paneManager: PaneManager
+    let sessionIDs: [UUID]
+    private let suiteName: String
+    private var retained: [MetalTerminalRenderer] = []
+
+    private init(
+        window: NSWindow,
+        sessionManager: SessionManager,
+        navigationCoordinator: AppNavigationCoordinator,
+        tabManager: SessionTabManager,
+        paneManager: PaneManager,
+        suiteName: String
+    ) {
+        self.window = window
+        self.sessionManager = sessionManager
+        self.navigationCoordinator = navigationCoordinator
+        self.tabManager = tabManager
+        self.paneManager = paneManager
+        self.sessionIDs = sessionManager.sessions.map(\.id)
+        self.suiteName = suiteName
+    }
+
+    static func make() async throws -> SurfaceHarness {
         let suiteName = "TerminalSurfaceIdentityTests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName) }
 
         let sessionManager = SessionManager(
             transport: MockSSHTransport(),
             knownHostsStore: TrustingKnownHostsStore()
         )
         await sessionManager.injectScreenshotSessions()
-        let navigationCoordinator = AppNavigationCoordinator()
+        XCTAssertGreaterThanOrEqual(sessionManager.sessions.count, 2)
 
-        let rootView = TerminalView()
+        let navigationCoordinator = AppNavigationCoordinator()
+        let tabManager = SessionTabManager(defaults: defaults)
+        let paneManager = PaneManager(layoutStore: PaneLayoutStore(defaults: defaults))
+
+        let rootView = TerminalView(tabManager: tabManager, paneManager: paneManager)
             .environmentObject(navigationCoordinator)
             .environmentObject(sessionManager)
             .environmentObject(TransferManager())
@@ -41,59 +234,95 @@ final class TerminalSurfaceIdentityTests: XCTestCase {
             defer: false
         )
         window.isReleasedWhenClosed = false
-        defer { window.close() }
         window.contentView = NSHostingView(rootView: rootView)
 
-        // Strong references, so a freed renderer's address cannot be reused by its replacement.
-        let original = try await waitForRenderer(in: window)
-
-        navigationCoordinator.isTerminalMaximized = true
-        try await settle(window)
-        let maximized = try await waitForRenderer(in: window)
-        XCTAssertTrue(maximized === original, "Maximizing the terminal rebuilt its surface and renderer")
-
-        navigationCoordinator.isTerminalMaximized = false
-        try await settle(window)
-        let restored = try await waitForRenderer(in: window)
-        XCTAssertTrue(restored === original, "Restoring the sidebar rebuilt the terminal surface and renderer")
+        let harness = SurfaceHarness(
+            window: window,
+            sessionManager: sessionManager,
+            navigationCoordinator: navigationCoordinator,
+            tabManager: tabManager,
+            paneManager: paneManager,
+            suiteName: suiteName
+        )
+        try await harness.settle()
+        return harness
     }
 
-    // MARK: - Helpers
+    func close() {
+        window.close()
+        UserDefaults(suiteName: suiteName)?.removePersistentDomain(forName: suiteName)
+    }
 
-    @MainActor
-    private func settle(_ window: NSWindow) async throws {
+    func settle() async throws {
         for _ in 0..<10 {
             window.contentView?.layoutSubtreeIfNeeded()
             try await Task.sleep(nanoseconds: 20_000_000)
         }
     }
 
-    @MainActor
-    private func waitForRenderer(
-        in window: NSWindow,
+    func select(_ sessionID: UUID) async throws {
+        tabManager.select(sessionID: sessionID)
+        try await settle()
+    }
+
+    /// Splits the focused pane and shows `sessionID` in the new pane, as
+    /// `TerminalView.splitWithExistingSession` does. Returns the new pane's ID.
+    func split(with sessionID: UUID) async throws -> UUID {
+        let focused = paneManager.focusedPaneId
+        if paneManager.rootNode.findPane(id: focused)?.sessionID == nil, let selected = tabManager.selectedSessionID {
+            paneManager.assignSession(selected, to: focused)
+        }
+        paneManager.splitPane(focused, direction: .vertical)
+        let newPane = paneManager.focusedPaneId
+        paneManager.assignSession(sessionID, to: newPane)
+        try await settle()
+        return newPane
+    }
+
+    /// The renderers of the terminal surfaces in the window, once there are exactly `count`.
+    /// Retained by default, so a freed renderer's address cannot be reused by its replacement.
+    func renderers(
+        count: Int,
+        retain: Bool = true,
         timeout: TimeInterval = 5
-    ) async throws -> MetalTerminalRenderer {
+    ) async throws -> [MetalTerminalRenderer] {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             window.contentView?.layoutSubtreeIfNeeded()
-            let renderers = metalContainers(in: window.contentView).compactMap(\.renderer)
-            if renderers.count == 1 {
-                return renderers[0]
+            let found = containers(in: window.contentView).compactMap(\.renderer)
+            if found.count == count {
+                if retain { retained.append(contentsOf: found) }
+                return found
             }
             try await Task.sleep(nanoseconds: 10_000_000)
         }
-        let found = metalContainers(in: window.contentView).count
-        XCTFail("Expected exactly one terminal surface in the window, found \(found)")
+        let found = containers(in: window.contentView).count
+        XCTFail("Expected \(count) terminal surfaces in the window, found \(found)")
         throw CancellationError()
     }
 
-    @MainActor
-    private func metalContainers(in view: NSView?) -> [TerminalMetalContainerView] {
+    func waitUntil(
+        _ description: String,
+        timeout: TimeInterval = 3,
+        _ condition: () -> Bool
+    ) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() {
+            guard Date() < deadline else {
+                XCTFail("Timed out waiting until: \(description)")
+                return
+            }
+            window.contentView?.layoutSubtreeIfNeeded()
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+    }
+
+    private func containers(in view: NSView?) -> [TerminalMetalContainerView] {
         guard let view else { return [] }
         if let container = view as? TerminalMetalContainerView {
             return [container]
         }
-        return view.subviews.flatMap { metalContainers(in: $0) }
+        return view.subviews.flatMap { containers(in: $0) }
     }
 }
 

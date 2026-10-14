@@ -146,6 +146,18 @@ extension MetalTerminalRenderer {
         isDirty = true
     }
 
+    /// Frees the drawable-sized offscreen textures of a renderer whose view is hidden. They are
+    /// recreated on the next draw by `ensurePostProcessTextures`; the glyph atlas is kept, since
+    /// re-rasterizing it is the hitch a kept renderer avoids (Docs/Bug84.md, Phase 0 results).
+    func releaseOffscreenTextures() {
+        postProcessTexture = nil
+        previousFrameTexture = nil
+        hasCapturedPreviousFrame = false
+        bloomBrightTexture = nil
+        bloomBlurH = nil
+        bloomBlurV = nil
+    }
+
     func ensurePostProcessTextures(for drawableSize: CGSize) {
         let width = max(1, Int(drawableSize.width))
         let height = max(1, Int(drawableSize.height))

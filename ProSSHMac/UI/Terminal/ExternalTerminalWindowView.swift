@@ -12,6 +12,8 @@ struct ExternalTerminalWindowView: View {
     @AppStorage("terminal.ui.fontFamily") private var terminalUIFontFamily = FontManager.platformDefaultFontFamily
     @AppStorage("terminal.renderer.useMetal") private var useMetalRenderer = true
     @StateObject private var selectionCoordinator = TerminalSelectionCoordinator()
+    /// This window's renderers; never shared with the main window (Bug 84).
+    @StateObject private var surfaceModels = TerminalSurfaceModelStore()
     @State private var directInputActivationNonce: Int = 0
 
     private var session: Session? {
@@ -99,6 +101,7 @@ struct ExternalTerminalWindowView: View {
 
         if useMetalRenderer, MTLCreateSystemDefaultDevice() != nil {
             MetalTerminalSessionSurface(
+                model: surfaceModels.model(for: session.id),
                 sessionID: session.id,
                 snapshotProvider: { sessionManager.gridSnapshot(for: session.id) },
                 snapshotNonce: snapshotNonce,

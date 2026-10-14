@@ -52,13 +52,18 @@ struct TerminalMetalView: NSViewRepresentable {
         nsView.metalView.onMouseDown = onMouseDown
         nsView.metalView.onMouseDragged = onMouseDragged
         nsView.metalView.onMouseUp = onMouseUp
-        renderer.onGridSizeChange = onTerminalResize
         nsView.onScroll = onScroll
         nsView.shouldRouteWheelToViewport = shouldRouteWheelToViewport
         nsView.cellHeight = renderer.currentCellHeight
         nsView.renderer = renderer
-        renderer.smoothScrollEngine.onScrollLineChange = { [weak nsView] lines in
-            nsView?.onScroll?(lines)
+        // A kept renderer can briefly have two views while SwiftUI swaps them (Bug 84). Only the
+        // view the renderer draws into may own its callbacks; a lingering old view would point
+        // scrolling at a container that is about to go away.
+        if renderer.configuredMTKView === nsView.metalView {
+            renderer.onGridSizeChange = onTerminalResize
+            renderer.smoothScrollEngine.onScrollLineChange = { [weak nsView] lines in
+                nsView?.onScroll?(lines)
+            }
         }
         nsView.setBackgroundOpacity(backgroundOpacity)
     }

@@ -9,6 +9,9 @@ import Metal
 @preconcurrency import ObjectiveC
 
 struct MetalTerminalSessionSurface: View {
+    /// Owned by the window's `TerminalSurfaceModelStore`, not by this view, so that layout
+    /// changes which rebuild this view keep the session's renderer (Bug 84).
+    @ObservedObject var model: MetalTerminalSurfaceModel
     let sessionID: UUID
     let snapshotProvider: () -> GridSnapshot?
     let snapshotNonce: Int
@@ -27,7 +30,9 @@ struct MetalTerminalSessionSurface: View {
     /// Provides current scroll offset row so smooth-scroll engine can stay in sync.
     var scrollOffsetProvider: (() -> Int)?
 
-    @StateObject private var model = MetalTerminalSurfaceModel()
+    /// Identifies this view instance. A rebuilt surface appears before the old one disappears,
+    /// and both hold the same model, so only the attached surface may detach it.
+    @State private var surfaceToken = UUID()
 
     var body: some View {
         Group {
@@ -52,6 +57,7 @@ struct MetalTerminalSessionSurface: View {
                     backgroundOpacityPercent: backgroundOpacityPercent
                 )
                 .onAppear {
+                    model.attach(surface: surfaceToken)
                     model.renderer?.isLocalSession = isLocalSession
                     model.renderer?.scrollbackBoundsProvider = scrollbackCountProvider
                     if let scrollOffsetProvider {
@@ -71,7 +77,7 @@ struct MetalTerminalSessionSurface: View {
                     }
                 }
                 .onDisappear {
-                    model.setRendererPaused(true)
+                    guard model.detach(surface: surfaceToken) else { return }
                     selectionCoordinator?.unregister(sessionID: sessionID, model: model)
                 }
                 .onChange(of: snapshotNonce) { _, _ in
@@ -242,6 +248,31 @@ final class MetalTerminalSurfaceModel: ObservableObject {
         if let observer = settingsObserver {
             NotificationCenter.default.removeObserver(observer)
         }
+    }
+
+    /// The surface view currently showing this model. See `MetalTerminalSessionSurface`.
+    private var attachedSurface: UUID?
+
+    func attach(surface: UUID) {
+        attachedSurface = surface
+    }
+
+    /// Detaches `surface` if it is still the attached one: pauses the renderer and frees its
+    /// drawable-sized textures, keeping the glyph atlas. Returns false for a surface that has
+    /// already been replaced, which must leave its replacement alone.
+    ///
+    /// Also drops the view's callbacks. They capture view structs that hold this model, so a
+    /// renderer keeping them would retain its own model after the store let go of it. The next
+    /// attach sets them again (`onAppear`, `TerminalMetalView.makeNSView`).
+    @discardableResult
+    func detach(surface: UUID) -> Bool {
+        guard attachedSurface == surface else { return false }
+        attachedSurface = nil
+        renderer?.setPaused(true)
+        renderer?.releaseOffscreenTextures()
+        renderer?.scrollbackBoundsProvider = nil
+        renderer?.onGridSizeChange = nil
+        return true
     }
 
     func apply(snapshot: GridSnapshot?) {

@@ -85,6 +85,13 @@ extension MetalTerminalRenderer {
     ///
     /// - Parameter view: The MTKView to configure.
     func configureView(_ view: MTKView) {
+        // A kept renderer moves to a new view when a layout change rebuilds its surface, and the
+        // old view lingers until SwiftUI removes it. Only the newest view may drive the renderer:
+        // a stale view's size change would resize the grid to the old geometry.
+        if let previous = configuredMTKView, previous !== view {
+            previous.delegate = nil
+            previous.isPaused = true
+        }
         view.device = device
         view.delegate = self
         view.colorPixelFormat = .bgra8Unorm

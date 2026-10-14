@@ -7,6 +7,8 @@ struct TerminalSurfaceView: View {
     let session: Session
     let isFocused: Bool
     let paneID: UUID?
+    /// The session's model from the window's `TerminalSurfaceModelStore` (Bug 84).
+    let surfaceModel: MetalTerminalSurfaceModel
 
     @ObservedObject var bellEffect: BellEffectController
     @ObservedObject var resizeEffect: ResizeEffectController
@@ -145,6 +147,7 @@ struct TerminalSurfaceView: View {
         let snapshotNonce = sessionManager.gridSnapshotNonceBySessionID[session.id, default: 0]
 
         MetalTerminalSessionSurface(
+            model: surfaceModel,
             sessionID: session.id,
             snapshotProvider: { sessionManager.gridSnapshot(for: session.id) },
             snapshotNonce: snapshotNonce,
