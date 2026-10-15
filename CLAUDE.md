@@ -518,11 +518,11 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 | `Docs/featurelist.md` | **Long-term memory** — dated work log, phase progress, loop-log entries |
 | `Docs/RenderCost.md` | **Active spec.** What rendering actually costs — R0/R1/R2a done, **R2b open** (code merged, performance unvalidated). Read its "Measurement caveats" before any perf measurement |
 | `Docs/R2bBenchmarkResults.md` | R2b A/B evidence: exact commands and all raw reports for the six baseline/candidate pairs |
-| `Docs/Anthropic.md` | **Active.** Direct Anthropic Messages API as a second AI provider next to OpenRouter — Phases 0–5 done (Claude is selectable in Settings), Phase 6 (live validation with a real key, docs) next. Read its "Rules that shape the design" before touching AI transcript code |
+| `Docs/Anthropic.md` | Direct Anthropic Messages API as a second AI provider next to OpenRouter — **COMPLETE** (Phases 0–6, validated live). Read its "Rules that shape the design" before touching AI transcript code |
 | `Docs/Bug84.md` | One terminal renderer per session across tab switches and split changes (per-session model store) — **COMPLETE** (Phases 0–5); Phase 5 has the live memory numbers |
 | `Docs/bugs.md` | Bug and tech-debt register by subsystem/severity (counts in its Summary table); paths are pre-refactor |
 | `Docs/PhaseB.md` | Local Input V2 Phase B checklist (make byte-first local input the only path) — open |
-| `Docs/OpenRouterArchitecture.md` | Current OpenRouter AI architecture, settings, transcript, and verification |
+| `Docs/AIArchitecture.md` | Current AI assistant architecture for both providers (OpenRouter, Anthropic): settings, transcript, replay rules, logging, verification |
 | `docs/FutureFeatures.md` | Prioritized feature roadmap (competitive analysis) |
 | `docs/Optimization.md` | Performance bottleneck analysis, benchmark commands, current numbers |
 | `Docs/FasterThenYouWillEverLiveToBe.md` | Throughput gap profiling — Phases 0,1,2,3,5 done. **Phase 4 is abandoned, not optional**: `parse + grid` was never the constraint |
@@ -550,18 +550,8 @@ and the session coordinators) has no spec file left; see `Docs/featurelist.md`.
 
 ## Next Session Plan
 
-**Active work: `Docs/Anthropic.md` Phase 6 — live validation with a real Anthropic key.**
-Phases 0–5 are done: Claude is selectable in Settings → AI Assistant (provider picker, key, model,
-effort) and fully wired. Phase 6 needs a relaunched app, the user's API key and the user at the
-keyboard: run the spec's live list (plain question, multi-step tool session with `apply_patch`
-approval, reasoning panel, Opus 5.5 → Sonnet 5.5 switch, provider switch and back). Watch the
-debug log (`com.prossh` / `AICopilot.Anthropic`) for `input_transformations` entries (there should
-be no `prefix_binding_mismatch`) and for cache reads from the second request on. Check that the
-existing `strict: true` tool schemas are accepted. Then extend `Docs/OpenRouterArchitecture.md` to
-cover both providers.
-
-**Next after that: Bug 88 + Bug 87 (tab selection vs. pane focus in split layouts).** Bug 84 is
-closed (2026-10-15). Both bugs are in `Docs/bugs.md` and touch the same interaction in
+**Active work: Bug 88 + Bug 87 (tab selection vs. pane focus in split layouts).** Bug 84 is
+closed (2026-10-15); the Anthropic provider (`Docs/Anthropic.md`) is complete and validated live. Both bugs are in `Docs/bugs.md` and touch the same interaction in
 `TerminalView`: tab selection, pane assignment and `onChange(of: paneManager.focusedPaneId)`.
 - Bug 88: in a split layout a tab click only changes `tabManager.selectedSessionID`; panes draw
   `pane.sessionID`, so nothing new appears. Proposed: a tab already in a pane focuses that pane,
@@ -594,6 +584,10 @@ list is in `Docs/RenderCost.md` and the raw reports in `Docs/R2bBenchmarkResults
    conditions. Restore genuine window acquisition before any rendered or peer-comparable claim.
 4. Close R2b when the variability is explained or bounded; update `Docs/featurelist.md`,
    `Docs/RenderCost.md` and this plan.
+
+**Watch for:** SwiftUI's "Publishing changes from within view updates" warning at
+`AIProviderSelection.select` (seen once, unconfirmed cause; see `Docs/Anthropic.md` Phase 6). If it
+returns, capture the call stack before changing anything.
 
 **Pending live checks (need a relaunched app and a user at the keyboard):**
 - Shift+Enter: inserts a newline at a plain zsh prompt and is distinguished inside Claude Code;

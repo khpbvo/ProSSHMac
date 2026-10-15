@@ -30,6 +30,9 @@ final class AIProviderSelection: ObservableObject {
     }
 
     func select(_ provider: AIProvider) {
+        // Pickers can write the current value back while SwiftUI updates the view; publishing
+        // then is not allowed, so an unchanged value must not publish.
+        guard provider != self.provider else { return }
         self.provider = provider
         defaults.set(provider.rawValue, forKey: Self.defaultsKey)
     }

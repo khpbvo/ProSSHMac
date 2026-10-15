@@ -62,6 +62,7 @@ final class AnthropicModelStore: ObservableObject {
     }
 
     func setEffort(_ effort: AnthropicEffort) {
+        guard effort != self.effort else { return }  // See AIProviderSelection.select.
         self.effort = effort
         defaults.set(effort.rawValue, forKey: effortKey)
     }

@@ -150,7 +150,7 @@ Changed: `AIConversationContext.swift` (neutral transcript), `AISharedTypes.swif
 `AIChatProviding`), `AIAgentRunner.swift`, `AIAgentService.swift`, `OpenRouterClient.swift`
 (conform to the shared protocol), `App/AppDependencies.swift`, `UI/Settings/SettingsView.swift`,
 `UI/Terminal/TerminalAIAssistantPane.swift` (provider · model label), existing AI tests,
-`Docs/OpenRouterArchitecture.md` (→ AI architecture covering both providers).
+`Docs/AIArchitecture.md` (renamed from `OpenRouterArchitecture.md`; covers both providers).
 
 ## Phases
 
@@ -221,7 +221,7 @@ Changed: `AIConversationContext.swift` (neutral transcript), `AISharedTypes.swif
     switch mid-conversation, per-turn snapshot, refusal surfaces as an error and runs no tools.
     Build + targeted AI suites green.
 
-- [ ] **Phase 6: Live validation and docs.**
+- [x] **Phase 6: Live validation and docs.** Done 2026-10-15; see "Phase 6 results".
   - With a real key, on a relaunched build: plain question; multi-step tool session
     (`execute_and_wait`, `read_files`, `apply_patch` with approval); reasoning panel shows
     summaries; switch Opus 5.5 → Sonnet 5.5 mid-conversation; switch provider and back; long
@@ -349,6 +349,32 @@ Changed: `AIConversationContext.swift` (neutral transcript), `AISharedTypes.swif
   (Phase 1) compared two `JSONEncoder` outputs byte for byte; without `.sortedKeys` the key order
   can differ between encodes, and it started failing consistently. Fixed in the test (sorted keys).
   The Anthropic writer already uses sorted keys / fixed order everywhere.
+
+## Phase 6 results (2026-10-15)
+
+Live, Debug build, the user's own Anthropic key, user at the keyboard. AI log lines captured with
+`/usr/bin/log stream` (category `AICopilot.Anthropic` / `AgentRunner`; no content is logged).
+
+- **Multi-step tool session over SSH** (Sonnet 5.5): Claude disabled unneeded services on a remote
+  Ubuntu VM — many tool calls, all requests succeeded, so the existing `strict: true` tool schemas
+  are accepted. Patch approval (`apply_patch`) worked; the reasoning panel showed the summaries.
+- **Long conversation** (38 replayed messages, Sonnet 5.5): request 2 of the turn read 28,901
+  tokens from cache; no `input_transformations` entry (nothing dropped).
+- **Provider and model switches in one conversation:** Sonnet 5.5 → OpenRouter GLM 5.3 Flash
+  (got Claude's exchange as history) → Anthropic Opus 5.5. The first Opus request read 0 from
+  cache (caches are per model) and wrote 7,306; the next requests read 7,306 → 8,988 → 10,651 →
+  10,958 → 11,367 → 11,977, each writing only the new tail. A monotonically growing cache across
+  turns means every request replayed the earlier history byte for byte. No reasoning dropped, no
+  failed request.
+- Follow-ups made during validation: the Anthropic log lines moved from debug to notice (macOS
+  discards unstreamed debug messages, so the first session could not be checked afterwards), the
+  usage line gained `cache_write`, and `Docs/OpenRouterArchitecture.md` became
+  `Docs/AIArchitecture.md` covering both providers.
+- **Not settled:** the user saw SwiftUI's "Publishing changes from within view updates" warning
+  at `AIProviderSelection.select` once; a rebuild removed the evidence. `select` and
+  `AnthropicModelStore.setEffort` now return early for an unchanged value (fixes the case where a
+  picker writes its current value back during an update). If the warning returns, the write
+  happens during an update with a new value: capture the call stack first, then defer the write.
 
 ## Open questions
 

@@ -51,7 +51,7 @@ struct AnthropicChatProvider: AIChatProviding {
             }
         }
         Self.logger.notice(
-            "usage model=\(response.model, privacy: .public) input=\(response.usage?.inputTokens ?? -1) cache_read=\(response.usage?.cacheReadInputTokens ?? -1) output=\(response.usage?.outputTokens ?? -1)"
+            "usage model=\(response.model, privacy: .public) input=\(response.usage?.inputTokens ?? -1) cache_write=\(response.usage?.cacheCreationInputTokens ?? -1) cache_read=\(response.usage?.cacheReadInputTokens ?? -1) output=\(response.usage?.outputTokens ?? -1)"
         )
         return AIAssistantTurn(
             text: response.text.isEmpty ? nil : response.text,
