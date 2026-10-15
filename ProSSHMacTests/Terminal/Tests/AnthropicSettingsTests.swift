@@ -160,6 +160,43 @@ final class AnthropicSettingsTests: XCTestCase {
         XCTAssertEqual(decoded, original)
     }
 
+    // MARK: - Provider selection and key entry
+
+    func testProviderSelectionDefaultsToOpenRouterAndPersists() {
+        let isolated = defaults()
+        XCTAssertEqual(AIProviderSelection(defaults: isolated).provider, .openRouter)
+        AIProviderSelection(defaults: isolated).select(.anthropic)
+        XCTAssertEqual(AIProviderSelection(defaults: isolated).provider, .anthropic)
+        XCTAssertEqual(isolated.string(forKey: "ai.provider.selected"), "anthropic")
+        XCTAssertNil(isolated.string(forKey: "ai.provider.active"), "not the legacy key the cleanup removes")
+    }
+
+    func testKeySettingsSaveRefreshesCatalogAndRemoveClears() async {
+        let catalog = AnthropicCatalogFixture()
+        catalog.models = [model("claude-opus-5-5")]
+        let keyStore = MemoryKeyStore()
+        let viewModel = AnthropicSettingsViewModel(modelStore: AnthropicModelStore(client: catalog, defaults: defaults()), keyStore: keyStore)
+
+        await viewModel.saveAPIKey()
+        XCTAssertEqual(viewModel.statusMessage, "Enter an Anthropic API key before saving.")
+        XCTAssertEqual(catalog.fetches, 0)
+
+        viewModel.apiKeyInput = "  sk-ant-api03-abcd1234  "
+        await viewModel.saveAPIKey()
+        XCTAssertTrue(viewModel.hasStoredAPIKey)
+        XCTAssertEqual(viewModel.storedKeyHint, "••••1234")
+        XCTAssertEqual(viewModel.apiKeyInput, "")
+        XCTAssertEqual(viewModel.statusMessage, "Anthropic API key saved securely.")
+        XCTAssertEqual(catalog.fetches, 1)
+        XCTAssertEqual(viewModel.modelStore.models.map(\.id), ["claude-opus-5-5"])
+
+        await viewModel.removeAPIKey()
+        XCTAssertFalse(viewModel.hasStoredAPIKey)
+        XCTAssertNil(viewModel.storedKeyHint)
+        XCTAssertEqual(viewModel.statusMessage, "Anthropic API key removed.")
+        XCTAssertNil(keyStore.loadAPIKey())
+    }
+
     // MARK: - Keychain
 
     func testKeyUsesItsOwnServiceNotALegacyOne() {
@@ -198,7 +235,9 @@ final class AnthropicSettingsTests: XCTestCase {
 private final class AnthropicCatalogFixture: AnthropicServicing {
     var models: [AnthropicModel] = []
     var failure: Error?
+    var fetches = 0
     func fetchModels() async throws -> [AnthropicModel] {
+        fetches += 1
         if let failure { throw failure }
         return models
     }
@@ -207,4 +246,11 @@ private final class AnthropicCatalogFixture: AnthropicServicing {
     }
 }
 
+@MainActor
+private final class MemoryKeyStore: AIAPIKeyStoring {
+    private var key: String?
+    func loadAPIKey() -> String? { key }
+    func saveAPIKey(_ key: String) { self.key = key.trimmingCharacters(in: .whitespacesAndNewlines) }
+    func deleteAPIKey() { key = nil }
+}
 #endif

@@ -77,6 +77,9 @@ struct ProSSHMacApp: App {
             .environmentObject(dependencies.openRouterSettingsViewModel)
             .environmentObject(dependencies.terminalAIAssistantViewModel)
             .environmentObject(dependencies.openRouterModelStore)
+            .environmentObject(dependencies.anthropicSettingsViewModel)
+            .environmentObject(dependencies.anthropicModelStore)
+            .environmentObject(dependencies.aiProviderSelection)
             .preferredColorScheme(currentAppearance.preferredColorScheme)
     }
 

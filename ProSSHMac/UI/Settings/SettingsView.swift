@@ -8,6 +8,9 @@ struct SettingsView: View {
     @EnvironmentObject private var auditLogManager: AuditLogManager
     @EnvironmentObject private var openRouterSettingsViewModel: OpenRouterSettingsViewModel
     @EnvironmentObject private var openRouterModelStore: OpenRouterModelStore
+    @EnvironmentObject private var anthropicSettingsViewModel: AnthropicSettingsViewModel
+    @EnvironmentObject private var anthropicModelStore: AnthropicModelStore
+    @EnvironmentObject private var aiProviderSelection: AIProviderSelection
     @AppStorage("app.appearance") private var appAppearanceRawValue = AppAppearance.system.rawValue
     @AppStorage("terminal.effects.crtEnabled") private var terminalCRTEffectEnabled = false
     @AppStorage(BellEffectController.settingsKey) private var terminalBellFeedbackMode = BellFeedbackMode.none.rawValue
@@ -221,96 +224,51 @@ struct SettingsView: View {
                 }
 
                 Section("AI Assistant") {
-                    Text("Connection: OpenRouter")
-
-                    if openRouterSettingsViewModel.hasStoredAPIKey {
-                        HStack {
-                            Button {
-                                showingModelPicker = true
-                            } label: {
-                                HStack {
-                                    Text("Model")
-                                    Spacer()
-                                    Text(openRouterModelStore.selectedModel?.name ?? openRouterModelStore.selectedModelID ?? "Choose a model")
-                                        .foregroundStyle(openRouterModelStore.selectedModelID == nil ? .secondary : .primary)
-                                }
-                            }
-                            .buttonStyle(.plain)
-                            Spacer()
-                            Button("Refresh Models") {
-                                Task { await openRouterModelStore.refresh() }
-                            }
-                            .disabled(openRouterModelStore.isRefreshing)
-                        }
-                        if openRouterModelStore.selectedModelUnavailable {
-                            Text("This model is no longer listed. Choose another model to continue.")
-                                .font(.footnote)
-                                .foregroundStyle(.orange)
-                        }
-                        if let error = openRouterModelStore.catalogError {
-                            Text("Could not refresh models: \(error). Your previous selection remains available.")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
+                    Picker("Provider", selection: Binding(
+                        get: { aiProviderSelection.provider },
+                        set: { aiProviderSelection.select($0) }
+                    )) {
+                        ForEach(AIProvider.allCases) { provider in
+                            Text(provider.displayName).tag(provider)
                         }
                     }
+                    .pickerStyle(.segmented)
 
-                    Group {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("OpenRouter API Key")
-                                .font(.subheadline)
-
-                            SecureField("API key...", text: $openRouterSettingsViewModel.apiKeyInput)
-                                .textFieldStyle(.roundedBorder)
-                                .font(.body.monospaced())
-
-                            HStack {
-                                Button("Paste from Clipboard") {
-                                    openRouterSettingsViewModel.pasteFromClipboard()
-                                }
-                                .buttonStyle(.borderless)
-
-                                Spacer()
-                            }
-                        }
-
-                        Text("Stored securely in the device Keychain and used by the AI assistant service.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-
+                    if aiProviderSelection.provider == .anthropic {
+                        AnthropicSettingsSection(viewModel: anthropicSettingsViewModel, modelStore: anthropicModelStore)
+                    } else {
                         if openRouterSettingsViewModel.hasStoredAPIKey {
-                            Label(
-                                "Saved key: \(openRouterSettingsViewModel.storedKeyHint ?? "••••")",
-                                systemImage: "checkmark.circle.fill"
-                            )
-                            .font(.footnote)
-                            .foregroundStyle(.green)
-                        } else {
-                            Text("No API key saved.")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
-
-                        HStack {
-                            Button("Save API Key") {
-                                Task {
-                                    await openRouterSettingsViewModel.saveAPIKey()
+                            HStack {
+                                Button {
+                                    showingModelPicker = true
+                                } label: {
+                                    HStack {
+                                        Text("Model")
+                                        Spacer()
+                                        Text(openRouterModelStore.selectedModel?.name ?? openRouterModelStore.selectedModelID ?? "Choose a model")
+                                            .foregroundStyle(openRouterModelStore.selectedModelID == nil ? .secondary : .primary)
+                                    }
                                 }
-                            }
-                            .disabled(openRouterSettingsViewModel.apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-
-                            Button("Remove API Key", role: .destructive) {
-                                Task {
-                                    await openRouterSettingsViewModel.removeAPIKey()
+                                .buttonStyle(.plain)
+                                Spacer()
+                                Button("Refresh Models") {
+                                    Task { await openRouterModelStore.refresh() }
                                 }
+                                .disabled(openRouterModelStore.isRefreshing)
                             }
-                            .disabled(!openRouterSettingsViewModel.hasStoredAPIKey)
+                            if openRouterModelStore.selectedModelUnavailable {
+                                Text("This model is no longer listed. Choose another model to continue.")
+                                    .font(.footnote)
+                                    .foregroundStyle(.orange)
+                            }
+                            if let error = openRouterModelStore.catalogError {
+                                Text("Could not refresh models: \(error). Your previous selection remains available.")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
 
-                        if let statusMessage = openRouterSettingsViewModel.statusMessage {
-                            Text(statusMessage)
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
+                        AIAPIKeyFields(viewModel: openRouterSettingsViewModel)
                     }
 
                     Text("AI Copilot lives in Terminal. Use ⌥⌘I to toggle it. In the composer: Enter sends, Shift+Enter inserts a new line.")
@@ -461,6 +419,7 @@ struct SettingsView: View {
             await auditLogManager.refresh()
             await sessionManager.refreshKnownHosts()
             await openRouterSettingsViewModel.refresh()
+            await anthropicSettingsViewModel.refresh()
         }
         .sheet(isPresented: $showingModelPicker) {
             OpenRouterModelPicker(modelStore: openRouterModelStore)

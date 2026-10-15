@@ -317,8 +317,11 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
   level, then re-arms terminal. See Known Issues.
 - **AI service stack**: the agent loop and `AIConversationContext` use provider-neutral types
   (`AITranscriptMessage`, `AIAssistantTurn`, `AIChatProviding` in `AISharedTypes.swift`);
-  `OpenRouterChatProvider` maps them to Chat Completions. Anthropic is being added as a second
-  provider (`Docs/Anthropic.md`). `AIAgentService` uses one `OpenRouterClient` for Chat Completions.
+  `OpenRouterChatProvider` maps them to Chat Completions, `AnthropicChatProvider` to the Anthropic
+  Messages API. `AIProviderSelection` (`ai.provider.selected`, default OpenRouter) picks one;
+  `AIAgentService.activeModel()` resolves provider + model once per user turn. Each provider has its
+  own key store, client, model store and settings view model (`AIKeySettingsViewModel` subclasses).
+  See `Docs/Anthropic.md`.
   `OpenRouterModelStore` requires explicit selection and refreshes the tool-capable text-model catalog.
   `AIConversationContext` stores per-session structured turns; a model switch drops reasoning blocks
   but keeps messages and tool history. `OpenRouterAPIKeyStore` owns the single Keychain entry.
@@ -381,6 +384,9 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 - **Every `XCTestCase` subclass warns** "main actor-isolated initializer 'init()' has different actor
   isolation from nonisolated overridden declaration" — target-wide, from default MainActor
   isolation. Not caused by your change; don't chase it per file.
+- **`JSONEncoder` key order is not stable between encodes** unless `.sortedKeys` is set. Anything
+  compared or replayed byte for byte (tests, Anthropic request bodies) must use sorted keys or a
+  fixed field order (`AnthropicJSON`).
 - **SourceKit false positives**: "Cannot find type" errors across files. Always verify with
   `xcodebuild build`.
 
@@ -512,7 +518,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 | `Docs/featurelist.md` | **Long-term memory** — dated work log, phase progress, loop-log entries |
 | `Docs/RenderCost.md` | **Active spec.** What rendering actually costs — R0/R1/R2a done, **R2b open** (code merged, performance unvalidated). Read its "Measurement caveats" before any perf measurement |
 | `Docs/R2bBenchmarkResults.md` | R2b A/B evidence: exact commands and all raw reports for the six baseline/candidate pairs |
-| `Docs/Anthropic.md` | **Active.** Direct Anthropic Messages API as a second AI provider next to OpenRouter — Phases 0–4 done (spec, provider-neutral transcript, key store/catalog/model store, streaming client, replay rules), Phase 5 (provider selection, wiring, Settings UI) next. Read its "Rules that shape the design" before touching AI transcript code |
+| `Docs/Anthropic.md` | **Active.** Direct Anthropic Messages API as a second AI provider next to OpenRouter — Phases 0–5 done (Claude is selectable in Settings), Phase 6 (live validation with a real key, docs) next. Read its "Rules that shape the design" before touching AI transcript code |
 | `Docs/Bug84.md` | One terminal renderer per session across tab switches and split changes (per-session model store) — **COMPLETE** (Phases 0–5); Phase 5 has the live memory numbers |
 | `Docs/bugs.md` | Bug and tech-debt register by subsystem/severity (counts in its Summary table); paths are pre-refactor |
 | `Docs/PhaseB.md` | Local Input V2 Phase B checklist (make byte-first local input the only path) — open |
@@ -544,17 +550,15 @@ and the session coordinators) has no spec file left; see `Docs/featurelist.md`.
 
 ## Next Session Plan
 
-**Active work: `Docs/Anthropic.md` — Anthropic as a second AI provider.** Phases 0–4 are done:
-everything up to `AnthropicChatProvider` exists and is tested, but nothing is selectable in the
-app yet. Next is Phase 5: `AIProviderSelection` (`ai.provider.selected`, default OpenRouter),
-`AIAgentService`/`AIAgentRunner` snapshotting provider + model per turn (the runner still reads
-`service.modelStore`, the OpenRouter store, for selection and context length), `AppDependencies`
-building both stacks, and Settings → AI Assistant (provider picker, Anthropic key, model picker,
-effort, a note that refusal fallbacks are on). Also refresh the Anthropic catalog before first use,
-so fallbacks are sent for the default model. Read the spec's "Rules that shape the
-design" first: preserved thinking (append-only history, no forced `tool_choice`, no disabled
-thinking on Opus 5.5) and the legacy Keychain name `nl.budgetsoft.ProSSHMac.llm.anthropic`, which
-`LegacyProviderKeyCleanup` deletes.
+**Active work: `Docs/Anthropic.md` Phase 6 — live validation with a real Anthropic key.**
+Phases 0–5 are done: Claude is selectable in Settings → AI Assistant (provider picker, key, model,
+effort) and fully wired. Phase 6 needs a relaunched app, the user's API key and the user at the
+keyboard: run the spec's live list (plain question, multi-step tool session with `apply_patch`
+approval, reasoning panel, Opus 5.5 → Sonnet 5.5 switch, provider switch and back). Watch the
+debug log (`com.prossh` / `AICopilot.Anthropic`) for `input_transformations` entries (there should
+be no `prefix_binding_mismatch`) and for cache reads from the second request on. Check that the
+existing `strict: true` tool schemas are accepted. Then extend `Docs/OpenRouterArchitecture.md` to
+cover both providers.
 
 **Next after that: Bug 88 + Bug 87 (tab selection vs. pane focus in split layouts).** Bug 84 is
 closed (2026-10-15). Both bugs are in `Docs/bugs.md` and touch the same interaction in

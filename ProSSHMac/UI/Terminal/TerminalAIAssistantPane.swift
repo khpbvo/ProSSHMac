@@ -4,6 +4,8 @@ import AppKit
 struct TerminalAIAssistantPane: View {
     @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var modelStore: OpenRouterModelStore
+    @EnvironmentObject private var anthropicModelStore: AnthropicModelStore
+    @EnvironmentObject private var providerSelection: AIProviderSelection
     @ObservedObject var viewModel: TerminalAIAssistantViewModel
     @State private var composerHeight: CGFloat = 38
     var session: Session?
@@ -63,7 +65,7 @@ struct TerminalAIAssistantPane: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
 
-            Text("OpenRouter · \(activeModelDisplayName)")
+            Text("\(providerSelection.provider.displayName) · \(activeModelDisplayName)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -75,7 +77,12 @@ struct TerminalAIAssistantPane: View {
     }
 
     private var activeModelDisplayName: String {
-        modelStore.selectedModel?.name ?? modelStore.selectedModelID ?? "Choose a model in Settings"
+        switch providerSelection.provider {
+        case .openRouter:
+            return modelStore.selectedModel?.name ?? modelStore.selectedModelID ?? "Choose a model in Settings"
+        case .anthropic:
+            return anthropicModelStore.selectedModel?.displayName ?? anthropicModelStore.selectedModelID
+        }
     }
 
     private var messagesView: some View {

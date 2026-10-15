@@ -83,7 +83,10 @@ final class AIConversationContextTests: XCTestCase {
             .assistant(.init(text: "done")),
         ]
         let mapped = OpenRouterChatProvider.wireMessages(systemPrompt: "system", messages: neutral)
-        XCTAssertEqual(try JSONEncoder().encode(mapped), try JSONEncoder().encode(handBuilt))
+        // JSONEncoder's key order can differ between two encodes; only sorted keys compare.
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        XCTAssertEqual(try encoder.encode(mapped), try encoder.encode(handBuilt))
     }
 
     func testEstimatedRequestBytesMatchesWireEncodingPlusTools() throws {

@@ -101,6 +101,110 @@ final class AIAgentServiceTests: XCTestCase {
         _ = try await service.generateReply(sessionID: session.sessionID, prompt: "new")
         XCTAssertFalse(client.requests[2].messages.contains { $0.content == "first answer" })
     }
+
+    // MARK: - Anthropic provider
+
+    private struct AnthropicStack {
+        let service: AIAgentService
+        let openRouter: MockOpenRouterService
+        let claude: MockAnthropicService
+        let selection: AIProviderSelection
+        let session: MockAgentSessionProvider
+    }
+
+    private func anthropicStack(selected: AIProvider = .anthropic) async throws -> AnthropicStack {
+        let openRouter = MockOpenRouterService()
+        let claude = MockAnthropicService()
+        let session = MockAgentSessionProvider()
+        let defaults = UserDefaults(suiteName: "AnthropicAgentTests.\(UUID().uuidString)")!
+        let selection = AIProviderSelection(defaults: defaults)
+        selection.select(selected)
+        let service = AIAgentService(
+            openRouterClient: openRouter,
+            sessionProvider: session,
+            modelStore: try await store(client: openRouter),
+            anthropicClient: claude,
+            anthropicModelStore: AnthropicModelStore(client: claude, defaults: defaults),
+            providerSelection: selection
+        )
+        return AnthropicStack(service: service, openRouter: openRouter, claude: claude, selection: selection, session: session)
+    }
+
+    private func claudeText(_ text: String) -> AnthropicResponse {
+        AnthropicResponse(id: "msg", model: "claude-opus-5-5", content: [.text(text)], text: text, reasoning: "", toolCalls: [], stopReason: "end_turn", usage: nil, inputTransformations: [])
+    }
+
+    func testClaudeRunsTheToolLoopWithCatalogMetadata() async throws {
+        let stack = try await anthropicStack()
+        let toolUse = AnthropicBlock(json: #"{"id":"toolu_1","input":{},"name":"get_session_info","type":"tool_use"}"#)
+        stack.claude.enqueue(AnthropicResponse(id: "msg_1", model: "claude-opus-5-5", content: [toolUse], text: "", reasoning: "", toolCalls: [LLMToolCall(id: "toolu_1", name: "get_session_info", arguments: "{}")], stopReason: "tool_use", usage: nil, inputTransformations: []))
+        stack.claude.enqueue(claudeText("Session healthy"))
+
+        let reply = try await stack.service.generateReply(sessionID: stack.session.sessionID, prompt: "status")
+
+        XCTAssertEqual(reply.text, "Session healthy")
+        XCTAssertEqual(reply.toolCallsExecuted, 1)
+        XCTAssertEqual(stack.claude.catalogFetches, 1, "the catalog loads before the first turn")
+        XCTAssertTrue(stack.openRouter.requests.isEmpty)
+        XCTAssertEqual(stack.claude.requests.count, 2)
+        let first = stack.claude.requests[0]
+        XCTAssertEqual(first.model, "claude-opus-5-5")
+        XCTAssertTrue(first.serverFallback)
+        XCTAssertEqual(first.effort, .medium)
+        let second = stack.claude.requests[1]
+        XCTAssertEqual(second.messages.map(\.role), ["user", "assistant", "user"])
+        XCTAssertEqual(second.messages[1].content, [toolUse])
+        let result = try XCTUnwrap(second.messages[2].content.first?.json)
+        XCTAssertTrue(result.contains(#""tool_use_id":"toolu_1""#))
+        XCTAssertTrue(result.contains(#"\"ok\":true"#))
+    }
+
+    func testSwitchingProvidersKeepsTheConversation() async throws {
+        let stack = try await anthropicStack(selected: .openRouter)
+        stack.openRouter.enqueue(completion("The code is blue"))
+        _ = try await stack.service.generateReply(sessionID: stack.session.sessionID, prompt: "Remember the code")
+
+        stack.selection.select(.anthropic)
+        stack.claude.enqueue(claudeText("It is blue."))
+        _ = try await stack.service.generateReply(sessionID: stack.session.sessionID, prompt: "What is the code?")
+        let claudeRequest = try XCTUnwrap(stack.claude.requests.last)
+        XCTAssertEqual(claudeRequest.messages.map(\.role), ["user", "assistant", "user"])
+        XCTAssertEqual(claudeRequest.messages[1].content, [.text("The code is blue")])
+
+        stack.selection.select(.openRouter)
+        stack.openRouter.enqueue(completion("Still blue"))
+        _ = try await stack.service.generateReply(sessionID: stack.session.sessionID, prompt: "And now?")
+        let openRouterRequest = try XCTUnwrap(stack.openRouter.requests.last)
+        XCTAssertTrue(openRouterRequest.messages.contains { $0.role == "assistant" && $0.content == "It is blue." })
+    }
+
+    func testClaudeRefusalSurfacesAndRunsNoTools() async throws {
+        let stack = try await anthropicStack()
+        stack.claude.failure = AnthropicError.refused(category: "cyber", explanation: nil)
+        do {
+            _ = try await stack.service.generateReply(sessionID: stack.session.sessionID, prompt: "do it")
+            XCTFail("Expected a refusal")
+        } catch {
+            XCTAssertEqual(error as? AnthropicError, .refused(category: "cyber", explanation: nil))
+        }
+        XCTAssertTrue(stack.session.sentCommands.isEmpty)
+    }
+
+    func testDirectActionPromptKeepsAllToolsOnlyForClaude() async throws {
+        let stack = try await anthropicStack()
+        stack.claude.enqueue(claudeText("ok"))
+        _ = try await stack.service.generateReply(sessionID: stack.session.sessionID, prompt: "run uptime")
+        XCTAssertEqual(stack.claude.requests.last?.tools.count, stack.service.toolDefinitions.count)
+
+        stack.selection.select(.openRouter)
+        stack.openRouter.enqueue(completion("ok"))
+        _ = try await stack.service.generateReply(sessionID: stack.session.sessionID, prompt: "run uptime")
+        XCTAssertEqual(
+            stack.openRouter.requests.last?.tools.count,
+            AIToolDefinitions.directActionToolDefinitions(from: stack.service.toolDefinitions).count
+        )
+        XCTAssertLessThan(stack.openRouter.requests.last?.tools.count ?? 0, stack.service.toolDefinitions.count)
+    }
 }
 
 @MainActor
@@ -223,6 +327,34 @@ private final class MockOpenRouterService: OpenRouterServicing {
         let response = responses.removeFirst()
         if let text = response.choices.first?.message.content { onEvent(.textDone(text)) }
         return response
+    }
+}
+@MainActor
+private final class MockAnthropicService: AnthropicServicing {
+    var requests: [AnthropicRequest] = []
+    var responses: [AnthropicResponse] = []
+    var failure: Error?
+    var catalogFetches = 0
+    func enqueue(_ response: AnthropicResponse) { responses.append(response) }
+    func fetchModels() async throws -> [AnthropicModel] {
+        catalogFetches += 1
+        return [AnthropicModel(
+            id: "claude-opus-5-5",
+            displayName: "Claude Opus 5.5",
+            maxInputTokens: 1_000_000,
+            maxTokens: 128_000,
+            allowedFallbackModels: ["claude-opus-5"],
+            capabilities: .init(
+                thinking: .init(supported: true, types: .init(adaptive: .init(supported: true))),
+                effort: .init(supported: true, low: .init(supported: true), medium: .init(supported: true), high: .init(supported: true), xhigh: .init(supported: true), max: .init(supported: true))
+            )
+        )]
+    }
+    func complete(_ request: AnthropicRequest, onEvent: @escaping @Sendable (LLMStreamEvent) -> Void) async throws -> AnthropicResponse {
+        requests.append(request)
+        if let failure { throw failure }
+        guard !responses.isEmpty else { throw AnthropicError.invalidResponse }
+        return responses.removeFirst()
     }
 }
 #endif

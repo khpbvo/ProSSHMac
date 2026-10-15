@@ -29,6 +29,12 @@ extension AIAgentServicing {
     }
 }
 
+struct AIActiveModel {
+    let provider: any AIChatProviding
+    let modelID: String
+    let contextLength: Int
+}
+
 struct AIAgentReply: Sendable, Equatable {
     var text: String
     var toolCallsExecuted: Int
@@ -98,9 +104,11 @@ final class AIAgentService: AIAgentServicing {
     }
 
     let openRouterClient: any OpenRouterServicing
-    let chatProvider: any AIChatProviding
     let sessionProvider: any AIAgentSessionProviding
     let modelStore: OpenRouterModelStore
+    let anthropicClient: (any AnthropicServicing)?
+    let anthropicModelStore: AnthropicModelStore?
+    let providerSelection: AIProviderSelection?
     let requestTimeoutSeconds: Int
     let maxToolIterations: Int
     let persistConversationContext: Bool
@@ -137,12 +145,17 @@ final class AIAgentService: AIAgentServicing {
         modelStore: OpenRouterModelStore,
         requestTimeoutSeconds: Int = 60,
         maxToolIterations: Int = 50,
-        persistConversationContext: Bool = true
+        persistConversationContext: Bool = true,
+        anthropicClient: (any AnthropicServicing)? = nil,
+        anthropicModelStore: AnthropicModelStore? = nil,
+        providerSelection: AIProviderSelection? = nil
     ) {
         self.openRouterClient = openRouterClient
-        self.chatProvider = OpenRouterChatProvider(client: openRouterClient)
         self.sessionProvider = sessionProvider
         self.modelStore = modelStore
+        self.anthropicClient = anthropicClient
+        self.anthropicModelStore = anthropicModelStore
+        self.providerSelection = providerSelection
         self.requestTimeoutSeconds = max(10, requestTimeoutSeconds)
         self.maxToolIterations = max(1, maxToolIterations)
         self.persistConversationContext = persistConversationContext
@@ -152,6 +165,33 @@ final class AIAgentService: AIAgentServicing {
 
     func clearConversation(sessionID: UUID) {
         conversationContext.clear(sessionID: sessionID)
+    }
+
+    /// The provider and model for the next user turn. The runner resolves this once per turn,
+    /// so a Settings change can't split one tool loop across two models.
+    func activeModel() async throws -> AIActiveModel {
+        switch providerSelection?.provider ?? .openRouter {
+        case .openRouter:
+            let modelID = try modelStore.requireSelection()
+            return AIActiveModel(
+                provider: OpenRouterChatProvider(client: openRouterClient),
+                modelID: modelID,
+                contextLength: modelStore.contextLength(for: modelID)
+            )
+        case .anthropic:
+            guard let anthropicClient, let anthropicModelStore else { throw AnthropicError.missingAPIKey }
+            // Load the catalog before the first turn, so the model's limits and its refusal
+            // fallback are known. After a failed refresh, Settings retries; turns use defaults.
+            if anthropicModelStore.models.isEmpty, anthropicModelStore.catalogError == nil {
+                await anthropicModelStore.refresh()
+            }
+            let modelID = try anthropicModelStore.requireSelection()
+            return AIActiveModel(
+                provider: AnthropicChatProvider(client: anthropicClient, modelStore: anthropicModelStore),
+                modelID: modelID,
+                contextLength: anthropicModelStore.contextLength(for: modelID)
+            )
+        }
     }
 
     func generateReply(

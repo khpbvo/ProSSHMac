@@ -17,6 +17,9 @@ final class AppDependencies: ObservableObject {
     let aiAgentService: any AIAgentServicing
     let openRouterAPIKeyStore: KeychainOpenRouterAPIKeyStore
     let openRouterModelStore: OpenRouterModelStore
+    let anthropicModelStore: AnthropicModelStore
+    let anthropicSettingsViewModel: AnthropicSettingsViewModel
+    let aiProviderSelection: AIProviderSelection
 
     static var isScreenshotMode: Bool {
         ProcessInfo.processInfo.arguments.contains("--screenshot-mode")
@@ -111,13 +114,26 @@ final class AppDependencies: ObservableObject {
         let client = OpenRouterClient(keyStore: keyStore)
         let modelStore = OpenRouterModelStore(client: client)
         self.openRouterModelStore = modelStore
+        let anthropicKeyStore = KeychainAnthropicAPIKeyStore()
+        let anthropicClient = AnthropicClient(keyStore: anthropicKeyStore)
+        let anthropicModelStore = AnthropicModelStore(client: anthropicClient)
+        self.anthropicModelStore = anthropicModelStore
+        self.anthropicSettingsViewModel = AnthropicSettingsViewModel(
+            modelStore: anthropicModelStore,
+            keyStore: anthropicKeyStore
+        )
+        let providerSelection = AIProviderSelection()
+        self.aiProviderSelection = providerSelection
         self.aiAgentService = AIAgentService(
             openRouterClient: client,
             sessionProvider: sessionManager,
             modelStore: modelStore,
             requestTimeoutSeconds: 600,
             maxToolIterations: 200,
-            persistConversationContext: true
+            persistConversationContext: true,
+            anthropicClient: anthropicClient,
+            anthropicModelStore: anthropicModelStore,
+            providerSelection: providerSelection
         )
 
         self.openRouterSettingsViewModel = OpenRouterSettingsViewModel(

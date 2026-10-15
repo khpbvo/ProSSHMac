@@ -209,7 +209,7 @@ Changed: `AIConversationContext.swift` (neutral transcript), `AISharedTypes.swif
     keeps blocks; cross-provider history replays as text/tool calls; fallback echo omits pre-
     boundary thinking/tool_use.
 
-- [ ] **Phase 5: Provider selection, wiring and Settings UI.**
+- [x] **Phase 5: Provider selection, wiring and Settings UI.** Done 2026-10-15; see "Phase 5 as built".
   - `AIProviderSelection` (`ai.provider.selected`, default OpenRouter so existing users see no
     change). `AIAgentService`/`AIAgentRunner` snapshot provider + model per user turn and route to
     the matching client and context budget (`max_input_tokens`).
@@ -323,6 +323,32 @@ Changed: `AIConversationContext.swift` (neutral transcript), `AISharedTypes.swif
   `drop_block` covers anything missed).
 - Tests: `AnthropicTranscriptTests` (9); disabling the prefix-change strip turned its test red.
   45/45 across seven AI suites.
+
+## Phase 5 as built (2026-10-15)
+
+- `AIProviderSelection.swift`: `AIProvider` (`openRouter`, `anthropic`) and `AIProviderSelection`
+  (`ai.provider.selected`, default OpenRouter).
+- `AIAgentService.activeModel()` replaces `chatProvider`: per user turn it resolves the provider,
+  model and context length; for Anthropic it first loads the catalog if it is empty and no refresh
+  has failed, so the default model's metadata (and `fallbacks`) is known on the first turn. New init
+  parameters (`anthropicClient`, `anthropicModelStore`, `providerSelection`) default to nil, so
+  OpenRouter-only callers are unchanged. `AIAgentRunner` calls it once per turn.
+- Key entry: `AIKeySettingsViewModel` base class (logic moved from `OpenRouterSettingsViewModel`)
+  with `OpenRouterSettingsViewModel` and `AnthropicSettingsViewModel` subclasses (environment
+  objects are looked up by type). `AIAPIKeyFields` is the shared key UI.
+- Settings → AI Assistant: segmented provider picker; OpenRouter rows unchanged; for Anthropic,
+  `AnthropicSettingsSection` (model row and Refresh Models, effort picker with a one-line
+  explanation, key fields, a note that refusal fallback is on) and `AnthropicModelPicker`.
+  Assistant pane header: "<provider> · <model>".
+- `AppDependencies` builds the Anthropic stack and the selection; both window scenes' roots
+  (`ProSSHMacApp.configuredRoot`) inject them.
+- Tests: `AIAgentServiceTests` +4 (Claude tool loop with catalog metadata, provider switch keeps the
+  conversation both ways, refusal runs no tools, direct-action tool sets), `AnthropicSettingsTests`
+  +2 (selection, key view model). 51/51 across seven AI suites.
+- Found while testing: `AIConversationContextTests.testMappedToolCycleEncodesLikeHandBuiltMessages`
+  (Phase 1) compared two `JSONEncoder` outputs byte for byte; without `.sortedKeys` the key order
+  can differ between encodes, and it started failing consistently. Fixed in the test (sorted keys).
+  The Anthropic writer already uses sorted keys / fixed order everywhere.
 
 ## Open questions
 

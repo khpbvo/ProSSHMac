@@ -36,7 +36,11 @@ import os.log
             "[\(traceID, privacy: .public)] turn_start session=\(AIToolDefinitions.shortSessionID(sessionID), privacy: .public) prompt_chars=\(trimmedPrompt.count) persist_context=\(service.persistConversationContext)"
         )
 
-        let provider = service.chatProvider
+        // Snapshot the provider and model so a Settings change cannot split one tool loop
+        // across two models. The next user turn may continue with the new selection.
+        let activeModel = try await service.activeModel()
+        let provider = activeModel.provider
+        let modelID = activeModel.modelID
         let directActionMode = AIToolDefinitions.isDirectActionPrompt(trimmedPrompt)
         // A provider that binds reasoning to the tool set keeps all tools; direct-action mode
         // then only caps the iterations.
@@ -50,9 +54,6 @@ import os.log
             "[\(traceID, privacy: .public)] turn_mode direct_action=\(directActionMode) tools=\(activeToolDefinitions.count) iteration_limit=\(iterationLimit)"
         )
 
-        // Snapshot the selection so a Settings change cannot split one tool loop
-        // across two models. The next user turn may continue with the new model.
-        let modelID = try service.modelStore.requireSelection()
         var conversationState = service.persistConversationContext
             ? service.conversationContext.state(for: sessionID) ?? AIConversationState()
             : AIConversationState()
@@ -93,7 +94,7 @@ import os.log
             let messages = try conversationState.requestHistory(
                 currentTurn: &currentTurn,
                 prefixFingerprint: prefixFingerprint,
-                contextLength: service.modelStore.contextLength(for: modelID)
+                contextLength: activeModel.contextLength
             ) {
                 provider.estimatedRequestBytes(systemPrompt: systemPrompt, messages: $0, tools: activeToolDefinitions)
             }
