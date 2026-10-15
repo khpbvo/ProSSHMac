@@ -73,7 +73,8 @@ import os.log
             entries: AISessionDirectory.entries(
                 sessions: service.sessionProvider.sessions,
                 focusedID: sessionID,
-                broadcastIDs: broadcastIDs
+                broadcastIDs: broadcastIDs,
+                shellBuffers: service.sessionProvider.shellBuffers
             ),
             broadcasting: !broadcastIDs.isEmpty
         )

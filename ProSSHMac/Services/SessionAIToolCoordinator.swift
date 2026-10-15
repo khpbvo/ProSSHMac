@@ -4,6 +4,7 @@ import Foundation
 @MainActor final class SessionAIToolCoordinator {
     weak var manager: SessionManager?
     private var pendingCommands: [UUID: PendingToolCommand] = [:]
+    private var pendingCLICommands: [UUID: PendingCLICommand] = [:]
 
     init() {}
 
@@ -35,9 +36,7 @@ import Foundation
 
         let pending = PendingToolCommand(token: token)
         do {
-            if let previous = pendingCommands.removeValue(forKey: sessionID) {
-                previous.finish(CommandExecutionResult(output: "A newer command started in this session.", exitCode: nil, timedOut: true, blockID: nil))
-            }
+            supersedePendingCommands(sessionID: sessionID)
             pendingCommands[sessionID] = pending
             let payload = wrappedCommand + "\n"
             try await shell.send(payload)
@@ -80,8 +79,90 @@ import Foundation
         return result
     }
 
+    /// Runs one command at a router, switch or appliance prompt, which cannot run the POSIX
+    /// wrapper above: sends the line as Enter would, presses Space at pager prompts, and returns
+    /// once the prompt is back, the device asks a question, or the timeout passes. The output
+    /// stays visible in the terminal.
+    func executeCLICommand(
+        sessionID: UUID,
+        command: String,
+        timeoutSeconds: TimeInterval = 30
+    ) async -> CLICommandResult {
+        guard let manager,
+              manager.sessions.contains(where: { $0.id == sessionID && $0.state == .connected }),
+              let shell = manager.shellChannels[sessionID] else {
+            return CLICommandResult(output: "Session is not connected.", status: .failed)
+        }
+
+        let startPrompt = DeviceCLIPrompt.cursorLine(in: manager.shellBuffers[sessionID] ?? [])
+        let pending = PendingCLICommand(capture: DeviceCLICapture(command: command, startPrompt: startPrompt))
+        supersedePendingCommands(sessionID: sessionID)
+        pendingCLICommands[sessionID] = pending
+
+        let payload = command + "\r"
+        do {
+            try await shell.send(payload)
+        } catch {
+            pendingCLICommands.removeValue(forKey: sessionID)
+            return CLICommandResult(output: "Error sending command: \(error.localizedDescription)", status: .failed)
+        }
+        manager.lastActivityBySessionID[sessionID] = .now
+        manager.bytesSentBySessionID[sessionID, default: 0] += Int64(payload.utf8.count)
+        manager.recordingCoordinator.recordInput(sessionID: sessionID, text: payload)
+        await manager.terminalHistoryIndex.recordCommandInput(
+            sessionID: sessionID,
+            command: command,
+            at: .now,
+            source: .userInput
+        )
+
+        let clock = ContinuousClock()
+        let deadline = clock.now + .milliseconds(Int(max(0, timeoutSeconds) * 1000))
+        pending.lastOutputAt = clock.now
+        while true {
+            guard pendingCLICommands[sessionID] === pending else {
+                return pending.result(status: .superseded)
+            }
+            if Task.isCancelled || manager.shellChannels[sessionID] == nil {
+                pendingCLICommands.removeValue(forKey: sessionID)
+                return pending.result(status: .failed)
+            }
+            switch pending.capture.poll(idleFor: clock.now - pending.lastOutputAt) {
+            case .complete:
+                pendingCLICommands.removeValue(forKey: sessionID)
+                return pending.result(status: .completed)
+            case let .awaitingInput(question):
+                pendingCLICommands.removeValue(forKey: sessionID)
+                return pending.result(status: .awaitingInput(question))
+            case .advancePager:
+                pending.capture.didAdvancePager()
+                try? await shell.send(" ")
+                manager.bytesSentBySessionID[sessionID, default: 0] += 1
+            case .wait:
+                break
+            }
+            if clock.now >= deadline {
+                pendingCLICommands.removeValue(forKey: sessionID)
+                return pending.result(status: .timedOut)
+            }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+    }
+
+    /// One AI command per session: a new one ends whichever is still waiting.
+    private func supersedePendingCommands(sessionID: UUID) {
+        if let previous = pendingCommands.removeValue(forKey: sessionID) {
+            previous.finish(CommandExecutionResult(output: "A newer command started in this session.", exitCode: nil, timedOut: true, blockID: nil))
+        }
+        pendingCLICommands.removeValue(forKey: sessionID)
+    }
+
     func filterToolOutput(sessionID: UUID, chunk: Data) -> Data {
-        pendingCommands[sessionID]?.filter(chunk) ?? chunk
+        if let pending = pendingCLICommands[sessionID] {
+            pending.capture.ingest(chunk)
+            pending.lastOutputAt = ContinuousClock().now
+        }
+        return pendingCommands[sessionID]?.filter(chunk) ?? chunk
     }
 
     func completeToolCommand(sessionID: UUID, token: String, exitCode: Int) {
@@ -110,6 +191,26 @@ import Foundation
         manager.latestPublishedCommandBlockIDBySessionID[sessionID] = block.id
         manager.latestCompletedCommandBlockBySessionID[sessionID] = block
         manager.commandCompletionNonceBySessionID[sessionID, default: 0] += 1
+    }
+}
+
+/// One device CLI command's output while `executeCLICommand` waits for the prompt.
+@MainActor private final class PendingCLICommand {
+    var capture: DeviceCLICapture
+    var lastOutputAt = ContinuousClock().now
+
+    init(capture: DeviceCLICapture) {
+        self.capture = capture
+    }
+
+    func result(status: CLICommandResult.Status) -> CLICommandResult {
+        let completed = status == .completed
+        return CLICommandResult(
+            output: capture.output(dropTrailingPrompt: completed),
+            status: status,
+            finalPrompt: completed ? capture.finalPrompt : nil,
+            pagesAdvanced: capture.pagesAdvanced
+        )
     }
 }
 
@@ -166,7 +267,7 @@ import Foundation
     var commandOutput: String {
         let oscStart = Array("\u{1B}]7777;PSW;\(token);".utf8)
         let commandBytes = outputBytes.firstRange(of: oscStart).map { Array(outputBytes[..<$0.lowerBound]) } ?? outputBytes
-        return Self.plainText(commandBytes).trimmingCharacters(in: .whitespacesAndNewlines)
+        return TerminalPlainText.plainText(commandBytes).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     func finish(_ result: CommandExecutionResult) {
@@ -177,8 +278,11 @@ import Foundation
             continuation.resume(returning: result)
         }
     }
+}
 
-    private static func plainText(_ bytes: [UInt8]) -> String {
+/// Terminal output as plain text: escape sequences removed, printable text and line breaks kept.
+nonisolated enum TerminalPlainText {
+    static func stripEscapes(_ bytes: [UInt8], keepingBackspace: Bool = false) -> [UInt8] {
         enum EscapeState { case text, escape, csi, osc, oscEscape }
         var state = EscapeState.text
         var cleaned: [UInt8] = []
@@ -188,6 +292,7 @@ import Foundation
             case .text:
                 if byte == 0x1B { state = .escape }
                 else if byte == 0x0A || byte == 0x0D || byte == 0x09 || byte >= 0x20 { cleaned.append(byte) }
+                else if byte == 0x08, keepingBackspace { cleaned.append(byte) }
             case .escape:
                 state = byte == 0x5B ? .csi : byte == 0x5D ? .osc : .text
             case .csi:
@@ -199,7 +304,11 @@ import Foundation
                 state = byte == 0x5C ? .text : .osc
             }
         }
-        return String(decoding: cleaned, as: UTF8.self)
+        return cleaned
+    }
+
+    static func plainText(_ bytes: [UInt8]) -> String {
+        String(decoding: stripEscapes(bytes), as: UTF8.self)
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
     }

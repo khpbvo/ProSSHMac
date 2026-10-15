@@ -52,6 +52,11 @@ enum AIToolDefinitions {
         - To compare hosts, run the same read-only command on each (parallel tool calls) and compare the outputs before changing anything. Change one host, verify it, then do the rest.
         - When a command fails on some sessions, fix those individually with target_session.
 
+        DEVICE CLIs:
+        - The session list marks sessions sitting at a router, switch or appliance prompt (Cisco IOS, Junos, EOS, RouterOS, FRR vtysh, firewalls) as "device CLI". Run commands there with run_cli_command, one line per call; it returns the full output and handles pagers.
+        - execute_and_wait and the file tools (read_files, search_filesystem, search_file_contents, apply_patch) only work in POSIX shells.
+        - Start with read-only show commands. Before changing configuration, know how to roll it back (commit confirmed, reload in, a saved copy), and never change the interface, route or ACL that carries your own management session without one.
+
         FORMAT:
         - Use readable markdown with short paragraphs, bullet points, and code blocks.
         - Show relevant command output in fenced code blocks.
@@ -261,7 +266,7 @@ enum AIToolDefinitions {
             ),
             LLMToolDefinition(
                 name: "list_sessions",
-                description: "List every open terminal session you can act on: id (use as target_session), label, endpoint (user@host:port or local shell), whether it is focused or broadcasting, and the default targets for target_session=null. The same list arrives with each user message; call this when sessions may have opened or closed since.",
+                description: "List every open terminal session you can act on: id (use as target_session), label, endpoint (user@host:port or local shell), whether it is focused or broadcasting, the prompt when it sits at a router/switch/appliance CLI (device_cli_prompt), and the default targets for target_session=null. The same list arrives with each user message; call this when sessions may have opened or closed since.",
                 parameters: .object([
                     "type": .string("object"),
                     "properties": .object([:]),
@@ -271,7 +276,7 @@ enum AIToolDefinitions {
                 strict: true
             ),
         ] + (patchToolEnabled ? [ApplyPatchToolDefinition.definition()] : [])
-          + [SendInputToolDefinition.definition()]
+          + [SendInputToolDefinition.definition(), RunCLICommandToolDefinition.definition()]
     }
 
     // MARK: - Direct Action Tool Filtering
@@ -282,7 +287,7 @@ enum AIToolDefinitions {
         let allowedNames: Set<String> = [
             "execute_command", "execute_and_wait", "get_current_screen",
             "get_recent_commands", "get_command_output", "read_files",
-            "apply_patch", "send_input", "list_sessions",
+            "apply_patch", "send_input", "list_sessions", "run_cli_command",
         ]
         let filtered = tools.filter { allowedNames.contains($0.name) }
         return filtered.isEmpty ? tools : filtered

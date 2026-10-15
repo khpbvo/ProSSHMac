@@ -86,7 +86,12 @@ struct BroadcastContext: Sendable {
         case "list_sessions":
             let broadcastIDs = Set(broadcastContext.map { $0.isBroadcasting ? $0.allSessionIDs : [] } ?? [])
             return AIToolDefinitions.jsonString(from: AISessionDirectory.json(
-                entries: AISessionDirectory.entries(sessions: provider.sessions, focusedID: sessionID, broadcastIDs: broadcastIDs),
+                entries: AISessionDirectory.entries(
+                    sessions: provider.sessions,
+                    focusedID: sessionID,
+                    broadcastIDs: broadcastIDs,
+                    shellBuffers: provider.shellBuffers
+                ),
                 defaultTargets: AISessionDirectory.defaultTargets(focusedID: sessionID, broadcastContext: broadcastContext)
             ))
 
@@ -497,6 +502,20 @@ struct BroadcastContext: Sendable {
                 primarySessionID: sessionID,
                 broadcastContext: broadcastContext
             )
+
+            // The wrapper is POSIX shell syntax; a router or switch would reject it and the
+            // command would sit until the timeout.
+            let deviceTargets = deviceCLITargets(targets, provider: provider)
+            if !deviceTargets.isEmpty {
+                let names = deviceTargets.map { target, prompt in
+                    let label = provider.sessions.first { $0.id == target }?.hostLabel ?? String(target.uuidString.prefix(8))
+                    return "\(label) (\(prompt))"
+                }.joined(separator: ", ")
+                return AIToolDefinitions.errorResult(
+                    "Not a POSIX shell: \(names) is at a device CLI prompt. Nothing was run.",
+                    hint: "Use run_cli_command for router, switch and appliance prompts; execute_and_wait needs a POSIX shell."
+                )
+            }
 
             if targets.count <= 1 {
                 let target = targets.first ?? sessionID
@@ -1049,6 +1068,14 @@ struct BroadcastContext: Sendable {
                 payload["status"] = .string(patchStatus)
             }
             return AIToolDefinitions.jsonString(from: .object(payload))
+
+        case "run_cli_command":
+            return try await executeRunCLICommand(
+                sessionID: sessionID,
+                broadcastContext: broadcastContext,
+                arguments: arguments,
+                provider: provider
+            )
 
         case "send_input":
             return try await executeSendInput(

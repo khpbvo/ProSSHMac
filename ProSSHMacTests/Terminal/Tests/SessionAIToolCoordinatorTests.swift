@@ -105,7 +105,50 @@ final class SessionAIToolCoordinatorTests: XCTestCase {
         )
     }
 
+    /// A scripted device: echo, one page and a `--More--` pager, then the rest and the prompt.
+    func testCLICommandPagesThroughAFakeDeviceAndLeavesOutputVisible() async throws {
+        let (manager, sessionID, spy) = try await makeConnectedSessionWithSpy()
+        manager.shellBuffers[sessionID] = ["Switch# "]
+        let execution = Task {
+            await manager.aiToolCoordinator.executeCLICommand(
+                sessionID: sessionID, command: "show running-config", timeoutSeconds: 5
+            )
+        }
+        try await waitForPayloads(spy, count: 1)
+        let firstPayloads = await spy.sentPayloads
+        XCTAssertEqual(firstPayloads, ["show running-config\r"], "sent as Enter would, no shell wrapper")
+
+        func device(_ text: String) -> Data {
+            let chunk = Data(text.utf8)
+            let visible = manager.aiToolCoordinator.filterToolOutput(sessionID: sessionID, chunk: chunk)
+            XCTAssertEqual(visible, chunk, "device output must stay visible in the terminal")
+            return visible
+        }
+        _ = device("show running-config\r\nhostname Switch\r\n")
+        _ = device("interface Gi0/1\r\n --More-- ")
+        try await waitForPayloads(spy, count: 2)
+        let pagerPayloads = await spy.sentPayloads
+        XCTAssertEqual(pagerPayloads.last, " ", "the pager is answered with Space")
+
+        _ = device(String(repeating: "\u{08}", count: 10) + " shutdown\r\nend\r\nSwitch#")
+        let result = await execution.value
+        XCTAssertEqual(result.status, .completed)
+        XCTAssertEqual(result.output, "hostname Switch\ninterface Gi0/1\n shutdown\nend")
+        XCTAssertEqual(result.finalPrompt, "Switch#")
+        XCTAssertEqual(result.pagesAdvanced, 1)
+        let finalPayloads = await spy.sentPayloads
+        XCTAssertEqual(finalPayloads.count, 2, "one command, one page")
+    }
+
     // MARK: - Helpers
+
+    private func waitForPayloads(_ spy: SpyShellChannel, count: Int) async throws {
+        for _ in 0..<200 {
+            if await spy.sentPayloads.count >= count { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTFail("Expected \(count) payloads")
+    }
 
     /// Creates a SessionManager with a connected session, then swaps in a SpyShellChannel.
     private func makeConnectedSessionWithSpy() async throws -> (SessionManager, UUID, SpyShellChannel) {

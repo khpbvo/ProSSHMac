@@ -85,7 +85,7 @@ new `AISkillLibraryTests`, `DeviceCLITests`.
   - Tests: untargeted command in single focus → focused only; explicit id of an unfocused
     session works; broadcast default unchanged; closed id rejected.
 
-- [ ] **Phase 3: Device CLI command path.**
+- [x] **Phase 3: Device CLI command path.** Done 2026-10-15; see "Phase 3 as built".
   - First, verify against a real or emulated device what the current tools do (expect
     `execute_and_wait` to time out). Then `run_cli_command(command, target_session,
     timeout_seconds)`: paging off once per session (`terminal length 0`, `set cli screen-length 0`,
@@ -149,6 +149,50 @@ new `AISkillLibraryTests`, `DeviceCLITests`.
 - Tests: `AIAgentServiceTests` +5 (session list per turn, defaults with and without broadcast,
   explicit targets in and outside broadcast, refusal of unknown/closed ids — red with validation
   disabled — and `list_sessions`). 81/81 across nine suites.
+
+## Phase 3 as built (2026-10-15)
+
+**Live findings first.** Phase 2 held up on the four cloned VMs: asked to install FRR and run
+OSPF with a loopback per box, the copilot did so on all four (each box sees three neighbours, DR
+Testserv4, backup Testserv3, and routes to the other loopbacks); one conversation, ~30 Opus
+requests, cache reads growing on every request. The clone fixes themselves still wait at
+`sudo` prompts. Inside `vtysh` (an IOS-style CLI) Opus did **not** send the POSIX wrapper: it saw
+`testserv-02#` in the turn's screen snapshot and used `send_input` + screen reads (3 requests,
+~14 s). Its weak spots: terminal-wrapped lines it had to rebuild, one screen of output at most,
+no completion signal ("Maybe it hasn't updated yet, I'll check again"). `vtysh` accepted
+`terminal length 0`; its ~20-line `show running-config` never paged, so `--More--` is covered
+by the fake device only.
+
+- `Services/AI/DeviceCLI.swift` (new, pure):
+  - `DeviceCLIPrompt.classify` (cursor line → `.posixShell` / `.deviceCLI` / `.unknown`; device
+    = an existing vendor prompt pattern from `ShellIntegrationScripts` and not POSIX-looking)
+    and `base(of:)` (the part that survives mode changes).
+  - `DeviceCLICapture`: complete when the tail line starts with the base and ends in `#>$%`
+    after 300 ms quiet (1 s without a base); Space at a pager after 150 ms, once per page, at
+    most 1,000; a question (`?`, `:`, `]`, `[y/n]`) after 2 s; output without echo, pagers and
+    prompt.
+  - `DeviceCLIText` applies backspaces and carriage-return overwrites (pager erase).
+- `SessionAIToolCoordinator.executeCLICommand`: sends `command + "\r"` with the same bookkeeping
+  as `executeCommandAndWait`, observes output in `filterToolOutput` without hiding it, polls every
+  50 ms. A new AI command on a session supersedes either kind. The escape stripper moved from
+  `PendingToolCommand` into `TerminalPlainText` (shared).
+- `run_cli_command(command, timeout_seconds 5–120, target_session)` in
+  `AIToolHandler+DeviceCLI.swift`: `{ok, output, completed, final_prompt, pages_advanced,
+  truncated}`, `awaiting_input` + hint, `timed_out` + hint; several targets → `results[]`.
+- `execute_and_wait` refuses any target at a device prompt (`Not a POSIX shell: Testserv2
+  (testserv-02#) …`, hint `run_cli_command`), nothing sent. `AISessionDirectory` marks
+  `· device CLI "<prompt>"` and `device_cli_prompt` in `list_sessions`. Developer prompt: DEVICE
+  CLIs section (one line per call, POSIX-only tools, read-only first, rollback before touching
+  the management path).
+- Not done: platform paging commands are not sent automatically (a `router#` prompt does not
+  identify the platform; pagers are answered generically, skills will recommend `terminal length
+  0` etc.); the remote file tools do not check for device prompts yet (they would time out);
+  the host's configured "Device / Shell Type" is not used (the prompt is the per-call truth, since
+  `vtysh` or a jump to a router changes it mid-session).
+- Tests: new `DeviceCLITests` (11), `SessionAIToolCoordinatorTests` +1 (scripted fake device:
+  echo, a page, `--More--` answered with Space, output left visible), `AIAgentServiceTests` +4.
+  The refusal and pager tests went red with their behaviour disabled. 100/100 across eleven
+  suites.
 
 ## Open questions
 

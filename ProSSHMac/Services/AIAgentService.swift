@@ -96,6 +96,7 @@ protocol AIAgentSessionProviding: AnyObject {
     func sendShellInput(sessionID: UUID, input: String, suppressEcho: Bool) async
     func sendRawShellInput(sessionID: UUID, input: String) async
     func executeCommandAndWait(sessionID: UUID, command: String, timeoutSeconds: TimeInterval) async -> CommandExecutionResult
+    func executeCLICommand(sessionID: UUID, command: String, timeoutSeconds: TimeInterval) async -> CLICommandResult
 }
 
 struct CommandExecutionResult: Sendable {
@@ -103,6 +104,22 @@ struct CommandExecutionResult: Sendable {
     var exitCode: Int?
     var timedOut: Bool
     var blockID: UUID?
+}
+
+/// One command run at a device CLI prompt (`run_cli_command`).
+struct CLICommandResult: Sendable, Equatable {
+    enum Status: Sendable, Equatable {
+        case completed
+        case awaitingInput(String)
+        case timedOut
+        case superseded
+        case failed
+    }
+
+    var output: String
+    var status: Status
+    var finalPrompt: String?
+    var pagesAdvanced = 0
 }
 
 extension SessionManager: AIAgentSessionProviding {}

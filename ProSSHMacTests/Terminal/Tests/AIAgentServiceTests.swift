@@ -215,6 +215,61 @@ final class AIAgentServiceTests: XCTestCase {
         XCTAssertEqual(json["default_targets"] as? [String], [fleet.session.sessionID.uuidString])
     }
 
+    // MARK: - Device CLIs
+
+    func testRunCLICommandRunsOnTheTargetedSession() async throws {
+        let fleet = try await fleet()
+        fleet.session.simulatedCLIResult = CLICommandResult(output: "Neighbor ID  State", status: .completed, finalPrompt: "testserv-02#", pagesAdvanced: 2)
+        fleet.client.enqueue(toolCompletion("run_cli_command", arguments: #"{"command":"show ip ospf neighbor","timeout_seconds":20,"target_session":"\#(fleet.second.uuidString)"}"#))
+        fleet.client.enqueue(completion("done"))
+        _ = try await fleet.service.generateReply(sessionID: fleet.session.sessionID, prompt: "ospf?")
+        XCTAssertEqual(fleet.session.cliCommands.map(\.0), [fleet.second])
+        XCTAssertEqual(fleet.session.cliCommands.map(\.1), ["show ip ospf neighbor"])
+        let output = try XCTUnwrap(fleet.client.requests.last?.messages.last { $0.role == "tool" }?.content)
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any])
+        XCTAssertEqual(json["output"] as? String, "Neighbor ID  State")
+        XCTAssertEqual(json["completed"] as? Bool, true)
+        XCTAssertEqual(json["final_prompt"] as? String, "testserv-02#")
+        XCTAssertEqual(json["pages_advanced"] as? Int, 2)
+        XCTAssertTrue(fleet.client.requests[0].tools.contains { $0.name == "run_cli_command" })
+    }
+
+    func testRunCLICommandReportsAQuestion() async throws {
+        let fleet = try await fleet()
+        fleet.session.simulatedCLIResult = CLICommandResult(output: "", status: .awaitingInput("Destination filename [startup-config]?"))
+        fleet.client.enqueue(toolCompletion("run_cli_command", arguments: #"{"command":"copy run start","timeout_seconds":20,"target_session":null}"#))
+        fleet.client.enqueue(completion("done"))
+        _ = try await fleet.service.generateReply(sessionID: fleet.session.sessionID, prompt: "save")
+        let output = try XCTUnwrap(fleet.client.requests.last?.messages.last { $0.role == "tool" }?.content)
+        XCTAssertTrue(output.contains(#""completed":false"#))
+        XCTAssertTrue(output.contains("Destination filename [startup-config]?"))
+        XCTAssertTrue(output.contains("send_input"))
+    }
+
+    func testExecuteAndWaitIsRefusedAtADevicePrompt() async throws {
+        let fleet = try await fleet()
+        fleet.session.shellBuffers[fleet.second] = ["10.255.255.3  1 Full/Backup", "testserv-02# "]
+        let output = try await runCommand(fleet, target: #""\#(fleet.second.uuidString)""#)
+        XCTAssertTrue(output.contains(#""ok":false"#))
+        XCTAssertTrue(output.contains("Testserv2 (testserv-02#)"))
+        XCTAssertTrue(output.contains("run_cli_command"))
+        XCTAssertTrue(fleet.session.commandSessions.isEmpty, "nothing may be sent")
+
+        fleet.session.shellBuffers[fleet.third] = ["kevin@testserv-02:~$"]
+        _ = try await runCommand(fleet, target: #""\#(fleet.third.uuidString)""#)
+        XCTAssertEqual(fleet.session.commandSessions, [fleet.third], "a shell prompt still runs")
+    }
+
+    func testSessionListMarksDeviceCLIPrompts() async throws {
+        let fleet = try await fleet()
+        fleet.session.shellBuffers[fleet.second] = ["testserv-02(config)#"]
+        fleet.client.enqueue(completion("ok"))
+        _ = try await fleet.service.generateReply(sessionID: fleet.session.sessionID, prompt: "hi")
+        let user = try XCTUnwrap(fleet.client.requests.last?.messages.first { $0.role == "user" }?.content)
+        XCTAssertTrue(user.contains("- \(fleet.second.uuidString): Testserv2 — kevin@192.168.2.33:22 · device CLI \"testserv-02(config)#\""))
+        XCTAssertTrue(user.contains("- \(fleet.third.uuidString): Testserv3 — kevin@192.168.2.19:22\n"))
+    }
+
     // MARK: - Anthropic provider
 
     private struct AnthropicStack {
@@ -336,6 +391,8 @@ private final class MockAgentSessionProvider: AIAgentSessionProviding {
     var simulatedExecuteAndWaitExitCode: Int? = 0
     var simulatedExecuteAndWaitTimedOut: Bool = false
     var simulatedExecuteAndWaitResultsQueue: [CommandExecutionResult] = []
+    var cliCommands: [(UUID, String)] = []
+    var simulatedCLIResult = CLICommandResult(output: "", status: .completed, finalPrompt: "router#")
 
     init(isLocal: Bool = true) {
         let session = Session(
@@ -425,6 +482,10 @@ private final class MockAgentSessionProvider: AIAgentSessionProviding {
         )
     }
 
+    func executeCLICommand(sessionID: UUID, command: String, timeoutSeconds: TimeInterval) async -> CLICommandResult {
+        cliCommands.append((sessionID, command))
+        return simulatedCLIResult
+    }
 }
 
 @MainActor

@@ -10,10 +10,17 @@ enum AISessionDirectory {
         let endpoint: String
         let focused: Bool
         let broadcast: Bool
+        /// The cursor line when it is a router/switch/appliance prompt, else nil.
+        var deviceCLIPrompt: String? = nil
     }
 
     /// Connected sessions, focused first, then by label.
-    static func entries(sessions: [Session], focusedID: UUID, broadcastIDs: Set<UUID>) -> [Entry] {
+    static func entries(
+        sessions: [Session],
+        focusedID: UUID,
+        broadcastIDs: Set<UUID>,
+        shellBuffers: [UUID: [String]] = [:]
+    ) -> [Entry] {
         sessions
             .filter { $0.state == .connected }
             .map { session in
@@ -22,7 +29,8 @@ enum AISessionDirectory {
                     label: session.hostLabel,
                     endpoint: session.isLocal ? "local shell" : "\(session.username)@\(session.hostname):\(session.port)",
                     focused: session.id == focusedID,
-                    broadcast: broadcastIDs.contains(session.id)
+                    broadcast: broadcastIDs.contains(session.id),
+                    deviceCLIPrompt: deviceCLIPrompt(shellBuffers[session.id] ?? [])
                 )
             }
             .sorted {
@@ -45,6 +53,7 @@ enum AISessionDirectory {
             var flags: [String] = []
             if entry.focused { flags.append("focused") }
             if entry.broadcast { flags.append("broadcast") }
+            if let prompt = entry.deviceCLIPrompt { flags.append("device CLI \"\(prompt)\"") }
             let suffix = flags.isEmpty ? "" : " · " + flags.joined(separator: " · ")
             return "- \(entry.id.uuidString): \(entry.label) — \(entry.endpoint)\(suffix)"
         }
@@ -62,10 +71,16 @@ enum AISessionDirectory {
                     "endpoint": .string(entry.endpoint),
                     "focused": .bool(entry.focused),
                     "broadcast": .bool(entry.broadcast),
+                    "device_cli_prompt": entry.deviceCLIPrompt.map { .string($0) } ?? .null,
                 ])
             }),
             "default_targets": .array(defaultTargets.map { .string($0.uuidString) }),
         ])
+    }
+
+    private static func deviceCLIPrompt(_ screenLines: [String]) -> String? {
+        let line = DeviceCLIPrompt.cursorLine(in: screenLines)
+        return DeviceCLIPrompt.classify(line) == .deviceCLI ? line : nil
     }
 
     /// "Testserv4 — kevin@192.168.2.34:22", or "Local shell — <label>".

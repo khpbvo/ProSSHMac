@@ -676,6 +676,14 @@ final class SessionManager: ObservableObject {
         await aiToolCoordinator.executeCommandAndWait(sessionID: sessionID, command: command, timeoutSeconds: timeoutSeconds)
     }
 
+    func executeCLICommand(
+        sessionID: UUID,
+        command: String,
+        timeoutSeconds: TimeInterval = 30
+    ) async -> CLICommandResult {
+        await aiToolCoordinator.executeCLICommand(sessionID: sessionID, command: command, timeoutSeconds: timeoutSeconds)
+    }
+
     func trustKnownHost(challenge: KnownHostVerificationChallenge) async throws {
         do {
             try await knownHostsStore.trust(challenge: challenge)

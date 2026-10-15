@@ -70,6 +70,7 @@ Contents should include:
 
 When editing it, replace only the text below the `## Next Session Plan` heading, and check
 `wc -l CLAUDE.md` before committing — this file was once silently truncated to its last section.
+A script must anchor on the heading at the start of a line: the phrase also appears in this section.
 
 ### Plan Mode Protocol
 
@@ -202,8 +203,8 @@ ProSSHMac/
 │   ├── SSH/              #   LibSSHTransport, LibSSH{Shell,Forward}Channel, MockSSHTransport,
 │   │                     #   SSHTransportProtocol/Types, SSHAlgorithmPolicy,
 │   │                     #   (Default)SSHCredentialResolver, RemotePath
-│   ├── AI/               #   AIToolHandler (+5 ext), AIAgentRunner, AIToolDefinitions,
-│   │                     #   AIConversationContext, AISharedTypes,
+│   ├── AI/               #   AIToolHandler (+6 ext), AIAgentRunner, AIToolDefinitions,
+│   │                     #   AIConversationContext, AISharedTypes, AISessionDirectory, DeviceCLI,
 │   │                     #   OpenRouterClient/Types/ModelStore/APIKeyStore/ChatProvider,
 │   │                     #   AnthropicClient/Types/ModelStore/APIKeyStore, AIKeychain,
 │   │                     #   ApplyPatchTool, UnifiedDiffPatcher, apply_diff
@@ -251,7 +252,9 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 
 | File / Group | What it does |
 |---|---|
-| `Services/AI/AIToolHandler.swift` + 5 extensions | Tool dispatch (1,119L) — largest file. Extensions: ArgumentParsing, RemoteExecution, LocalFilesystem, InteractiveInput, OutputHelpers |
+| `Services/AI/AIToolHandler.swift` + 6 extensions | Tool dispatch (1,161L) — largest file. Extensions: ArgumentParsing, RemoteExecution, LocalFilesystem, InteractiveInput, DeviceCLI (`run_cli_command`), OutputHelpers |
+| `Services/AI/DeviceCLI.swift` | Router/switch CLI support: `DeviceCLIPrompt` (cursor line → POSIX / device / unknown, prompt base), `DeviceCLICapture` (complete / pager / question decisions from text + idle time), `DeviceCLIText` |
+| `Services/AI/AISessionDirectory.swift` | The open sessions as the copilot sees them: per-turn list, `list_sessions` JSON, default targets, device-CLI marking |
 | `Services/TerminalRenderingCoordinator.swift` | Snapshot publishing, scroll state, resize debounce, alt-buffer policy, shell-buffer throttle (1,066L). An ordinary publish is two engine calls (`publishViewportState`, then `publishSnapshot` carrying housekeeping) with MainActor scroll-anchor policy between them |
 | `UI/Terminal/TerminalView.swift` | Main terminal UI, sidebar layout, focus, input capture (1,081L). `sessionPanel` is the only place a session's terminal surface is built |
 | `Services/SessionManager.swift` + Queries | Session lifecycle, shell I/O, SFTP, grid snapshots (1,020L) |
@@ -273,12 +276,12 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 | `ViewModels/TerminalAIAssistantViewModel.swift` | AI sidebar VM: messages, streaming, patch approval (379L) |
 | `UI/Terminal/ExternalTerminalWindowView.swift` | Separate-window terminal session view (341L) |
 | `Terminal/Input/KeyEncoder.swift` | Key → byte encoding driven by `KeyEncoderOptions` (application cursor keys, kitty disambiguation, `modifyOtherKeys`); Shift+Enter fallback (315L) |
-| `Services/AI/AIToolDefinitions.swift` | Developer prompt, 8 tool schemas, direct-action filter, error helpers (315L) |
+| `Services/AI/AIToolDefinitions.swift` | Developer prompt, 9 tool schemas, direct-action filter, error helpers (334L) |
 | `Services/SessionShellIOCoordinator.swift` | Shell input, the batched parser reader, per-batch bookkeeping (307L). Each batch is one `feedAndCollectOutcome` call, applied in one MainActor handoff with no post-feed engine reads; also filters the AI tool wrapper echo |
 | `Services/LocalPTYProcess.swift` | Actor wrapping forkpty, async output stream (274L) |
 | `Terminal/Renderer/TerminalMetalView.swift` | NSViewRepresentable wrapping `TerminalMTKView` (left-mouse events with click count), wheel scrolling (204L) |
 | `Terminal/Diagnostics/TerminalPerf.swift` | Runtime-gated signposts + 19 in-process stage timers with span/busy tracking (236L). Start here for any perf work |
-| `Services/SessionAIToolCoordinator.swift` | AI one-shot command wrapping with private OSC 7777 start/completion events (206L) |
+| `Services/SessionAIToolCoordinator.swift` | AI one-shot command wrapping with private OSC 7777 start/completion events; `executeCLICommand` for device prompts; shared `TerminalPlainText` (315L) |
 | `Services/LocalShellBootstrap.swift` | Child env for local PTY, ZDOTDIR/BASH_ENV injection (202L) |
 | `UI/Terminal/PatchApprovalCardView.swift` | Inline patch approval card for `apply_patch` (177L) |
 | `UI/Terminal/ReasoningStreamView.swift` | Native `NSScrollView`/`NSTextView` (TextKit 1) reasoning panel (132L) |
@@ -334,15 +337,19 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
   OSC 7777 start/completion events, filters the echoed wrapper in the parser reader, and takes the
   exit code from `TerminalEngine`'s event callback. Remote filesystem helpers use the same command
   path. The chat pane renders pipe tables and collapses blank paragraph spacing.
+  Router/switch prompts can't run that wrapper: `executeCLICommand` (`run_cli_command`) sends the
+  line with `\r`, leaves the output visible, presses Space at pagers and returns when the prompt
+  is back (`DeviceCLICapture`). `execute_and_wait` refuses targets whose cursor line classifies as
+  a device CLI. One AI command per session; a new one supersedes either kind.
 - **Claude's thinking blocks bind the conversation prefix** (system prompt, tools, earlier
   messages). Claude turns are stored as `.anthropic(blocks:)` and replayed byte-for-byte; never
   edit, reorder or re-encode them. Claude always gets the full tool set (direct-action mode only
   caps iterations for it). A trim or tool-set change strips all thinking via
   `AIConversationState.requestHistory`. See `Docs/Anthropic.md`.
-- **AI agent tools**: 11 exposed schemas — 9 in `AIToolDefinitions` (`get_command_output`,
+- **AI agent tools**: 12 exposed schemas — 9 in `AIToolDefinitions` (`get_command_output`,
   `get_current_screen`, `search_filesystem`, `search_file_contents`, `read_files`,
   `get_recent_commands`, `execute_command`, `execute_and_wait`, `list_sessions`) plus `apply_patch`
-  (gated on `patchToolEnabled`) and `send_input`. `target_session` may name **any connected
+  (gated on `patchToolEnabled`), `send_input` and `run_cli_command`. `target_session` may name **any connected
   session** (validated before dispatch, `AISessionDirectory`); null = broadcast set when
   broadcasting, else the focused session. Every turn's user message lists the open sessions. The handler also accepts the legacy/internal names
   `read_file_chunk`, `get_session_info`, and the `search_terminal_history` alias.
@@ -478,7 +485,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
   managers; assert renderer identity) and `TerminalSurfaceModelStoreTests`.
 
 ### UI
-- **Four files are over 1,000 lines**: `AIToolHandler.swift` (1,119L),
+- **Four files are over 1,000 lines**: `AIToolHandler.swift` (1,161L),
   `TerminalRenderingCoordinator.swift` (1,066L), `TerminalView.swift` (1,081L),
   `SessionManager.swift` (1,020L). Read surrounding context before modifying.
 - **Focus management** between AI composer (NSTextView) and terminal (DirectTerminalInputNSView) is
@@ -521,7 +528,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 | `Docs/featurelist.md` | **Long-term memory** — dated work log, phase progress, loop-log entries |
 | `Docs/RenderCost.md` | **Active spec.** What rendering actually costs — R0/R1/R2a done, **R2b open** (code merged, performance unvalidated). Read its "Measurement caveats" before any perf measurement |
 | `Docs/R2bBenchmarkResults.md` | R2b A/B evidence: exact commands and all raw reports for the six baseline/candidate pairs |
-| `Docs/NetworkCopilot.md` | **Active.** Copilot reaches every open session, one memory per chat, a router/switch command path, and network-specialist skills (`load_skill`). Phases 1–2 done (one memory per chat; every open session reachable), Phase 3 (router/switch command path) next |
+| `Docs/NetworkCopilot.md` | **Active.** Copilot reaches every open session, one memory per chat, a router/switch command path, and network-specialist skills (`load_skill`). Phases 1–3 done (one memory per chat; every open session reachable; `run_cli_command`), Phase 4 (skill library) next |
 | `Docs/Anthropic.md` | Direct Anthropic Messages API as a second AI provider next to OpenRouter — **COMPLETE** (Phases 0–6, validated live). Read its "Rules that shape the design" before touching AI transcript code |
 | `Docs/Bug84.md` | One terminal renderer per session across tab switches and split changes (per-session model store) — **COMPLETE** (Phases 0–5); Phase 5 has the live memory numbers |
 | `Docs/bugs.md` | Bug and tech-debt register by subsystem/severity (counts in its Summary table); paths are pre-refactor |
@@ -554,14 +561,21 @@ and the session coordinators) has no spec file left; see `Docs/featurelist.md`.
 
 ## Next Session Plan
 
-**Active work: `Docs/NetworkCopilot.md` Phase 3 — device CLI command path.** Phases 1–2 are
-done (one memory per chat via `conversationID`; every connected session listed each turn and
-targetable, `list_sessions`). Phase 3 starts by verifying what today's tools do on a router or
-switch CLI (needs the user's device or a lab image). Found live
-(2026-10-15): the copilot reached only the focused pane (broadcast off; it gets no session list
-otherwise) and forgot the task when focus moved (chat is per window, memory per session); device
-CLIs can't use `execute_and_wait` (POSIX wrapper). Decisions: reach all open sessions, one memory
-per chat, skills = network-specialist playbooks. Read the spec's Overview first.
+**Active work: `Docs/NetworkCopilot.md` Phase 4 — skill library and `load_skill`.** Phases 1–3
+are done: one memory per chat (`conversationID`), every connected session listed each turn and
+targetable (`AISessionDirectory`, `list_sessions`), and `run_cli_command` for router/switch
+prompts (`DeviceCLI.swift`; `execute_and_wait` refuses device prompts). Read the spec's Overview
+and "Phase 3 as built" first. Live so far: the copilot set up FRR/OSPF across the four cloned
+VMs, and in `vtysh` Opus coped with `send_input` alone; `run_cli_command` itself has not run
+live yet — ask the user to try it in `vtysh` on Testserv2 (`show running-config`,
+`configure terminal` then `end`, and confirm `execute_and_wait` is refused there).
+Phase 4: `AISkillLibrary` (bundled + `~/Library/Application Support/ProSSHMac/Skills/`, front
+matter `name`/`description`/`platforms`), skill index in the system prompt, `load_skill` tool,
+Settings row to open the folder; the skill set must stay fixed per conversation (Anthropic
+prefix). Open questions in the spec: confirmation before changing unfocused hosts; watch the
+user folder live or load per chat. Known gaps for Phase 5 skills: the clone fixes are still
+waiting at `sudo` prompts on the VMs (WireGuard `wg0` identical on all four is the urgent one);
+check `sudo -n true` before planning root changes.
 
 **Next after that: Bug 88 + Bug 87 (tab selection vs. pane focus in split layouts).** Bug 84 is
 closed (2026-10-15); the Anthropic provider (`Docs/Anthropic.md`) is complete and validated live. Both bugs are in `Docs/bugs.md` and touch the same interaction in
