@@ -3,12 +3,41 @@ import Foundation
 struct AIConversationState: Sendable, Equatable {
     var turns: [[AITranscriptMessage]] = []
     var lastModelID: String?
+    /// The provider's prefix fingerprint on the last request that had one.
+    var lastPrefixFingerprint: String?
 
+    /// A model switch drops OpenRouter reasoning. Claude's thinking blocks stay: the API drops
+    /// those the new model can't read, and stripping them itself can make a request invalid.
     mutating func prepare(for modelID: String) {
         if let lastModelID, lastModelID != modelID {
-            turns = turns.map { $0.map(Self.removingReasoning) }
+            turns = turns.map { $0.map(Self.removingOpenRouterReasoning) }
         }
         lastModelID = modelID
+    }
+
+    /// The history for the next request. Fits it to the context budget, then, when that dropped
+    /// turns or the prefix fingerprint changed (another system prompt or tool set), strips Claude's
+    /// thinking blocks from every turn, including the current one: they are bound to the old
+    /// prefix and can never be valid again.
+    mutating func requestHistory(
+        currentTurn: inout [AITranscriptMessage],
+        prefixFingerprint: String?,
+        contextLength: Int,
+        size: ([AITranscriptMessage]) -> Int
+    ) throws -> [AITranscriptMessage] {
+        let turnCount = turns.count
+        var history = try fittedHistory(currentTurn: currentTurn, contextLength: contextLength, size: size)
+        let trimmed = turns.count < turnCount
+        let prefixChanged = prefixFingerprint != nil
+            && lastPrefixFingerprint != nil
+            && prefixFingerprint != lastPrefixFingerprint
+        if trimmed || prefixChanged {
+            turns = turns.map { $0.map(Self.removingAnthropicThinking) }
+            currentTurn = currentTurn.map(Self.removingAnthropicThinking)
+            history = turns.flatMap { $0 } + currentTurn
+        }
+        if let prefixFingerprint { lastPrefixFingerprint = prefixFingerprint }
+        return history
     }
 
     /// The history to send this request: earlier turns followed by `currentTurn`. Drops whole
@@ -38,9 +67,15 @@ struct AIConversationState: Sendable, Equatable {
         turns.append(messages)
     }
 
-    private static func removingReasoning(_ message: AITranscriptMessage) -> AITranscriptMessage {
-        guard case var .assistant(turn) = message else { return message }
+    private static func removingOpenRouterReasoning(_ message: AITranscriptMessage) -> AITranscriptMessage {
+        guard case var .assistant(turn) = message, case .openRouter? = turn.reasoning else { return message }
         turn.reasoning = nil
+        return .assistant(turn)
+    }
+
+    private static func removingAnthropicThinking(_ message: AITranscriptMessage) -> AITranscriptMessage {
+        guard case var .assistant(turn) = message, case let .anthropic(blocks)? = turn.reasoning else { return message }
+        turn.reasoning = .anthropic(blocks: blocks.filter { !$0.isThinking })
         return .assistant(turn)
     }
 }

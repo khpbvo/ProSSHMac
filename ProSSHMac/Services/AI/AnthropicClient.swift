@@ -154,7 +154,7 @@ final class AnthropicClient: AnthropicServicing {
         return Data(AnthropicJSON.object(fields).utf8)
     }
 
-    private nonisolated static func toolJSON(_ tool: LLMToolDefinition) -> String {
+    nonisolated static func toolJSON(_ tool: LLMToolDefinition) -> String {
         struct Wire: Encodable {
             let description: String
             let eager_input_streaming = true

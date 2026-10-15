@@ -36,8 +36,11 @@ import os.log
             "[\(traceID, privacy: .public)] turn_start session=\(AIToolDefinitions.shortSessionID(sessionID), privacy: .public) prompt_chars=\(trimmedPrompt.count) persist_context=\(service.persistConversationContext)"
         )
 
+        let provider = service.chatProvider
         let directActionMode = AIToolDefinitions.isDirectActionPrompt(trimmedPrompt)
-        let activeToolDefinitions = directActionMode
+        // A provider that binds reasoning to the tool set keeps all tools; direct-action mode
+        // then only caps the iterations.
+        let activeToolDefinitions = directActionMode && !provider.requiresStableToolSet
             ? AIToolDefinitions.directActionToolDefinitions(from: service.toolDefinitions)
             : service.toolDefinitions
         let iterationLimit = directActionMode
@@ -80,15 +83,16 @@ import os.log
             userMessageText = broadcastPreamble + trimmedPrompt
         }
 
-        let provider = service.chatProvider
         let systemPrompt = AIToolDefinitions.developerPrompt()
+        let prefixFingerprint = provider.prefixFingerprint(systemPrompt: systemPrompt, tools: activeToolDefinitions)
         var currentTurn: [AITranscriptMessage] = [.user(userMessageText)]
         var totalToolCalls = 0
 
         for iteration in 1...iterationLimit {
             let iterationStart = DispatchTime.now().uptimeNanoseconds
-            let messages = try conversationState.fittedHistory(
-                currentTurn: currentTurn,
+            let messages = try conversationState.requestHistory(
+                currentTurn: &currentTurn,
+                prefixFingerprint: prefixFingerprint,
                 contextLength: service.modelStore.contextLength(for: modelID)
             ) {
                 provider.estimatedRequestBytes(systemPrompt: systemPrompt, messages: $0, tools: activeToolDefinitions)

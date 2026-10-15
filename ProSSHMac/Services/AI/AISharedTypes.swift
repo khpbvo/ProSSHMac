@@ -68,11 +68,21 @@ struct AIAssistantTurn: Sendable, Equatable {
 /// one provider.
 enum AIProviderReasoning: Sendable, Equatable {
     case openRouter(details: [LLMJSONValue]?, text: String?)
+    /// Claude's whole assistant turn as returned: thinking, text and tool_use blocks in order.
+    case anthropic(blocks: [AnthropicBlock])
 }
 
 /// One provider's chat completion endpoint, seen by the agent loop.
 @MainActor
 protocol AIChatProviding: Sendable {
+    /// Whether every request in a conversation must carry the same tool set (Anthropic: a
+    /// changed `tools` array invalidates earlier thinking blocks).
+    var requiresStableToolSet: Bool { get }
+
+    /// Identifies the request prefix that replayed reasoning is bound to (system prompt and
+    /// tools); nil when the provider binds nothing.
+    func prefixFingerprint(systemPrompt: String, tools: [LLMToolDefinition]) -> String?
+
     /// Request size in UTF-8 bytes, used to fit history into the context budget.
     func estimatedRequestBytes(
         systemPrompt: String,
@@ -89,6 +99,12 @@ protocol AIChatProviding: Sendable {
         tools: [LLMToolDefinition],
         onEvent: @escaping @Sendable (LLMStreamEvent) -> Void
     ) async throws -> AIAssistantTurn
+}
+
+extension AIChatProviding {
+    var requiresStableToolSet: Bool { false }
+
+    func prefixFingerprint(systemPrompt: String, tools: [LLMToolDefinition]) -> String? { nil }
 }
 
 // MARK: - JSON Value

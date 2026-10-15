@@ -39,7 +39,7 @@ final class AnthropicModelStore: ObservableObject {
     }
 
     var selectedModel: AnthropicModel? {
-        model(for: selectedModelID)
+        metadata(for: selectedModelID)
     }
 
     func select(_ modelID: String) throws {
@@ -69,18 +69,18 @@ final class AnthropicModelStore: ObservableObject {
     /// The `effort` to send for `modelID`: nil when the model takes none, otherwise the setting
     /// lowered to the highest level the model supports. Unknown models get the setting as is.
     func effort(for modelID: String) -> AnthropicEffort? {
-        guard let model = model(for: modelID) else { return effort }
+        guard let model = metadata(for: modelID) else { return effort }
         let supported = model.supportedEffortLevels
         guard !supported.isEmpty else { return nil }
         return supported.last { $0 <= effort } ?? supported.first
     }
 
     func contextLength(for modelID: String) -> Int {
-        model(for: modelID)?.maxInputTokens ?? Self.fallbackContextLength
+        metadata(for: modelID)?.maxInputTokens ?? Self.fallbackContextLength
     }
 
     func maxOutputTokens(for modelID: String) -> Int {
-        model(for: modelID)?.maxTokens ?? Self.fallbackMaxOutputTokens
+        metadata(for: modelID)?.maxTokens ?? Self.fallbackMaxOutputTokens
     }
 
     func refresh() async {
@@ -105,7 +105,8 @@ final class AnthropicModelStore: ObservableObject {
         }
     }
 
-    private func model(for modelID: String) -> AnthropicModel? {
+    /// The catalog entry for `modelID`, or the cached one for the selection.
+    func metadata(for modelID: String) -> AnthropicModel? {
         models.first { $0.id == modelID }
             ?? (cachedSelectedModel?.id == modelID ? cachedSelectedModel : nil)
     }

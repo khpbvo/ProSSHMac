@@ -197,7 +197,7 @@ Changed: `AIConversationContext.swift` (neutral transcript), `AISharedTypes.swif
     fallback block, `max_tokens`, `error` event, 529 retry, request headers/body shape
     (no `tool_choice`, `eager_input_streaming`, `thinking`/`output_config`/`fallbacks` gating).
 
-- [ ] **Phase 4: Anthropic transcript replay rules.**
+- [x] **Phase 4: Anthropic transcript replay rules.** Done 2026-10-15; see "Phase 4 as built".
   - Neutral → Anthropic messages: user text, assistant native content replayed unchanged (or
     built from text/tool calls for turns another provider wrote), all tool results of a round in
     one user message, `INVALID_JSON` error results.
@@ -298,6 +298,31 @@ Changed: `AIConversationContext.swift` (neutral transcript), `AISharedTypes.swif
   across the six AI suites.
 - *Verify in Phase 6:* the existing tool schemas marked `strict: true` were written for OpenAI-style
   strict mode; check that Anthropic accepts them.
+
+## Phase 4 as built (2026-10-15)
+
+- `AIProviderReasoning.anthropic(blocks:)` holds Claude's whole turn (`AnthropicResponse.content`)
+  and is replayed verbatim. `AIChatProviding` gained `requiresStableToolSet` and
+  `prefixFingerprint(systemPrompt:tools:)` (defaults: false / nil, so OpenRouter is unchanged).
+- `AIConversationState`: `prepare(for:)` drops only OpenRouter reasoning on a model switch;
+  new `requestHistory(currentTurn:prefixFingerprint:contextLength:size:)` (used by the runner)
+  fits the history, and when that trimmed turns or the fingerprint changed, strips
+  `thinking`/`redacted_thinking` from every Claude turn, current turn included, permanently.
+  `lastPrefixFingerprint` remembers the last one; a conversation's first request never strips.
+- `AnthropicChatProvider` (new): fingerprint = SHA-256 of the system block and the tools JSON as
+  sent; request options from `AnthropicModelStore` (`maxTokens` ≤ 64 000, clamped effort, adaptive
+  thinking and fallbacks from metadata; unknown model → adaptive on, fallbacks off). Mapping merges
+  same-role entries (one user message per tool round; an interrupted turn's results and the next
+  prompt share one), rebuilds other providers' turns as text + `tool_use` with ids mapped to
+  `[A-Za-z0-9_-]`, skips empty assistant entries. Logs `input_transformations` and cache reads at
+  debug.
+- **Deviations from the plan above:** (1) direct-action mode keeps its iteration cap but sends all
+  tools to Claude (`requiresStableToolSet`), since a smaller tool list would invalidate the
+  conversation's thinking on every "run …" prompt; (2) trimming still happens whenever the budget
+  needs it, not only at turn start; each trim strips thinking (rare with 1M-token contexts, and
+  `drop_block` covers anything missed).
+- Tests: `AnthropicTranscriptTests` (9); disabling the prefix-change strip turned its test red.
+  45/45 across seven AI suites.
 
 ## Open questions
 

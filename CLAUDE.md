@@ -330,6 +330,11 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
   OSC 7777 start/completion events, filters the echoed wrapper in the parser reader, and takes the
   exit code from `TerminalEngine`'s event callback. Remote filesystem helpers use the same command
   path. The chat pane renders pipe tables and collapses blank paragraph spacing.
+- **Claude's thinking blocks bind the conversation prefix** (system prompt, tools, earlier
+  messages). Claude turns are stored as `.anthropic(blocks:)` and replayed byte-for-byte; never
+  edit, reorder or re-encode them. Claude always gets the full tool set (direct-action mode only
+  caps iterations for it). A trim or tool-set change strips all thinking via
+  `AIConversationState.requestHistory`. See `Docs/Anthropic.md`.
 - **AI agent tools**: 10 exposed schemas — 8 in `AIToolDefinitions` (`get_command_output`,
   `get_current_screen`, `search_filesystem`, `search_file_contents`, `read_files`,
   `get_recent_commands`, `execute_command`, `execute_and_wait`) plus `apply_patch` (gated on
@@ -507,7 +512,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 | `Docs/featurelist.md` | **Long-term memory** — dated work log, phase progress, loop-log entries |
 | `Docs/RenderCost.md` | **Active spec.** What rendering actually costs — R0/R1/R2a done, **R2b open** (code merged, performance unvalidated). Read its "Measurement caveats" before any perf measurement |
 | `Docs/R2bBenchmarkResults.md` | R2b A/B evidence: exact commands and all raw reports for the six baseline/candidate pairs |
-| `Docs/Anthropic.md` | **Active.** Direct Anthropic Messages API as a second AI provider next to OpenRouter — Phases 0–3 done (spec, provider-neutral transcript, key store/catalog/model store, streaming client), Phase 4 (transcript replay rules) next. Read its "Rules that shape the design" before touching AI transcript code |
+| `Docs/Anthropic.md` | **Active.** Direct Anthropic Messages API as a second AI provider next to OpenRouter — Phases 0–4 done (spec, provider-neutral transcript, key store/catalog/model store, streaming client, replay rules), Phase 5 (provider selection, wiring, Settings UI) next. Read its "Rules that shape the design" before touching AI transcript code |
 | `Docs/Bug84.md` | One terminal renderer per session across tab switches and split changes (per-session model store) — **COMPLETE** (Phases 0–5); Phase 5 has the live memory numbers |
 | `Docs/bugs.md` | Bug and tech-debt register by subsystem/severity (counts in its Summary table); paths are pre-refactor |
 | `Docs/PhaseB.md` | Local Input V2 Phase B checklist (make byte-first local input the only path) — open |
@@ -539,13 +544,14 @@ and the session coordinators) has no spec file left; see `Docs/featurelist.md`.
 
 ## Next Session Plan
 
-**Active work: `Docs/Anthropic.md` — Anthropic as a second AI provider.** Phases 0–3 are done
-(spec; provider-neutral transcript behind `AIChatProviding`; key store, catalog, model store with
-effort; `AnthropicClient.complete` with the fixed-order request writer, SSE parsing, fallback echo
-rule and retries). Next is Phase 4: map the neutral transcript to `AnthropicMessage`s (an
-`AnthropicChatProvider: AIChatProviding`, storing `AnthropicResponse.content` as the turn's native
-reasoning), the prefix fingerprint with strip-on-change, trimming only at turn start, and no
-stripping on an Anthropic model switch. Read the spec's "Rules that shape the
+**Active work: `Docs/Anthropic.md` — Anthropic as a second AI provider.** Phases 0–4 are done:
+everything up to `AnthropicChatProvider` exists and is tested, but nothing is selectable in the
+app yet. Next is Phase 5: `AIProviderSelection` (`ai.provider.selected`, default OpenRouter),
+`AIAgentService`/`AIAgentRunner` snapshotting provider + model per turn (the runner still reads
+`service.modelStore`, the OpenRouter store, for selection and context length), `AppDependencies`
+building both stacks, and Settings → AI Assistant (provider picker, Anthropic key, model picker,
+effort, a note that refusal fallbacks are on). Also refresh the Anthropic catalog before first use,
+so fallbacks are sent for the default model. Read the spec's "Rules that shape the
 design" first: preserved thinking (append-only history, no forced `tool_choice`, no disabled
 thinking on Opus 5.5) and the legacy Keychain name `nl.budgetsoft.ProSSHMac.llm.anthropic`, which
 `LegacyProviderKeyCleanup` deletes.

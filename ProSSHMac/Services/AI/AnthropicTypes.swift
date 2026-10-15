@@ -129,6 +129,17 @@ nonisolated struct AnthropicBlock: Equatable, Sendable {
         Self(json: AnthropicJSON.object([("text", AnthropicJSON.string(text)), ("type", #""text""#)]))
     }
 
+    /// The block's `type` field.
+    var type: String? {
+        guard let data = json.data(using: .utf8),
+              let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
+        return object["type"] as? String
+    }
+
+    var isThinking: Bool {
+        type == "thinking" || type == "redacted_thinking"
+    }
+
     static func toolResult(toolUseID: String, content: String, isError: Bool = false) -> Self {
         var fields = [("content", AnthropicJSON.string(content))]
         if isError { fields.append(("is_error", "true")) }
