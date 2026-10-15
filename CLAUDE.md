@@ -441,6 +441,10 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
     runs one more `updateNSView` *after* `onDisappear`, which set the resize callback again and
     leaked every closed pop-out's renderer. Add any new view-supplied callback to both.
   - **The pop-out releases its model when its session closes**, as the main window prunes.
+  - **A model is created the first time its session is shown**, never for a session only listed
+    in the tab bar. A hidden renderer keeps only its glyph atlas: ~16 MB Metal and ~21 MB footprint
+    each (Debug, 2x), so there is deliberately no LRU cap. Detach frees the CRT/bloom textures, the
+    likely cause of the Bug 89 brightness flicker on reattach.
   - **Verify renderer leaks live with `heap <pid> | grep MetalTerminalRenderer`**, not `leaks`: the
     synthesized `objectWillChange` registers objects in Combine's global table, which hides such
     cycles from `leaks`. A test window can't reproduce a `WindowGroup` close.
@@ -499,7 +503,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 | `Docs/featurelist.md` | **Long-term memory** — dated work log, phase progress, loop-log entries |
 | `Docs/RenderCost.md` | **Active spec.** What rendering actually costs — R0/R1/R2a done, **R2b open** (code merged, performance unvalidated). Read its "Measurement caveats" before any perf measurement |
 | `Docs/R2bBenchmarkResults.md` | R2b A/B evidence: exact commands and all raw reports for the six baseline/candidate pairs |
-| `Docs/Bug84.md` | **Active.** One terminal renderer per session across tab switches and split changes (per-session model store) — Phases 0–4 done, Phase 5 (live validation) next |
+| `Docs/Bug84.md` | One terminal renderer per session across tab switches and split changes (per-session model store) — **COMPLETE** (Phases 0–5); Phase 5 has the live memory numbers |
 | `Docs/bugs.md` | Bug and tech-debt register by subsystem/severity (counts in its Summary table); paths are pre-refactor |
 | `Docs/PhaseB.md` | Local Input V2 Phase B checklist (make byte-first local input the only path) — open |
 | `Docs/OpenRouterArchitecture.md` | Current OpenRouter AI architecture, settings, transcript, and verification |
@@ -530,19 +534,23 @@ and the session coordinators) has no spec file left; see `Docs/featurelist.md`.
 
 ## Next Session Plan
 
-**Active work: `Docs/Bug84.md` Phase 5 (live validation, memory, close the bug).**
-Phases 0–4 are done. Phase 4 (2026-10-14) found and fixed two pop-out leaks (a callback cycle
-re-armed by the post-`onDisappear` update, now cleared in `TerminalMetalView.dismantleNSView`; a
-closed session's model kept by an open pop-out). Read the spec's "As built" notes first.
-Phase 5 needs a relaunched app and the user at the keyboard:
-1. The live list in the spec, including split-pane copy targeting the right pane.
-2. Re-measure hidden-renderer memory with many sessions (`heap <pid> | grep MetalTerminalRenderer`
-   plus `footprint`), and decide on an LRU cap only if the numbers call for one.
-3. Close Bug 84 in `Docs/bugs.md` and update the Summary counts.
+**Active work: Bug 88 + Bug 87 (tab selection vs. pane focus in split layouts).** Bug 84 is
+closed (2026-10-15). Both bugs are in `Docs/bugs.md` and touch the same interaction in
+`TerminalView`: tab selection, pane assignment and `onChange(of: paneManager.focusedPaneId)`.
+- Bug 88: in a split layout a tab click only changes `tabManager.selectedSessionID`; panes draw
+  `pane.sessionID`, so nothing new appears. Proposed: a tab already in a pane focuses that pane,
+  otherwise the session replaces the focused pane's session (keeping its store model/renderer).
+  Confirm that behaviour with the user before implementing.
+- Bug 87: Move to New Tab selects the remaining pane's session because the focus-change handler
+  overrides the selection made after `closePane`.
+- Extend `TerminalSurfaceIdentityTests` (it hosts the real `TerminalView`); fix both in one change.
+  Small enough to skip a feature spec; log in `Docs/featurelist.md`.
 
-**Queued after Bug 84:** Bug 87 (Move to New Tab selects the wrong tab, confirmed live; small),
-Bug 83 (registry audit), Bug 80 (one shared copy path and the draft/last-line fallback), Bug 86
-(colour emoji render as silhouettes; not diagnosed). All in `Docs/bugs.md`.
+**Queued after that:** Bug 89 (brightness flicker on every tab switch with CRT/bloom on; first
+check whether it goes away with CRT and bloom off and whether `240b260~1` shows it), Bug 83
+(registry audit), Bug 80 (one shared copy path and the draft/last-line fallback), Bug 86 (colour
+emoji render as silhouettes; not diagnosed). Optional: a shared glyph atlas, now the largest hidden
+renderer cost (`Docs/Bug84.md` Open questions).
 
 **Paused: `Docs/RenderCost.md` R2b — explain or bound the throughput variability.**
 R2b (fewer engine actor calls per batch and per publish) is merged on `master` but unvalidated:

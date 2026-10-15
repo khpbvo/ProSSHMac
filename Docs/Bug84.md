@@ -177,7 +177,7 @@ references, so that a freed renderer's address can't be reused by its replacemen
     Footprint 134 MB with the session, 214 MB with the pop-out open; after closing it, 165 MB and
     graphics 37 MB before the fix, **138 MB and 21 MB** with it (counts back to 1). A second pop-out
     left nothing behind; the main window kept drawing and copying.
-- [ ] **Phase 5: Live validation and memory policy.**
+- [x] **Phase 5: Live validation and memory policy.** Done 2026-10-15; results below the list.
   - On a relaunched build:
     - select text, switch tabs and back: the selection is still there and copy works
     - same for split/unsplit and maximize
@@ -189,6 +189,32 @@ references, so that a freed renderer's address can't be reused by its replacemen
     after Phase 2 call for one (see Phase 0 results).
   - Update `Docs/bugs.md` (Bug 84 fixed; Bug 80 status), `Docs/featurelist.md` and the CLAUDE.md
     gotchas: the surface model is owned by the store, not the view.
+  - **As built (2026-10-15).** Relaunched Debug build (process 02:01:46, binary 02:01:40), local
+    zsh sessions, the developer's CRT and bloom settings, user at the keyboard.
+    - **Passed:** selection and copy survive tab switch, split/unsplit and maximize; the scroll
+      position survives; with one session in two panes, Cmd+C and the context-menu Copy each copy
+      the pane they target.
+    - **Failed, filed separately:** every tab switch, including back to a visited tab, shows a
+      brief brightness change (Bug 89). Not diagnosed; the likely cause is the CRT/bloom textures
+      that detach frees, so the first frame after reattach has no CRT previous frame. The user
+      chose not to block Bug 84 on it.
+    - **Found:** in a split layout a tab click only changes the selected tab; no pane shows that
+      session (Bug 88, older than Bug 84). The 7 sessions first visited from a split therefore
+      had no renderer until the layout was unsplit.
+    - **Memory** (`heap <pid>` and `footprint`, Debug, 2x). Renderers exist only for sessions
+      that have been shown:
+
+      | State | Renderers | Metal (IOAccelerator) | `phys_footprint` |
+      |---|---|---|---|
+      | Launch, no session | 0 | — | 38 MB |
+      | 11 sessions, 3 shown | 3 | 57 MB | 308 MB |
+      | 11 sessions, all shown, 1 visible | 11 | 186 MB | 473 MB |
+
+      Each extra hidden renderer costs **~16 MB of Metal** (its one atlas page) and **~21 MB of
+      footprint**, as Phase 0 predicted. `leaks --traceTree` rooted all 11 models in the store's
+      dictionary (11 entries, 11 `zsh` children), so none leaked.
+    - **Decision: no LRU cap.** 20 hidden sessions cost ~400 MB, more only after heavy Unicode
+      output in each. A shared glyph atlas (Open questions) would save more than a cap.
 
 ## Phase 0 results (2026-10-14)
 

@@ -11,11 +11,11 @@ sequentially, and tagged by severity: **Critical**, **High**, **Medium**, or **L
 |----------|-------|-------|------|
 | Critical | 1     | 1     | 0    |
 | High     | 20    | 7     | 13   |
-| Medium   | 38    | 19    | 19   |
-| Low      | 28    | 5     | 23   |
-| **Total**| **87**| **32**| **55**|
+| Medium   | 39    | 20    | 19   |
+| Low      | 29    | 5     | 24   |
+| **Total**| **89**| **33**| **56**|
 
-Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13, Bug 85 fixed and Bugs 86-87 added 2026-10-14. The `**File:**` paths below predate the
+Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13, Bug 85 fixed and Bugs 86-87 added 2026-10-14, Bug 84 fixed and Bugs 88-89 added 2026-10-15. The `**File:**` paths below predate the
 refactors (`Views/` → `UI/`, `SSH/` → `Services/SSH/`, `Services/Security/` → `Services/`) and some
 files no longer exist — resolve by basename.
 
@@ -1367,7 +1367,8 @@ should exist at all (Terminal.app/iTerm2 copy nothing without a selection).
 **Progress (2026-10-14, Bug 84 Phase 3):** `TerminalSelectionCoordinator` is deleted. Each window
 reads the selection from its `TerminalSurfaceModelStore` (the main window by focused pane), and the
 main window's "copy any other visible pane's selection" fallback is gone. Still open: the two
-windows' duplicated copy functions, and the draft/last-line fallback.
+windows' duplicated copy functions, and the draft/last-line fallback. Bug 84 closed 2026-10-15
+without changing either.
 
 ---
 
@@ -1434,7 +1435,7 @@ registry itself (`TerminalSelectionCoordinator`) was deleted in Bug 84 Phase 3.
 
 ---
 
-### Bug 84 — Tab Switches and Split Changes Rebuild the Terminal Surface (Medium)
+### Bug 84 — ~~Tab Switches and Split Changes Rebuild the Terminal Surface~~ [FIXED] (Medium)
 
 **Files:** `UI/Terminal/TerminalView.swift` (`macOSBody`), `UI/Terminal/SplitNodeView.swift`,
 `UI/Terminal/MetalTerminalSessionSurface.swift`
@@ -1456,7 +1457,13 @@ live: the selection, copy and scroll position survive. Phase 3 removed
 `TerminalSelectionCoordinator`: copy and select-all read the store's model for the focused pane.
 Phase 4 checked the pop-out live and fixed two pop-out leaks: closing a pop-out leaked its
 renderer through a callback cycle (`TerminalMetalView.dismantleNSView` now clears the callbacks),
-and a pop-out left open on a closed session kept its model. Still open: Phase 5 validation.
+and a pop-out left open on a closed session kept its model.
+
+**Fixed (2026-10-15, Phase 5):** validated live on a relaunched build: selection, copy and scroll
+position survive tab switch, split/unsplit and maximize, and split-pane copy targets the right
+pane. Hidden renderers cost ~16 MB of Metal (~21 MB footprint) each, so no cap was added. Two
+issues found during validation are filed separately: Bug 88 (a tab click in a split layout shows
+nothing new) and Bug 89 (a brightness flicker on every tab switch).
 
 **Plan:** `Docs/Bug84.md` — move model ownership out of the view into a per-session store, with the
 Bug 81 identity rule for attach/detach.
@@ -1531,6 +1538,43 @@ is shown.
 **Expected:** the moved session's tab is selected. Likely fix: select after the focus change has
 been applied, or have the focus handler skip a pane change caused by closing a pane. Test: the
 moved session is selected once the layout settles.
+
+---
+
+### Bug 88 — In a Split Layout, Clicking a Tab Does Not Show Its Session (Medium)
+
+**Files:** `UI/Terminal/TerminalView.swift` (`macOSBody` split branch, `sessionForPane`),
+`UI/Terminal/TerminalSessionTabBar.swift`
+
+Found 2026-10-15 during Bug 84 Phase 5, older than Bug 84. With more than one pane, the terminal
+area draws each pane's assigned session (`pane.sessionID`). A tab click only calls
+`tabManager.select(sessionID:)`; nothing assigns that session to a pane. So the tab highlights but
+both panes keep their sessions; the user saw "only the first 2 are visible, clicking number 9
+doesn't show it". Unsplitting shows the selected tab again.
+
+**Expected** (iTerm2 and most split-pane terminals): clicking the tab of a session already in a
+pane focuses that pane; otherwise the session replaces the focused pane's session. Fix together
+with Bug 87, which is the same interaction between tab selection and
+`onChange(of: paneManager.focusedPaneId)`. Test: in a two-pane layout, selecting a third tab shows
+it in the focused pane and keeps its renderer.
+
+---
+
+### Bug 89 — Brightness Flicker on Every Tab Switch (Low)
+
+**Files:** `UI/Terminal/MetalTerminalSessionSurface.swift` (`detach`),
+`Terminal/Renderer/MetalTerminalRenderer+PostProcessing.swift` (`releaseOffscreenTextures`)
+
+Seen 2026-10-15 during Bug 84 Phase 5, with CRT and bloom enabled. Switching to a tab, including
+one already visited, shows a brief change in brightness before the terminal settles. It is not a
+blank frame.
+
+**Not yet diagnosed.** Likely cause: detach (Bug 84 Phase 2) frees the post-processing textures and
+resets `hasCapturedPreviousFrame`, so the first frames after reattach draw without the CRT previous
+frame and with fresh bloom textures. Check first whether it goes away with CRT and bloom off, and
+whether the build before Bug 84 (`240b260~1`, a new renderer per switch) showed it too. If it is
+the released textures, the options are keeping them for recently hidden sessions or seeding the
+previous frame on reattach; keeping them costs ~20 MB per hidden session at full-window size.
 
 ---
 
