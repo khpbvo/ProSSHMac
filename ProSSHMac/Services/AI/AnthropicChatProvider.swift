@@ -40,15 +40,17 @@ struct AnthropicChatProvider: AIChatProviding {
             request(model: model, systemPrompt: systemPrompt, messages: messages, tools: tools),
             onEvent: onEvent
         )
+        // Notice level, so macOS keeps these for `log show` after the fact. Counts and status
+        // only; never request or response content.
         for entry in response.inputTransformations {
             if case let .object(fields) = entry,
                case let .string(type)? = fields["type"] {
                 let reason: String
                 if case let .string(value)? = fields["reason"] { reason = value } else { reason = "unknown" }
-                Self.logger.debug("input_transformation type=\(type, privacy: .public) reason=\(reason, privacy: .public)")
+                Self.logger.notice("input_transformation type=\(type, privacy: .public) reason=\(reason, privacy: .public)")
             }
         }
-        Self.logger.debug(
+        Self.logger.notice(
             "usage model=\(response.model, privacy: .public) input=\(response.usage?.inputTokens ?? -1) cache_read=\(response.usage?.cacheReadInputTokens ?? -1) output=\(response.usage?.outputTokens ?? -1)"
         )
         return AIAssistantTurn(

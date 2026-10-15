@@ -99,7 +99,7 @@ final class AnthropicClient: AnthropicServicing {
                 let (bytes, response) = try await session.bytes(for: urlRequest)
                 guard let http = response as? HTTPURLResponse else { throw AnthropicError.invalidResponse }
                 if let requestID = http.value(forHTTPHeaderField: "request-id") {
-                    Self.logger.debug("messages request_id=\(requestID, privacy: .public) status=\(http.statusCode)")
+                    Self.logger.notice("messages request_id=\(requestID, privacy: .public) status=\(http.statusCode)")
                 }
                 guard (200...299).contains(http.statusCode) else {
                     let message = errorMessage(from: try await readAll(bytes))
