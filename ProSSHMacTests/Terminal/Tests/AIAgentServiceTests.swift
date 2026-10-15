@@ -128,6 +128,93 @@ final class AIAgentServiceTests: XCTestCase {
         XCTAssertFalse(client.requests[2].messages.contains { $0.content == "Noted: dedupe the clones" })
     }
 
+    // MARK: - Reaching every open session
+
+    private struct Fleet {
+        let service: AIAgentService
+        let client: MockOpenRouterService
+        let session: MockAgentSessionProvider
+        let second: UUID
+        let third: UUID
+        let closed: UUID
+    }
+
+    private func fleet() async throws -> Fleet {
+        let client = MockOpenRouterService()
+        let session = MockAgentSessionProvider()
+        let second = UUID(), third = UUID(), closed = UUID()
+        session.sessions += [
+            Session(id: second, kind: .ssh(hostID: UUID()), hostLabel: "Testserv2", username: "kevin", hostname: "192.168.2.33", port: 22, state: .connected),
+            Session(id: third, kind: .ssh(hostID: UUID()), hostLabel: "Testserv3", username: "kevin", hostname: "192.168.2.19", port: 22, state: .connected),
+            Session(id: closed, kind: .ssh(hostID: UUID()), hostLabel: "Testserv9", username: "kevin", hostname: "192.168.2.99", port: 22, state: .disconnected),
+        ]
+        let service = AIAgentService(openRouterClient: client, sessionProvider: session, modelStore: try await store(client: client))
+        return Fleet(service: service, client: client, session: session, second: second, third: third, closed: closed)
+    }
+
+    private func runCommand(_ fleet: Fleet, target: String, broadcast: [UUID]? = nil) async throws -> String {
+        fleet.client.enqueue(toolCompletion("execute_and_wait", arguments: #"{"command":"hostname","timeout_seconds":10,"target_session":\#(target)}"#))
+        fleet.client.enqueue(completion("done"))
+        _ = try await fleet.service.generateReply(sessionID: fleet.session.sessionID, prompt: "check", broadcastSessionIDs: broadcast)
+        let request = try XCTUnwrap(fleet.client.requests.last)
+        return try XCTUnwrap(request.messages.last { $0.role == "tool" }?.content)
+    }
+
+    func testEveryTurnListsTheOpenSessions() async throws {
+        let fleet = try await fleet()
+        fleet.client.enqueue(completion("ok"))
+        _ = try await fleet.service.generateReply(sessionID: fleet.session.sessionID, prompt: "hi", broadcastSessionIDs: [fleet.session.sessionID, fleet.second])
+        let user = try XCTUnwrap(fleet.client.requests.last?.messages.first { $0.role == "user" }?.content)
+        XCTAssertTrue(user.contains("[Open sessions — pass an id as target_session; null targets the 2 broadcast sessions]"))
+        XCTAssertTrue(user.contains("- \(fleet.session.sessionID.uuidString): Local: zsh — local shell · focused · broadcast"))
+        XCTAssertTrue(user.contains("- \(fleet.second.uuidString): Testserv2 — kevin@192.168.2.33:22 · broadcast"))
+        XCTAssertTrue(user.contains("- \(fleet.third.uuidString): Testserv3 — kevin@192.168.2.19:22\n"))
+        XCTAssertFalse(user.contains(fleet.closed.uuidString), "disconnected sessions are not offered")
+    }
+
+    func testUntargetedCommandsGoToTheFocusedSessionOrTheBroadcastSet() async throws {
+        let single = try await fleet()
+        _ = try await runCommand(single, target: "null")
+        XCTAssertEqual(single.session.commandSessions, [single.session.sessionID])
+
+        let broadcasting = try await fleet()
+        _ = try await runCommand(broadcasting, target: "null", broadcast: [broadcasting.session.sessionID, broadcasting.second])
+        XCTAssertEqual(Set(broadcasting.session.commandSessions), [broadcasting.session.sessionID, broadcasting.second])
+    }
+
+    func testAnyOpenSessionCanBeTargetedWithOrWithoutBroadcast() async throws {
+        let single = try await fleet()
+        _ = try await runCommand(single, target: #""\#(single.third.uuidString)""#)
+        XCTAssertEqual(single.session.commandSessions, [single.third])
+
+        let broadcasting = try await fleet()
+        _ = try await runCommand(broadcasting, target: #""\#(broadcasting.third.uuidString)""#, broadcast: [broadcasting.session.sessionID, broadcasting.second])
+        XCTAssertEqual(broadcasting.session.commandSessions, [broadcasting.third], "outside the broadcast set")
+    }
+
+    func testUnknownOrClosedSessionsAreRefusedBeforeRunning() async throws {
+        let fleet = try await fleet()
+        let closed = try await runCommand(fleet, target: #""\#(fleet.closed.uuidString)""#)
+        XCTAssertTrue(closed.contains(#""ok":false"#))
+        XCTAssertTrue(closed.contains("list_sessions"))
+        let unknown = try await runCommand(fleet, target: #""not-a-session""#)
+        XCTAssertTrue(unknown.contains("Unknown or disconnected session not-a-session"))
+        XCTAssertTrue(fleet.session.commandSessions.isEmpty)
+    }
+
+    func testListSessionsReturnsOpenSessionsAndDefaults() async throws {
+        let fleet = try await fleet()
+        fleet.client.enqueue(toolCompletion("list_sessions", arguments: "{}"))
+        fleet.client.enqueue(completion("done"))
+        _ = try await fleet.service.generateReply(sessionID: fleet.session.sessionID, prompt: "who is open?")
+        let output = try XCTUnwrap(fleet.client.requests.last?.messages.last { $0.role == "tool" }?.content)
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any])
+        let sessions = try XCTUnwrap(json["sessions"] as? [[String: Any]])
+        XCTAssertEqual(sessions.compactMap { $0["label"] as? String }, ["Local: zsh", "Testserv2", "Testserv3"])
+        XCTAssertEqual(sessions.first?["focused"] as? Bool, true)
+        XCTAssertEqual(json["default_targets"] as? [String], [fleet.session.sessionID.uuidString])
+    }
+
     // MARK: - Anthropic provider
 
     private struct AnthropicStack {
@@ -242,6 +329,7 @@ private final class MockAgentSessionProvider: AIAgentSessionProviding {
     var bytesReceivedBySessionID: [UUID: Int64]
     var bytesSentBySessionID: [UUID: Int64]
     var sentCommands: [String] = []
+    var commandSessions: [UUID] = []
     var commandBlocks: [CommandBlock]
     var commandOutputByBlockID: [UUID: String]
     var simulatedExecuteAndWaitOutput: String = ""
@@ -305,6 +393,7 @@ private final class MockAgentSessionProvider: AIAgentSessionProviding {
         timeoutSeconds: TimeInterval
     ) async -> CommandExecutionResult {
         sentCommands.append(command)
+        commandSessions.append(sessionID)
 
         if !simulatedExecuteAndWaitResultsQueue.isEmpty {
             return simulatedExecuteAndWaitResultsQueue.removeFirst()

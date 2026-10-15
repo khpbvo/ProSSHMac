@@ -67,24 +67,24 @@ import os.log
         let screenLines = service.sessionProvider.shellBuffers[sessionID] ?? []
         let screenSnapshot = screenLines.suffix(20).joined(separator: "\n")
 
-        // Build session map context for broadcast mode
-        var broadcastPreamble = ""
-        if let ctx = broadcastContext, ctx.isBroadcasting {
-            let sessionMap = ctx.allSessionIDs.map { id in
-                let label = ctx.sessionLabels[id] ?? "Unknown"
-                let isPrimary = id == ctx.primarySessionID ? " (primary)" : ""
-                return "  - \(id.uuidString): \(label)\(isPrimary)"
-            }.joined(separator: "\n")
-            broadcastPreamble = "[Active broadcast sessions — \(ctx.allSessionIDs.count) sessions]\n\(sessionMap)\n\n"
-        }
+        // Every open session can be targeted; the list tells the model their ids each turn.
+        let broadcastIDs = Set(broadcastContext.map { $0.isBroadcasting ? $0.allSessionIDs : [] } ?? [])
+        let sessionsPreamble = AISessionDirectory.preamble(
+            entries: AISessionDirectory.entries(
+                sessions: service.sessionProvider.sessions,
+                focusedID: sessionID,
+                broadcastIDs: broadcastIDs
+            ),
+            broadcasting: !broadcastIDs.isEmpty
+        )
 
         // The chat's memory spans sessions, so each turn says which pane it was sent from.
-        let focusLine = "[Focused session: \(Self.describe(focusedSession))]\n"
+        let focusLine = "[Focused session: \(AISessionDirectory.describe(focusedSession))]\n"
         let userMessageText: String
         if !screenSnapshot.isEmpty {
-            userMessageText = focusLine + broadcastPreamble + "[Current terminal screen — use this to identify the environment, OS, device type, and current path/mode before acting]\n```\n\(screenSnapshot)\n```\n\n\(trimmedPrompt)"
+            userMessageText = focusLine + sessionsPreamble + "[Current terminal screen — use this to identify the environment, OS, device type, and current path/mode before acting]\n```\n\(screenSnapshot)\n```\n\n\(trimmedPrompt)"
         } else {
-            userMessageText = focusLine + broadcastPreamble + trimmedPrompt
+            userMessageText = focusLine + sessionsPreamble + trimmedPrompt
         }
 
         let systemPrompt = AIToolDefinitions.developerPrompt()
@@ -164,13 +164,6 @@ import os.log
             "[\(traceID, privacy: .public)] turn_failed_tool_loop session=\(AIToolDefinitions.shortSessionID(sessionID), privacy: .public) limit=\(iterationLimit) total_ms=\(totalMs)"
         )
         throw AIAgentServiceError.toolLoopExceeded(limit: iterationLimit)
-    }
-
-    /// "Testserv4 — kevin@192.168.2.34:22", or "Local shell — <label>".
-    static func describe(_ session: Session) -> String {
-        session.isLocal
-            ? "Local shell — \(session.hostLabel)"
-            : "\(session.hostLabel) — \(session.username)@\(session.hostname):\(session.port)"
     }
 
     nonisolated private static func forward(

@@ -339,10 +339,12 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
   edit, reorder or re-encode them. Claude always gets the full tool set (direct-action mode only
   caps iterations for it). A trim or tool-set change strips all thinking via
   `AIConversationState.requestHistory`. See `Docs/Anthropic.md`.
-- **AI agent tools**: 10 exposed schemas — 8 in `AIToolDefinitions` (`get_command_output`,
+- **AI agent tools**: 11 exposed schemas — 9 in `AIToolDefinitions` (`get_command_output`,
   `get_current_screen`, `search_filesystem`, `search_file_contents`, `read_files`,
-  `get_recent_commands`, `execute_command`, `execute_and_wait`) plus `apply_patch` (gated on
-  `patchToolEnabled`) and `send_input`. The handler also accepts the legacy/internal names
+  `get_recent_commands`, `execute_command`, `execute_and_wait`, `list_sessions`) plus `apply_patch`
+  (gated on `patchToolEnabled`) and `send_input`. `target_session` may name **any connected
+  session** (validated before dispatch, `AISessionDirectory`); null = broadcast set when
+  broadcasting, else the focused session. Every turn's user message lists the open sessions. The handler also accepts the legacy/internal names
   `read_file_chunk`, `get_session_info`, and the `search_terminal_history` alias.
   Error format: `{ok:false, error, hint}`.
 - **Direct-action mode**: prompts starting `run `/`execute `/`cd ` filter to 8 tools and cap
@@ -519,7 +521,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 | `Docs/featurelist.md` | **Long-term memory** — dated work log, phase progress, loop-log entries |
 | `Docs/RenderCost.md` | **Active spec.** What rendering actually costs — R0/R1/R2a done, **R2b open** (code merged, performance unvalidated). Read its "Measurement caveats" before any perf measurement |
 | `Docs/R2bBenchmarkResults.md` | R2b A/B evidence: exact commands and all raw reports for the six baseline/candidate pairs |
-| `Docs/NetworkCopilot.md` | **Active.** Copilot reaches every open session, one memory per chat, a router/switch command path, and network-specialist skills (`load_skill`). Phase 1 (one chat, one memory) done, Phase 2 (reach every open session) next |
+| `Docs/NetworkCopilot.md` | **Active.** Copilot reaches every open session, one memory per chat, a router/switch command path, and network-specialist skills (`load_skill`). Phases 1–2 done (one memory per chat; every open session reachable), Phase 3 (router/switch command path) next |
 | `Docs/Anthropic.md` | Direct Anthropic Messages API as a second AI provider next to OpenRouter — **COMPLETE** (Phases 0–6, validated live). Read its "Rules that shape the design" before touching AI transcript code |
 | `Docs/Bug84.md` | One terminal renderer per session across tab switches and split changes (per-session model store) — **COMPLETE** (Phases 0–5); Phase 5 has the live memory numbers |
 | `Docs/bugs.md` | Bug and tech-debt register by subsystem/severity (counts in its Summary table); paths are pre-refactor |
@@ -552,8 +554,10 @@ and the session coordinators) has no spec file left; see `Docs/featurelist.md`.
 
 ## Next Session Plan
 
-**Active work: `Docs/NetworkCopilot.md` Phase 2 — reach every open session.** Phase 1 (one
-chat, one memory: `conversationID`) is done. Found live
+**Active work: `Docs/NetworkCopilot.md` Phase 3 — device CLI command path.** Phases 1–2 are
+done (one memory per chat via `conversationID`; every connected session listed each turn and
+targetable, `list_sessions`). Phase 3 starts by verifying what today's tools do on a router or
+switch CLI (needs the user's device or a lab image). Found live
 (2026-10-15): the copilot reached only the focused pane (broadcast off; it gets no session list
 otherwise) and forgot the task when focus moved (chat is per window, memory per session); device
 CLIs can't use `execute_and_wait` (POSIX wrapper). Decisions: reach all open sessions, one memory

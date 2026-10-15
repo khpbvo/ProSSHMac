@@ -45,9 +45,12 @@ enum AIToolDefinitions {
         - Never expose secrets, API keys, passwords, or private keys in your responses.
         - If a command could have irreversible side effects, mention the risk and ask for confirmation before executing.
 
-        BROADCAST:
-        - Pass target_session=null to target ALL broadcast sessions, or a session ID to target one. In single-session mode, null targets the active session.
-        - When a command fails on some sessions, use target_session to fix individually. Use parallel tool calls for independent operations on different sessions.
+        SESSIONS:
+        - Each turn lists the open sessions with their ids, which one is focused and which are broadcasting. You can act on any of them: pass its id as target_session.
+        - target_session=null means the default: all broadcast sessions when the user is broadcasting, otherwise the focused session.
+        - Sessions can open or close during a task; call list_sessions for the current list.
+        - To compare hosts, run the same read-only command on each (parallel tool calls) and compare the outputs before changing anything. Change one host, verify it, then do the rest.
+        - When a command fails on some sessions, fix those individually with target_session.
 
         FORMAT:
         - Use readable markdown with short paragraphs, bullet points, and code blocks.
@@ -66,7 +69,7 @@ enum AIToolDefinitions {
 
     static let targetSessionProperty: LLMJSONValue = .object([
         "type": .array([.string("string"), .string("null")]),
-        "description": .string("Session ID or null (all broadcast sessions / primary in single mode)."),
+        "description": .string("Id of an open session (from the open-sessions list or list_sessions), or null for the default targets: all broadcast sessions when broadcasting, otherwise the focused session."),
     ])
 
     static func buildToolDefinitions(patchToolEnabled: Bool = true) -> [LLMToolDefinition] {
@@ -256,6 +259,17 @@ enum AIToolDefinitions {
                 ]),
                 strict: true
             ),
+            LLMToolDefinition(
+                name: "list_sessions",
+                description: "List every open terminal session you can act on: id (use as target_session), label, endpoint (user@host:port or local shell), whether it is focused or broadcasting, and the default targets for target_session=null. The same list arrives with each user message; call this when sessions may have opened or closed since.",
+                parameters: .object([
+                    "type": .string("object"),
+                    "properties": .object([:]),
+                    "required": .array([]),
+                    "additionalProperties": commonNoExtraProperties,
+                ]),
+                strict: true
+            ),
         ] + (patchToolEnabled ? [ApplyPatchToolDefinition.definition()] : [])
           + [SendInputToolDefinition.definition()]
     }
@@ -268,7 +282,7 @@ enum AIToolDefinitions {
         let allowedNames: Set<String> = [
             "execute_command", "execute_and_wait", "get_current_screen",
             "get_recent_commands", "get_command_output", "read_files",
-            "apply_patch", "send_input",
+            "apply_patch", "send_input", "list_sessions",
         ]
         let filtered = tools.filter { allowedNames.contains($0.name) }
         return filtered.isEmpty ? tools : filtered

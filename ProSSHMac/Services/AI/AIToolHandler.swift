@@ -69,7 +69,27 @@ struct BroadcastContext: Sendable {
             throw AIAgentServiceError.sessionNotFound
         }
 
+        // Any connected session can be targeted by id; anything else is refused before it runs.
+        if let target = Self.optionalString(key: "target_session", in: arguments), !target.isEmpty {
+            let isOpen = UUID(uuidString: target).map { id in
+                provider.sessions.contains { $0.id == id && $0.state == .connected }
+            } ?? false
+            guard isOpen else {
+                return AIToolDefinitions.errorResult(
+                    "Unknown or disconnected session \(target)",
+                    hint: "Call list_sessions for the ids of the open sessions."
+                )
+            }
+        }
+
         switch toolCall.name {
+        case "list_sessions":
+            let broadcastIDs = Set(broadcastContext.map { $0.isBroadcasting ? $0.allSessionIDs : [] } ?? [])
+            return AIToolDefinitions.jsonString(from: AISessionDirectory.json(
+                entries: AISessionDirectory.entries(sessions: provider.sessions, focusedID: sessionID, broadcastIDs: broadcastIDs),
+                defaultTargets: AISessionDirectory.defaultTargets(focusedID: sessionID, broadcastContext: broadcastContext)
+            ))
+
         case "get_command_output":
             let blockIDRaw = try Self.requiredString(
                 key: "block_id",
@@ -1090,18 +1110,13 @@ struct BroadcastContext: Sendable {
         primarySessionID: UUID,
         broadcastContext: BroadcastContext?
     ) -> [UUID] {
-        // 1. Explicit target_session in arguments → that one session
+        // An explicit target_session is any open session (validated before dispatch), also one
+        // outside the broadcast set; otherwise the default targets.
         if let targetStr = Self.optionalString(key: "target_session", in: arguments),
-           let targetID = UUID(uuidString: targetStr),
-           broadcastContext?.allSessionIDs.contains(targetID) ?? true {
+           let targetID = UUID(uuidString: targetStr) {
             return [targetID]
         }
-        // 2. Broadcasting + no explicit target → all sessions
-        if let ctx = broadcastContext, ctx.isBroadcasting {
-            return ctx.allSessionIDs
-        }
-        // 3. Default → primary session only
-        return [primarySessionID]
+        return AISessionDirectory.defaultTargets(focusedID: primarySessionID, broadcastContext: broadcastContext)
     }
 
     func formatBroadcastResult(

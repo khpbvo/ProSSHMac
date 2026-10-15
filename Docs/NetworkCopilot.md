@@ -75,7 +75,7 @@ new `AISkillLibraryTests`, `DeviceCLITests`.
   - Tests: two prompts with different focused sessions share history; Clear starts fresh;
     existing `AIAgentServiceTests` adapted.
 
-- [ ] **Phase 2: Reach every open session.**
+- [x] **Phase 2: Reach every open session.** Done 2026-10-15; see "Phase 2 as built".
   - Session map in each turn's user message (all connected sessions; focused and broadcast
     flags); `list_sessions` tool; `resolveTargetSessions` validates ids against connected
     sessions (unknown/closed id → `{ok:false}` with the map as hint) and defaults to the
@@ -133,6 +133,22 @@ new `AISkillLibraryTests`, `DeviceCLITests`.
 - Tests: `AIAgentServiceTests` +1 (memory follows the chat across focused sessions, each turn names
   its session, clear drops it), `TerminalAIAssistantViewModelTests` +1 and the clear test updated;
   76/76 across nine suites.
+
+## Phase 2 as built (2026-10-15)
+
+- `AISessionDirectory` (new): connected sessions (focused first, then by label) with endpoint and
+  focused/broadcast flags; the per-turn preamble (`[Open sessions — pass an id as target_session;
+  null targets …]` + one line per session), the `list_sessions` JSON, and the default targets.
+  It replaced the broadcast-only session map; the Phase 1 focus line moved its `describe` here.
+- `AIToolHandler`: a non-null `target_session` that isn't a connected session is refused before
+  dispatch (`{ok:false}`, hint to call `list_sessions`); an explicit id now works for any open
+  session, also outside the broadcast set; new `list_sessions` case.
+- `AIToolDefinitions`: `list_sessions` schema (also allowed in direct-action mode), a clearer
+  `target_session` description, and the developer prompt's BROADCAST section rewritten as SESSIONS
+  (compare read-only first, change one host, verify, then the rest).
+- Tests: `AIAgentServiceTests` +5 (session list per turn, defaults with and without broadcast,
+  explicit targets in and outside broadcast, refusal of unknown/closed ids — red with validation
+  disabled — and `list_sessions`). 81/81 across nine suites.
 
 ## Open questions
 
