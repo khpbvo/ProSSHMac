@@ -94,7 +94,7 @@ protocol AIChatProviding: Sendable {
 // MARK: - JSON Value
 
 /// Generic JSON value type for tool parameter schemas and reasoning blocks.
-enum LLMJSONValue: Sendable, Equatable {
+nonisolated enum LLMJSONValue: Sendable, Equatable {
     case string(String)
     case number(Double)
     case bool(Bool)
@@ -103,7 +103,7 @@ enum LLMJSONValue: Sendable, Equatable {
     case null
 }
 
-extension LLMJSONValue: Codable {
+nonisolated extension LLMJSONValue: Codable {
     init(from decoder: any Decoder) throws {
         let container = try decoder.singleValueContainer()
         if container.decodeNil() {

@@ -14,12 +14,10 @@ final class AnthropicSettingsTests: XCTestCase {
     }
 
     private func client(key: String? = "sk-ant-test") -> AnthropicClient {
-        let config = URLSessionConfiguration.ephemeral
-        config.protocolClasses = [AnthropicURLProtocol.self]
-        return AnthropicClient(
+        AnthropicClient(
             keyStore: AnthropicFixtureKeyStore(key: key),
-            session: URLSession(configuration: config),
-            baseURL: URL(string: "https://anthropic.fixture.example/v1/")!
+            session: AnthropicURLProtocol.session(),
+            baseURL: AnthropicURLProtocol.baseURL
         )
     }
 
@@ -64,7 +62,8 @@ final class AnthropicSettingsTests: XCTestCase {
 
         let requests = AnthropicURLProtocol.requests
         XCTAssertEqual(requests.count, 2)
-        for request in requests {
+        for recorded in requests {
+            let request = recorded.request
             XCTAssertEqual(request.value(forHTTPHeaderField: "x-api-key"), "sk-ant-test")
             XCTAssertEqual(request.value(forHTTPHeaderField: "anthropic-version"), "2023-06-01")
             XCTAssertEqual(request.value(forHTTPHeaderField: "anthropic-beta"), "server-side-fallback-2026-06-01")
@@ -203,66 +202,9 @@ private final class AnthropicCatalogFixture: AnthropicServicing {
         if let failure { throw failure }
         return models
     }
+    func complete(_ request: AnthropicRequest, onEvent: @escaping @Sendable (LLMStreamEvent) -> Void) async throws -> AnthropicResponse {
+        throw AnthropicError.invalidResponse
+    }
 }
 
-private final class AnthropicFixtureKeyStore: AIAPIKeyStoring {
-    let key: String?
-    init(key: String?) { self.key = key }
-    func loadAPIKey() throws -> String? { key }
-    func saveAPIKey(_ key: String) throws {}
-    func deleteAPIKey() throws {}
-}
-
-/// Serves canned bodies keyed by path and query, and records every request it sees.
-private final class AnthropicURLProtocol: URLProtocol {
-    private struct Fixture {
-        var body: Data
-        var status: Int
-    }
-    private static let lock = NSLock()
-    nonisolated(unsafe) private static var fixtures: [String: Fixture] = [:]
-    nonisolated(unsafe) private static var recorded: [URLRequest] = []
-
-    static func reset() {
-        lock.lock(); defer { lock.unlock() }
-        fixtures = [:]
-        recorded = []
-    }
-
-    static func set(_ pathAndQuery: String, body: String, status: Int = 200) {
-        lock.lock(); defer { lock.unlock() }
-        fixtures[pathAndQuery] = Fixture(body: Data(body.utf8), status: status)
-    }
-
-    static var requests: [URLRequest] {
-        lock.lock(); defer { lock.unlock() }
-        return recorded
-    }
-
-    private static func key(for url: URL) -> String {
-        let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-        let query = components?.percentEncodedQuery.map { "?\($0)" } ?? ""
-        return (components?.path ?? "") + query
-    }
-
-    override class func canInit(with request: URLRequest) -> Bool { request.url?.host == "anthropic.fixture.example" }
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-    override func startLoading() {
-        guard let url = request.url else {
-            client?.urlProtocol(self, didFailWithError: URLError(.badURL)); return
-        }
-        Self.lock.lock()
-        Self.recorded.append(request)
-        let fixture = Self.fixtures[Self.key(for: url)]
-        Self.lock.unlock()
-        guard let fixture,
-              let response = HTTPURLResponse(url: url, statusCode: fixture.status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"]) else {
-            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse)); return
-        }
-        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: fixture.body)
-        client?.urlProtocolDidFinishLoading(self)
-    }
-    override func stopLoading() {}
-}
 #endif

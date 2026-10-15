@@ -205,14 +205,9 @@ final class OpenRouterClient: OpenRouterServicing {
         var usage: OpenRouterCompletion.Usage?
         var finishReason: String?
         var sawDone = false
-        var dataLines: [String] = []
-        var lineBytes = Data()
-        var lastWasCR = false
+        var decoder = ServerSentEventDecoder()
 
-        func consumeEvent() throws {
-            guard !dataLines.isEmpty else { return }
-            let dataText = dataLines.joined(separator: "\n")
-            dataLines.removeAll(keepingCapacity: true)
+        func consumeEvent(_ dataText: String) throws {
             if dataText == "[DONE]" { sawDone = true; return }
             guard let data = dataText.data(using: .utf8),
                   let chunk = try? JSONDecoder().decode(StreamChunk.self, from: data) else {
@@ -254,36 +249,15 @@ final class OpenRouterClient: OpenRouterServicing {
             }
         }
 
-        func consumeLine() throws {
-            guard let line = String(data: lineBytes, encoding: .utf8) else {
-                throw OpenRouterError.invalidResponse
+        do {
+            for try await byte in bytes {
+                try Task.checkCancellation()
+                if let event = try decoder.consume(byte) { try consumeEvent(event) }
             }
-            lineBytes.removeAll(keepingCapacity: true)
-            if line.isEmpty {
-                try consumeEvent()
-            } else if line.hasPrefix("data:") {
-                var value = String(line.dropFirst(5))
-                if value.hasPrefix(" ") { value.removeFirst() }
-                dataLines.append(value)
-            }
+            if let event = try decoder.finish() { try consumeEvent(event) }
+        } catch is ServerSentEventDecoder.DecodingError {
+            throw OpenRouterError.invalidResponse
         }
-
-        for try await byte in bytes {
-            try Task.checkCancellation()
-            if byte == 13 {
-                try consumeLine()
-                lastWasCR = true
-            } else if byte == 10 {
-                if !lastWasCR { try consumeLine() }
-                lastWasCR = false
-            } else {
-                lastWasCR = false
-                lineBytes.append(byte)
-                if lineBytes.count > 4_000_000 { throw OpenRouterError.invalidResponse }
-            }
-        }
-        if !lineBytes.isEmpty { try consumeLine() }
-        try consumeEvent()
         guard sawDone, let responseID, let finishReason else { throw OpenRouterError.invalidResponse }
         if finishReason == "length" { throw OpenRouterError.incompleteResponse }
         if finishReason == "error" { throw OpenRouterError.streamError("Generation stopped with an error") }

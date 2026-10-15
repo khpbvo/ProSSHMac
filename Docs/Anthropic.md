@@ -181,7 +181,7 @@ Changed: `AIConversationContext.swift` (neutral transcript), `AISharedTypes.swif
   - Exit: `AnthropicSettingsTests` (mocked `URLProtocol`): pagination, capability parsing,
     selection persistence, unavailable-after-refresh, outage keeps selection, effort clamping.
 
-- [ ] **Phase 3: `AnthropicClient` — request building and the SSE stream.**
+- [x] **Phase 3: `AnthropicClient` — request building and the SSE stream.** Done 2026-10-15; see "Phase 3 as built".
   - Raw-JSON request writer: fixed fields encoded with `JSONEncoder`, replayed assistant blocks
     and tool inputs spliced in verbatim.
   - Byte-oriented SSE parser (reuse the OpenRouter line splitter): text, thinking (+signature),
@@ -202,7 +202,8 @@ Changed: `AIConversationContext.swift` (neutral transcript), `AISharedTypes.swif
     built from text/tool calls for turns another provider wrote), all tool results of a round in
     one user message, `INVALID_JSON` error results.
   - Prefix fingerprint; strip all thinking on change; trim only at turn start; no stripping on
-    Anthropic model switch; fallback-boundary echo rule; `input_transformations` debug logging.
+    Anthropic model switch; `input_transformations` debug logging. (The fallback echo rule moved
+    into Phase 3: `AnthropicResponse.content` already applies it.)
   - Exit: `AnthropicTranscriptTests`: append-only replay is byte-identical across iterations; a
     tool-set change strips thinking once; trimming strips thinking from kept turns; model switch
     keeps blocks; cross-provider history replays as text/tool calls; fallback echo omits pre-
@@ -269,6 +270,34 @@ Changed: `AIConversationContext.swift` (neutral transcript), `AISharedTypes.swif
   64 000 when no metadata is known.
 - Tests: `AnthropicSettingsTests` (6), with its own `URLProtocol` fixture keyed by path + query.
   26/26 across the five AI suites. Nothing is wired into the app yet.
+
+## Phase 3 as built (2026-10-15)
+
+- `ServerSentEvents.swift`: `ServerSentEventDecoder`, the byte-level SSE splitter extracted from
+  `OpenRouterClient` (which now uses it; OpenRouterClientTests unchanged and green).
+- `AnthropicTypes.swift`: `AnthropicBlock` (one content block as JSON text; `.text`,
+  `.toolResult`), `AnthropicMessage`, `AnthropicRequest` (`adaptiveThinking`, `effort`,
+  `serverFallback`), `AnthropicUsage`, `AnthropicResponse` (`content` = the turn to replay),
+  `AnthropicJSON` (fixed-order/sorted-key JSON text), and the new `AnthropicError` cases
+  `incompleteResponse`, `invalidToolCall`, `refused(category:explanation:)`, `streamError`.
+- `AnthropicClient.complete(_:onEvent:)`: body written by `requestBody(for:)` in a fixed key order
+  with blocks spliced verbatim; `thinking` (adaptive, summarized, `drop_block`) and its beta only
+  with `adaptiveThinking`; `output_config.effort` only with an effort; `fallbacks: "default"` and
+  its beta only with `serverFallback`; top-level `cache_control`; never `tool_choice`. Retries
+  429/5xx/529 twice, honouring `retry-after` (capped at 60 s) with an injectable sleep.
+- Stream: `thinking_delta` → `.reasoningSummaryDelta` (it is a summary under
+  `display: "summarized"`), `text_delta` → `.textDelta`. `assemble(...)` rebuilds each block's
+  JSON (tool_use keeps the model's raw input; invalid input is passed to the tool handler, whose
+  argument parser returns its normal error, and replays as `{}`), applies the fallback echo rule
+  and maps stop reasons.
+- `LLMJSONValue` and its `Codable` conformance are now `nonisolated` (they were MainActor by the
+  target default); the request writer and assembler run off the main actor.
+- Tests: `AnthropicClientTests` (10) with `AnthropicTestSupport.swift` (the URL-protocol fixture,
+  now shared with `AnthropicSettingsTests`: response queues, fragmented bodies, headers, recorded
+  request bodies). A deliberate break of the fallback rule turned the fallback test red. 36/36
+  across the six AI suites.
+- *Verify in Phase 6:* the existing tool schemas marked `strict: true` were written for OpenAI-style
+  strict mode; check that Anthropic accepts them.
 
 ## Open questions
 
