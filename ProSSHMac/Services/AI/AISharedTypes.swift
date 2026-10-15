@@ -1,7 +1,8 @@
 import Foundation
 
-// Shared AI tool and streaming types. Wire messages and model metadata live in
-// OpenRouterTypes.swift.
+// Shared AI tool, streaming and transcript types. Each provider's wire messages and model
+// metadata live in its own file (OpenRouterTypes.swift); the agent loop and the per-session
+// transcript use only the types here.
 
 struct LLMToolDefinition: Sendable, Equatable {
     var name: String
@@ -28,6 +29,48 @@ enum LLMStreamEvent: Sendable, Equatable {
     case reasoningDone(String)
     case reasoningSummaryDelta(String)
     case reasoningSummaryDone(String)
+}
+
+// MARK: - Transcript
+
+/// One entry of a session's conversation, independent of any provider's wire format.
+enum AITranscriptMessage: Sendable, Equatable {
+    case user(String)
+    case assistant(AIAssistantTurn)
+    case toolResult(LLMToolOutput)
+}
+
+struct AIAssistantTurn: Sendable, Equatable {
+    var text: String?
+    var toolCalls: [LLMToolCall] = []
+    var reasoning: AIProviderReasoning?
+}
+
+/// Reasoning a provider needs replayed verbatim on its own next request. Each case belongs to
+/// one provider.
+enum AIProviderReasoning: Sendable, Equatable {
+    case openRouter(details: [LLMJSONValue]?, text: String?)
+}
+
+/// One provider's chat completion endpoint, seen by the agent loop.
+@MainActor
+protocol AIChatProviding: Sendable {
+    /// Request size in UTF-8 bytes, used to fit history into the context budget.
+    func estimatedRequestBytes(
+        systemPrompt: String,
+        messages: [AITranscriptMessage],
+        tools: [LLMToolDefinition]
+    ) -> Int
+
+    /// Streams one assistant response. Throws on any stop that leaves the turn unusable
+    /// (truncation, refusal, malformed tool calls), so a returned turn is always complete.
+    func complete(
+        model: String,
+        systemPrompt: String,
+        messages: [AITranscriptMessage],
+        tools: [LLMToolDefinition],
+        onEvent: @escaping @Sendable (LLMStreamEvent) -> Void
+    ) async throws -> AIAssistantTurn
 }
 
 // MARK: - JSON Value

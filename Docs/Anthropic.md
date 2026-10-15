@@ -38,9 +38,11 @@ AIAgentRunner (per user turn: snapshot provider + model)
   tool results. Each client maps neutral → wire. The native payload is how each provider replays
   its own reasoning: OpenRouter's `reasoning_details`/`reasoning`, and Anthropic's full ordered
   assistant `content` array (thinking, text, tool_use blocks) kept as raw JSON.
-- **A shared client protocol** (`AIChatProviding`) with one call, "complete this turn", streaming
-  `LLMStreamEvent`s and returning a neutral assistant message plus stop info. `OpenRouterClient`
-  and `AnthropicClient` both conform. The runner no longer touches `OpenRouterCompletion`.
+- **A shared client protocol** (`AIChatProviding`, in `AISharedTypes.swift`): "complete this
+  turn" streaming `LLMStreamEvent`s and returning a neutral `AIAssistantTurn`, plus a request-size
+  estimate for the context budget. Clients throw on every stop that leaves the turn unusable, so
+  there is no stop-kind result. `OpenRouterChatProvider` adapts `OpenRouterServicing`; an
+  Anthropic provider conforms the same way. The runner no longer touches `OpenRouterCompletion`.
 - **Per-provider stores.** `AnthropicModelStore` mirrors `OpenRouterModelStore` (published state,
   defaults keys `ai.anthropic.*`, cached metadata of the selected model). A small
   `AIProviderSelection` holds the active provider (`ai.provider.selected`).
@@ -154,10 +156,10 @@ Changed: `AIConversationContext.swift` (neutral transcript), `AISharedTypes.swif
 
 - [x] **Phase 0: Spec and API research.** Done 2026-10-15. This document.
 
-- [ ] **Phase 1: Provider-neutral transcript and client protocol (no behaviour change).**
-  - Add neutral types: `AIProvider`, `AITranscriptMessage` (user / assistant / toolResults),
-    `AIAssistantTurn` (text, tool calls, `AINativePayload {provider, modelID, json}`), and the
-    `AIChatProviding` protocol returning an `AIChatResult` (assistant turn, stop kind, usage).
+- [x] **Phase 1: Provider-neutral transcript and client protocol (no behaviour change).** Done
+  2026-10-15; see "Phase 1 as built" below.
+  - Add neutral types: `AITranscriptMessage` (user / assistant / toolResult), `AIAssistantTurn`
+    (text, tool calls, provider reasoning), and the `AIChatProviding` protocol.
   - `AIConversationState` stores neutral turns. OpenRouter replay maps them to
     `OpenRouterMessage`, including `reasoning_details` from the native payload; the existing
     "model switch drops reasoning" rule stays for OpenRouter only.
@@ -227,6 +229,25 @@ Changed: `AIConversationContext.swift` (neutral transcript), `AISharedTypes.swif
   - Rename/extend `Docs/OpenRouterArchitecture.md` to cover both providers; update CLAUDE.md
     (AI service stack, key files, gotchas: legacy key name, preserved thinking, no forced
     tool_choice).
+
+## Phase 1 as built (2026-10-15)
+
+- `AISharedTypes.swift`: `AITranscriptMessage` (`.user`, `.assistant(AIAssistantTurn)`,
+  `.toolResult(LLMToolOutput)`), `AIAssistantTurn` (text, tool calls, `reasoning`),
+  `AIProviderReasoning` (one case, `.openRouter(details:text:)`; Phase 4 adds Anthropic's content
+  blocks) and `AIChatProviding` (`estimatedRequestBytes`, `complete`). No `AIProvider` enum yet:
+  Phase 5 adds it with provider selection.
+- `OpenRouterChatProvider.swift` (new): maps the neutral transcript to `OpenRouterMessage`s and back,
+  prepends the system prompt, takes `choices.first`, and keeps the old size formula.
+  `OpenRouterServicing`, `OpenRouterClient` and `AppDependencies` are unchanged;
+  `AIAgentService` builds the adapter (`chatProvider`).
+- `AIConversationState` stores neutral turns. `replay` became `fittedHistory(currentTurn:
+  contextLength:size:)` (same trimming loop, size from the provider, no system message in the
+  result). A model switch still drops all reasoning; Phase 4 makes that OpenRouter-only.
+- Tests: `AIAgentServiceTests` passed unchanged (the proof that OpenRouter requests are the same);
+  `AIConversationContextTests` adapted plus three new: assistant messages round-trip unchanged
+  through the neutral type, a mapped tool cycle encodes byte-identically to hand-built messages,
+  and the size estimate equals the old formula. 20/20 in the four AI suites.
 
 ## Open questions
 

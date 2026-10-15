@@ -98,6 +98,7 @@ final class AIAgentService: AIAgentServicing {
     }
 
     let openRouterClient: any OpenRouterServicing
+    let chatProvider: any AIChatProviding
     let sessionProvider: any AIAgentSessionProviding
     let modelStore: OpenRouterModelStore
     let requestTimeoutSeconds: Int
@@ -139,6 +140,7 @@ final class AIAgentService: AIAgentServicing {
         persistConversationContext: Bool = true
     ) {
         self.openRouterClient = openRouterClient
+        self.chatProvider = OpenRouterChatProvider(client: openRouterClient)
         self.sessionProvider = sessionProvider
         self.modelStore = modelStore
         self.requestTimeoutSeconds = max(10, requestTimeoutSeconds)

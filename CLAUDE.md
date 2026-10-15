@@ -314,7 +314,10 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
   is supported and reported. Soft/full reset clears all keyboard modes.
 - **Focus management**: `isAIAssistantComposerFocused` state. `focusSessionAndPane()` resigns at AppKit
   level, then re-arms terminal. See Known Issues.
-- **AI service stack**: `AIAgentService` uses one `OpenRouterClient` for Chat Completions.
+- **AI service stack**: the agent loop and `AIConversationContext` use provider-neutral types
+  (`AITranscriptMessage`, `AIAssistantTurn`, `AIChatProviding` in `AISharedTypes.swift`);
+  `OpenRouterChatProvider` maps them to Chat Completions. Anthropic is being added as a second
+  provider (`Docs/Anthropic.md`). `AIAgentService` uses one `OpenRouterClient` for Chat Completions.
   `OpenRouterModelStore` requires explicit selection and refreshes the tool-capable text-model catalog.
   `AIConversationContext` stores per-session structured turns; a model switch drops reasoning blocks
   but keeps messages and tool history. `OpenRouterAPIKeyStore` owns the single Keychain entry.
@@ -503,7 +506,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 | `Docs/featurelist.md` | **Long-term memory** — dated work log, phase progress, loop-log entries |
 | `Docs/RenderCost.md` | **Active spec.** What rendering actually costs — R0/R1/R2a done, **R2b open** (code merged, performance unvalidated). Read its "Measurement caveats" before any perf measurement |
 | `Docs/R2bBenchmarkResults.md` | R2b A/B evidence: exact commands and all raw reports for the six baseline/candidate pairs |
-| `Docs/Anthropic.md` | **Active.** Direct Anthropic Messages API as a second AI provider next to OpenRouter — Phase 0 (spec) done, Phase 1 (provider-neutral transcript) next. Read its "Rules that shape the design" before touching AI transcript code |
+| `Docs/Anthropic.md` | **Active.** Direct Anthropic Messages API as a second AI provider next to OpenRouter — Phases 0–1 done (spec, provider-neutral transcript), Phase 2 (key store, catalog, model store) next. Read its "Rules that shape the design" before touching AI transcript code |
 | `Docs/Bug84.md` | One terminal renderer per session across tab switches and split changes (per-session model store) — **COMPLETE** (Phases 0–5); Phase 5 has the live memory numbers |
 | `Docs/bugs.md` | Bug and tech-debt register by subsystem/severity (counts in its Summary table); paths are pre-refactor |
 | `Docs/PhaseB.md` | Local Input V2 Phase B checklist (make byte-first local input the only path) — open |
@@ -535,8 +538,9 @@ and the session coordinators) has no spec file left; see `Docs/featurelist.md`.
 
 ## Next Session Plan
 
-**Active work: `Docs/Anthropic.md` — Anthropic as a second AI provider.** Phase 0 (spec, API
-research) is done; continue with the first unchecked phase. Read the spec's "Rules that shape the
+**Active work: `Docs/Anthropic.md` — Anthropic as a second AI provider.** Phases 0–1 are done
+(spec; provider-neutral transcript behind `AIChatProviding`, OpenRouter unchanged). Next is
+Phase 2: Anthropic key store, `/v1/models` catalog and `AnthropicModelStore`. Read the spec's "Rules that shape the
 design" first: preserved thinking (append-only history, no forced `tool_choice`, no disabled
 thinking on Opus 5.5) and the legacy Keychain name `nl.budgetsoft.ProSSHMac.llm.anthropic`, which
 `LegacyProviderKeyCleanup` deletes.

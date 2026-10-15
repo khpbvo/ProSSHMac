@@ -80,24 +80,27 @@ import os.log
             userMessageText = broadcastPreamble + trimmedPrompt
         }
 
-        var currentTurn = [OpenRouterMessage.user(userMessageText)]
+        let provider = service.chatProvider
+        let systemPrompt = AIToolDefinitions.developerPrompt()
+        var currentTurn: [AITranscriptMessage] = [.user(userMessageText)]
         var totalToolCalls = 0
 
         for iteration in 1...iterationLimit {
             let iterationStart = DispatchTime.now().uptimeNanoseconds
-            let messages = try conversationState.replay(
-                systemPrompt: AIToolDefinitions.developerPrompt(),
+            let messages = try conversationState.fittedHistory(
                 currentTurn: currentTurn,
-                tools: activeToolDefinitions,
                 contextLength: service.modelStore.contextLength(for: modelID)
-            )
+            ) {
+                provider.estimatedRequestBytes(systemPrompt: systemPrompt, messages: $0, tools: activeToolDefinitions)
+            }
             Self.logger.debug(
-                "[\(traceID, privacy: .public)] iteration_start i=\(iteration) model=\(modelID, privacy: .public) messages=\(messages.count)"
+                "[\(traceID, privacy: .public)] iteration_start i=\(iteration) model=\(modelID, privacy: .public) messages=\(messages.count + 1)"
             )
 
-            let response = try await runWithTimeout(timeoutSeconds: service.requestTimeoutSeconds) {
-                try await service.openRouterClient.complete(
+            let assistantTurn = try await runWithTimeout(timeoutSeconds: service.requestTimeoutSeconds) {
+                try await provider.complete(
                     model: modelID,
+                    systemPrompt: systemPrompt,
                     messages: messages,
                     tools: activeToolDefinitions
                 ) { event in
@@ -106,12 +109,9 @@ import os.log
             }
             try Task.checkCancellation()
             let responseMs = AIToolDefinitions.elapsedMillis(since: iterationStart)
-            guard let choice = response.choices.first else { throw OpenRouterError.invalidResponse }
-            currentTurn.append(choice.message)
-            let toolCalls = (choice.message.toolCalls ?? []).map {
-                LLMToolCall(id: $0.id, name: $0.function.name, arguments: $0.function.arguments)
-            }
-            let replyText = choice.message.content ?? ""
+            currentTurn.append(.assistant(assistantTurn))
+            let toolCalls = assistantTurn.toolCalls
+            let replyText = assistantTurn.text ?? ""
             Self.logger.debug(
                 "[\(traceID, privacy: .public)] iteration_response i=\(iteration) response_ms=\(responseMs) tool_calls=\(toolCalls.count) text_chars=\(replyText.count)"
             )
@@ -138,7 +138,7 @@ import os.log
                 toolCalls: toolCalls,
                 traceID: traceID
             )
-            currentTurn += toolOutputs.map { OpenRouterMessage.tool($0.output, callID: $0.callID) }
+            currentTurn += toolOutputs.map { .toolResult($0) }
             if service.persistConversationContext {
                 var persisted = conversationState
                 persisted.appendTurn(currentTurn)
