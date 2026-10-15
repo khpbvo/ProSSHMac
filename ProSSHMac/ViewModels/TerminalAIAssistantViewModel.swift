@@ -36,6 +36,9 @@ struct TerminalAIAssistantMessage: Identifiable, Sendable, Equatable {
 @MainActor
 final class TerminalAIAssistantViewModel: ObservableObject {
     @Published var messages: [TerminalAIAssistantMessage] = []
+    /// The chat's conversation: the model remembers what this chat shows, whichever session is
+    /// focused. Clear starts a new one.
+    private(set) var conversationID = UUID()
     @Published var draftPrompt = ""
     @Published private(set) var isSending = false
     @Published private(set) var lastError: String?
@@ -97,7 +100,7 @@ final class TerminalAIAssistantViewModel: ObservableObject {
 
     nonisolated deinit {}
 
-    func clearConversation(sessionID: UUID?) {
+    func clearConversation() {
         activeAgentTask?.cancel()
         activeAgentTask = nil
         isSending = false
@@ -105,9 +108,8 @@ final class TerminalAIAssistantViewModel: ObservableObject {
         clearReasoningPanel()
         messages = []
         lastError = nil
-        if let sessionID {
-            agentService.clearConversation(sessionID: sessionID)
-        }
+        agentService.clearConversation(conversationID: conversationID)
+        conversationID = UUID()
     }
 
     func requestPatchApproval(
@@ -202,6 +204,7 @@ final class TerminalAIAssistantViewModel: ObservableObject {
             )
             do {
                 let reply = try await self.agentService.generateReply(
+                    conversationID: self.conversationID,
                     sessionID: sessionID,
                     prompt: prompt,
                     broadcastSessionIDs: broadcastSessionIDs,

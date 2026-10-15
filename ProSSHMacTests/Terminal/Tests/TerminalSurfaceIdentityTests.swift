@@ -482,12 +482,14 @@ private final class StubAgentService: AIAgentServicing {
 
     nonisolated deinit {}
 
-    func clearConversation(sessionID: UUID) {}
+    func clearConversation(conversationID: UUID) {}
 
     func generateReply(
+        conversationID: UUID,
         sessionID: UUID,
         prompt: String,
-        broadcastSessionIDs: [UUID]?
+        broadcastSessionIDs: [UUID]?,
+        streamHandler: (@Sendable (AIAgentStreamEvent) -> Void)?
     ) async throws -> AIAgentReply {
         throw CancellationError()
     }

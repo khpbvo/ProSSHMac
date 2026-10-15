@@ -11,6 +11,7 @@ import os.log
     // MARK: - Agent Loop
 
     func run(
+        conversationID: UUID,
         sessionID: UUID,
         prompt: String,
         broadcastContext: BroadcastContext? = nil,
@@ -22,7 +23,7 @@ import os.log
 
         let traceID = AIToolDefinitions.shortTraceID()
         let turnStart = DispatchTime.now().uptimeNanoseconds
-        guard service.sessionProvider.sessions.contains(where: { $0.id == sessionID }) else {
+        guard let focusedSession = service.sessionProvider.sessions.first(where: { $0.id == sessionID }) else {
             Self.logger.error("[\(traceID, privacy: .public)] session_not_found session=\(AIToolDefinitions.shortSessionID(sessionID), privacy: .public)")
             throw AIAgentServiceError.sessionNotFound
         }
@@ -55,12 +56,12 @@ import os.log
         )
 
         var conversationState = service.persistConversationContext
-            ? service.conversationContext.state(for: sessionID) ?? AIConversationState()
+            ? service.conversationContext.state(for: conversationID) ?? AIConversationState()
             : AIConversationState()
         let priorModelID = conversationState.lastModelID
         conversationState.prepare(for: modelID)
         if service.persistConversationContext, priorModelID != nil, priorModelID != modelID {
-            service.conversationContext.update(state: conversationState, for: sessionID)
+            service.conversationContext.update(state: conversationState, for: conversationID)
         }
 
         let screenLines = service.sessionProvider.shellBuffers[sessionID] ?? []
@@ -77,11 +78,13 @@ import os.log
             broadcastPreamble = "[Active broadcast sessions — \(ctx.allSessionIDs.count) sessions]\n\(sessionMap)\n\n"
         }
 
+        // The chat's memory spans sessions, so each turn says which pane it was sent from.
+        let focusLine = "[Focused session: \(Self.describe(focusedSession))]\n"
         let userMessageText: String
         if !screenSnapshot.isEmpty {
-            userMessageText = broadcastPreamble + "[Current terminal screen — use this to identify the environment, OS, device type, and current path/mode before acting]\n```\n\(screenSnapshot)\n```\n\n\(trimmedPrompt)"
+            userMessageText = focusLine + broadcastPreamble + "[Current terminal screen — use this to identify the environment, OS, device type, and current path/mode before acting]\n```\n\(screenSnapshot)\n```\n\n\(trimmedPrompt)"
         } else {
-            userMessageText = broadcastPreamble + trimmedPrompt
+            userMessageText = focusLine + broadcastPreamble + trimmedPrompt
         }
 
         let systemPrompt = AIToolDefinitions.developerPrompt()
@@ -123,7 +126,7 @@ import os.log
             guard !toolCalls.isEmpty else {
                 conversationState.appendTurn(currentTurn)
                 if service.persistConversationContext {
-                    service.conversationContext.update(state: conversationState, for: sessionID)
+                    service.conversationContext.update(state: conversationState, for: conversationID)
                 }
                 let totalMs = AIToolDefinitions.elapsedMillis(since: turnStart)
                 Self.logger.info(
@@ -147,7 +150,7 @@ import os.log
             if service.persistConversationContext {
                 var persisted = conversationState
                 persisted.appendTurn(currentTurn)
-                service.conversationContext.update(state: persisted, for: sessionID)
+                service.conversationContext.update(state: persisted, for: conversationID)
             }
             try Task.checkCancellation()
             let toolMs = AIToolDefinitions.elapsedMillis(since: toolStart)
@@ -161,6 +164,13 @@ import os.log
             "[\(traceID, privacy: .public)] turn_failed_tool_loop session=\(AIToolDefinitions.shortSessionID(sessionID), privacy: .public) limit=\(iterationLimit) total_ms=\(totalMs)"
         )
         throw AIAgentServiceError.toolLoopExceeded(limit: iterationLimit)
+    }
+
+    /// "Testserv4 — kevin@192.168.2.34:22", or "Local shell — <label>".
+    static func describe(_ session: Session) -> String {
+        session.isLocal
+            ? "Local shell — \(session.hostLabel)"
+            : "\(session.hostLabel) — \(session.username)@\(session.hostname):\(session.port)"
     }
 
     nonisolated private static func forward(

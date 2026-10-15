@@ -59,7 +59,6 @@ final class TerminalAIAssistantViewModelTests: XCTestCase {
     }
 
     func testClearConversationResetsMessagesAndCallsService() throws {
-        let sessionID = UUID()
         let service = MockAgentService(
             nextReply: AIAgentReply(text: "ok", toolCallsExecuted: 0)
         )
@@ -71,10 +70,43 @@ final class TerminalAIAssistantViewModelTests: XCTestCase {
             .init(id: UUID(), role: .assistant, content: "test", createdAt: .now, isStreaming: false),
         ]
 
-        viewModel.clearConversation(sessionID: sessionID)
+        let original = viewModel.conversationID
+        viewModel.clearConversation()
 
         XCTAssertTrue(viewModel.messages.isEmpty)
-        XCTAssertEqual(service.clearedSessionIDs, [sessionID])
+        XCTAssertEqual(service.clearedConversationIDs, [original])
+        XCTAssertNotEqual(viewModel.conversationID, original, "Clear starts a new conversation")
+    }
+
+    func testPromptsFromDifferentSessionsShareOneConversation() async throws {
+        let service = MockAgentService(nextReply: AIAgentReply(text: "ok", toolCallsExecuted: 0))
+        let viewModel = TerminalAIAssistantViewModel(agentService: service, streamChunkDelayNanoseconds: 0)
+        let first = UUID(), second = UUID()
+
+        viewModel.draftPrompt = "check the first box"
+        viewModel.submitPrompt(for: first)
+        try await waitUntilIdle(viewModel)
+        viewModel.draftPrompt = "now the second"
+        viewModel.submitPrompt(for: second)
+        try await waitUntilIdle(viewModel)
+
+        XCTAssertEqual(service.capturedSessionIDs, [first, second])
+        XCTAssertEqual(service.capturedConversationIDs, [viewModel.conversationID, viewModel.conversationID])
+
+        let before = viewModel.conversationID
+        viewModel.clearConversation()
+        viewModel.draftPrompt = "fresh start"
+        viewModel.submitPrompt(for: first)
+        try await waitUntilIdle(viewModel)
+        XCTAssertEqual(service.capturedConversationIDs.last, viewModel.conversationID)
+        XCTAssertNotEqual(service.capturedConversationIDs.last, before)
+    }
+
+    private func waitUntilIdle(_ viewModel: TerminalAIAssistantViewModel) async throws {
+        for _ in 0..<200 where viewModel.isSending {
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        XCTAssertFalse(viewModel.isSending)
     }
 
     /// `normalizeAssistantReply` was reduced to a trim in b6a7165 ("simplify markdown
@@ -357,7 +389,9 @@ private final class MockAgentService: AIAgentServicing {
     var streamEvents: [AIAgentStreamEvent] = []
     var streamEventDelayNanoseconds: UInt64 = 0
     private(set) var capturedPrompts: [String] = []
-    private(set) var clearedSessionIDs: [UUID] = []
+    private(set) var clearedConversationIDs: [UUID] = []
+    private(set) var capturedConversationIDs: [UUID] = []
+    private(set) var capturedSessionIDs: [UUID] = []
 
     init(nextReply: AIAgentReply, replyDelayNanoseconds: UInt64 = 0) {
         self.nextReply = nextReply
@@ -366,32 +400,23 @@ private final class MockAgentService: AIAgentServicing {
 
     nonisolated deinit {}
 
-    func clearConversation(sessionID: UUID) {
-        clearedSessionIDs.append(sessionID)
+    func clearConversation(conversationID: UUID) {
+        clearedConversationIDs.append(conversationID)
     }
 
     func generateReply(
+        conversationID: UUID,
         sessionID: UUID,
         prompt: String,
-        broadcastSessionIDs: [UUID]? = nil
-    ) async throws -> AIAgentReply {
-        if replyDelayNanoseconds > 0 {
-            try? await Task.sleep(nanoseconds: replyDelayNanoseconds)
-        }
-        capturedPrompts.append(prompt)
-        return nextReply
-    }
-
-    func generateReply(
-        sessionID: UUID,
-        prompt: String,
-        broadcastSessionIDs: [UUID]? = nil,
+        broadcastSessionIDs: [UUID]?,
         streamHandler: (@Sendable (AIAgentStreamEvent) -> Void)?
     ) async throws -> AIAgentReply {
         if replyDelayNanoseconds > 0 {
             try? await Task.sleep(nanoseconds: replyDelayNanoseconds)
         }
         capturedPrompts.append(prompt)
+        capturedConversationIDs.append(conversationID)
+        capturedSessionIDs.append(sessionID)
         if let streamHandler {
             for event in streamEvents {
                 streamHandler(event)

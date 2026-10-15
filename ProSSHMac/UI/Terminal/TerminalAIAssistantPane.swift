@@ -245,7 +245,7 @@ struct TerminalAIAssistantPane: View {
 
             HStack(spacing: 8) {
                 Button("Clear") {
-                    viewModel.clearConversation(sessionID: session?.id)
+                    viewModel.clearConversation()
                 }
                 .buttonStyle(.bordered)
                 .disabled(viewModel.messages.isEmpty)

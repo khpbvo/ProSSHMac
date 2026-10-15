@@ -1,15 +1,14 @@
 import Foundation
 
+/// The AI assistant. A conversation is one chat: its memory follows the chat, not the focused
+/// session. `sessionID` is the session focused when the prompt was sent (the tools' default
+/// target and the screen snapshot's source).
 @MainActor
 protocol AIAgentServicing {
     var toolDefinitions: [LLMToolDefinition] { get }
-    func clearConversation(sessionID: UUID)
+    func clearConversation(conversationID: UUID)
     func generateReply(
-        sessionID: UUID,
-        prompt: String,
-        broadcastSessionIDs: [UUID]?
-    ) async throws -> AIAgentReply
-    func generateReply(
+        conversationID: UUID,
         sessionID: UUID,
         prompt: String,
         broadcastSessionIDs: [UUID]?,
@@ -18,14 +17,25 @@ protocol AIAgentServicing {
 }
 
 extension AIAgentServicing {
+    /// A conversation of its own per session (the session id is the conversation id).
+    func clearConversation(sessionID: UUID) {
+        clearConversation(conversationID: sessionID)
+    }
+
+    /// A conversation of its own per session (the session id is the conversation id).
     func generateReply(
         sessionID: UUID,
         prompt: String,
         broadcastSessionIDs: [UUID]? = nil,
-        streamHandler: (@Sendable (AIAgentStreamEvent) -> Void)?
+        streamHandler: (@Sendable (AIAgentStreamEvent) -> Void)? = nil
     ) async throws -> AIAgentReply {
-        _ = streamHandler
-        return try await generateReply(sessionID: sessionID, prompt: prompt, broadcastSessionIDs: broadcastSessionIDs)
+        try await generateReply(
+            conversationID: sessionID,
+            sessionID: sessionID,
+            prompt: prompt,
+            broadcastSessionIDs: broadcastSessionIDs,
+            streamHandler: streamHandler
+        )
     }
 }
 
@@ -163,8 +173,8 @@ final class AIAgentService: AIAgentServicing {
         agentRunner.service = self
     }
 
-    func clearConversation(sessionID: UUID) {
-        conversationContext.clear(sessionID: sessionID)
+    func clearConversation(conversationID: UUID) {
+        conversationContext.clear(conversationID: conversationID)
     }
 
     /// The provider and model for the next user turn. The runner resolves this once per turn,
@@ -195,22 +205,10 @@ final class AIAgentService: AIAgentServicing {
     }
 
     func generateReply(
+        conversationID: UUID,
         sessionID: UUID,
         prompt: String,
-        broadcastSessionIDs: [UUID]? = nil
-    ) async throws -> AIAgentReply {
-        return try await generateReply(
-            sessionID: sessionID,
-            prompt: prompt,
-            broadcastSessionIDs: broadcastSessionIDs,
-            streamHandler: nil
-        )
-    }
-
-    func generateReply(
-        sessionID: UUID,
-        prompt: String,
-        broadcastSessionIDs: [UUID]? = nil,
+        broadcastSessionIDs: [UUID]?,
         streamHandler: (@Sendable (AIAgentStreamEvent) -> Void)?
     ) async throws -> AIAgentReply {
         let broadcastContext = buildBroadcastContext(
@@ -218,6 +216,7 @@ final class AIAgentService: AIAgentServicing {
             broadcastSessionIDs: broadcastSessionIDs
         )
         return try await agentRunner.run(
+            conversationID: conversationID,
             sessionID: sessionID,
             prompt: prompt,
             broadcastContext: broadcastContext,

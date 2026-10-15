@@ -80,18 +80,19 @@ struct AIConversationState: Sendable, Equatable {
     }
 }
 
+/// Conversation state per chat (conversation id), not per terminal session.
 @MainActor final class AIConversationContext {
-    private(set) var stateBySessionID: [UUID: AIConversationState] = [:]
+    private(set) var stateByConversationID: [UUID: AIConversationState] = [:]
 
-    func state(for sessionID: UUID) -> AIConversationState? {
-        stateBySessionID[sessionID]
+    func state(for conversationID: UUID) -> AIConversationState? {
+        stateByConversationID[conversationID]
     }
 
-    func update(state: AIConversationState?, for sessionID: UUID) {
-        stateBySessionID[sessionID] = state
+    func update(state: AIConversationState?, for conversationID: UUID) {
+        stateByConversationID[conversationID] = state
     }
 
-    func clear(sessionID: UUID) {
-        stateBySessionID.removeValue(forKey: sessionID)
+    func clear(conversationID: UUID) {
+        stateByConversationID.removeValue(forKey: conversationID)
     }
 }

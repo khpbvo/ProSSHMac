@@ -13,7 +13,7 @@ final class AIConversationContextTests: XCTestCase {
         context.update(state: AIConversationState(turns: [[.user("two")]], lastModelID: "a"), for: second)
         XCTAssertEqual(context.state(for: first)?.turns[0][0], .user("one"))
         XCTAssertEqual(context.state(for: second)?.turns[0][0], .user("two"))
-        context.clear(sessionID: first)
+        context.clear(conversationID: first)
         XCTAssertNil(context.state(for: first))
         XCTAssertNotNil(context.state(for: second))
     }

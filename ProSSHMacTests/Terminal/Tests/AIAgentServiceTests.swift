@@ -102,6 +102,32 @@ final class AIAgentServiceTests: XCTestCase {
         XCTAssertFalse(client.requests[2].messages.contains { $0.content == "first answer" })
     }
 
+    func testOneConversationFollowsTheChatAcrossFocusedSessions() async throws {
+        let client = MockOpenRouterService()
+        let session = MockAgentSessionProvider()
+        let secondID = UUID()
+        session.sessions.append(Session(id: secondID, kind: .ssh(hostID: UUID()), hostLabel: "Testserv2", username: "kevin", hostname: "192.168.2.33", port: 22, state: .connected))
+        let service = AIAgentService(openRouterClient: client, sessionProvider: session, modelStore: try await store(client: client))
+        let chat = UUID()
+        client.enqueue(completion("Noted: dedupe the clones"))
+        client.enqueue(completion("You asked me to dedupe the clones"))
+
+        _ = try await service.generateReply(conversationID: chat, sessionID: session.sessionID, prompt: "dedupe the clones", broadcastSessionIDs: nil, streamHandler: nil)
+        _ = try await service.generateReply(conversationID: chat, sessionID: secondID, prompt: "what did I ask?", broadcastSessionIDs: nil, streamHandler: nil)
+
+        let second = client.requests[1].messages
+        XCTAssertTrue(second.contains { $0.role == "assistant" && $0.content == "Noted: dedupe the clones" }, "memory follows the chat")
+        let users = second.filter { $0.role == "user" }.compactMap(\.content)
+        XCTAssertEqual(users.count, 2)
+        XCTAssertTrue(users[0].hasPrefix("[Focused session: Local shell — "))
+        XCTAssertTrue(users[1].hasPrefix("[Focused session: Testserv2 — kevin@192.168.2.33:22]"))
+
+        service.clearConversation(conversationID: chat)
+        client.enqueue(completion("fresh"))
+        _ = try await service.generateReply(conversationID: chat, sessionID: secondID, prompt: "again", broadcastSessionIDs: nil, streamHandler: nil)
+        XCTAssertFalse(client.requests[2].messages.contains { $0.content == "Noted: dedupe the clones" })
+    }
+
     // MARK: - Anthropic provider
 
     private struct AnthropicStack {

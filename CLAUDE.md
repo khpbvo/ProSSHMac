@@ -319,7 +319,8 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
   (`AITranscriptMessage`, `AIAssistantTurn`, `AIChatProviding` in `AISharedTypes.swift`);
   `OpenRouterChatProvider` maps them to Chat Completions, `AnthropicChatProvider` to the Anthropic
   Messages API. `AIProviderSelection` (`ai.provider.selected`, default OpenRouter) picks one;
-  `AIAgentService.activeModel()` resolves provider + model once per user turn. Each provider has its
+  `AIAgentService.activeModel()` resolves provider + model once per user turn. Memory is per chat
+  (`conversationID`, owned by `TerminalAIAssistantViewModel`), not per focused session. Each provider has its
   own key store, client, model store and settings view model (`AIKeySettingsViewModel` subclasses).
   See `Docs/Anthropic.md`.
   `OpenRouterModelStore` requires explicit selection and refreshes the tool-capable text-model catalog.
@@ -518,7 +519,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 | `Docs/featurelist.md` | **Long-term memory** — dated work log, phase progress, loop-log entries |
 | `Docs/RenderCost.md` | **Active spec.** What rendering actually costs — R0/R1/R2a done, **R2b open** (code merged, performance unvalidated). Read its "Measurement caveats" before any perf measurement |
 | `Docs/R2bBenchmarkResults.md` | R2b A/B evidence: exact commands and all raw reports for the six baseline/candidate pairs |
-| `Docs/NetworkCopilot.md` | **Active.** Copilot reaches every open session, one memory per chat, a router/switch command path, and network-specialist skills (`load_skill`). Phase 1 (one chat, one memory) next |
+| `Docs/NetworkCopilot.md` | **Active.** Copilot reaches every open session, one memory per chat, a router/switch command path, and network-specialist skills (`load_skill`). Phase 1 (one chat, one memory) done, Phase 2 (reach every open session) next |
 | `Docs/Anthropic.md` | Direct Anthropic Messages API as a second AI provider next to OpenRouter — **COMPLETE** (Phases 0–6, validated live). Read its "Rules that shape the design" before touching AI transcript code |
 | `Docs/Bug84.md` | One terminal renderer per session across tab switches and split changes (per-session model store) — **COMPLETE** (Phases 0–5); Phase 5 has the live memory numbers |
 | `Docs/bugs.md` | Bug and tech-debt register by subsystem/severity (counts in its Summary table); paths are pre-refactor |
@@ -551,7 +552,8 @@ and the session coordinators) has no spec file left; see `Docs/featurelist.md`.
 
 ## Next Session Plan
 
-**Active work: `Docs/NetworkCopilot.md` Phase 1 — one chat, one memory.** Found live
+**Active work: `Docs/NetworkCopilot.md` Phase 2 — reach every open session.** Phase 1 (one
+chat, one memory: `conversationID`) is done. Found live
 (2026-10-15): the copilot reached only the focused pane (broadcast off; it gets no session list
 otherwise) and forgot the task when focus moved (chat is per window, memory per session); device
 CLIs can't use `execute_and_wait` (POSIX wrapper). Decisions: reach all open sessions, one memory

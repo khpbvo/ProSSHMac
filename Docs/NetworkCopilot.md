@@ -67,7 +67,7 @@ new `AISkillLibraryTests`, `DeviceCLITests`.
 
 ## Phases
 
-- [ ] **Phase 1: One chat, one memory.**
+- [x] **Phase 1: One chat, one memory.** Done 2026-10-15; see "Phase 1 as built".
   - Chat id owned by `TerminalAIAssistantViewModel` (new id on Clear); the service and runner key
     `AIConversationContext` by it. The focused session is passed per turn and named in the user
     message.
@@ -118,6 +118,21 @@ new `AISkillLibraryTests`, `DeviceCLITests`.
 - [ ] **Phase 6: Live validation.** The four cloned test VMs: the original task end to end, with
   and without broadcast, focus changes between prompts. A router or switch if available (or a
   lab image). Docs: `Docs/AIArchitecture.md`, CLAUDE.md.
+
+## Phase 1 as built (2026-10-15)
+
+- `AIAgentServicing` takes a `conversationID` (memory) next to `sessionID` (focused session:
+  tool default and screen snapshot): `generateReply(conversationID:sessionID:prompt:
+  broadcastSessionIDs:streamHandler:)`, `clearConversation(conversationID:)`. Protocol-extension
+  conveniences keep the old session-keyed calls (session id = conversation id).
+- `AIConversationContext` is keyed by conversation; `AIAgentRunner.run(conversationID:sessionID:…)`
+  loads and stores by it, and each turn's user message starts with
+  `[Focused session: <label> — <user>@<host>:<port>]` (or `Local shell — <label>`).
+- `TerminalAIAssistantViewModel` owns `conversationID`; `clearConversation()` clears it and starts
+  a new one (Clear button and closing the pane).
+- Tests: `AIAgentServiceTests` +1 (memory follows the chat across focused sessions, each turn names
+  its session, clear drops it), `TerminalAIAssistantViewModelTests` +1 and the clear test updated;
+  76/76 across nine suites.
 
 ## Open questions
 
