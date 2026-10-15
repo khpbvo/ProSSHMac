@@ -11,21 +11,6 @@ protocol OpenRouterServicing: Sendable {
     ) async throws -> OpenRouterCompletion
 }
 
-protocol OpenRouterHTTPSessioning: Sendable {
-    func data(for request: URLRequest) async throws -> (Data, URLResponse)
-    func bytes(for request: URLRequest) async throws -> (URLSession.AsyncBytes, URLResponse)
-}
-
-extension URLSession: OpenRouterHTTPSessioning {
-    func data(for request: URLRequest) async throws -> (Data, URLResponse) {
-        try await data(for: request, delegate: nil)
-    }
-
-    func bytes(for request: URLRequest) async throws -> (URLSession.AsyncBytes, URLResponse) {
-        try await bytes(for: request, delegate: nil)
-    }
-}
-
 @MainActor
 final class OpenRouterClient: OpenRouterServicing {
     private struct Tool: Encodable {
@@ -102,14 +87,14 @@ final class OpenRouterClient: OpenRouterServicing {
         var arguments = ""
     }
 
-    private let keyStore: any OpenRouterAPIKeyStoring
-    private let session: any OpenRouterHTTPSessioning
+    private let keyStore: any AIAPIKeyStoring
+    private let session: any AIHTTPSessioning
     private let completionURL: URL
     private let modelsURL: URL
 
     init(
-        keyStore: any OpenRouterAPIKeyStoring,
-        session: any OpenRouterHTTPSessioning = URLSession.shared,
+        keyStore: any AIAPIKeyStoring,
+        session: any AIHTTPSessioning = URLSession.shared,
         completionURL: URL = URL(string: "https://openrouter.ai/api/v1/chat/completions")!,
         modelsURL: URL = URL(string: "https://openrouter.ai/api/v1/models?supported_parameters=tools&input_modalities=text&output_modalities=text")!
     ) {

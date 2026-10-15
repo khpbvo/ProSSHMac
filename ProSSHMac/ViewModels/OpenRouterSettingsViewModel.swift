@@ -9,9 +9,9 @@ final class OpenRouterSettingsViewModel: ObservableObject {
     @Published private(set) var statusMessage: String?
 
     let modelStore: OpenRouterModelStore
-    private let keyStore: any OpenRouterAPIKeyStoring
+    private let keyStore: any AIAPIKeyStoring
 
-    init(modelStore: OpenRouterModelStore, keyStore: any OpenRouterAPIKeyStoring) {
+    init(modelStore: OpenRouterModelStore, keyStore: any AIAPIKeyStoring) {
         self.modelStore = modelStore
         self.keyStore = keyStore
     }

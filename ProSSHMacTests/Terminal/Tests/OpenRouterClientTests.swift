@@ -114,7 +114,7 @@ final class OpenRouterClientTests: XCTestCase {
 }
 
 @MainActor
-private final class FixtureKeyStore: OpenRouterAPIKeyStoring {
+private final class FixtureKeyStore: AIAPIKeyStoring {
     let key: String?
     init(key: String?) { self.key = key }
     func loadAPIKey() throws -> String? { key }
@@ -159,7 +159,7 @@ private final class OpenRouterURLProtocol: URLProtocol {
     override func stopLoading() {}
 }
 
-private struct CancellingSession: OpenRouterHTTPSessioning {
+private struct CancellingSession: AIHTTPSessioning {
     func data(for request: URLRequest) async throws -> (Data, URLResponse) {
         throw CancellationError()
     }

@@ -31,6 +31,24 @@ enum LLMStreamEvent: Sendable, Equatable {
     case reasoningSummaryDone(String)
 }
 
+// MARK: - HTTP
+
+/// The `URLSession` calls the provider clients make, so tests can substitute a session.
+protocol AIHTTPSessioning: Sendable {
+    func data(for request: URLRequest) async throws -> (Data, URLResponse)
+    func bytes(for request: URLRequest) async throws -> (URLSession.AsyncBytes, URLResponse)
+}
+
+extension URLSession: AIHTTPSessioning {
+    func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        try await data(for: request, delegate: nil)
+    }
+
+    func bytes(for request: URLRequest) async throws -> (URLSession.AsyncBytes, URLResponse) {
+        try await bytes(for: request, delegate: nil)
+    }
+}
+
 // MARK: - Transcript
 
 /// One entry of a session's conversation, independent of any provider's wire format.

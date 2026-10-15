@@ -168,7 +168,7 @@ Changed: `AIConversationContext.swift` (neutral transcript), `AISharedTypes.swif
     `OpenRouterSettingsTests` green with unchanged assertions (adapted only to the new types),
     plus a test that OpenRouter replay of a neutral transcript is byte-identical to before.
 
-- [ ] **Phase 2: Anthropic key store, catalog and model store.**
+- [x] **Phase 2: Anthropic key store, catalog and model store.** Done 2026-10-15; see "Phase 2 as built".
   - `KeychainAnthropicAPIKeyStore` (service `nl.budgetsoft.ProSSHMac.anthropic`; reuse the
     Keychain code by extracting a shared generic-password helper from the OpenRouter store, not
     copying it). Test that the legacy cleanup list never contains the new service.
@@ -248,6 +248,27 @@ Changed: `AIConversationContext.swift` (neutral transcript), `AISharedTypes.swif
   `AIConversationContextTests` adapted plus three new: assistant messages round-trip unchanged
   through the neutral type, a mapped tool cycle encodes byte-identically to hand-built messages,
   and the size estimate equals the old formula. 20/20 in the four AI suites.
+
+## Phase 2 as built (2026-10-15)
+
+- Shared: `OpenRouterAPIKeyStoring` → `AIAPIKeyStoring` and `OpenRouterKeyStoreError` →
+  `AIKeychainError` (both now in `AIKeychain.swift`, with `KeychainGenericPassword`, the Keychain
+  code extracted from the OpenRouter store); `OpenRouterHTTPSessioning` → `AIHTTPSessioning` (in
+  `AISharedTypes.swift`). The OpenRouter key store keeps its service, legacy list and cleanup.
+- `AnthropicTypes.swift`: `AnthropicEffort` (ordered `low`…`max`), `AnthropicModel` (decoded from
+  `/v1/models` and re-encoded with the same keys for the selection cache; `supportsAdaptiveThinking`,
+  `supportedEffortLevels`, `supportsServerFallback`), `AnthropicModelsPage`, `AnthropicError`.
+- `AnthropicAPIKeyStore.swift`: `KeychainAnthropicAPIKeyStore`, service
+  `nl.budgetsoft.ProSSHMac.anthropic`.
+- `AnthropicClient.swift`: `AnthropicServicing` + `AnthropicClient.fetchModels()` (pages of 1000
+  via `after_id`, at most 20; `x-api-key`, `anthropic-version: 2023-06-01`,
+  `anthropic-beta: server-side-fallback-2026-06-01`; newest first).
+- `AnthropicModelStore.swift`: default `claude-opus-5-5` (not persisted), selection cache,
+  unavailable-after-refresh, effort setting (default `medium`) with `effort(for:)` clamping to the
+  model's highest supported level (nil when it takes none), context/output fallbacks 200 000 /
+  64 000 when no metadata is known.
+- Tests: `AnthropicSettingsTests` (6), with its own `URLProtocol` fixture keyed by path + query.
+  26/26 across the five AI suites. Nothing is wired into the app yet.
 
 ## Open questions
 

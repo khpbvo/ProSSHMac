@@ -92,7 +92,7 @@ private final class CleanupFixture: LegacyProviderKeyDeleting {
     func setShouldFail(_ value: Bool) { shouldFail = value }
     func deleteLegacyProviderKeys() throws {
         calls += 1
-        if shouldFail { throw OpenRouterKeyStoreError.keychain(-1) }
+        if shouldFail { throw AIKeychainError.keychain(-1) }
     }
 }
 #endif
