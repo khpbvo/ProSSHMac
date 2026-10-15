@@ -12,10 +12,10 @@ sequentially, and tagged by severity: **Critical**, **High**, **Medium**, or **L
 | Critical | 1     | 1     | 0    |
 | High     | 20    | 7     | 13   |
 | Medium   | 39    | 20    | 19   |
-| Low      | 29    | 5     | 24   |
-| **Total**| **89**| **33**| **56**|
+| Low      | 30    | 5     | 25   |
+| **Total**| **90**| **33**| **57**|
 
-Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13, Bug 85 fixed and Bugs 86-87 added 2026-10-14, Bug 84 fixed and Bugs 88-89 added 2026-10-15. The `**File:**` paths below predate the
+Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13, Bug 85 fixed and Bugs 86-87 added 2026-10-14, Bug 84 fixed and Bugs 88-90 added 2026-10-15. The `**File:**` paths below predate the
 refactors (`Views/` → `UI/`, `SSH/` → `Services/SSH/`, `Services/Security/` → `Services/`) and some
 files no longer exist — resolve by basename.
 
@@ -1575,6 +1575,22 @@ frame and with fresh bloom textures. Check first whether it goes away with CRT a
 whether the build before Bug 84 (`240b260~1`, a new renderer per switch) showed it too. If it is
 the released textures, the options are keeping them for recently hidden sessions or seeding the
 previous frame on reattach; keeping them costs ~20 MB per hidden session at full-window size.
+
+---
+
+### Bug 90 — Shell-Integration Setup Line Is Visible in Remote Bash Sessions (Low)
+
+**Files:** `Terminal/Features/ShellIntegrationScripts.swift`, the code that injects it on connect
+
+Seen 2026-10-15 in a screenshot of four SSH sessions to Ubuntu VMs (bash): each terminal shows the
+whole injected line, `if [ -z "$__PROSSH_SHELL_INTEGRATION" ]; then export … trap
+'__prossh_debug_trap' DEBUG; printf '\e]133;A\e\\'; fi`, echoed at the prompt. It works (prompt
+marks follow), but it clutters the screen and the AI's screen reads (`get_current_screen` returned
+it as the session's only history).
+
+**Not yet diagnosed.** Check whether local zsh hides it (ZDOTDIR injection) while remote bash gets
+it typed at the prompt, and whether it can be sent with echo suppressed or followed by a clear of
+those lines. Expected: no visible setup text, as in iTerm2's shell integration.
 
 ---
 
