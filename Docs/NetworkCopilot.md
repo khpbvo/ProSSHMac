@@ -94,30 +94,94 @@ new `AISkillLibraryTests`, `DeviceCLITests`.
     session map; `execute_and_wait` refuses on device CLIs with a hint.
   - Tests with a scripted fake device (echo, prompt, `--More--` paging).
 
-- [ ] **Phase 4: Skill library and `load_skill`.**
-  - `AISkillLibrary`: bundled + user skills, front matter (`name`, `description`, optional
-    `platforms`), validation; skill index in the system prompt; `load_skill` tool; Settings row
-    to open the user folder.
-  - Tests: parsing, user override of a bundled name, unknown skill error, index is stable.
+- [ ] **Phase 4: Harness first — nothing the model must remember because the code could not.**
+  Reshaped 2026-10-16 (see "Design rules" below). Depends on `Docs/CredentialPrompt.md`
+  Phases 0–3 (the password wait; it deletes the SUDO section and the `apply_patch` sudo dance).
+  - Non-interactive execution: commands run by `execute_and_wait` must not stall on things the
+    model cannot see coming: Ubuntu's `needrestart` dialog after `apt`, pagers on `systemctl`,
+    `git` and `journalctl`, `apt` without `-y`, ssh host-key questions. Preferred: the wrapper in
+    `SessionAIToolCoordinator.executeCommandAndWait` sets `DEBIAN_FRONTEND=noninteractive
+    NEEDRESTART_MODE=a SYSTEMD_PAGER= PAGER=cat GIT_PAGER=cat` for that command only. Builder's
+    call on the mechanism: it must neither leak into the user's shell nor lose `cd` (which
+    persists today and direct-action mode depends on). If no mechanism satisfies both, the
+    variables go into the `linux-host-operations` skill instead and this item says so.
+  - Prompt audit: read `developerPrompt()` end to end and remove every rule that is a
+    workaround for a harness gap, duplicated, or in tension with another (e.g. "use the minimum
+    tool calls" vs "do not truncate diagnostic output"). The prompt keeps: what the harness is,
+    how sessions and tools work, the invariants (never cut the path you are connected over,
+    confirm before destructive commands, never expose secrets), and gains a three-line
+    handover format that does not exist yet (what changed per host, how it was verified, how
+    to undo it). Record the before/after line counts in `Docs/featurelist.md`.
+  - No confirmation gate on unfocused hosts (decided 2026-10-16): the panes show every command
+    as it runs. Remove the open question.
+  - Tool contract sweep: a test that calls every exposed tool schema with valid minimal
+    arguments against the mock provider and asserts no `{ok:false}`; every error path returns an
+    actionable `hint`. Fix what it finds.
+- [ ] **Phase 5: Skill library and `load_skill`.**
+  - `AISkillLibrary`: bundled (`Resources/Skills/*.md`) + user folder
+    (`~/Library/Application Support/ProSSHMac/Skills/`), front matter `name`, `description`,
+    optional `platforms` (metadata returned by `load_skill`, never a filter on the index, which
+    must not vary with the open sessions); a user skill with a bundled name overrides it;
+    validation errors are logged and the skill skipped, never fatal.
+  - The index in the system prompt is one line per skill (`name — description`), nothing more.
+    Loaded once per conversation at chat start (decided: no live watch; a new chat picks up
+    folder changes), so the Anthropic prefix stays fixed.
+  - `load_skill(name)` returns the body; unknown name → `{ok:false, hint: <index>}`.
+  - Settings row: "Open skills folder".
+  - Tests: parsing, override, unknown skill, index stable across turns, folder absent.
+- [ ] **Phase 6: Write the skills — shaped by the lifecycle, not the vendor.** Vendor syntax
+  stays with the model. A skill is a procedure or a checklist a team would write down; it
+  contains no rules ("never", "always" live in the prompt only, so nothing can conflict). Each
+  under ~80 lines. Before closing the phase, read the prompt and all skills together once and
+  strike any contradiction.
+  - `change-procedure`: the method of procedure every change follows — pre-checks, steps,
+    post-checks, rollback, staged rollout (one host, verify, then the rest). One line per
+    platform safety net: Junos `commit confirmed`, IOS `reload in`, RouterOS safe mode, VyOS
+    `commit-confirm`, nftables/iptables with a timed revert.
+  - `baseline-and-diff`: capture state across hosts before touching anything, same read-only
+    commands in parallel, diff, change, diff again.
+  - `troubleshooting`: isolate by layer, change one variable, compare a working host with a
+    broken one, capture when reasoning runs out.
+  - `routing` (definition of done): adjacencies in the expected state on every neighbour,
+    routes present on both ends, reachability both ways, persistence across restart, config
+    saved. Covers OSPF/BGP/static; FRR and vendor CLIs alike.
+  - `services` (definition of done, sysadmin): unit active and enabled, listening where
+    expected, logs clean, survives restart, config validated before reload (`sshd -t`,
+    `nginx -t`).
+  - `access-safety`: never lock yourself out — keep a session open, validate before restarting
+    sshd, firewall changes with a timer, check `sudo -n true` before planning root work.
+  - `clone-deduplication`: the specific checklist (hostname, `/etc/hosts`, machine-id + D-Bus
+    id, SSH host keys, DHCP DUID/client id, cloud-init instance id, static IPs/MACs, monitoring
+    agent ids, iSCSI initiator name, domain joins); compare across sessions first, fix per
+    host.
+  - `linux-host-operations`: what hangs or misleads in this harness (whatever Phase 4 could
+    not fix in code), package and service idioms per family (apt/dnf/apk, systemd/OpenRC).
+  - An example user skill in the docs (`my-lab.md`: hosts, roles, what not to touch) so the
+    folder's purpose is obvious.
+- [ ] **Phase 7: Live validation and cost.** The four cloned VMs, user at the keyboard: the
+  original de-duplication task end to end, with and without broadcast, focus changes between
+  prompts, and the OSPF task again. Record iterations and dollars per run with and without the
+  skills loaded (the 2026-10-15 OSPF run was ~30 iterations, ~$1.50 on Opus 5.5); the skills
+  earn their place only if iterations drop. A router or switch if available (or a lab image).
+  Docs: `Docs/AIArchitecture.md`, CLAUDE.md.
 
-- [ ] **Phase 5: Write the skills.** Each one: when to use, safety rules first, the commands,
-  how to verify, how to roll back.
-  - `clone-deduplication` (Linux VMs cloned from one image): hostname/hostnamectl and
-    `/etc/hosts`, `/etc/machine-id` + D-Bus id, SSH host keys, DHCP client id/DUID
-    (systemd-networkd, NetworkManager, netplan), cloud-init instance id, static IPs/MAC matches,
-    filesystem/swap UUIDs only if shared storage matters, monitoring/agent ids, iSCSI initiator
-    name, domain/Kerberos joins; compare across sessions first, then fix per host.
-  - `multi-host-operations`: inventory, diff outputs across hosts, staged rollout (one host,
-    verify, then the rest), never act on all hosts with an unverified command.
-  - `linux-network-diagnostics`: links, addresses, routes, DNS, MTU, sockets, firewall
-    (nftables/iptables/ufw), packet capture.
-  - Device playbooks: `cisco-ios` (IOS/IOS-XE), `junos` (commit confirmed), `arista-eos`,
-    `mikrotik-routeros`, `vyos-edgeos`, `pfsense-opnsense` — read-only discovery first, change
-    safety (rollback timers, don't cut the management path you are connected over), save config.
-  - `hypervisor-basics`: Proxmox/ESXi/libvirt guest inventory and console access.
-- [ ] **Phase 6: Live validation.** The four cloned test VMs: the original task end to end, with
-  and without broadcast, focus changes between prompts. A router or switch if available (or a
-  lab image). Docs: `Docs/AIArchitecture.md`, CLAUDE.md.
+## Design rules (2026-10-16)
+
+Agreed with the user after the first live runs. Each thing lives in exactly one layer:
+
+| Layer | Holds | Examples |
+|---|---|---|
+| Code | Guarantees the model should never have to remember | passwords never leave the Mac, prompts that need a human pause the tool, non-interactive execution, tools never error on valid input |
+| System prompt | What applies to every turn and fits in a few lines; the Anthropic cache prefix, so fixed per conversation | what this harness is, how sessions work, the invariants, the handover format, the skill index |
+| Skills | Procedures and checklists a team would write down; loaded on demand | change procedure, definitions of done, troubleshooting method |
+| User skills | What no model can know | the user's lab, hosts, what not to touch |
+
+Why: the model (Opus 5.5) set up OSPF across four VMs unaided; vendor playbooks would repeat
+its training at a token cost every turn. Both live failures so far (reach, memory) and the known
+gap (hosts left at sudo prompts) were harness gaps, not knowledge gaps. A rule in the prompt
+that exists because the code could not do its job is a harness defect: fix the code, delete the
+rule. Sysadmins are a target audience as much as network engineers; the lifecycle skills serve
+both, only the definition-of-done checklists differ.
 
 ## Phase 1 as built (2026-10-15)
 
@@ -196,8 +260,7 @@ by the fake device only.
 
 ## Open questions
 
-- Should acting on a session the user did not focus or broadcast to require a confirmation, as
-  `apply_patch` does? Default proposal: no for read-only commands, a one-time per-turn
-  confirmation listing the hosts for changing commands is a candidate if the user wants it.
-- User skills folder: watch for changes live, or load at app start / chat start only? (Stable
-  per conversation either way.)
+- (Resolved 2026-10-16) No confirmation gate for unfocused hosts; user skills load once per
+  chat, not watched live. Both recorded in Phase 4/5 and "Design rules".
+- Phase 4 non-interactive environment: can the wrapper set the variables for one command
+  without leaking into the user's shell or losing `cd`? Builder decides; fallback is the skill.

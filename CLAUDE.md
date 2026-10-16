@@ -528,7 +528,8 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 | `Docs/featurelist.md` | **Long-term memory** — dated work log, phase progress, loop-log entries |
 | `Docs/RenderCost.md` | **Active spec.** What rendering actually costs — R0/R1/R2a done, **R2b open** (code merged, performance unvalidated). Read its "Measurement caveats" before any perf measurement |
 | `Docs/R2bBenchmarkResults.md` | R2b A/B evidence: exact commands and all raw reports for the six baseline/candidate pairs |
-| `Docs/NetworkCopilot.md` | **Active.** Copilot reaches every open session, one memory per chat, a router/switch command path, and network-specialist skills (`load_skill`). Phases 1–3 done (one memory per chat; every open session reachable; `run_cli_command`), Phase 4 (skill library) next |
+| `Docs/CredentialPrompt.md` | **Active, next.** Password prompts (sudo, su, ssh, passphrase, device `enable`) pause the awaited tool call with a card in the chat; the user types in the terminal, nothing is recorded, Decline Ctrl+Cs and tells the model. Replaces the prompt's SUDO rules and the `apply_patch` sudo dance. Phases 0–4 open |
+| `Docs/NetworkCopilot.md` | **Active.** Copilot reaches every open session, one memory per chat, a router/switch command path, and lifecycle-shaped skills (`load_skill`). Phases 1–3 done; Phases 4–7 reshaped 2026-10-16 (harness first, then skill library, then skills, then live cost validation). Read its "Design rules" before adding any rule to the developer prompt |
 | `Docs/Anthropic.md` | Direct Anthropic Messages API as a second AI provider next to OpenRouter — **COMPLETE** (Phases 0–6, validated live). Read its "Rules that shape the design" before touching AI transcript code |
 | `Docs/Bug84.md` | One terminal renderer per session across tab switches and split changes (per-session model store) — **COMPLETE** (Phases 0–5); Phase 5 has the live memory numbers |
 | `Docs/bugs.md` | Bug and tech-debt register by subsystem/severity (counts in its Summary table); paths are pre-refactor |
@@ -561,25 +562,35 @@ and the session coordinators) has no spec file left; see `Docs/featurelist.md`.
 
 ## Next Session Plan
 
-**Active work: `Docs/NetworkCopilot.md` Phase 4 — skill library and `load_skill`.** Phases 1–3
-are done: one memory per chat (`conversationID`), every connected session listed each turn and
-targetable (`AISessionDirectory`, `list_sessions`), and `run_cli_command` for router/switch
-prompts (`DeviceCLI.swift`; `execute_and_wait` refuses device prompts). Read the spec's Overview
-and "Phase 3 as built" first. Live so far: the copilot set up FRR/OSPF across the four cloned
-VMs, and in `vtysh` Opus coped with `send_input` alone; `run_cli_command` itself has not run
-live yet — ask the user to try it in `vtysh` on Testserv2 (`show running-config`,
-`configure terminal` then `end`, and confirm `execute_and_wait` is refused there).
-Phase 4: `AISkillLibrary` (bundled + `~/Library/Application Support/ProSSHMac/Skills/`, front
-matter `name`/`description`/`platforms`), skill index in the system prompt, `load_skill` tool,
-Settings row to open the folder; the skill set must stay fixed per conversation (Anthropic
-prefix). Open questions in the spec: confirmation before changing unfocused hosts; watch the
-user folder live or load per chat. Known gaps for Phase 5 skills: the clone fixes are still
-waiting at `sudo` prompts on the VMs (WireGuard `wg0` identical on all four is the urgent one);
-check `sudo -n true` before planning root changes.
+**Active work: `Docs/CredentialPrompt.md` Phase 0 — detector and pause.** Planned 2026-10-16/17
+with the user; read the spec's Overview, "Guarantees", "Architecture sketch" and "Decisions"
+first. Phase 0 is coordinator-only (no UI): `CredentialPromptDetector` (pure, table-driven
+tests), `SessionAIToolCoordinator` enters a wait after 300 ms idle on a credential cursor line,
+suspends the pending command's timeout, resumes on output, re-enters on "Sorry, try again.",
+declines with `0x03` and a `.declined` result, and task cancellation sends `0x03` to the
+waiting session; delete the dead `detectsPasswordPrompt` in `TerminalView`. Result types
+(`Services/AIAgentService.swift`) gain `waitedForCredential` and `.declined`. Tests drive a
+fake shell channel (`@MainActor final class`, not `actor`). Then Phase 1 (secret entry: the
+user keystroke path `SessionShellIOCoordinator.sendRawShellInputBytes` records nothing while
+waiting, proven by a test that types a known password and finds it nowhere), Phase 2 (the card
+plus a new Stop button that keeps the chat; there is no Stop today, only Clear), Phase 3
+(delete the SUDO prompt section and the `apply_patch` sudo dance, keeping plain-first then
+sudo), Phase 4 (live on the four VMs). Tool execution is sequential, so one host waits at a
+time: no queue. See the spec's "Decisions" for the calls made after the builder check.
 
-**Next after that: Bug 88 + Bug 87 (tab selection vs. pane focus in split layouts).** Bug 84 is
-closed (2026-10-15); the Anthropic provider (`Docs/Anthropic.md`) is complete and validated live. Both bugs are in `Docs/bugs.md` and touch the same interaction in
-`TerminalView`: tab selection, pane assignment and `onChange(of: paneManager.focusedPaneId)`.
+**Then `Docs/NetworkCopilot.md` Phase 4** (harness first: non-interactive execution
+environment, prompt audit, tool contract sweep), Phase 5 (skill library, one-line index loaded
+once per chat), Phase 6 (lifecycle-shaped skills), Phase 7 (live validation with iteration and
+dollar counts). The spec's "Design rules" table is the test for where anything new goes: code,
+prompt, skill or user skill. Do not add vendor playbooks or new prompt rules. Still owed from
+Phase 3: `run_cli_command` has not run live; try it in `vtysh` on Testserv2 during
+CredentialPrompt Phase 4 (`show running-config`, `configure terminal` then `end`, and confirm
+`execute_and_wait` is refused there). Known VM state: the clone fixes are still waiting at
+`sudo` prompts on all four VMs (WireGuard `wg0` identical on all four is the urgent one).
+
+**Next after that: Bug 88 + Bug 87 (tab selection vs. pane focus in split layouts).** Both are in
+`Docs/bugs.md` and touch the same interaction in `TerminalView`: tab selection, pane assignment
+and `onChange(of: paneManager.focusedPaneId)`.
 - Bug 88: in a split layout a tab click only changes `tabManager.selectedSessionID`; panes draw
   `pane.sessionID`, so nothing new appears. Proposed: a tab already in a pane focuses that pane,
   otherwise the session replaces the focused pane's session (keeping its store model/renderer).
