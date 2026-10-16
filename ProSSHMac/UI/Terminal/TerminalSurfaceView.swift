@@ -129,7 +129,7 @@ struct TerminalSurfaceView: View {
     }
 
     private func safeTerminalDisplayLines(for session: Session) -> [SafeTerminalRenderedLine] {
-        // stubs: directInputBufferBySessionID / shouldUseSecureInput / shouldEnableDirectTerminalInput
+        // stub: shouldEnableDirectTerminalInput
         // live in TerminalView; this entire function is unreachable (isMacOSTerminalSafetyModeEnabled = false)
         let lines = sessionManager.shellBuffers[session.id] ?? []
 

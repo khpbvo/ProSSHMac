@@ -1,10 +1,34 @@
 // Extracted from SessionManager.swift
 import Foundation
 
+/// An awaited copilot command stopped at a password prompt. The user answers in the terminal.
+/// See Docs/CredentialPrompt.md.
+struct CredentialWait: Equatable, Sendable {
+    enum Phase: Equatable, Sendable {
+        /// The prompt is up and the command's timeout is suspended.
+        case waiting
+        /// The user pressed Enter. The timeout runs again until the output shows the command got
+        /// past the prompt; a re-raised prompt goes back to `waiting`.
+        case verifying
+    }
+
+    let sessionID: UUID
+    var prompt: String
+    var kind: CredentialPromptDetector.Kind
+    let command: String
+    let startedAt: Date
+    var phase: Phase
+}
+
 @MainActor final class SessionAIToolCoordinator {
     weak var manager: SessionManager?
     private var pendingCommands: [UUID: PendingToolCommand] = [:]
     private var pendingCLICommands: [UUID: PendingCLICommand] = [:]
+    /// At most one entry today: tool calls run one after another.
+    private(set) var awaitingCredential: [UUID: CredentialWait] = [:]
+    /// After Ctrl+C, before anything else is sent: SIGINT flushes the tty's queued input, so a
+    /// line sent in the same packet would be discarded.
+    private let interruptSettleDelay: Duration = .milliseconds(250)
 
     init() {}
 
@@ -34,9 +58,9 @@ import Foundation
             return CommandExecutionResult(output: "Session is not connected.", exitCode: nil, timedOut: false, blockID: nil)
         }
 
-        let pending = PendingToolCommand(token: token)
+        let pending = PendingToolCommand(token: token, command: command, timeoutSeconds: timeoutSeconds)
         do {
-            supersedePendingCommands(sessionID: sessionID)
+            await supersedePendingCommands(sessionID: sessionID)
             pendingCommands[sessionID] = pending
             let payload = wrappedCommand + "\n"
             try await shell.send(payload)
@@ -57,18 +81,17 @@ import Foundation
         let result = await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 pending.continuation = continuation
-                Task { [weak self] in
-                    try? await Task.sleep(for: .seconds(max(0, timeoutSeconds)))
-                    self?.timeoutToolCommand(sessionID: sessionID, token: token)
-                }
+                startTimeout(for: pending, sessionID: sessionID)
             }
         } onCancel: {
             Task { @MainActor [weak self] in
-                self?.timeoutToolCommand(sessionID: sessionID, token: token)
+                await self?.cancelToolCommand(sessionID: sessionID, token: token)
             }
         }
 
         guard result.timedOut else { return result }
+        // A newer command owns the session; a reset line now would be typed into it.
+        guard pendingCommands[sessionID] == nil, pendingCLICommands[sessionID] == nil else { return result }
 
         // Defense-in-depth: reset terminal SGR attributes on timeout to prevent
         // stuck hidden/color state from a command that failed to complete its reset.
@@ -96,7 +119,7 @@ import Foundation
 
         let startPrompt = DeviceCLIPrompt.cursorLine(in: manager.shellBuffers[sessionID] ?? [])
         let pending = PendingCLICommand(capture: DeviceCLICapture(command: command, startPrompt: startPrompt))
-        supersedePendingCommands(sessionID: sessionID)
+        await supersedePendingCommands(sessionID: sessionID)
         pendingCLICommands[sessionID] = pending
 
         let payload = command + "\r"
@@ -149,12 +172,23 @@ import Foundation
         }
     }
 
-    /// One AI command per session: a new one ends whichever is still waiting.
-    private func supersedePendingCommands(sessionID: UUID) {
-        if let previous = pendingCommands.removeValue(forKey: sessionID) {
-            previous.finish(CommandExecutionResult(output: "A newer command started in this session.", exitCode: nil, timedOut: true, blockID: nil))
-        }
+    /// One AI command per session: a new one ends whichever is still waiting. A command paused
+    /// at a password prompt gets Ctrl+C first, so the new command is never typed into the prompt.
+    private func supersedePendingCommands(sessionID: UUID) async {
+        let previous = pendingCommands.removeValue(forKey: sessionID)
         pendingCLICommands.removeValue(forKey: sessionID)
+        if awaitingCredential.removeValue(forKey: sessionID) != nil {
+            await interruptCredentialPrompt(sessionID: sessionID)
+        }
+        // Finish last: the caller registers the new command before the previous one resumes,
+        // so the previous one sees it and sends nothing more to the session.
+        previous?.finish(CommandExecutionResult(
+            output: "A newer command started in this session.",
+            exitCode: nil,
+            timedOut: true,
+            blockID: nil,
+            waitedForCredential: previous?.waitedForCredential ?? false
+        ))
     }
 
     func filterToolOutput(sessionID: UUID, chunk: Data) -> Data {
@@ -162,24 +196,166 @@ import Foundation
             pending.capture.ingest(chunk)
             pending.lastOutputAt = ContinuousClock().now
         }
-        return pendingCommands[sessionID]?.filter(chunk) ?? chunk
+        guard let pending = pendingCommands[sessionID] else { return chunk }
+        let visible = pending.filter(chunk)
+        if !visible.isEmpty {
+            noteCommandOutput(visible, sessionID: sessionID, pending: pending)
+        }
+        return visible
     }
 
     func completeToolCommand(sessionID: UUID, token: String, exitCode: Int) {
         guard let pending = pendingCommands[sessionID], pending.token == token else { return }
         pendingCommands.removeValue(forKey: sessionID)
+        awaitingCredential.removeValue(forKey: sessionID)
         pending.finish(CommandExecutionResult(
             output: pending.commandOutput,
             exitCode: exitCode,
             timedOut: false,
-            blockID: nil
+            blockID: nil,
+            waitedForCredential: pending.waitedForCredential
         ))
     }
 
     private func timeoutToolCommand(sessionID: UUID, token: String) {
         guard let pending = pendingCommands[sessionID], pending.token == token else { return }
         pendingCommands.removeValue(forKey: sessionID)
-        pending.finish(CommandExecutionResult(output: pending.commandOutput, exitCode: nil, timedOut: true, blockID: nil))
+        awaitingCredential.removeValue(forKey: sessionID)
+        pending.finish(CommandExecutionResult(
+            output: pending.commandOutput,
+            exitCode: nil,
+            timedOut: true,
+            blockID: nil,
+            waitedForCredential: pending.waitedForCredential
+        ))
+    }
+
+    /// The agent task was cancelled (Stop or Clear). A host left at a password prompt gets Ctrl+C.
+    private func cancelToolCommand(sessionID: UUID, token: String) async {
+        guard let pending = pendingCommands[sessionID], pending.token == token else { return }
+        if awaitingCredential.removeValue(forKey: sessionID) != nil {
+            await interruptCredentialPrompt(sessionID: sessionID)
+        }
+        timeoutToolCommand(sessionID: sessionID, token: token)
+    }
+
+    // MARK: - Credential prompts
+
+    /// The user declined to answer: Ctrl+C the prompt and tell the model.
+    func declineCredentialPrompt(sessionID: UUID) async {
+        guard awaitingCredential.removeValue(forKey: sessionID) != nil else { return }
+        let pending = pendingCommands.removeValue(forKey: sessionID)
+        await interruptCredentialPrompt(sessionID: sessionID)
+        pending?.finish(CommandExecutionResult(
+            output: pending?.commandOutput ?? "",
+            exitCode: nil,
+            timedOut: false,
+            blockID: nil,
+            waitedForCredential: true,
+            declinedCredential: true
+        ))
+    }
+
+    /// The session closed or dropped. Without this a command paused at a prompt, which has no
+    /// timeout, would never return.
+    func sessionEnded(sessionID: UUID) {
+        awaitingCredential.removeValue(forKey: sessionID)
+        pendingCLICommands.removeValue(forKey: sessionID)
+        guard let pending = pendingCommands.removeValue(forKey: sessionID) else { return }
+        pending.finish(CommandExecutionResult(
+            output: "The session ended before the command finished.",
+            exitCode: nil,
+            timedOut: false,
+            blockID: nil,
+            waitedForCredential: pending.waitedForCredential
+        ))
+    }
+
+    private func interruptCredentialPrompt(sessionID: UUID) async {
+        guard let manager, let shell = manager.shellChannels[sessionID] else { return }
+        try? await shell.send(bytes: [0x03])
+        manager.bytesSentBySessionID[sessionID, default: 0] += 1
+        try? await Task.sleep(for: interruptSettleDelay)
+    }
+
+    private func startTimeout(for pending: PendingToolCommand, sessionID: UUID) {
+        pending.timeoutTask?.cancel()
+        let token = pending.token
+        let seconds = max(0, pending.timeoutSeconds)
+        pending.timeoutTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(seconds))
+            guard !Task.isCancelled else { return }
+            self?.timeoutToolCommand(sessionID: sessionID, token: token)
+        }
+    }
+
+    private func noteCommandOutput(_ visible: Data, sessionID: UUID, pending: PendingToolCommand) {
+        pending.lastOutputAt = .now
+        if var wait = awaitingCredential[sessionID] {
+            switch wait.phase {
+            case .waiting:
+                // Only a line break answers the prompt; `pwfeedback` asterisks do not.
+                if let lineBreak = visible.firstIndex(where: { $0 == 0x0A || $0 == 0x0D }) {
+                    wait.phase = .verifying
+                    awaitingCredential[sessionID] = wait
+                    pending.recordAfterAnswer(visible[lineBreak...], restart: true)
+                    startTimeout(for: pending, sessionID: sessionID)
+                }
+            case .verifying:
+                pending.recordAfterAnswer(visible, restart: false)
+            }
+            if awaitingCredential[sessionID]?.phase == .verifying,
+               CredentialPromptDetector.showsProgress(afterAnswer: pending.outputAfterAnswer) {
+                awaitingCredential.removeValue(forKey: sessionID)
+            }
+        }
+        armCredentialIdleCheck(sessionID: sessionID, pending: pending)
+    }
+
+    /// One task per pending command, checking once output has been quiet for the idle window.
+    private func armCredentialIdleCheck(sessionID: UUID, pending: PendingToolCommand) {
+        guard pending.idleTask == nil else { return }
+        pending.idleTask = Task { [weak self] in
+            while !Task.isCancelled {
+                let due = pending.lastOutputAt + CredentialPromptDetector.idle
+                guard ContinuousClock.now >= due else {
+                    try? await Task.sleep(until: due, clock: .continuous)
+                    continue
+                }
+                pending.idleTask = nil
+                self?.checkForCredentialPrompt(sessionID: sessionID, pending: pending)
+                return
+            }
+        }
+    }
+
+    private func checkForCredentialPrompt(sessionID: UUID, pending: PendingToolCommand) {
+        guard pendingCommands[sessionID] === pending else { return }
+        let line = pending.cursorLine
+        guard let match = CredentialPromptDetector.match(line) else {
+            if awaitingCredential[sessionID]?.phase == .verifying, !line.isEmpty {
+                awaitingCredential.removeValue(forKey: sessionID)
+            }
+            return
+        }
+        pending.timeoutTask?.cancel()
+        pending.timeoutTask = nil
+        pending.waitedForCredential = true
+        if var wait = awaitingCredential[sessionID] {
+            wait.phase = .waiting
+            wait.prompt = match.prompt
+            wait.kind = match.kind
+            awaitingCredential[sessionID] = wait
+        } else {
+            awaitingCredential[sessionID] = CredentialWait(
+                sessionID: sessionID,
+                prompt: match.prompt,
+                kind: match.kind,
+                command: pending.command,
+                startedAt: .now,
+                phase: .waiting
+            )
+        }
     }
 
     func publishCommandCompletion(_ block: CommandBlock) {
@@ -219,6 +395,14 @@ import Foundation
 /// before the private start marker, then pass real command output through.
 @MainActor private final class PendingToolCommand {
     let token: String
+    let command: String
+    let timeoutSeconds: TimeInterval
+    var timeoutTask: Task<Void, Never>?
+    var idleTask: Task<Void, Never>?
+    var lastOutputAt = ContinuousClock.now
+    var waitedForCredential = false
+    /// Output since the user last answered a credential prompt, bounded.
+    private(set) var outputAfterAnswer: [UInt8] = []
     private var prelude: [UInt8] = []
     private var started = false
     private var outputBytes: [UInt8] = []
@@ -232,8 +416,10 @@ import Foundation
         }
     }
 
-    init(token: String) {
+    init(token: String, command: String, timeoutSeconds: TimeInterval) {
         self.token = token
+        self.command = command
+        self.timeoutSeconds = timeoutSeconds
     }
 
     func filter(_ chunk: Data) -> Data {
@@ -270,8 +456,23 @@ import Foundation
         return TerminalPlainText.plainText(commandBytes).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// The line the cursor is on in this command's output.
+    var cursorLine: String {
+        CredentialPromptDetector.cursorLine(in: outputBytes)
+    }
+
+    func recordAfterAnswer(_ bytes: some Sequence<UInt8>, restart: Bool) {
+        if restart { outputAfterAnswer.removeAll(keepingCapacity: true) }
+        outputAfterAnswer.append(contentsOf: bytes)
+        if outputAfterAnswer.count > 4_096 {
+            outputAfterAnswer.removeFirst(outputAfterAnswer.count - 4_096)
+        }
+    }
+
     func finish(_ result: CommandExecutionResult) {
         guard resolvedResult == nil else { return }
+        timeoutTask?.cancel()
+        idleTask?.cancel()
         resolvedResult = result
         if let continuation {
             self.continuation = nil

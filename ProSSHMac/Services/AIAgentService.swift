@@ -104,6 +104,10 @@ struct CommandExecutionResult: Sendable {
     var exitCode: Int?
     var timedOut: Bool
     var blockID: UUID?
+    /// The command stopped at a password prompt and waited for the user to answer it.
+    var waitedForCredential = false
+    /// The user declined the password prompt; the command was interrupted with Ctrl+C.
+    var declinedCredential = false
 }
 
 /// One command run at a device CLI prompt (`run_cli_command`).
@@ -114,12 +118,16 @@ struct CLICommandResult: Sendable, Equatable {
         case timedOut
         case superseded
         case failed
+        /// The user declined the password prompt; the command was interrupted with Ctrl+C.
+        case declined
     }
 
     var output: String
     var status: Status
     var finalPrompt: String?
     var pagesAdvanced = 0
+    /// The command stopped at a password prompt and waited for the user to answer it.
+    var waitedForCredential = false
 }
 
 extension SessionManager: AIAgentSessionProviding {}

@@ -880,6 +880,7 @@ final class SessionManager: ObservableObject {
     }
 
     private func removeSessionArtifacts(sessionID: UUID) {
+        aiToolCoordinator.sessionEnded(sessionID: sessionID)
         shellIOCoordinator.cancelParserTask(for: sessionID)
         renderingCoordinator.cleanupSession(sessionID)
         shellChannels.removeValue(forKey: sessionID)

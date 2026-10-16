@@ -37,8 +37,6 @@ struct TerminalView: View {
     @StateObject private var quickCommands = QuickCommands()
     @FocusState private var focusedSessionID: UUID?
     @State private var closeConfirmationSession: Session?
-    @State private var secureInputOverride: Bool?
-    @State private var directInputBufferBySessionID: [UUID: String] = [:]
     @State private var directInputActivationNonce: Int = 0
     @State private var searchFocusNonce: Int = 0
     @State private var isSearchBarFocused: Bool = false
@@ -667,54 +665,7 @@ struct TerminalView: View {
     }
 
     private func handleDirectTerminalInput(_ sequence: String, sessionID: UUID) {
-        if !isMacOSTerminalSafetyModeEnabled {
-            directInputBufferBySessionID[sessionID] = ""
-            sendControl(sequence, sessionID: sessionID)
-            return
-        }
-
-        let isSecure = sessionManager.sessions
-            .first(where: { $0.id == sessionID })
-            .map(shouldUseSecureInput(for:))
-            ?? false
-
-        if sequence == "\r" {
-            let command = directInputBufferBySessionID[sessionID, default: ""]
-            directInputBufferBySessionID[sessionID] = ""
-            Task {
-                await sessionManager.sendShellInput(
-                    sessionID: sessionID,
-                    input: command,
-                    suppressEcho: isSecure
-                )
-            }
-            return
-        }
-
-        if sequence == "\u{7F}" {
-            var buffer = directInputBufferBySessionID[sessionID, default: ""]
-            if !buffer.isEmpty {
-                buffer.removeLast()
-            }
-            directInputBufferBySessionID[sessionID] = buffer
-            return
-        }
-
-        if isDirectPrintableInput(sequence) {
-            directInputBufferBySessionID[sessionID, default: ""] += sequence
-            return
-        }
-
-        directInputBufferBySessionID[sessionID] = ""
         sendControl(sequence, sessionID: sessionID)
-    }
-
-    private func isDirectPrintableInput(_ sequence: String) -> Bool {
-        guard sequence.count == 1,
-              let scalar = sequence.unicodeScalars.first else {
-            return false
-        }
-        return scalar.value >= 0x20 && scalar.value != 0x7F
     }
 
     private func binding(for sessionID: UUID) -> Binding<String> {
@@ -735,8 +686,6 @@ struct TerminalView: View {
     private var isMetalRendererAvailable: Bool {
         MTLCreateSystemDefaultDevice() != nil
     }
-
-    private var isMacOSTerminalSafetyModeEnabled: Bool { false }
 
     private var newWindowToolbarPlacement: ToolbarItemPlacement {
         return .automatic
@@ -958,35 +907,15 @@ struct TerminalView: View {
         }
     }
 
-    private func shouldUseSecureInput(for session: Session) -> Bool {
-        if let override = secureInputOverride { return override }
-        return detectsPasswordPrompt(for: session)
-    }
-
     private var bellFeedbackMode: BellFeedbackMode {
         BellFeedbackMode(rawValue: bellFeedbackModeRawValue) ?? .none
     }
 
-    private func detectsPasswordPrompt(for session: Session) -> Bool {
-        let lines = sessionManager.shellBuffers[session.id] ?? []
-        guard let lastLine = lines.last?.trimmingCharacters(in: .whitespaces).lowercased(),
-              !lastLine.isEmpty else { return false }
-        let patterns = ["password:", "password for", "passphrase:", "passphrase for", "enter pin"]
-        return patterns.contains(where: { lastLine.contains($0) })
-    }
-
     private func sendCommand(for sessionID: UUID) {
         let command = pendingInput[sessionID, default: ""]
-        let wasSecure: Bool
-        if let session = sessionManager.sessions.first(where: { $0.id == sessionID }) {
-            wasSecure = shouldUseSecureInput(for: session)
-        } else {
-            wasSecure = false
-        }
         pendingInput[sessionID] = ""
-        secureInputOverride = nil
         Task {
-            await sessionManager.sendShellInput(sessionID: sessionID, input: command, suppressEcho: wasSecure)
+            await sessionManager.sendShellInput(sessionID: sessionID, input: command)
         }
     }
 

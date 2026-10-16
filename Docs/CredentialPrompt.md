@@ -78,10 +78,11 @@ prompt will say to use `execute_and_wait` for sudo like any other command, so th
 rare.
 
 **Detection.** `CredentialPromptDetector` (pure, `nonisolated`, next to `DeviceCLI.swift`)
-classifies the cursor line (`DeviceCLIPrompt.cursorLine`, from `manager.shellBuffers`):
+classifies the cursor line of the pending command's own output (the text after its last line
+break; see Decisions for why not `manager.shellBuffers`):
 `[sudo] password for <user>:`, `Password:`, `password:`, `<user>@<host>'s password:`,
-`Enter passphrase for key '…':`, `(current) UNIX password:`, `Password for <user>:`, sudo's
-`Sorry, try again.` followed by a prompt. It fires only while a pending awaited command exists
+`Enter passphrase for key '…':`, `(current) UNIX password:`, `Password for <user>:`,
+`doas (<user>@<host>) password:`, sudo's `Sorry, try again.` followed by a prompt. It fires only while a pending awaited command exists
 for that session and the cursor line has been sitting on a prompt with no further output for
 300 ms (so `Password:` scrolling past in a file never matches). Bounded like every other scan:
 the check runs at most once per output batch and reads one line. `TerminalView.swift` already
@@ -91,11 +92,18 @@ hard-coded `false`); Phase 0 deletes it so there is one detector, not three.
 **Architecture sketch.**
 
 - `SessionAIToolCoordinator` owns the state: `awaitingCredential: [UUID: CredentialWait]`
-  (session, prompt text, the command, when it started; at most one entry today).
+  (session, prompt, kind, the command, when it started, phase; at most one entry today).
   `filterToolOutput` (per batch) arms a 300 ms idle check; the check reads the cursor line and
-  enters the wait. Entering the wait cancels the pending command's timeout task; leaving it
-  (output arrived after the user's input) starts a fresh full timeout. Leaving re-arms the idle
-  check so a re-raised prompt ("Sorry, try again.") re-enters the wait and the card stays.
+  enters `.waiting`, which cancels the pending command's timeout task. A line break in the
+  output (the user pressed Enter) moves to `.verifying` and starts a fresh full timeout.
+  `.verifying` ends when a complete ordinary output line arrives (not a retry notice, not a
+  prompt), when the idle check finds a non-prompt cursor line, or when the command finishes; a
+  re-raised prompt goes back to `.waiting`, so the entry (and the card) never blinks out
+  between attempts. `pwfeedback` asterisks never end `.waiting`.
+- Decline, cancellation and supersede send Ctrl+C to a session with an entry, then wait 250 ms
+  before anything else is sent (SIGINT flushes the tty's queued input). A session that closes or
+  drops (`SessionManager.removeSessionArtifacts`) ends its pending command, since a paused
+  command has no timeout to end it.
 - `SessionManager` publishes `credentialPrompt: CredentialPromptRequest?` (`@Published`) and
   exposes `declineCredentialPrompt(sessionID:)` (sends `0x03`, finishes the pending command
   with `.declined`) and `cancelCredentialPrompts()` (Stop/Clear).
@@ -139,7 +147,7 @@ safety-mode path). Tests: new `CredentialPromptDetectorTests`,
 
 ## Phases
 
-- [ ] **Phase 0: Detector and pause.** `CredentialPromptDetector` with table-driven tests
+- [x] **Phase 0: Detector and pause.** (2026-10-17) `CredentialPromptDetector` with table-driven tests
   (every prompt form above, plus negatives: a `Password:` line followed by more output, a
   shell prompt, a `--More--` pager); delete `detectsPasswordPrompt` and the dead safety-mode
   path in `TerminalView`. `SessionAIToolCoordinator`: enter the wait after 300 ms idle on a
@@ -196,6 +204,22 @@ safety-mode path). Tests: new `CredentialPromptDetectorTests`,
 - Detection is a cursor-line match plus 300 ms idle, not output-stream parsing. (Claude's call:
   the cursor line is what the user sees and is already maintained for device CLIs; the idle
   window avoids false positives from file contents.)
+
+- Detection reads the pending command's own output, not `shellBuffers`: those are throttled
+  (up to 200 ms in burst mode) and give the last *non-empty* line, so after a correct password
+  with a quiet command (`sudo sleep 10`) they would still show the prompt and re-enter the wait.
+  The command's output after its start marker is the exact cursor line and cannot match text
+  printed before the command ran. (Phase 0, 2026-10-17.)
+- The wait has two phases, `.waiting` and `.verifying`, instead of "resume on any output", so
+  a wrong password never makes the card say "granted" and `pwfeedback` asterisks don't end the
+  wait. (Phase 0.)
+- Supersede while waiting sends Ctrl+C before the new command, and finishes the old command
+  only after that, so the old command never sends its timeout reset line (`ESC[0m` + newline)
+  into the prompt or the new command. A timed-out command skips that reset whenever a newer
+  command already owns the session. (Phase 0; found by the supersede test.)
+- `CLICommandResult.Status.declined` is formatted for the model already (the exhaustive switch
+  in `AIToolHandler+DeviceCLI` needs it); everything else about result formatting stays in
+  Phase 3. (Phase 0.)
 
 ## Open questions
 

@@ -114,6 +114,10 @@ extension AIToolHandler {
         case .failed:
             fields["ok"] = .bool(false)
             fields["error"] = .string(result.output)
+        case .declined:
+            fields["ok"] = .bool(false)
+            fields["error"] = .string("The user declined the password prompt.")
+            fields["hint"] = .string("Do not retry on this host unless the user asks. Continue with the other hosts and report.")
         }
         return .object(fields)
     }
