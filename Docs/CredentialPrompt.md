@@ -161,7 +161,7 @@ safety-mode path). Tests: new `CredentialPromptDetectorTests`,
   appears in none of: history index raw output or command list, session recording, shell
   buffers, the tool's `commandOutput`, the per-turn screen snapshot. The prompt line itself may
   appear.
-- [ ] **Phase 2: The card and Stop.** `SessionManager.credentialPrompt`,
+- [x] **Phase 2: The card and Stop.** (2026-10-17) `SessionManager.credentialPrompt`,
   `CredentialPromptCardView` (host label, command, Enter password, Decline, the "not visible"
   note), "Waiting for your password on <host>…" in the chat, best-effort reveal through
   `focusSessionAndPane`, focus to the chat pane after a grant. The Stop button
@@ -223,6 +223,18 @@ safety-mode path). Tests: new `CredentialPromptDetectorTests`,
   paste was recorded; a leaked first key also stayed in the history index's typed-input buffer
   and was glued onto the next real command (`hls` for `ls`, found by the Phase 1 test). The
   copilot's own command wrapper is still recorded as input, as before. (Phase 1, 2026-10-17.)
+- The card's state lives in the view model (mirrored from `SessionManager.credentialPrompt`
+  through `CredentialPromptHandling`), not in a view, so it cannot outlive its wait. Its end is
+  reported as a UI-only chat line: "Password entered on X" (not "granted": sudo's third failure
+  also ends the wait from `.verifying`), "Declined…", or "…closed" for a prompt that went away
+  unanswered (the user's own Ctrl+C, a dropped session). Stop and Clear add no such line.
+  (Phase 2.)
+- While a host is at a password prompt, broadcast and group input go to that host only
+  (`PaneManager.inputTargetSessionIDs`). Without it a password typed while broadcasting was
+  typed, echoed and recorded on every other host, where the copilot can read it. Added in
+  Phase 2; not in the original plan. (Phase 2.)
+- After an answer, keys go to the chat (the terminal's direct input is off); the composer takes
+  focus when the turn ends unless the user clicked a terminal first. (Phase 2.)
 - `CLICommandResult.Status.declined` is formatted for the model already (the exhaustive switch
   in `AIToolHandler+DeviceCLI` needs it); everything else about result formatting stays in
   Phase 3. (Phase 0.)

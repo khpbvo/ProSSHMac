@@ -141,7 +141,8 @@ final class AppDependencies: ObservableObject {
             keyStore: keyStore
         )
         self.terminalAIAssistantViewModel = TerminalAIAssistantViewModel(
-            agentService: self.aiAgentService
+            agentService: self.aiAgentService,
+            credentialPrompts: sessionManager
         )
 
         if !runningTests && !screenshotMode && !ThroughputBenchmarkRunner.isEnabled

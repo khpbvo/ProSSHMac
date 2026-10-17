@@ -12,6 +12,12 @@ struct TerminalAIAssistantPane: View {
     var onClose: () -> Void
     var onSend: (UUID) -> Void
     var onComposerFocusChanged: (Bool) -> Void
+    /// Brings a session forward so the user can type a password there.
+    var onRevealSession: (UUID) -> Void = { _ in }
+    /// Why a session cannot be brought forward, if it cannot.
+    var credentialRevealNote: (UUID) -> String? = { _ in nil }
+    /// Changing it moves keyboard focus to the composer once it is enabled.
+    var composerFocusRequest = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -19,6 +25,15 @@ struct TerminalAIAssistantPane: View {
             Divider()
             messagesView
             Divider()
+            if let request = viewModel.credentialPrompt {
+                CredentialPromptCardView(
+                    request: request,
+                    revealNote: credentialRevealNote(request.sessionID),
+                    onEnterPassword: { onRevealSession(request.sessionID) },
+                    onDecline: { viewModel.declineCredentialPrompt() }
+                )
+                .padding([.horizontal, .top], 12)
+            }
             composer
         }
         .background(
@@ -113,6 +128,12 @@ struct TerminalAIAssistantPane: View {
                                     warnings: warnings, success: success
                                 )
                                 .id(message.id)
+                            case .status:
+                                Text(message.content)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .center)
+                                    .id(message.id)
                             }
                         }
                     }
@@ -211,6 +232,7 @@ struct TerminalAIAssistantPane: View {
                     text: $viewModel.draftPrompt,
                     dynamicHeight: $composerHeight,
                     isEnabled: session != nil && !viewModel.isSending,
+                    focusRequest: composerFocusRequest,
                     minHeight: 38,
                     maxHeight: 160,
                     onSubmit: {
@@ -249,6 +271,12 @@ struct TerminalAIAssistantPane: View {
                 }
                 .buttonStyle(.bordered)
                 .disabled(viewModel.messages.isEmpty)
+
+                Button("Stop") {
+                    viewModel.stop()
+                }
+                .buttonStyle(.bordered)
+                .disabled(!viewModel.isSending)
 
                 Spacer()
 
@@ -487,13 +515,16 @@ private struct AIAssistantComposerTextView: NSViewRepresentable {
     @Binding var text: String
     @Binding var dynamicHeight: CGFloat
     var isEnabled: Bool
+    var focusRequest: Int
     var minHeight: CGFloat
     var maxHeight: CGFloat
     var onSubmit: () -> Void
     var onFocusChanged: (Bool) -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(parent: self)
+        let coordinator = Coordinator(parent: self)
+        coordinator.handledFocusRequest = focusRequest
+        return coordinator
     }
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -564,12 +595,21 @@ private struct AIAssistantComposerTextView: NSViewRepresentable {
             window.makeFirstResponder(nil)
         }
 
+        if isEnabled, focusRequest != context.coordinator.handledFocusRequest {
+            context.coordinator.handledFocusRequest = focusRequest
+            DispatchQueue.main.async { [weak textView] in
+                guard let textView, let window = textView.window else { return }
+                window.makeFirstResponder(textView)
+            }
+        }
+
         context.coordinator.parent = self
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: AIAssistantComposerTextView
         weak var textView: ComposerTextView?
+        var handledFocusRequest = 0
         private var lastFocusState: Bool?
 
         init(parent: AIAssistantComposerTextView) {

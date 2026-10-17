@@ -366,6 +366,143 @@ final class TerminalAIAssistantViewModelTests: XCTestCase {
         XCTAssertFalse(viewModel.messages[1].isStreaming)
     }
 
+    // MARK: - Credential prompt card and Stop (Docs/CredentialPrompt.md Phase 2)
+
+    func testCredentialPromptMirrorsTheSessionLayerAndReportsAnAnswer() {
+        let prompts = FakeCredentialPrompts()
+        let viewModel = makeViewModel(credentialPrompts: prompts)
+        let waiting = makeCredentialRequest(phase: .waiting)
+
+        prompts.subject.send(waiting)
+        XCTAssertEqual(viewModel.credentialPrompt, waiting)
+        let verifying = makeCredentialRequest(id: waiting.id, sessionID: waiting.sessionID, phase: .verifying)
+        prompts.subject.send(verifying)
+        XCTAssertEqual(viewModel.credentialPrompt, verifying)
+        XCTAssertTrue(viewModel.messages.isEmpty, "a phase change is not an ending")
+
+        prompts.subject.send(nil)
+        XCTAssertNil(viewModel.credentialPrompt)
+        XCTAssertEqual(viewModel.messages.map(\.content), ["Password entered on Testserv2."])
+        XCTAssertEqual(viewModel.messages.first?.kind, .status)
+        XCTAssertEqual(viewModel.credentialAnsweredNonce, 1)
+    }
+
+    func testPromptClosedWithoutAnAnswerDoesNotMoveFocus() {
+        let prompts = FakeCredentialPrompts()
+        let viewModel = makeViewModel(credentialPrompts: prompts)
+
+        prompts.subject.send(makeCredentialRequest(phase: .waiting))
+        prompts.subject.send(nil)
+
+        XCTAssertNil(viewModel.credentialPrompt)
+        XCTAssertEqual(viewModel.messages.map(\.content), ["The password prompt on Testserv2 closed."])
+        XCTAssertEqual(viewModel.credentialAnsweredNonce, 0)
+    }
+
+    func testDeclineGoesToTheSessionLayerAndIsReported() async throws {
+        let prompts = FakeCredentialPrompts()
+        let viewModel = makeViewModel(credentialPrompts: prompts)
+        let request = makeCredentialRequest(phase: .waiting)
+        prompts.subject.send(request)
+
+        viewModel.declineCredentialPrompt()
+        try await waitUntil(timeout: 1.0) { viewModel.credentialPrompt == nil }
+
+        XCTAssertEqual(prompts.declinedSessionIDs, [request.sessionID])
+        XCTAssertEqual(viewModel.messages.map(\.content), ["Declined the password prompt on Testserv2."])
+        XCTAssertEqual(viewModel.credentialAnsweredNonce, 0)
+    }
+
+    func testStopKeepsTheChatAndTheConversation() async throws {
+        let prompts = FakeCredentialPrompts()
+        let service = MockAgentService(
+            nextReply: AIAgentReply(text: "never shown", toolCallsExecuted: 0),
+            replyDelayNanoseconds: 5_000_000_000
+        )
+        let viewModel = makeViewModel(service: service, credentialPrompts: prompts)
+        let conversationID = viewModel.conversationID
+
+        viewModel.draftPrompt = "Update all hosts"
+        viewModel.submitPrompt(for: UUID())
+        try await waitUntil(timeout: 1.0) { viewModel.messages.count == 2 }
+        viewModel.stop()
+
+        XCTAssertFalse(viewModel.isSending)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(viewModel.messages.map(\.content), ["Update all hosts", "Stopped."])
+        XCTAssertFalse(viewModel.messages.contains(where: \.isStreaming))
+        XCTAssertEqual(viewModel.conversationID, conversationID)
+        XCTAssertTrue(service.clearedConversationIDs.isEmpty, "Stop keeps the model's memory")
+        try await waitUntil(timeout: 1.0) { prompts.cancelCount == 1 }
+        XCTAssertNil(viewModel.credentialPrompt)
+    }
+
+    func testStopWithAPromptUpCancelsItWithoutAClosedNotice() async throws {
+        let prompts = FakeCredentialPrompts()
+        let service = MockAgentService(
+            nextReply: AIAgentReply(text: "never shown", toolCallsExecuted: 0),
+            replyDelayNanoseconds: 5_000_000_000
+        )
+        let viewModel = makeViewModel(service: service, credentialPrompts: prompts)
+        viewModel.draftPrompt = "sudo apt update on Testserv2"
+        viewModel.submitPrompt(for: UUID())
+        prompts.subject.send(makeCredentialRequest(phase: .waiting))
+
+        viewModel.stop()
+        try await waitUntil(timeout: 1.0) { viewModel.credentialPrompt == nil }
+
+        XCTAssertEqual(prompts.cancelCount, 1)
+        XCTAssertEqual(viewModel.messages.last?.content, "Stopped.")
+        XCTAssertFalse(viewModel.messages.contains { $0.content.contains("closed") })
+    }
+
+    func testClearWithAPromptUpCancelsIt() async throws {
+        let prompts = FakeCredentialPrompts()
+        let viewModel = makeViewModel(credentialPrompts: prompts)
+        prompts.subject.send(makeCredentialRequest(phase: .waiting))
+
+        viewModel.clearConversation()
+        try await waitUntil(timeout: 1.0) { viewModel.credentialPrompt == nil }
+
+        XCTAssertEqual(prompts.cancelCount, 1)
+        XCTAssertTrue(viewModel.messages.isEmpty)
+    }
+
+    func testStopDoesNothingWhenIdle() {
+        let prompts = FakeCredentialPrompts()
+        let viewModel = makeViewModel(credentialPrompts: prompts)
+        viewModel.stop()
+        XCTAssertTrue(viewModel.messages.isEmpty)
+        XCTAssertEqual(prompts.cancelCount, 0)
+    }
+
+    private func makeViewModel(
+        service: MockAgentService = MockAgentService(nextReply: AIAgentReply(text: "ok", toolCallsExecuted: 0)),
+        credentialPrompts: FakeCredentialPrompts
+    ) -> TerminalAIAssistantViewModel {
+        TerminalAIAssistantViewModel(
+            agentService: service,
+            credentialPrompts: credentialPrompts,
+            streamChunkDelayNanoseconds: 0
+        )
+    }
+
+    private func makeCredentialRequest(
+        id: UUID = UUID(),
+        sessionID: UUID = UUID(),
+        phase: CredentialWait.Phase
+    ) -> CredentialPromptRequest {
+        CredentialPromptRequest(
+            id: id,
+            sessionID: sessionID,
+            hostLabel: "Testserv2",
+            prompt: "[sudo] password for kevin:",
+            kind: .sudo,
+            command: "sudo apt update",
+            phase: phase
+        )
+    }
+
     private func waitUntil(
         timeout: TimeInterval,
         condition: @escaping @MainActor () -> Bool
@@ -378,6 +515,29 @@ final class TerminalAIAssistantViewModelTests: XCTestCase {
             try await Task.sleep(nanoseconds: 10_000_000)
         }
         XCTFail("Condition not met before timeout.")
+    }
+}
+
+@MainActor
+private final class FakeCredentialPrompts: CredentialPromptHandling {
+    let subject = CurrentValueSubject<CredentialPromptRequest?, Never>(nil)
+    private(set) var declinedSessionIDs: [UUID] = []
+    private(set) var cancelCount = 0
+
+    nonisolated deinit {}
+
+    var credentialPromptPublisher: AnyPublisher<CredentialPromptRequest?, Never> {
+        subject.eraseToAnyPublisher()
+    }
+
+    func declineCredentialPrompt(sessionID: UUID) async {
+        declinedSessionIDs.append(sessionID)
+        subject.send(nil)
+    }
+
+    func cancelCredentialPrompts() async {
+        cancelCount += 1
+        subject.send(nil)
     }
 }
 

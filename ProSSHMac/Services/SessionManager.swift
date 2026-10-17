@@ -43,6 +43,8 @@ final class SessionManager: ObservableObject {
     @Published var latestCompletedCommandBlockBySessionID: [UUID: CommandBlock] = [:]
     @Published var commandCompletionNonceBySessionID: [UUID: Int] = [:]
     @Published var scrollStateBySessionID: [UUID: TerminalScrollState] = [:]
+    /// The copilot command waiting at a password prompt, if any. See SessionManager+CredentialPrompt.
+    @Published var credentialPrompt: CredentialPromptRequest?
 
     let transport: any SSHTransporting
     private let knownHostsStore: any KnownHostsStoreProtocol

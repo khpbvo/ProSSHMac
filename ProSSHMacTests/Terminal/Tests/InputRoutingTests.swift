@@ -83,6 +83,26 @@ final class InputRoutingTests: XCTestCase {
         XCTAssertTrue(targets.contains(sessionB))
     }
 
+    /// A password typed while broadcasting goes only to the host at the copilot's password prompt.
+    @MainActor
+    func testBroadcastInputGoesOnlyToTheHostAtAPasswordPrompt() {
+        let (manager, first, second) = makeManagerWith2Panes()
+        manager.inputRoutingMode = .broadcast
+        let sessionA = manager.rootNode.findPane(id: first)!.sessionID!
+        let sessionB = manager.rootNode.findPane(id: second)!.sessionID!
+
+        XCTAssertEqual(
+            Set(manager.inputTargetSessionIDs { _ in false }),
+            [sessionA, sessionB]
+        )
+        XCTAssertEqual(manager.inputTargetSessionIDs { $0 == sessionB }, [sessionB])
+        XCTAssertEqual(
+            manager.inputTargetSessionIDs { $0 == UUID() },
+            manager.targetSessionIDs,
+            "a prompt outside the targets changes nothing"
+        )
+    }
+
     @MainActor
     func testTargetSessionIDsInSelectGroup() {
         let (manager, first, second) = makeManagerWith2Panes()

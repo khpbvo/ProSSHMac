@@ -108,6 +108,14 @@ final class PaneManager: ObservableObject {
         return result
     }
 
+    /// `targetSessionIDs`, narrowed to the targets at a copilot password prompt when there are
+    /// any, so a password typed while broadcasting is never typed into the other hosts.
+    func inputTargetSessionIDs(isEnteringCredential: (UUID) -> Bool) -> [UUID] {
+        let targets = targetSessionIDs
+        let entering = targets.filter(isEnteringCredential)
+        return entering.isEmpty ? targets : entering
+    }
+
     /// Pane IDs that are currently targeted for input (for visual indicators).
     var targetPaneIDs: Set<UUID> {
         if let soloPaneId, inputRoutingMode != .singleFocus {

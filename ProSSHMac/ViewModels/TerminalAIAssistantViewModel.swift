@@ -8,6 +8,9 @@ enum TerminalAIAssistantMessageKind: Sendable, Equatable {
         operation: String, path: String,
         linesChanged: Int, warnings: [String], success: Bool
     )
+    /// A one-line note from the chat itself (a password prompt answered, a run stopped). Shown
+    /// only; never sent to the model.
+    case status
 }
 
 struct PatchApprovalRequest: Identifiable, Sendable {
@@ -46,6 +49,11 @@ final class TerminalAIAssistantViewModel: ObservableObject {
     @Published private(set) var reasoningDetails = ""
     @Published private(set) var isReasoningStreaming = false
     @Published private(set) var activePatchApproval: PatchApprovalRequest?
+    /// The copilot command waiting at a password prompt, mirrored from the session layer. Kept
+    /// here, not in a view, so the card can never outlive its wait.
+    @Published private(set) var credentialPrompt: CredentialPromptRequest?
+    /// Bumped when the user answered a password prompt, so the window can move focus back to the chat.
+    @Published private(set) var credentialAnsweredNonce = 0
 
     private let agentService: any AIAgentServicing
     private let streamChunkDelayNanoseconds: UInt64
@@ -54,6 +62,15 @@ final class TerminalAIAssistantViewModel: ObservableObject {
 
     private var activePatchApprovalContinuation: CheckedContinuation<(Bool, Bool), Never>?
     private var activeAgentTask: Task<Void, Never>?
+    private let credentialPrompts: (any CredentialPromptHandling)?
+    private var credentialPromptSubscription: AnyCancellable?
+    /// Prompts the chat itself ended, by wait id, so their end is not reported as the user's.
+    private var credentialPromptEndings: [UUID: CredentialPromptEnding] = [:]
+
+    private enum CredentialPromptEnding {
+        case declined
+        case stopped
+    }
 
     var formattedReasoningSummary: String {
         reasoningSummary.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -78,11 +95,13 @@ final class TerminalAIAssistantViewModel: ObservableObject {
 
     init(
         agentService: any AIAgentServicing,
+        credentialPrompts: (any CredentialPromptHandling)? = nil,
         streamChunkDelayNanoseconds: UInt64 = 6_000_000,
         minChunkSize: Int = 28,
         maxChunkSize: Int = 120
     ) {
         self.agentService = agentService
+        self.credentialPrompts = credentialPrompts
         self.streamChunkDelayNanoseconds = streamChunkDelayNanoseconds
         self.minChunkSize = minChunkSize
         self.maxChunkSize = maxChunkSize
@@ -96,11 +115,19 @@ final class TerminalAIAssistantViewModel: ObservableObject {
                 self?.appendPatchResultNotification(operation: operation, result: result)
             }
         }
+        // The session layer publishes on the main actor.
+        credentialPromptSubscription = credentialPrompts?.credentialPromptPublisher
+            .sink { [weak self] request in
+                MainActor.assumeIsolated {
+                    self?.applyCredentialPrompt(request)
+                }
+            }
     }
 
     nonisolated deinit {}
 
     func clearConversation() {
+        endCredentialPromptsForStop()
         activeAgentTask?.cancel()
         activeAgentTask = nil
         isSending = false
@@ -110,6 +137,66 @@ final class TerminalAIAssistantViewModel: ObservableObject {
         lastError = nil
         agentService.clearConversation(conversationID: conversationID)
         conversationID = UUID()
+    }
+
+    /// Cancels the run but keeps the chat and the model's memory. A host waiting at a password
+    /// prompt gets Ctrl+C.
+    func stop() {
+        guard isSending else { return }
+        endCredentialPromptsForStop()
+        activeAgentTask?.cancel()
+        activeAgentTask = nil
+        isSending = false
+        denyPatch()
+        finishReasoningStreams()
+        messages.removeAll { $0.role == .assistant && $0.isStreaming && $0.content.isEmpty }
+        for index in messages.indices where messages[index].isStreaming {
+            messages[index].isStreaming = false
+        }
+        appendStatus("Stopped.")
+    }
+
+    /// Ctrl+C the prompt on the card's host; the model is told and carries on with other hosts.
+    func declineCredentialPrompt() {
+        guard let prompt = credentialPrompt, let credentialPrompts else { return }
+        credentialPromptEndings[prompt.id] = .declined
+        Task { await credentialPrompts.declineCredentialPrompt(sessionID: prompt.sessionID) }
+    }
+
+    private func endCredentialPromptsForStop() {
+        guard let credentialPrompts else { return }
+        if let prompt = credentialPrompt {
+            credentialPromptEndings[prompt.id] = .stopped
+        }
+        Task { await credentialPrompts.cancelCredentialPrompts() }
+    }
+
+    private func applyCredentialPrompt(_ request: CredentialPromptRequest?) {
+        let previous = credentialPrompt
+        credentialPrompt = request
+        guard let previous, previous.id != request?.id else { return }
+        switch credentialPromptEndings.removeValue(forKey: previous.id) {
+        case .declined:
+            appendStatus("Declined the password prompt on \(previous.hostLabel).")
+        case .stopped:
+            break
+        case nil:
+            // `verifying` means the user pressed Enter. After sudo's third wrong password the
+            // wait ends the same way, so this cannot say "granted".
+            if previous.phase == .verifying {
+                appendStatus("Password entered on \(previous.hostLabel).")
+                credentialAnsweredNonce &+= 1
+            } else {
+                appendStatus("The password prompt on \(previous.hostLabel) closed.")
+            }
+        }
+    }
+
+    private func appendStatus(_ text: String) {
+        messages.append(TerminalAIAssistantMessage(
+            id: UUID(), role: .system, content: text, createdAt: .now,
+            isStreaming: false, kind: .status
+        ))
     }
 
     func requestPatchApproval(
@@ -191,7 +278,8 @@ final class TerminalAIAssistantViewModel: ObservableObject {
             return false
         })
         activeAgentTask = Task { @MainActor [weak self] in
-            guard let self else { return }
+            // Stopped before it started: don't leave an empty streaming reply behind.
+            guard let self, !Task.isCancelled else { return }
             let assistantID = UUID()
             self.messages.append(
                 TerminalAIAssistantMessage(

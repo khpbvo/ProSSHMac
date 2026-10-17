@@ -246,6 +246,7 @@ final class SessionAIToolCoordinatorTests: XCTestCase {
         XCTAssertFalse(result.timedOut)
         XCTAssertNil(result.exitCode)
         XCTAssertNil(coordinator.awaitingCredential[sessionID])
+        XCTAssertNil(manager.credentialPrompt, "the card goes with the wait")
         let payloads = await spy.sentPayloads
         XCTAssertEqual(payloads.last, "\u{03}")
     }
@@ -343,6 +344,52 @@ final class SessionAIToolCoordinatorTests: XCTestCase {
         XCTAssertEqual(result.output, "The session ended before the command finished.")
         XCTAssertTrue(result.waitedForCredential)
         XCTAssertNil(coordinator.awaitingCredential[sessionID])
+        XCTAssertNil(manager.credentialPrompt, "the card goes with the wait")
+    }
+
+    // MARK: - The card (Docs/CredentialPrompt.md Phase 2)
+
+    func testCredentialPromptIsPublishedForTheCardAndFollowsTheWait() async throws {
+        let (manager, sessionID, spy) = try await makeConnectedSessionWithSpy()
+        let (execution, token) = try await startCommand("sudo whoami", on: manager, sessionID: sessionID, spy: spy, timeout: 5)
+        XCTAssertNil(manager.credentialPrompt)
+
+        feed("\u{1B}]7777;PSB;\(token)\u{07}[sudo] password for kevin: ", manager, sessionID)
+        try await waitUntil { manager.credentialPrompt != nil }
+        let request = try XCTUnwrap(manager.credentialPrompt)
+        XCTAssertEqual(request.sessionID, sessionID)
+        XCTAssertEqual(request.hostLabel, "Coordinator Test")
+        XCTAssertEqual(request.prompt, "[sudo] password for kevin:")
+        XCTAssertEqual(request.kind, .sudo)
+        XCTAssertEqual(request.command, "sudo whoami")
+        XCTAssertEqual(request.phase, .waiting)
+        XCTAssertTrue(manager.isEnteringCredential(sessionID: sessionID))
+
+        feed("\r\n", manager, sessionID)
+        XCTAssertEqual(manager.credentialPrompt?.phase, .verifying)
+        XCTAssertEqual(manager.credentialPrompt?.id, request.id, "the same card through Enter")
+        feed("root\r\n", manager, sessionID)
+        XCTAssertNil(manager.credentialPrompt)
+
+        manager.aiToolCoordinator.completeToolCommand(sessionID: sessionID, token: token, exitCode: 0)
+        _ = await execution.value
+        XCTAssertNil(manager.credentialPrompt)
+    }
+
+    func testCancelCredentialPromptsInterruptsTheWaitingHostAndReturnsItsCommand() async throws {
+        let (manager, sessionID, spy) = try await makeConnectedSessionWithSpy()
+        let (execution, token) = try await startCommand("sudo -i", on: manager, sessionID: sessionID, spy: spy, timeout: 5)
+        feed("\u{1B}]7777;PSB;\(token)\u{07}Password: ", manager, sessionID)
+        try await waitUntil { manager.credentialPrompt != nil }
+
+        await manager.cancelCredentialPrompts()
+
+        let result = await execution.value
+        XCTAssertTrue(result.timedOut)
+        XCTAssertTrue(result.waitedForCredential)
+        XCTAssertNil(manager.credentialPrompt)
+        let payloads = await spy.sentPayloads
+        XCTAssertEqual(payloads.dropFirst().first, "\u{03}", "Ctrl+C goes to the waiting host first")
     }
 
     // MARK: - Secret entry (Docs/CredentialPrompt.md Phase 1)

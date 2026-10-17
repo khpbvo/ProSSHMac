@@ -191,7 +191,7 @@ ProSSHMac/
 ├── CLibSSH/              # C wrapper around libssh (ProSSHLibSSHWrapper.c/.h, bridging header)
 ├── Models/               # Host, Session, Transfer, SSHKey, SSHCertificate, AuditLogEntry,
 │   │                     #   TOTPConfiguration
-├── Services/             # SessionManager (+Queries) + 7 coordinators, TransferManager,
+├── Services/             # SessionManager (+Queries, +CredentialPrompt) + 7 coordinators, TransferManager,
 │   │                     #   EncryptedStorage, PersistentStore, PortForwardingManager,
 │   │                     #   LocalPTYProcess, LocalShellBootstrap, LocalShellChannel,
 │   │                     #   ZshStartupWarningFilter, SSHBinaryReader,
@@ -228,9 +228,10 @@ ProSSHMac/
 │                         #   TerminalSearch, QuickCommands, SessionRecorder, CommandBlock,
 │                         #   ShellIntegrationScripts, TerminalHistoryIndex, TerminalFileBrowserTree
 ├── UI/
-│   ├── Terminal/         # 23 files: TerminalView, TerminalSurfaceView, MetalTerminalSessionSurface,
+│   ├── Terminal/         # 24 files: TerminalView, TerminalSurfaceView, MetalTerminalSessionSurface,
 │   │                     #   TerminalPaneView/SplitNodeView/PaneDividerView, TerminalAIAssistantPane,
-│   │                     #   ReasoningStreamView, PatchApprovalCardView, TerminalFileBrowserSidebar,
+│   │                     #   ReasoningStreamView, PatchApprovalCardView, CredentialPromptCardView,
+│   │                     #   TerminalFileBrowserSidebar,
 │   │                     #   session tab/header/actions/metadata bars, search bar, scrollbar,
 │   │                     #   quick commands, TerminalInputCaptureView, ExternalTerminalWindowView,
 │   │                     #   MatrixScreensaverView, TerminalKeyboardShortcutLayer,
@@ -258,9 +259,11 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 | `Services/AI/DeviceCLI.swift` | Router/switch CLI support: `DeviceCLIPrompt` (cursor line → POSIX / device / unknown, prompt base), `DeviceCLICapture` (complete / pager / question decisions from text + idle time), `DeviceCLIText` |
 | `Services/AI/AISessionDirectory.swift` | The open sessions as the copilot sees them: per-turn list, `list_sessions` JSON, default targets, device-CLI marking |
 | `Services/TerminalRenderingCoordinator.swift` | Snapshot publishing, scroll state, resize debounce, alt-buffer policy, shell-buffer throttle (1,066L). An ordinary publish is two engine calls (`publishViewportState`, then `publishSnapshot` carrying housekeeping) with MainActor scroll-anchor policy between them |
-| `UI/Terminal/TerminalView.swift` | Main terminal UI, sidebar layout, focus, input capture (1,010L). `sessionPanel` is the only place a session's terminal surface is built |
-| `Services/SessionManager.swift` + Queries | Session lifecycle, shell I/O, SFTP, grid snapshots (1,020L) |
-| `UI/Terminal/TerminalAIAssistantPane.swift` | AI copilot sidebar, composer, message rendering, pipe tables (992L) |
+| `UI/Terminal/TerminalView.swift` | Main terminal UI, sidebar layout, focus, input capture (1,060L). `sessionPanel` is the only place a session's terminal surface is built |
+| `Services/SessionManager.swift` + Queries | Session lifecycle, shell I/O, SFTP, grid snapshots (1,032L) |
+| `Services/SessionManager+CredentialPrompt.swift` | `CredentialPromptRequest`, `CredentialPromptHandling`; publishes `credentialPrompt` from the coordinator's wait, decline, `cancelCredentialPrompts` |
+| `UI/Terminal/CredentialPromptCardView.swift` | The password-prompt card above the composer: host, command, Enter password, Decline, reveal note |
+| `UI/Terminal/TerminalAIAssistantPane.swift` | AI copilot sidebar, composer, message rendering, pipe tables, credential card slot, Stop (1,039L) |
 | `Terminal/Parser/TerminalEngine.swift` | VT parser hot path, merged parse/apply loop, `feedAndCollectOutcome`, `primaryBufferVisibleText` (843L) |
 | `Services/SSH/LibSSHTransport.swift` | LibSSH transport actor (822L); channels in `LibSSHShellChannel`/`LibSSHForwardChannel` |
 | `Terminal/Renderer/MetalTerminalRenderer.swift` + 8 extensions | Metal renderer (510L): glyph resolution, snapshot update, font management, draw loop, view config, selection, post-processing, diagnostics |
@@ -275,7 +278,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 | `App/ThroughputBenchmarkRunner+Render.swift` | End-to-end benchmark through the real app path (419L): `--benchmark-render`, `--benchmark-render-detached`, `--benchmark-window WxH`, windowless warning |
 | `UI/Terminal/MetalTerminalSessionSurface.swift` | SwiftUI-Metal bridge, snapshot application, selection from mouse events (394L) |
 | `UI/Terminal/TerminalSurfaceModelStore.swift` | Owns each window's renderers: one `MetalTerminalSurfaceModel` per session, plus pane-keyed duplicates; `model(for:duplicateInPane:)`, non-creating `existingModel` (selection lookups), `release`, `prune(keeping:panes:)`. Owned by `TerminalView` and `ExternalTerminalWindowView` |
-| `ViewModels/TerminalAIAssistantViewModel.swift` | AI sidebar VM: messages, streaming, patch approval (379L) |
+| `ViewModels/TerminalAIAssistantViewModel.swift` | AI sidebar VM: messages, streaming, patch approval, credential-prompt mirror and status lines, `stop()` (470L) |
 | `UI/Terminal/ExternalTerminalWindowView.swift` | Separate-window terminal session view (341L) |
 | `Terminal/Input/KeyEncoder.swift` | Key → byte encoding driven by `KeyEncoderOptions` (application cursor keys, kitty disambiguation, `modifyOtherKeys`); Shift+Enter fallback (315L) |
 | `Services/AI/AIToolDefinitions.swift` | Developer prompt, 9 tool schemas, direct-action filter, error helpers (334L) |
@@ -283,7 +286,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 | `Services/LocalPTYProcess.swift` | Actor wrapping forkpty, async output stream (274L) |
 | `Terminal/Renderer/TerminalMetalView.swift` | NSViewRepresentable wrapping `TerminalMTKView` (left-mouse events with click count), wheel scrolling (204L) |
 | `Terminal/Diagnostics/TerminalPerf.swift` | Runtime-gated signposts + 19 in-process stage timers with span/busy tracking (236L). Start here for any perf work |
-| `Services/SessionAIToolCoordinator.swift` | AI one-shot command wrapping with private OSC 7777 start/completion events; `executeCLICommand` for device prompts; the credential-prompt wait (`awaitingCredential`); shared `TerminalPlainText` (516L) |
+| `Services/SessionAIToolCoordinator.swift` | AI one-shot command wrapping with private OSC 7777 start/completion events; `executeCLICommand` for device prompts; the credential-prompt wait (`awaitingCredential`); shared `TerminalPlainText` (542L) |
 | `Services/LocalShellBootstrap.swift` | Child env for local PTY, ZDOTDIR/BASH_ENV injection (202L) |
 | `UI/Terminal/PatchApprovalCardView.swift` | Inline patch approval card for `apply_patch` (177L) |
 | `UI/Terminal/ReasoningStreamView.swift` | Native `NSScrollView`/`NSTextView` (TextKit 1) reasoning panel (132L) |
@@ -351,7 +354,12 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
   before its interrupt: it would send its timeout reset line into the prompt.
   While `isEnteringCredential` (wait up, or the cursor line already a prompt) the keystroke path
   `sendRawShellInputBytes` sends but records nothing: no history index, no recording. Any new
-  per-keystroke recorder must sit behind that guard.
+  per-keystroke recorder must sit behind that guard. The same check narrows broadcast/group
+  input to the waiting host (`PaneManager.inputTargetSessionIDs`); any new fan-out path must use it.
+  The chat card reads `TerminalAIAssistantViewModel.credentialPrompt` (mirrored from
+  `SessionManager.credentialPrompt` via `CredentialPromptHandling`), never view state.
+  **Stop** (`stop()`) cancels the run and keeps messages and memory; Stop and Clear both
+  Ctrl+C a waiting host through `cancelCredentialPrompts()`.
 - **Claude's thinking blocks bind the conversation prefix** (system prompt, tools, earlier
   messages). Claude turns are stored as `.anthropic(blocks:)` and replayed byte-for-byte; never
   edit, reorder or re-encode them. Claude always gets the full tool set (direct-action mode only
@@ -496,9 +504,9 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
   managers; assert renderer identity) and `TerminalSurfaceModelStoreTests`.
 
 ### UI
-- **Four files are over 1,000 lines**: `AIToolHandler.swift` (1,161L),
-  `TerminalRenderingCoordinator.swift` (1,066L), `TerminalView.swift` (1,010L),
-  `SessionManager.swift` (1,020L). Read surrounding context before modifying.
+- **Five files are over 1,000 lines**: `AIToolHandler.swift` (1,161L),
+  `TerminalRenderingCoordinator.swift` (1,066L), `TerminalView.swift` (1,060L),
+  `TerminalAIAssistantPane.swift` (1,039L), `SessionManager.swift` (1,032L). Read surrounding context before modifying.
 - **Focus management** between AI composer (NSTextView) and terminal (DirectTerminalInputNSView) is
   delicate. Must resign at AppKit level, not just SwiftUI state. See `focusSessionAndPane()`.
 - **SwiftUI state mutations during `updateNSView`** cause warnings. Use `DispatchQueue.main.async` or
@@ -539,7 +547,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 | `Docs/featurelist.md` | **Long-term memory** — dated work log, phase progress, loop-log entries |
 | `Docs/RenderCost.md` | **Active spec.** What rendering actually costs — R0/R1/R2a done, **R2b open** (code merged, performance unvalidated). Read its "Measurement caveats" before any perf measurement |
 | `Docs/R2bBenchmarkResults.md` | R2b A/B evidence: exact commands and all raw reports for the six baseline/candidate pairs |
-| `Docs/CredentialPrompt.md` | **Active, next.** Password prompts (sudo, su, ssh, passphrase, device `enable`) pause the awaited tool call with a card in the chat; the user types in the terminal, nothing is recorded, Decline Ctrl+Cs and tells the model. Replaces the prompt's SUDO rules and the `apply_patch` sudo dance. Phases 0–1 done; Phases 2–4 open |
+| `Docs/CredentialPrompt.md` | **Active, next.** Password prompts (sudo, su, ssh, passphrase, device `enable`) pause the awaited tool call with a card in the chat; the user types in the terminal, nothing is recorded, Decline Ctrl+Cs and tells the model. Replaces the prompt's SUDO rules and the `apply_patch` sudo dance. Phases 0–2 done; Phases 3–4 open |
 | `Docs/NetworkCopilot.md` | **Active.** Copilot reaches every open session, one memory per chat, a router/switch command path, and lifecycle-shaped skills (`load_skill`). Phases 1–3 done; Phases 4–7 reshaped 2026-10-16 (harness first, then skill library, then skills, then live cost validation). Read its "Design rules" before adding any rule to the developer prompt |
 | `Docs/Anthropic.md` | Direct Anthropic Messages API as a second AI provider next to OpenRouter — **COMPLETE** (Phases 0–6, validated live). Read its "Rules that shape the design" before touching AI transcript code |
 | `Docs/Bug84.md` | One terminal renderer per session across tab switches and split changes (per-session model store) — **COMPLETE** (Phases 0–5); Phase 5 has the live memory numbers |
@@ -573,25 +581,20 @@ and the session coordinators) has no spec file left; see `Docs/featurelist.md`.
 
 ## Next Session Plan
 
-**Active work: `Docs/CredentialPrompt.md` Phase 2 — the card and Stop.** Phases 0 (detector
-and pause) and 1 (keys at a prompt are recorded nowhere) are done; read the spec's "Guarantees",
-"Architecture sketch" and "Decisions". Phase 2: `SessionManager.credentialPrompt`
-(`@Published`, mirrors `aiToolCoordinator.awaitingCredential`, which is `private(set)` and not
-observable today, so the coordinator must notify the manager on every change),
-`declineCredentialPrompt(sessionID:)` and `cancelCredentialPrompts()`; new
-`UI/Terminal/CredentialPromptCardView.swift` (host label, command, Enter password, Decline, the
-"in its own window" / "not in a visible pane" note) above the composer in
-`TerminalAIAssistantPane`; "Waiting for your password on <host>…" in the chat; Enter password
-calls a new `onRevealSession` wired by `TerminalView` to `focusSessionAndPane`; focus to the chat
-pane after a grant. The Stop button (`TerminalAIAssistantViewModel.stop()`: cancel the agent
-task, keep messages and memory; there is no Stop today, only Clear). Tests per the spec: a
-prompt, a decline, Stop with and without a prompt, Clear with a prompt, the card never outliving
-its wait. Until Phase 2 lands a copilot `sudo` waits with no card: type the password in the
-terminal or press Clear. Then Phase 3 (delete the SUDO prompt section and the `apply_patch` sudo
-dance, keeping plain-first then sudo; format `waitedForCredential`/`declinedCredential` for the
-model; `run_cli_command` enters the wait on a device password prompt), Phase 4 (live on the four
-VMs; measure whether 300 ms idle suits SSH). Tool execution is sequential, so one host waits at a
-time: no queue.
+**Active work: `Docs/CredentialPrompt.md` Phase 3 — model-facing cleanup.** Phases 0–2 are
+done: the pause, nothing recorded at a prompt, and now the card, Decline, Stop and broadcast
+narrowing (read the spec's "Guarantees" and "Decisions"). Phase 3: delete the SUDO section from
+`AIToolDefinitions.developerPrompt`; in `apply_patch` delete `canUseSudoWithoutPassword`, the
+`sudo -v` priming command and `sudo_password_required`, keeping plain-first then sudo (without
+`-n`) on permission denied, and check the base64 heredoc write still works when sudo prompts
+(`sudo tee` reads the password from the tty); format `waitedForCredential` as a `note` and
+`declinedCredential` as `{ok:false, error, hint}` in `AIToolHandler` (+RemoteExecution);
+`run_cli_command` enters the same wait on a device password prompt instead of returning
+`awaitingInput` (`DeviceCLICapture` + `executeCLICommand`, which has no wait support yet);
+update the tool descriptions. Optional: "Grant sudo on all hosts". Then Phase 4 (live on the
+four VMs, user at the keyboard). The card, Stop, reveal and focus-back have **not been seen
+live**; check them first in Phase 4, including a split layout and broadcast mode. Tool
+execution is sequential, so one host waits at a time: no queue.
 
 **Pre-existing red test (not from Phase 0):**
 `AIBroadcastTests.testResolveTargetSessionsInvalidTargetFallsBackToBroadcast` fails on clean

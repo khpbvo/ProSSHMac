@@ -41,6 +41,10 @@ struct TerminalView: View {
     @State private var searchFocusNonce: Int = 0
     @State private var isSearchBarFocused: Bool = false
     @State private var isAIAssistantComposerFocused = false
+    @State private var composerFocusRequest = 0
+    /// A password was just entered; the composer takes focus when the turn ends unless the user
+    /// clicks a terminal first.
+    @State private var composerFocusPendingAfterCredential = false
     @State private var fileBrowserDragBaseWidth: Double?
     @State private var aiAssistantDragBaseWidth: Double?
     @State private var loadedSidebarLayoutContextKey: String?
@@ -235,6 +239,15 @@ struct TerminalView: View {
                 isAIAssistantComposerFocused = false
             }
             persistSidebarLayoutForSelection()
+        }
+        .onChange(of: terminalAIAssistantViewModel.credentialAnsweredNonce) { _, _ in
+            focusChatAfterCredential()
+        }
+        .onChange(of: terminalAIAssistantViewModel.isSending) { _, isSending in
+            if !isSending, composerFocusPendingAfterCredential {
+                composerFocusPendingAfterCredential = false
+                composerFocusRequest &+= 1
+            }
         }
         .onChange(of: fileBrowserWidth) { _, _ in
             persistSidebarLayoutForSelection()
@@ -542,7 +555,10 @@ struct TerminalView: View {
                 if !isFocused {
                     directInputActivationNonce &+= 1
                 }
-            }
+            },
+            onRevealSession: { sessionID in revealSessionForCredential(sessionID) },
+            credentialRevealNote: { sessionID in credentialRevealNote(for: sessionID) },
+            composerFocusRequest: composerFocusRequest
         )
         .frame(minWidth: CGFloat(aiAssistantMinWidth), idealWidth: CGFloat(clampedAIAssistantWidth), maxWidth: CGFloat(aiAssistantMaxWidth))
         .overlay(alignment: .leading) {
@@ -584,6 +600,7 @@ struct TerminalView: View {
             window.makeFirstResponder(nil)
         }
         isAIAssistantComposerFocused = false
+        composerFocusPendingAfterCredential = false
         directInputActivationNonce &+= 1
         focusedSessionID = sessionID
         if tabManager.selectedSessionID != sessionID {
@@ -595,6 +612,39 @@ struct TerminalView: View {
         if let targetPaneID, targetPaneID != paneManager.focusedPaneId {
             paneManager.focusPane(targetPaneID)
         }
+    }
+
+    /// "Enter password" on the card: best effort, since a pop-out window or a session not in any
+    /// pane of a split layout cannot be brought forward from here (`credentialRevealNote`).
+    private func revealSessionForCredential(_ sessionID: UUID) {
+        let paneID = paneManager.allPanes.first(where: { $0.sessionID == sessionID })?.id
+        if let paneID, let maximized = paneManager.maximizedPaneId, maximized != paneID {
+            paneManager.toggleMaximize(maximized)
+        }
+        focusSessionAndPane(sessionID, paneID: paneID)
+    }
+
+    private func credentialRevealNote(for sessionID: UUID) -> String? {
+        guard paneManager.paneCount > 1 || paneManager.maximizedPaneId != nil,
+              !paneManager.allPanes.contains(where: { $0.sessionID == sessionID }) else { return nil }
+        let label = tabManager.tabs.first(where: { $0.id == sessionID })?.session.hostLabel ?? "This session"
+        return "\(label) is not in a visible pane. Show it in a pane, or bring its window forward, to type the password there."
+    }
+
+    /// After a password is entered, keys go to the chat, not the terminal. The composer stays
+    /// disabled until the turn ends, then takes focus.
+    private func focusChatAfterCredential() {
+        guard showAIAssistant else { return }
+        if let window = NSApp.keyWindow {
+            window.makeFirstResponder(nil)
+        }
+        isAIAssistantComposerFocused = true
+        composerFocusPendingAfterCredential = true
+    }
+
+    /// Broadcast and group input targets; only the host at a copilot password prompt while there is one.
+    private func inputTargetSessionIDs() -> [UUID] {
+        paneManager.inputTargetSessionIDs { sessionManager.isEnteringCredential(sessionID: $0) }
     }
 
     private var noSessionPlaceholder: some View {
@@ -622,7 +672,7 @@ struct TerminalView: View {
             onSendSequence: { sessionID, sequence in
                 if paneManager.inputRoutingMode != .singleFocus {
                     // Broadcast/group: send directly to all targets, bypass per-session safety buffer
-                    for targetID in paneManager.targetSessionIDs {
+                    for targetID in inputTargetSessionIDs() {
                         sendControl(sequence, sessionID: targetID)
                     }
                 } else {
@@ -632,7 +682,7 @@ struct TerminalView: View {
             onSendBytes: { sessionID, bytes, eventType in
                 if paneManager.inputRoutingMode != .singleFocus {
                     // Broadcast/group: fan out to all targets
-                    for targetID in paneManager.targetSessionIDs {
+                    for targetID in inputTargetSessionIDs() {
                         Task {
                             await sessionManager.sendRawShellInputBytes(
                                 sessionID: targetID,
@@ -920,7 +970,7 @@ struct TerminalView: View {
     }
 
     private func sendControl(_ sequence: String) {
-        let targets = paneManager.targetSessionIDs
+        let targets = inputTargetSessionIDs()
         if targets.isEmpty {
             // Fallback for single-pane non-split mode
             let targetSessionID = focusedSessionID ?? tabManager.selectedSessionID

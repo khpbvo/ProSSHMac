@@ -12,6 +12,8 @@ struct CredentialWait: Equatable, Sendable {
         case verifying
     }
 
+    /// A new wait on the same session is a new card.
+    let id = UUID()
     let sessionID: UUID
     var prompt: String
     var kind: CredentialPromptDetector.Kind
@@ -25,7 +27,9 @@ struct CredentialWait: Equatable, Sendable {
     private var pendingCommands: [UUID: PendingToolCommand] = [:]
     private var pendingCLICommands: [UUID: PendingCLICommand] = [:]
     /// At most one entry today: tool calls run one after another.
-    private(set) var awaitingCredential: [UUID: CredentialWait] = [:]
+    private(set) var awaitingCredential: [UUID: CredentialWait] = [:] {
+        didSet { manager?.credentialWaitsDidChange() }
+    }
     /// After Ctrl+C, before anything else is sent: SIGINT flushes the tty's queued input, so a
     /// line sent in the same packet would be discarded.
     private let interruptSettleDelay: Duration = .milliseconds(250)
@@ -263,6 +267,19 @@ struct CredentialWait: Equatable, Sendable {
             waitedForCredential: true,
             declinedCredential: true
         ))
+    }
+
+    /// Stop or Clear: every host waiting at a prompt gets Ctrl+C and its command returns. Task
+    /// cancellation reaches the same commands, but a paused command has no timeout, so a missed
+    /// cancellation would leave it waiting forever.
+    func cancelCredentialPrompts() async {
+        for sessionID in Array(awaitingCredential.keys) {
+            guard let token = pendingCommands[sessionID]?.token else {
+                awaitingCredential.removeValue(forKey: sessionID)
+                continue
+            }
+            await cancelToolCommand(sessionID: sessionID, token: token)
+        }
     }
 
     /// The session closed or dropped. Without this a command paused at a prompt, which has no
