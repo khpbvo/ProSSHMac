@@ -22,6 +22,18 @@ final class AIToolDefinitionsTests: XCTestCase {
         XCTAssertTrue(prompt.contains("compressed pages, swap usage and memory pressure"))
     }
 
+    /// Password prompts are handled in code (Docs/CredentialPrompt.md): no sudo choreography
+    /// in the prompt or the tool descriptions.
+    func testNoSudoWorkaroundIsLeftForTheModel() {
+        let prompt = AIToolDefinitions.developerPrompt()
+        XCTAssertFalse(prompt.contains("SUDO"))
+        XCTAssertFalse(prompt.contains("sudo_password_required"))
+        let descriptions = AIToolDefinitions.buildToolDefinitions(patchToolEnabled: true).map(\.description)
+        XCTAssertFalse(descriptions.contains { $0.contains("sudo_password_required") })
+        let executeAndWait = AIToolDefinitions.buildToolDefinitions().first { $0.name == "execute_and_wait" }
+        XCTAssertTrue(executeAndWait?.description.contains("waits while the user types it") == true)
+    }
+
     // MARK: - isDirectActionPrompt
 
     func testIsDirectActionPromptTrueForRunPrefix() {

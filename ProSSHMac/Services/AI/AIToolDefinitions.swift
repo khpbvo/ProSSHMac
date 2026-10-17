@@ -35,11 +35,6 @@ enum AIToolDefinitions {
         - Issue parallel tool calls when operations are independent (reading multiple files, running commands on different broadcast sessions).
         - Use search_filesystem/search_file_contents instead of execute_and_wait with find/grep — the dedicated tools handle path resolution and output parsing.
 
-        SUDO:
-        - Use execute_command (not execute_and_wait) for sudo commands — the password prompt will timeout execute_and_wait.
-        - After sudo, call get_current_screen. If it shows a password prompt, tell the user to type their password in the terminal, then STOP and wait for their confirmation.
-        - If apply_patch returns status="sudo_password_required", do the same.
-
         SAFETY:
         - Never run destructive commands (rm -rf /, mkfs, dd if=/dev/zero, DROP TABLE, etc.) without explicit user confirmation.
         - Never expose secrets, API keys, passwords, or private keys in your responses.
@@ -245,7 +240,7 @@ enum AIToolDefinitions {
             ),
             LLMToolDefinition(
                 name: "execute_and_wait",
-                description: "Execute a shell command and wait for it to complete, returning the output and exit code directly. Use this for one-shot commands (ls, grep, git, make, curl, etc.). Do NOT use for interactive or long-running programs (vim, nano, top, tail -f, ssh) — use execute_command instead. Returns: output text, exit_code (integer), timed_out (bool), truncated (bool).",
+                description: "Execute a shell command and wait for it to complete, returning the output and exit code directly. Use this for one-shot commands (ls, grep, git, make, curl, etc.). Do NOT use for interactive or long-running programs (vim, nano, top, tail -f, ssh) — use execute_command instead. If the command asks for a password (sudo, su, ssh), the call waits while the user types it in the terminal; the result then carries a note, or an error if the user declined. Returns: output text, exit_code (integer), timed_out (bool), truncated (bool).",
                 parameters: .object([
                     "type": .string("object"),
                     "properties": .object([

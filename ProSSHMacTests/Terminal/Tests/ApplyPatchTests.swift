@@ -690,13 +690,10 @@ final class RemotePatchCommandBuilderTests: XCTestCase {
         XCTAssertTrue(command.contains("nginx.conf"))
     }
 
-    func testReadCommandWithSudoNUsesNonInteractiveSudo() {
-        let command = RemotePatchCommandBuilder.buildReadCommand(
-            path: "/etc/nginx.conf",
-            useSudo: true,
-            nonInteractiveSudo: true
-        )
-        XCTAssertTrue(command.contains("sudo -n base64"))
+    /// Sudo is interactive: a password prompt pauses the copilot's command for the user.
+    func testSudoReadAsksForAPasswordInsteadOfFailingNonInteractively() {
+        let command = RemotePatchCommandBuilder.buildReadCommand(path: "/etc/nginx.conf", useSudo: true)
+        XCTAssertEqual(command, "sudo base64 '/etc/nginx.conf'")
     }
 
     func testWriteCommandWithSudoUsesTeeAndSudoMkdir() {
@@ -715,10 +712,6 @@ final class RemotePatchCommandBuilderTests: XCTestCase {
             useSudo: true
         )
         XCTAssertTrue(command.contains("sudo rm"))
-    }
-
-    func testSudoPrimingCommandIsSudoV() {
-        XCTAssertEqual(RemotePatchCommandBuilder.buildSudoPrimingCommand(), "sudo -v")
     }
 
     func testReadCommandEscapesSpaces() {

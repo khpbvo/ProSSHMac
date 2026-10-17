@@ -169,7 +169,7 @@ safety-mode path). Tests: new `CredentialPromptDetectorTests`,
   view model and pane state for a prompt, a decline, a Stop with and without a prompt up, Clear
   with a prompt up, the card never outlives its wait (compare Bug 81: look up state that
   outlives the view).
-- [ ] **Phase 3: Model-facing cleanup.** Delete the SUDO section from `developerPrompt` and,
+- [x] **Phase 3: Model-facing cleanup.** (2026-10-17; the optional "Grant sudo on all hosts" button was deferred) Delete the SUDO section from `developerPrompt` and,
   in `apply_patch`, `canUseSudoWithoutPassword`, the `sudo -v` priming command and
   `sudo_password_required`. Keep the plain-first, sudo-on-permission-denied order (always-sudo
   would prompt for unprotected files and create root-owned paths); the sudo retry just runs
@@ -235,6 +235,20 @@ safety-mode path). Tests: new `CredentialPromptDetectorTests`,
   Phase 2; not in the original plan. (Phase 2.)
 - After an answer, keys go to the chat (the terminal's direct input is off); the composer takes
   focus when the turn ends unless the user clicked a terminal first. (Phase 2.)
+- `apply_patch` runs each remote command plain, then with interactive `sudo` on permission
+  denied, through the same awaited path; a declined step stops the patch with the decline error
+  and nothing after it runs. The write after a sudo read uses sudo directly. (Phase 3.)
+- A remote `apply_patch` create/update without a `diff` is refused before the approval card. It
+  used to fall through to the delete branch and `rm` the file. (User, Phase 3.)
+- The decline hint is generic ("Do not retry on this host unless the user asks…"), since the
+  same error covers sudo, ssh and device `enable`. Declines name the host by its label, also in
+  broadcast results. (Phase 3.)
+- The device-CLI wait is stepped from `executeCLICommand`'s 50 ms poll loop rather than from
+  output callbacks; Decline and Stop mark the command interrupted, Ctrl+C, wait 250 ms, then
+  unregister it, so the result never reaches the model before the tty settles. A device
+  `Password:` is never returned as `awaiting_input`. (Phase 3.)
+- "Grant sudo on all hosts" is deferred: one card per host, one after another, has not been
+  seen live yet; decide after Phase 4 whether it is needed. (Phase 3.)
 - `CLICommandResult.Status.declined` is formatted for the model already (the exhaustive switch
   in `AIToolHandler+DeviceCLI` needs it); everything else about result formatting stays in
   Phase 3. (Phase 0.)

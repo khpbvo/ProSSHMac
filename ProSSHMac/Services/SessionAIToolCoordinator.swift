@@ -144,23 +144,47 @@ struct CredentialWait: Equatable, Sendable {
         )
 
         let clock = ContinuousClock()
-        let deadline = clock.now + .milliseconds(Int(max(0, timeoutSeconds) * 1000))
+        let timeout = Duration.milliseconds(Int(max(0, timeoutSeconds) * 1000))
+        var deadline = clock.now + timeout
         pending.lastOutputAt = clock.now
         while true {
             guard pendingCLICommands[sessionID] === pending else {
-                return pending.result(status: .superseded)
+                return pending.result(status: pending.interruption ?? .superseded)
+            }
+            // Declined or stopped at a password prompt: return once Ctrl+C has settled.
+            if let interruption = pending.interruption {
+                if Task.isCancelled { return pending.result(status: interruption) }
+                try? await Task.sleep(for: .milliseconds(50))
+                continue
             }
             if Task.isCancelled || manager.shellChannels[sessionID] == nil {
                 pendingCLICommands.removeValue(forKey: sessionID)
+                if awaitingCredential.removeValue(forKey: sessionID) != nil {
+                    await interruptCredentialPrompt(sessionID: sessionID)
+                }
                 return pending.result(status: .failed)
             }
-            switch pending.capture.poll(idleFor: clock.now - pending.lastOutputAt) {
+            let idle = clock.now - pending.lastOutputAt
+            switch stepCLICredentialWait(sessionID: sessionID, pending: pending, idle: idle) {
+            case .waiting:
+                // No timeout while the user is asked for a password.
+                try? await Task.sleep(for: .milliseconds(50))
+                continue
+            case .answered:
+                deadline = clock.now + timeout
+            case .none:
+                break
+            }
+            switch pending.capture.poll(idleFor: idle) {
             case .complete:
-                pendingCLICommands.removeValue(forKey: sessionID)
+                endCLICommand(sessionID: sessionID)
                 return pending.result(status: .completed)
             case let .awaitingInput(question):
-                pendingCLICommands.removeValue(forKey: sessionID)
-                return pending.result(status: .awaitingInput(question))
+                // A password prompt is the wait's, never a question for the model.
+                if CredentialPromptDetector.match(question) == nil {
+                    endCLICommand(sessionID: sessionID)
+                    return pending.result(status: .awaitingInput(question))
+                }
             case .advancePager:
                 pending.capture.didAdvancePager()
                 try? await shell.send(" ")
@@ -169,11 +193,66 @@ struct CredentialWait: Equatable, Sendable {
                 break
             }
             if clock.now >= deadline {
-                pendingCLICommands.removeValue(forKey: sessionID)
+                endCLICommand(sessionID: sessionID)
                 return pending.result(status: .timedOut)
             }
             try? await Task.sleep(for: .milliseconds(50))
         }
+    }
+
+    private func endCLICommand(sessionID: UUID) {
+        pendingCLICommands.removeValue(forKey: sessionID)
+        awaitingCredential.removeValue(forKey: sessionID)
+    }
+
+    private enum CLICredentialStep {
+        case none
+        /// The prompt is up: no timeout, no polling.
+        case waiting
+        /// The user just pressed Enter: the timeout restarts in full.
+        case answered
+    }
+
+    /// The device-CLI counterpart of `noteCommandOutput` + `checkForCredentialPrompt`, run on
+    /// each tick of `executeCLICommand` since that loop polls rather than reacting to output.
+    private func stepCLICredentialWait(sessionID: UUID, pending: PendingCLICommand, idle: Duration) -> CLICredentialStep {
+        let capture = pending.capture
+        if var wait = awaitingCredential[sessionID] {
+            switch wait.phase {
+            case .waiting:
+                guard let lineBreak = capture.lineBreak(from: pending.credentialOffset) else { return .waiting }
+                wait.phase = .verifying
+                awaitingCredential[sessionID] = wait
+                pending.answerOffset = lineBreak
+                return .answered
+            case .verifying:
+                if idle >= CredentialPromptDetector.idle, let match = CredentialPromptDetector.match(capture.cursorLine) {
+                    wait.phase = .waiting
+                    wait.prompt = match.prompt
+                    wait.kind = match.kind
+                    awaitingCredential[sessionID] = wait
+                    pending.credentialOffset = capture.byteCount
+                    return .waiting
+                }
+                if CredentialPromptDetector.showsProgress(afterAnswer: capture.rawBytes(since: pending.answerOffset)) {
+                    awaitingCredential.removeValue(forKey: sessionID)
+                }
+                return .none
+            }
+        }
+        guard idle >= CredentialPromptDetector.idle,
+              let match = CredentialPromptDetector.match(capture.cursorLine) else { return .none }
+        pending.waitedForCredential = true
+        pending.credentialOffset = capture.byteCount
+        awaitingCredential[sessionID] = CredentialWait(
+            sessionID: sessionID,
+            prompt: match.prompt,
+            kind: match.kind,
+            command: capture.command,
+            startedAt: .now,
+            phase: .waiting
+        )
+        return .waiting
     }
 
     /// One AI command per session: a new one ends whichever is still waiting. A command paused
@@ -250,6 +329,9 @@ struct CredentialWait: Equatable, Sendable {
     /// Keystrokes are then sent but recorded nowhere. See Docs/CredentialPrompt.md.
     func isEnteringCredential(sessionID: UUID) -> Bool {
         if awaitingCredential[sessionID] != nil { return true }
+        if let cli = pendingCLICommands[sessionID], CredentialPromptDetector.match(cli.capture.cursorLine) != nil {
+            return true
+        }
         guard let pending = pendingCommands[sessionID] else { return false }
         return CredentialPromptDetector.match(pending.cursorLine) != nil
     }
@@ -258,7 +340,12 @@ struct CredentialWait: Equatable, Sendable {
     func declineCredentialPrompt(sessionID: UUID) async {
         guard awaitingCredential.removeValue(forKey: sessionID) != nil else { return }
         let pending = pendingCommands.removeValue(forKey: sessionID)
+        let cli = pendingCLICommands[sessionID]
+        cli?.interruption = .declined
         await interruptCredentialPrompt(sessionID: sessionID)
+        if let cli, pendingCLICommands[sessionID] === cli {
+            pendingCLICommands.removeValue(forKey: sessionID)
+        }
         pending?.finish(CommandExecutionResult(
             output: pending?.commandOutput ?? "",
             exitCode: nil,
@@ -274,11 +361,18 @@ struct CredentialWait: Equatable, Sendable {
     /// cancellation would leave it waiting forever.
     func cancelCredentialPrompts() async {
         for sessionID in Array(awaitingCredential.keys) {
-            guard let token = pendingCommands[sessionID]?.token else {
+            if let token = pendingCommands[sessionID]?.token {
+                await cancelToolCommand(sessionID: sessionID, token: token)
+            } else if let cli = pendingCLICommands[sessionID] {
                 awaitingCredential.removeValue(forKey: sessionID)
-                continue
+                cli.interruption = .failed
+                await interruptCredentialPrompt(sessionID: sessionID)
+                if pendingCLICommands[sessionID] === cli {
+                    pendingCLICommands.removeValue(forKey: sessionID)
+                }
+            } else {
+                awaitingCredential.removeValue(forKey: sessionID)
             }
-            await cancelToolCommand(sessionID: sessionID, token: token)
         }
     }
 
@@ -400,6 +494,12 @@ struct CredentialWait: Equatable, Sendable {
 @MainActor private final class PendingCLICommand {
     var capture: DeviceCLICapture
     var lastOutputAt = ContinuousClock().now
+    var waitedForCredential = false
+    /// Where the current password wait started, and where the user's answer began.
+    var credentialOffset = 0
+    var answerOffset = 0
+    /// Set by Decline or Stop at a password prompt; the loop returns it once Ctrl+C has settled.
+    var interruption: CLICommandResult.Status?
 
     init(capture: DeviceCLICapture) {
         self.capture = capture
@@ -411,7 +511,8 @@ struct CredentialWait: Equatable, Sendable {
             output: capture.output(dropTrailingPrompt: completed),
             status: status,
             finalPrompt: completed ? capture.finalPrompt : nil,
-            pagesAdvanced: capture.pagesAdvanced
+            pagesAdvanced: capture.pagesAdvanced,
+            waitedForCredential: waitedForCredential
         )
     }
 }

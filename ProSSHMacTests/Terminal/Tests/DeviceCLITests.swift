@@ -108,6 +108,22 @@ final class DeviceCLITests: XCTestCase {
         )
     }
 
+    /// What the coordinator's password wait reads from a device command's output.
+    func testCursorLineAndLineBreaksForThePasswordWait() {
+        var capture = DeviceCLICapture(command: "enable", startPrompt: "router>")
+        capture.ingest(Array("enable\r\nPassword: ".utf8))
+        XCTAssertEqual(capture.cursorLine, "Password:")
+        let waitStart = capture.byteCount
+        XCTAssertNil(capture.lineBreak(from: waitStart), "nothing typed yet")
+
+        capture.ingest(Array("\r\nrouter#".utf8))
+        let answer = try? XCTUnwrap(capture.lineBreak(from: waitStart))
+        XCTAssertEqual(answer, waitStart)
+        XCTAssertEqual(capture.rawBytes(since: waitStart), Array("\r\nrouter#".utf8))
+        XCTAssertEqual(capture.cursorLine, "router#")
+        XCTAssertEqual(capture.rawBytes(since: 10_000), [], "an offset past the end is clamped")
+    }
+
     func testEscapesAndSplitChunks() {
         var capture = DeviceCLICapture(command: "show version", startPrompt: "leaf1#")
         let stream = Array("show version\r\n\u{1B}[1mArista\u{1B}[0m vEOS\r\nleaf1#".utf8)

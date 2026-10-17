@@ -260,6 +260,138 @@ final class AIAgentServiceTests: XCTestCase {
         XCTAssertEqual(fleet.session.commandSessions, [fleet.third], "a shell prompt still runs")
     }
 
+    // MARK: - Password prompts (Docs/CredentialPrompt.md Phase 3)
+
+    private func toolResult(_ fleet: Fleet) throws -> [String: Any] {
+        let output = try XCTUnwrap(fleet.client.requests.last?.messages.last { $0.role == "tool" }?.content)
+        return try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any])
+    }
+
+    private func applyPatch(_ fleet: Fleet, _ arguments: String) async throws -> [String: Any] {
+        fleet.service.patchApprovalCallback = { _, _ in (true, false) }
+        fleet.client.enqueue(toolCompletion("apply_patch", arguments: arguments))
+        fleet.client.enqueue(completion("done"))
+        _ = try await fleet.service.generateReply(sessionID: fleet.session.sessionID, prompt: "patch it")
+        return try toolResult(fleet)
+    }
+
+    private func denied(_ path: String) -> CommandExecutionResult {
+        CommandExecutionResult(output: "base64: \(path): Permission denied", exitCode: 1, timedOut: false, blockID: nil)
+    }
+
+    func testApplyPatchRetriesAProtectedFileWithSudoThatMayAskTheUser() async throws {
+        let fleet = try await fleet()
+        fleet.session.simulatedExecuteAndWaitResultsQueue = [
+            denied("/etc/motd"),
+            CommandExecutionResult(
+                output: Data("old\n".utf8).base64EncodedString(), exitCode: 0, timedOut: false, blockID: nil,
+                waitedForCredential: true
+            ),
+            CommandExecutionResult(output: "", exitCode: 0, timedOut: false, blockID: nil),
+        ]
+        let json = try await applyPatch(fleet, #"{"operation":"update","path":"/etc/motd","diff":"@@\n-old\n+new\n","target_session":"\#(fleet.second.uuidString)"}"#)
+
+        XCTAssertEqual(json["ok"] as? Bool, true, "\(json)")
+        XCTAssertEqual(json["note"] as? String, AIToolHandler.credentialWaitNote)
+        XCTAssertNil(json["status"], "no sudo_password_required dance")
+        let commands = fleet.session.sentCommands
+        XCTAssertEqual(commands.count, 3)
+        XCTAssertEqual(commands[0], "base64 '/etc/motd'")
+        XCTAssertEqual(commands[1], "sudo base64 '/etc/motd'")
+        XCTAssertTrue(commands[2].contains("sudo tee '/etc/motd'"), "a file read with sudo is written with sudo")
+        XCTAssertFalse(commands.contains { $0.contains("sudo -n") || $0.contains("sudo -v") })
+    }
+
+    func testDeclinedSudoStopsThePatchBeforeAnyWrite() async throws {
+        let fleet = try await fleet()
+        fleet.session.simulatedExecuteAndWaitResultsQueue = [
+            denied("/etc/motd"),
+            CommandExecutionResult(
+                output: "[sudo] password for kevin:", exitCode: nil, timedOut: false, blockID: nil,
+                waitedForCredential: true, declinedCredential: true
+            ),
+        ]
+        let json = try await applyPatch(fleet, #"{"operation":"update","path":"/etc/motd","diff":"@@\n-old\n+new\n","target_session":"\#(fleet.second.uuidString)"}"#)
+
+        XCTAssertEqual(json["ok"] as? Bool, false)
+        XCTAssertEqual(json["error"] as? String, "The user declined the password prompt on Testserv2.")
+        XCTAssertEqual(json["hint"] as? String, AIToolHandler.credentialDeclinedHint)
+        XCTAssertEqual(fleet.session.sentCommands.count, 2, "nothing is written")
+    }
+
+    func testRemoteCreateWithoutADiffIsRefusedBeforeAnythingRuns() async throws {
+        let fleet = try await fleet()
+        var asked = false
+        fleet.client.enqueue(toolCompletion("apply_patch", arguments: #"{"operation":"create","path":"/etc/motd","content":"hello","target_session":"\#(fleet.second.uuidString)"}"#))
+        fleet.client.enqueue(completion("done"))
+        fleet.service.patchApprovalCallback = { _, _ in asked = true; return (true, false) }
+        _ = try await fleet.service.generateReply(sessionID: fleet.session.sessionID, prompt: "create")
+        let json = try toolResult(fleet)
+
+        XCTAssertEqual(json["ok"] as? Bool, false)
+        XCTAssertTrue((json["error"] as? String)?.contains("diff is required") == true)
+        XCTAssertFalse(asked, "no approval card for a patch that cannot run")
+        XCTAssertTrue(fleet.session.sentCommands.isEmpty, "a missing diff once fell through to rm")
+    }
+
+    func testExecuteAndWaitTellsTheModelAboutAPasswordWait() async throws {
+        let fleet = try await fleet()
+        fleet.session.simulatedExecuteAndWaitResultsQueue = [
+            CommandExecutionResult(output: "root", exitCode: 0, timedOut: false, blockID: nil, waitedForCredential: true),
+        ]
+        _ = try await runCommand(fleet, target: #""\#(fleet.second.uuidString)""#)
+        let json = try toolResult(fleet)
+        XCTAssertEqual(json["ok"] as? Bool, true)
+        XCTAssertEqual(json["output"] as? String, "root")
+        XCTAssertEqual(json["note"] as? String, AIToolHandler.credentialWaitNote)
+    }
+
+    func testExecuteAndWaitReportsADeclineWithTheHost() async throws {
+        let fleet = try await fleet()
+        fleet.session.simulatedExecuteAndWaitResultsQueue = [
+            CommandExecutionResult(output: "", exitCode: nil, timedOut: false, blockID: nil, waitedForCredential: true, declinedCredential: true),
+        ]
+        _ = try await runCommand(fleet, target: #""\#(fleet.second.uuidString)""#)
+        let json = try toolResult(fleet)
+        XCTAssertEqual(json["ok"] as? Bool, false)
+        XCTAssertEqual(json["error"] as? String, "The user declined the password prompt on Testserv2.")
+        XCTAssertEqual(json["hint"] as? String, AIToolHandler.credentialDeclinedHint)
+    }
+
+    func testBroadcastDeclineSkipsOnlyThatHost() async throws {
+        let fleet = try await fleet()
+        fleet.session.simulatedExecuteAndWaitResultsQueue = [
+            CommandExecutionResult(output: "", exitCode: nil, timedOut: false, blockID: nil, waitedForCredential: true, declinedCredential: true),
+            CommandExecutionResult(output: "testserv-03", exitCode: 0, timedOut: false, blockID: nil),
+        ]
+        _ = try await runCommand(fleet, target: "null", broadcast: [fleet.second, fleet.third])
+        let results = try XCTUnwrap(try toolResult(fleet)["results"] as? [[String: Any]])
+        XCTAssertEqual(results.count, 2)
+        XCTAssertEqual(results[0]["error"] as? String, "The user declined the password prompt on Testserv2.")
+        XCTAssertNil(results[1]["error"])
+        XCTAssertEqual(results[1]["output"] as? String, "testserv-03")
+    }
+
+    func testRunCLICommandReportsAPasswordWaitAndADecline() async throws {
+        let fleet = try await fleet()
+        fleet.session.simulatedCLIResult = CLICommandResult(
+            output: "Password:", status: .completed, finalPrompt: "testserv-02#", waitedForCredential: true
+        )
+        fleet.client.enqueue(toolCompletion("run_cli_command", arguments: #"{"command":"enable","target_session":"\#(fleet.second.uuidString)"}"#))
+        fleet.client.enqueue(completion("done"))
+        _ = try await fleet.service.generateReply(sessionID: fleet.session.sessionID, prompt: "enable")
+        XCTAssertEqual(try toolResult(fleet)["note"] as? String, AIToolHandler.credentialWaitNote)
+
+        fleet.session.simulatedCLIResult = CLICommandResult(output: "", status: .declined, waitedForCredential: true)
+        fleet.client.enqueue(toolCompletion("run_cli_command", arguments: #"{"command":"enable","target_session":"\#(fleet.second.uuidString)"}"#))
+        fleet.client.enqueue(completion("done"))
+        _ = try await fleet.service.generateReply(sessionID: fleet.session.sessionID, prompt: "enable")
+        let json = try toolResult(fleet)
+        XCTAssertEqual(json["ok"] as? Bool, false)
+        XCTAssertEqual(json["error"] as? String, "The user declined the password prompt on Testserv2.")
+        XCTAssertNil(json["note"])
+    }
+
     func testSessionListMarksDeviceCLIPrompts() async throws {
         let fleet = try await fleet()
         fleet.session.shellBuffers[fleet.second] = ["testserv-02(config)#"]

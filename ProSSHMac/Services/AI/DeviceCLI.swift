@@ -118,6 +118,23 @@ nonisolated struct DeviceCLICapture {
         return .wait
     }
 
+    /// The line the cursor is on: a password prompt shows up here.
+    var cursorLine: String {
+        CredentialPromptDetector.cursorLine(in: bytes)
+    }
+
+    var byteCount: Int { bytes.count }
+
+    /// The first line break at or after `offset`, if the output has one yet.
+    func lineBreak(from offset: Int) -> Int? {
+        bytes[min(max(0, offset), bytes.count)...].firstIndex { $0 == 0x0A || $0 == 0x0D }
+    }
+
+    /// The raw output from `offset` on.
+    func rawBytes(since offset: Int) -> [UInt8] {
+        Array(bytes[min(max(0, offset), bytes.count)...])
+    }
+
     /// The prompt the device returned to, once complete.
     var finalPrompt: String {
         let lines = DeviceCLIText.normalize(bytes).components(separatedBy: "\n")

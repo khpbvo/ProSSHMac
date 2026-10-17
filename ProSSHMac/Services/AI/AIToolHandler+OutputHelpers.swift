@@ -5,6 +5,23 @@ extension AIToolHandler {
 
     // MARK: - Output Helpers
 
+    // MARK: Password prompts (Docs/CredentialPrompt.md)
+
+    static let credentialWaitNote = "Waited for the user to type a password in the terminal; the delay was the user, not the command."
+    static let credentialDeclinedHint = "Do not retry on this host unless the user asks. Continue with the other hosts and report."
+
+    static func credentialDeclinedMessage(label: String) -> String {
+        "The user declined the password prompt on \(label)."
+    }
+
+    static func credentialDeclinedResult(label: String) -> String {
+        AIToolDefinitions.errorResult(credentialDeclinedMessage(label: label), hint: credentialDeclinedHint)
+    }
+
+    static func sessionLabel(_ sessionID: UUID, in provider: any AIAgentSessionProviding) -> String {
+        provider.sessions.first { $0.id == sessionID }?.hostLabel ?? String(sessionID.uuidString.prefix(8))
+    }
+
     static func commandBlockSummary(_ block: CommandBlock) -> LLMJSONValue {
         .object([
             "id": .string(block.id.uuidString.lowercased()),

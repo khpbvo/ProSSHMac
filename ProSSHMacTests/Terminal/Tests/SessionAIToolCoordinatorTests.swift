@@ -392,6 +392,114 @@ final class SessionAIToolCoordinatorTests: XCTestCase {
         XCTAssertEqual(payloads.dropFirst().first, "\u{03}", "Ctrl+C goes to the waiting host first")
     }
 
+    // MARK: - Device CLI password prompts (Docs/CredentialPrompt.md Phase 3)
+
+    func testDeviceEnablePasswordPausesWithoutTimeoutUntilAnswered() async throws {
+        let (manager, sessionID, spy) = try await makeConnectedSessionWithSpy()
+        let coordinator = manager.aiToolCoordinator
+        let execution = try await startCLICommand("enable", on: manager, sessionID: sessionID, spy: spy, timeout: 0.6)
+
+        feed("enable\r\nPassword: ", manager, sessionID)
+        try await waitUntil { coordinator.awaitingCredential[sessionID]?.phase == .waiting }
+        let request = try XCTUnwrap(manager.credentialPrompt)
+        XCTAssertEqual(request.prompt, "Password:")
+        XCTAssertEqual(request.kind, .password)
+        XCTAssertEqual(request.command, "enable")
+        XCTAssertTrue(coordinator.isEnteringCredential(sessionID: sessionID))
+
+        try await Task.sleep(for: .seconds(1.2))
+        XCTAssertNotNil(coordinator.awaitingCredential[sessionID], "the timeout is suspended while waiting")
+
+        feed("\r\n", manager, sessionID)
+        try await waitUntil { coordinator.awaitingCredential[sessionID]?.phase == .verifying }
+        XCTAssertEqual(manager.credentialPrompt?.id, request.id)
+        feed("router#", manager, sessionID)
+
+        let result = await execution.value
+        XCTAssertEqual(result.status, .completed)
+        XCTAssertEqual(result.finalPrompt, "router#")
+        XCTAssertTrue(result.waitedForCredential)
+        XCTAssertNil(manager.credentialPrompt)
+    }
+
+    func testDeviceWrongPasswordRaisesTheSameCardAgain() async throws {
+        let (manager, sessionID, spy) = try await makeConnectedSessionWithSpy()
+        let coordinator = manager.aiToolCoordinator
+        let execution = try await startCLICommand("enable", on: manager, sessionID: sessionID, spy: spy, timeout: 5)
+
+        feed("enable\r\nPassword: ", manager, sessionID)
+        try await waitUntil { coordinator.awaitingCredential[sessionID]?.phase == .waiting }
+        let waitID = try XCTUnwrap(coordinator.awaitingCredential[sessionID]?.id)
+        feed("\r\n", manager, sessionID)
+        try await waitUntil { coordinator.awaitingCredential[sessionID]?.phase == .verifying }
+        feed("\r\nPassword: ", manager, sessionID)
+        try await waitUntil { coordinator.awaitingCredential[sessionID]?.phase == .waiting }
+        XCTAssertEqual(coordinator.awaitingCredential[sessionID]?.id, waitID, "the card never blinks out between attempts")
+
+        feed("\r\nrouter#", manager, sessionID)
+        let result = await execution.value
+        XCTAssertEqual(result.status, .completed)
+        XCTAssertTrue(result.waitedForCredential)
+    }
+
+    func testDeclineAtADevicePasswordReturnsDeclinedAfterCtrlC() async throws {
+        let (manager, sessionID, spy) = try await makeConnectedSessionWithSpy()
+        let coordinator = manager.aiToolCoordinator
+        let execution = try await startCLICommand("enable", on: manager, sessionID: sessionID, spy: spy, timeout: 5)
+        feed("enable\r\nPassword: ", manager, sessionID)
+        try await waitUntil { coordinator.awaitingCredential[sessionID] != nil }
+
+        await coordinator.declineCredentialPrompt(sessionID: sessionID)
+
+        let result = await execution.value
+        XCTAssertEqual(result.status, .declined)
+        XCTAssertTrue(result.waitedForCredential)
+        XCTAssertNil(manager.credentialPrompt)
+        let payloads = await spy.sentPayloads
+        XCTAssertEqual(payloads, ["enable\r", "\u{03}"])
+    }
+
+    func testStopAtADevicePasswordSendsCtrlC() async throws {
+        let (manager, sessionID, spy) = try await makeConnectedSessionWithSpy()
+        let execution = try await startCLICommand("enable", on: manager, sessionID: sessionID, spy: spy, timeout: 5)
+        feed("enable\r\nPassword: ", manager, sessionID)
+        try await waitUntil { manager.credentialPrompt != nil }
+
+        await manager.cancelCredentialPrompts()
+
+        let result = await execution.value
+        XCTAssertEqual(result.status, .failed)
+        XCTAssertNil(manager.credentialPrompt)
+        let payloads = await spy.sentPayloads
+        XCTAssertEqual(payloads.last, "\u{03}")
+    }
+
+    func testCancellingADeviceCommandAtAPasswordSendsCtrlC() async throws {
+        let (manager, sessionID, spy) = try await makeConnectedSessionWithSpy()
+        let execution = try await startCLICommand("enable", on: manager, sessionID: sessionID, spy: spy, timeout: 5)
+        feed("enable\r\nPassword: ", manager, sessionID)
+        try await waitUntil { manager.credentialPrompt != nil }
+
+        execution.cancel()
+
+        let result = await execution.value
+        XCTAssertEqual(result.status, .failed)
+        XCTAssertNil(manager.credentialPrompt)
+        let payloads = await spy.sentPayloads
+        XCTAssertEqual(payloads.last, "\u{03}")
+    }
+
+    func testDevicePasswordLineFollowedByMoreOutputNeverPauses() async throws {
+        let (manager, sessionID, spy) = try await makeConnectedSessionWithSpy()
+        let execution = try await startCLICommand("show run | include Password:", on: manager, sessionID: sessionID, spy: spy, timeout: 5)
+        feed("show run | include Password:\r\nPassword:\r\nrouter>", manager, sessionID)
+
+        let result = await execution.value
+        XCTAssertEqual(result.status, .completed)
+        XCTAssertFalse(result.waitedForCredential)
+        XCTAssertNil(manager.credentialPrompt)
+    }
+
     // MARK: - Secret entry (Docs/CredentialPrompt.md Phase 1)
 
     /// A password typed at a copilot command's prompt reaches the host and is recorded nowhere.
@@ -502,6 +610,25 @@ final class SessionAIToolCoordinatorTests: XCTestCase {
         let payloads = await spy.sentPayloads
         let payload = try XCTUnwrap(payloads.last)
         return (execution, try token(from: payload))
+    }
+
+    /// Starts a device CLI command at a `router>` prompt once its line is sent.
+    private func startCLICommand(
+        _ command: String,
+        on manager: SessionManager,
+        sessionID: UUID,
+        spy: SpyShellChannel,
+        timeout: TimeInterval
+    ) async throws -> Task<CLICommandResult, Never> {
+        manager.shellBuffers[sessionID] = ["router> "]
+        let before = await spy.sentPayloads.count
+        let execution = Task {
+            await manager.aiToolCoordinator.executeCLICommand(
+                sessionID: sessionID, command: command, timeoutSeconds: timeout
+            )
+        }
+        try await waitForPayloads(spy, count: before + 1)
+        return execution
     }
 
     private func token(from payload: String) throws -> String {

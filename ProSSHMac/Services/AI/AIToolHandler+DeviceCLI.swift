@@ -63,17 +63,19 @@ extension AIToolHandler {
         }
 
         if results.count == 1, let (_, result) = results.first {
-            return AIToolDefinitions.jsonString(from: Self.cliResultJSON(result, timeout: timeout))
+            return AIToolDefinitions.jsonString(from: Self.cliResultJSON(
+                result, timeout: timeout, label: Self.sessionLabel(targets.first ?? sessionID, in: provider)
+            ))
         }
         return AIToolDefinitions.jsonString(from: .object([
             "ok": .bool(true),
             "sessions_targeted": .number(Double(results.count)),
             "results": .array(results.map { target, result in
-                var entry = Self.cliResultJSON(result, timeout: timeout)
+                let label = Self.sessionLabel(target, in: provider)
+                var entry = Self.cliResultJSON(result, timeout: timeout, label: label)
                 if case var .object(fields) = entry {
                     fields["session_id"] = .string(target.uuidString)
-                    fields["session"] = .string(provider.sessions.first { $0.id == target }?.hostLabel
-                        ?? String(target.uuidString.prefix(8)))
+                    fields["session"] = .string(label)
                     entry = .object(fields)
                 }
                 return entry
@@ -89,7 +91,7 @@ extension AIToolHandler {
         }
     }
 
-    private static func cliResultJSON(_ result: CLICommandResult, timeout: TimeInterval) -> LLMJSONValue {
+    private static func cliResultJSON(_ result: CLICommandResult, timeout: TimeInterval, label: String) -> LLMJSONValue {
         let truncated = result.output.count > maxCLIOutputChars
         var fields: [String: LLMJSONValue] = [
             "ok": .bool(true),
@@ -116,8 +118,11 @@ extension AIToolHandler {
             fields["error"] = .string(result.output)
         case .declined:
             fields["ok"] = .bool(false)
-            fields["error"] = .string("The user declined the password prompt.")
-            fields["hint"] = .string("Do not retry on this host unless the user asks. Continue with the other hosts and report.")
+            fields["error"] = .string(credentialDeclinedMessage(label: label))
+            fields["hint"] = .string(credentialDeclinedHint)
+        }
+        if result.waitedForCredential, result.status != .declined {
+            fields["note"] = .string(credentialWaitNote)
         }
         return .object(fields)
     }
