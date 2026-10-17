@@ -241,6 +241,15 @@ struct CredentialWait: Equatable, Sendable {
 
     // MARK: - Credential prompts
 
+    /// Whether keys typed in this session now are a password: the wait is up (either phase), or
+    /// the awaited command's cursor line is already a prompt the idle check hasn't confirmed yet.
+    /// Keystrokes are then sent but recorded nowhere. See Docs/CredentialPrompt.md.
+    func isEnteringCredential(sessionID: UUID) -> Bool {
+        if awaitingCredential[sessionID] != nil { return true }
+        guard let pending = pendingCommands[sessionID] else { return false }
+        return CredentialPromptDetector.match(pending.cursorLine) != nil
+    }
+
     /// The user declined to answer: Ctrl+C the prompt and tell the model.
     func declineCredentialPrompt(sessionID: UUID) async {
         guard awaitingCredential.removeValue(forKey: sessionID) != nil else { return }

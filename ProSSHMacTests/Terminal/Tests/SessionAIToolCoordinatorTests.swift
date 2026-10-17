@@ -345,6 +345,87 @@ final class SessionAIToolCoordinatorTests: XCTestCase {
         XCTAssertNil(coordinator.awaitingCredential[sessionID])
     }
 
+    // MARK: - Secret entry (Docs/CredentialPrompt.md Phase 1)
+
+    /// A password typed at a copilot command's prompt reaches the host and is recorded nowhere.
+    /// Host output takes the real path: parser reader, history index, recorder, engine, shellBuffers.
+    func testTypedPasswordIsRecordedNowhere() async throws {
+        let recordings = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SecretEntry.\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: recordings, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: recordings) }
+        let recorder = SessionRecorder(recordingsDirectoryURL: recordings)
+        let (manager, sessionID, spy) = try await makeConnectedSessionWithSpy(sessionRecorder: recorder)
+        let coordinator = manager.aiToolCoordinator
+        manager.shellIOCoordinator.startParserReader(for: sessionID, rawOutput: spy.rawOutput)
+        await manager.startRecording(sessionID: sessionID)
+
+        func type(_ text: String) async {
+            for byte in text.utf8 {
+                await manager.sendRawShellInputBytes(
+                    sessionID: sessionID, bytes: [byte], source: .hardwareKeyCapture, eventType: "key_down"
+                )
+            }
+        }
+        func screen() -> String {
+            (manager.shellBuffers[sessionID] ?? []).joined(separator: "\n")
+        }
+
+        let (execution, token) = try await startCommand("sudo whoami", on: manager, sessionID: sessionID, spy: spy, timeout: 5)
+        spy.emit("\u{1B}]7777;PSB;\(token)\u{07}[sudo] password for kevin: ")
+        try await waitUntil { screen().contains("[sudo] password for kevin:") }
+        XCTAssertNil(coordinator.awaitingCredential[sessionID], "the first key must land inside the idle window")
+        await type("h")
+        try await waitUntil { coordinator.awaitingCredential[sessionID]?.phase == .waiting }
+        await type("unter2-SEC")
+        await manager.sendRawShellInput(sessionID: sessionID, input: "RET")  // a paste
+        await type("\r")
+        let sent = await spy.sentPayloads.joined()
+        XCTAssertTrue(sent.contains("hunter2-SECRET\r"), "the password must still reach the host")
+
+        // The host never echoes a password.
+        spy.emit("\r\nroot\r\n\u{1B}]7777;PSW;\(token);0\u{07}ops@host:~$ ")
+        let result = await execution.value
+        XCTAssertEqual(result.exitCode, 0)
+        XCTAssertTrue(result.waitedForCredential)
+        XCTAssertNil(coordinator.awaitingCredential[sessionID])
+
+        // An ordinary command afterwards is recorded as usual, with nothing glued onto it.
+        await type("ls\r")
+        spy.emit("ls\r\nfile.txt\r\nops@host:~$ ")
+        try await waitUntil { screen().contains("file.txt") }
+
+        func assertNoSecret(_ text: String, _ place: String, file: StaticString = #filePath, line: UInt = #line) {
+            for fragment in ["hunter2", "SECRET", "unter2-SEC", "RET\r"] {
+                XCTAssertFalse(text.contains(fragment), "\(place) contains '\(fragment)'", file: file, line: line)
+            }
+        }
+        XCTAssertTrue(result.output.contains("root"))
+        assertNoSecret(result.output, "the tool's commandOutput")
+        assertNoSecret(screen(), "shellBuffers (and so the per-turn screen snapshot)")
+        let engine = try XCTUnwrap(manager.engines[sessionID])
+        assertNoSecret(await engine.visibleText().joined(separator: "\n"), "the terminal screen")
+
+        let history = manager.terminalHistoryIndex
+        assertNoSecret(await history.activeCommandRawOutput(sessionID: sessionID) ?? "", "the history index's raw output")
+        _ = await history.flushActiveCommand(sessionID: sessionID)
+        let commands = await history.recentCommands(sessionID: sessionID)
+        XCTAssertEqual(commands.first?.command, "ls")
+        for block in commands {
+            assertNoSecret(block.command, "a history command")
+            assertNoSecret(block.output, "a history command's output")
+        }
+
+        await manager.stopRecording(sessionID: sessionID)
+        let recording = try recorder.loadLatestRecording(sessionID: sessionID)
+        let input = recording.chunks.filter { $0.stream == .input }.map(\.text).joined()
+        let output = recording.chunks.filter { $0.stream == .output }.map(\.text).joined()
+        let payloads = await spy.sentPayloads
+        let wrapper = try XCTUnwrap(payloads.first)
+        XCTAssertEqual(input, wrapper + "ls\r", "the copilot's command and the ordinary one, nothing typed at the prompt")
+        assertNoSecret(output, "the recording's output")
+    }
+
     // MARK: - Helpers
 
     private func waitForPayloads(_ spy: SpyShellChannel, count: Int) async throws {
@@ -405,10 +486,13 @@ final class SessionAIToolCoordinatorTests: XCTestCase {
     }
 
     /// Creates a SessionManager with a connected session, then swaps in a SpyShellChannel.
-    private func makeConnectedSessionWithSpy() async throws -> (SessionManager, UUID, SpyShellChannel) {
+    private func makeConnectedSessionWithSpy(
+        sessionRecorder: SessionRecorder = SessionRecorder()
+    ) async throws -> (SessionManager, UUID, SpyShellChannel) {
         let manager = SessionManager(
             transport: MockSSHTransport(),
-            knownHostsStore: CoordinatorTestKnownHostsStore()
+            knownHostsStore: CoordinatorTestKnownHostsStore(),
+            sessionRecorder: sessionRecorder
         )
         let (sessionID, spy) = try await addConnectedSession(to: manager, label: "Coordinator Test")
         return (manager, sessionID, spy)
@@ -450,7 +534,7 @@ final class SessionAIToolCoordinatorTests: XCTestCase {
 
 // MARK: - Test Doubles
 
-/// Minimal spy that captures all `send()` payloads without producing output.
+/// Minimal spy that captures all `send()` payloads; produces output only through `emit`.
 @MainActor private final class SpyShellChannel: SSHShellChannel {
     let rawOutput: AsyncStream<Data>
     private let continuation: AsyncStream<Data>.Continuation
@@ -471,6 +555,11 @@ final class SessionAIToolCoordinatorTests: XCTestCase {
     }
 
     func resizePTY(columns: Int, rows: Int) async throws {}
+
+    /// Output as the host would send it.
+    func emit(_ text: String) {
+        continuation.yield(Data(text.utf8))
+    }
 
     func close() async {
         continuation.finish()

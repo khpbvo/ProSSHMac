@@ -111,6 +111,8 @@ enum RawShellInputSource: String {
         do {
             try await shell.send(bytes: bytes)
             manager.bytesSentBySessionID[sessionID, default: 0] += Int64(bytes.count)
+            // A password typed at a copilot command's prompt goes to the host and nowhere else.
+            guard !manager.aiToolCoordinator.isEnteringCredential(sessionID: sessionID) else { return }
             let rawText = recordingText ?? String(decoding: bytes, as: UTF8.self)
             manager.recordingCoordinator.recordInput(sessionID: sessionID, text: rawText)
             await manager.terminalHistoryIndex.recordRawInput(

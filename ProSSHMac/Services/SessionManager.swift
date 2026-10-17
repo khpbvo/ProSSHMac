@@ -85,7 +85,8 @@ final class SessionManager: ObservableObject {
         knownHostsStore: any KnownHostsStoreProtocol,
         auditLogManager: AuditLogManager? = nil,
         portForwardingManager: PortForwardingManager? = nil,
-        totpStore: TOTPStore? = nil
+        totpStore: TOTPStore? = nil,
+        sessionRecorder: SessionRecorder = SessionRecorder()
     ) {
         self.transport = transport
         self.knownHostsStore = knownHostsStore
@@ -97,7 +98,7 @@ final class SessionManager: ObservableObject {
         self.keepaliveCoordinator = SessionKeepaliveCoordinator()
         let renderCoord = TerminalRenderingCoordinator()
         self.renderingCoordinator = renderCoord
-        let recordCoord = SessionRecordingCoordinator()
+        let recordCoord = SessionRecordingCoordinator(sessionRecorder: sessionRecorder)
         self.recordingCoordinator = recordCoord
         let sftpCoord = SessionSFTPCoordinator()
         self.sftpCoordinator = sftpCoord

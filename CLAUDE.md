@@ -349,6 +349,9 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
   `shellBuffers`. Anything that interrupts a waiting session sends Ctrl+C, then waits 250 ms
   before sending more (SIGINT flushes queued tty input). Never finish a superseded command
   before its interrupt: it would send its timeout reset line into the prompt.
+  While `isEnteringCredential` (wait up, or the cursor line already a prompt) the keystroke path
+  `sendRawShellInputBytes` sends but records nothing: no history index, no recording. Any new
+  per-keystroke recorder must sit behind that guard.
 - **Claude's thinking blocks bind the conversation prefix** (system prompt, tools, earlier
   messages). Claude turns are stored as `.anthropic(blocks:)` and replayed byte-for-byte; never
   edit, reorder or re-encode them. Claude always gets the full tool set (direct-action mode only
@@ -536,7 +539,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 | `Docs/featurelist.md` | **Long-term memory** — dated work log, phase progress, loop-log entries |
 | `Docs/RenderCost.md` | **Active spec.** What rendering actually costs — R0/R1/R2a done, **R2b open** (code merged, performance unvalidated). Read its "Measurement caveats" before any perf measurement |
 | `Docs/R2bBenchmarkResults.md` | R2b A/B evidence: exact commands and all raw reports for the six baseline/candidate pairs |
-| `Docs/CredentialPrompt.md` | **Active, next.** Password prompts (sudo, su, ssh, passphrase, device `enable`) pause the awaited tool call with a card in the chat; the user types in the terminal, nothing is recorded, Decline Ctrl+Cs and tells the model. Replaces the prompt's SUDO rules and the `apply_patch` sudo dance. Phase 0 done; Phases 1–4 open |
+| `Docs/CredentialPrompt.md` | **Active, next.** Password prompts (sudo, su, ssh, passphrase, device `enable`) pause the awaited tool call with a card in the chat; the user types in the terminal, nothing is recorded, Decline Ctrl+Cs and tells the model. Replaces the prompt's SUDO rules and the `apply_patch` sudo dance. Phases 0–1 done; Phases 2–4 open |
 | `Docs/NetworkCopilot.md` | **Active.** Copilot reaches every open session, one memory per chat, a router/switch command path, and lifecycle-shaped skills (`load_skill`). Phases 1–3 done; Phases 4–7 reshaped 2026-10-16 (harness first, then skill library, then skills, then live cost validation). Read its "Design rules" before adding any rule to the developer prompt |
 | `Docs/Anthropic.md` | Direct Anthropic Messages API as a second AI provider next to OpenRouter — **COMPLETE** (Phases 0–6, validated live). Read its "Rules that shape the design" before touching AI transcript code |
 | `Docs/Bug84.md` | One terminal renderer per session across tab switches and split changes (per-session model store) — **COMPLETE** (Phases 0–5); Phase 5 has the live memory numbers |
@@ -570,22 +573,25 @@ and the session coordinators) has no spec file left; see `Docs/featurelist.md`.
 
 ## Next Session Plan
 
-**Active work: `Docs/CredentialPrompt.md` Phase 1 — secret entry.** Phase 0 (detector and
-pause) is done; read the spec's "Guarantees", "Architecture sketch" and "Decisions" (four
-Phase 0 refinements are recorded there). `SessionShellIOCoordinator.sendRawShellInputBytes`, the
-user keystroke path (keys, paste, pop-out keys, `send_input`), must skip
-`recordingCoordinator.recordInput` and `terminalHistoryIndex.recordRawInput` while
-`aiToolCoordinator.awaitingCredential[sessionID]` is set (either phase); the bytes still reach
-the host. One test types a known password through the real path and asserts it appears in none
-of: history index raw output or command list, session recording, shell buffers, the tool's
-`commandOutput`, the per-turn screen snapshot (the prompt line itself may). Until Phase 2 a
-copilot `sudo` waits with no card: type the password in the terminal or press Clear. Then
-Phase 2 (the card, `SessionManager.credentialPrompt` publishing the coordinator's wait, and a
-new Stop button that keeps the chat; there is no Stop today, only Clear), Phase 3 (delete the
-SUDO prompt section and the `apply_patch` sudo dance, keeping plain-first then sudo; format
-`waitedForCredential`/`declinedCredential` for the model; `run_cli_command` enters the wait on a
-device password prompt), Phase 4 (live on the four VMs; measure whether 300 ms idle suits SSH).
-Tool execution is sequential, so one host waits at a time: no queue.
+**Active work: `Docs/CredentialPrompt.md` Phase 2 — the card and Stop.** Phases 0 (detector
+and pause) and 1 (keys at a prompt are recorded nowhere) are done; read the spec's "Guarantees",
+"Architecture sketch" and "Decisions". Phase 2: `SessionManager.credentialPrompt`
+(`@Published`, mirrors `aiToolCoordinator.awaitingCredential`, which is `private(set)` and not
+observable today, so the coordinator must notify the manager on every change),
+`declineCredentialPrompt(sessionID:)` and `cancelCredentialPrompts()`; new
+`UI/Terminal/CredentialPromptCardView.swift` (host label, command, Enter password, Decline, the
+"in its own window" / "not in a visible pane" note) above the composer in
+`TerminalAIAssistantPane`; "Waiting for your password on <host>…" in the chat; Enter password
+calls a new `onRevealSession` wired by `TerminalView` to `focusSessionAndPane`; focus to the chat
+pane after a grant. The Stop button (`TerminalAIAssistantViewModel.stop()`: cancel the agent
+task, keep messages and memory; there is no Stop today, only Clear). Tests per the spec: a
+prompt, a decline, Stop with and without a prompt, Clear with a prompt, the card never outliving
+its wait. Until Phase 2 lands a copilot `sudo` waits with no card: type the password in the
+terminal or press Clear. Then Phase 3 (delete the SUDO prompt section and the `apply_patch` sudo
+dance, keeping plain-first then sudo; format `waitedForCredential`/`declinedCredential` for the
+model; `run_cli_command` enters the wait on a device password prompt), Phase 4 (live on the four
+VMs; measure whether 300 ms idle suits SSH). Tool execution is sequential, so one host waits at a
+time: no queue.
 
 **Pre-existing red test (not from Phase 0):**
 `AIBroadcastTests.testResolveTargetSessionsInvalidTargetFallsBackToBroadcast` fails on clean

@@ -156,7 +156,7 @@ safety-mode path). Tests: new `CredentialPromptDetectorTests`,
   session. Result types carry `waitedForCredential` and `.declined`. Tests drive a fake shell
   channel: prompt then PSW marker after "user input"; three failures then exit 1; a decline; a
   cancellation; a second session prompting after the first resolves; a supersede while waiting.
-- [ ] **Phase 1: Secret entry.** `sendRawShellInputBytes` records nothing while its session is
+- [x] **Phase 1: Secret entry.** (2026-10-17) `sendRawShellInputBytes` records nothing while its session is
   awaiting a credential. One test types a known password through the real path and asserts it
   appears in none of: history index raw output or command list, session recording, shell
   buffers, the tool's `commandOutput`, the per-turn screen snapshot. The prompt line itself may
@@ -217,6 +217,12 @@ safety-mode path). Tests: new `CredentialPromptDetectorTests`,
   only after that, so the old command never sends its timeout reset line (`ESC[0m` + newline)
   into the prompt or the new command. A timed-out command skips that reset whenever a newer
   command already owns the session. (Phase 0; found by the supersede test.)
+- Keystrokes go unrecorded not only while the wait is up but also while the awaited command's
+  cursor line already matches a prompt (`SessionAIToolCoordinator.isEnteringCredential`). The
+  300 ms idle check otherwise leaves a window in which a fast first key or a password-manager
+  paste was recorded; a leaked first key also stayed in the history index's typed-input buffer
+  and was glued onto the next real command (`hls` for `ls`, found by the Phase 1 test). The
+  copilot's own command wrapper is still recorded as input, as before. (Phase 1, 2026-10-17.)
 - `CLICommandResult.Status.declined` is formatted for the model already (the exhaustive switch
   in `AIToolHandler+DeviceCLI` needs it); everything else about result formatting stays in
   Phase 3. (Phase 0.)
