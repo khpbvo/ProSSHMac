@@ -12,10 +12,10 @@ sequentially, and tagged by severity: **Critical**, **High**, **Medium**, or **L
 | Critical | 1     | 1     | 0    |
 | High     | 20    | 7     | 13   |
 | Medium   | 39    | 20    | 19   |
-| Low      | 30    | 5     | 25   |
-| **Total**| **90**| **33**| **57**|
+| Low      | 33    | 5     | 28   |
+| **Total**| **93**| **33**| **60**|
 
-Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13, Bug 85 fixed and Bugs 86-87 added 2026-10-14, Bug 84 fixed and Bugs 88-90 added 2026-10-15. The `**File:**` paths below predate the
+Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13, Bug 85 fixed and Bugs 86-87 added 2026-10-14, Bug 84 fixed and Bugs 88-90 added 2026-10-15, Bugs 91-93 added 2026-10-18. The `**File:**` paths below predate the
 refactors (`Views/` → `UI/`, `SSH/` → `Services/SSH/`, `Services/Security/` → `Services/`) and some
 files no longer exist — resolve by basename.
 
@@ -1591,6 +1591,63 @@ it as the session's only history).
 **Not yet diagnosed.** Check whether local zsh hides it (ZDOTDIR injection) while remote bash gets
 it typed at the prompt, and whether it can be sent with echo suppressed or followed by a clear of
 those lines. Expected: no visible setup text, as in iTerm2's shell integration.
+
+Seen again 2026-10-18 on the same four VMs at every login.
+
+---
+
+### Bug 91 — Split Right / Split Down Silently Do Nothing When Every Session Is in a Pane (Low)
+
+**Files:** `UI/Terminal/TerminalView.swift` (`splitNextAvailableSession`),
+`UI/Terminal/TerminalKeyboardShortcutLayer.swift`
+
+Seen 2026-10-18 during CredentialPrompt Phase 4 with four SSH sessions in a 2×2 split: the user
+picked Split Right and "nothing happens". The menu items (Cmd+D, Cmd+Shift+D) call
+`splitNextAvailableSession`, which only moves an open session that is not yet in a pane into a
+new pane and returns when there is none. The items stay enabled, so it looks broken.
+
+**Expected:** either disable the items when no unplaced session exists, or split with a new
+session (as the pane context menu's "split with new session" does through
+`createSessionForNewPane`). Ask the user which before changing it.
+
+---
+
+### Bug 92 — Copilot File-Tool Internals Are Visible in the Terminal (Low)
+
+**Files:** `Services/AI/AIToolHandler+RemoteExecution.swift` (remote helpers, the not-found
+marker), `Services/AI/AIToolHandler+RemotePatch.swift`, `Services/SessionAIToolCoordinator.swift`
+
+Seen 2026-10-18 during CredentialPrompt Phase 4 on testserv-01. The remote file helpers run
+through the visible `execute_and_wait` path, so their raw output stays on screen: the
+`__PROSSH_PATH_NOT_FOUND__` marker, `apply_patch`'s base64 read of the file
+(`aGVsbG8KIyBwcm9zc2ggdGVzdAo=`) and an `ls -l` line. After the not-found marker the prompt was
+also drawn twice (`kevin@testserv-01:~$ kevin@testserv-01:~$`). Harmless, but it clutters the
+user's terminal and the copilot's own screen reads.
+
+**Not yet diagnosed.** Options: keep helper output out of the grid like the wrapper echo
+(filtered between the private start and completion events), or print a one-line summary instead.
+Check the doubled prompt separately; it may be the marker's missing trailing newline.
+
+---
+
+### Bug 93 — Split Panes Overlapped Once After Switching Terminal-Only Mode (Low)
+
+**Files:** `UI/RootTabView.swift` (`columnVisibility` animation),
+`UI/Terminal/TerminalView.swift` (`macOSBody`), `Terminal/Renderer/TerminalMetalView.swift`
+
+Seen once, 2026-10-18 01:34, during CredentialPrompt Phase 4 with four SSH sessions in a 2×2
+split, broadcast on: the app sidebar and pane header bars came back (terminal-only mode was off)
+and the four terminals were drawn overlapping each other. The user described it as "the terminals
+jumped".
+
+**Not reproduced.** A Debug build with layout and geometry logging (branch
+`debug/terminal-jump`, commit `251e010`, writes `/tmp/prossh-jump.log`) showed that the password
+flow causes no layout, focus-mode or size change at all, and that terminal-only mode is switched
+only by the toolbar button, Cmd+Shift+F or leaving the Terminal section. Four switches in that
+run animated all four terminals through per-frame resizes and settled with Metal frames matching
+the SwiftUI pane frames. Most likely the screenshot caught that animation, or a rare bad settle.
+If it recurs, run that branch and compare the `swiftui.pane` and `appkit.metal` frames at the
+moment it happens.
 
 ---
 

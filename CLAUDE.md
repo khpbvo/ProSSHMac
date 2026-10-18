@@ -552,7 +552,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 | `Docs/featurelist.md` | **Long-term memory** — dated work log, phase progress, loop-log entries |
 | `Docs/RenderCost.md` | **Active spec.** What rendering actually costs — R0/R1/R2a done, **R2b open** (code merged, performance unvalidated). Read its "Measurement caveats" before any perf measurement |
 | `Docs/R2bBenchmarkResults.md` | R2b A/B evidence: exact commands and all raw reports for the six baseline/candidate pairs |
-| `Docs/CredentialPrompt.md` | **Active, next.** Password prompts (sudo, su, ssh, passphrase, device `enable`) pause the awaited tool call with a card in the chat; the user types in the terminal, nothing is recorded, Decline Ctrl+Cs and tells the model. Replaces the prompt's SUDO rules and the `apply_patch` sudo dance. Phases 0–3 done; Phase 4 (live validation) open |
+| `Docs/CredentialPrompt.md` | Password prompts (sudo, su, ssh, passphrase, device `enable`) pause the awaited tool call with a card in the chat; the user types in the terminal, nothing is recorded, Decline Ctrl+Cs and tells the model. Replaced the prompt's SUDO rules and the `apply_patch` sudo dance — **COMPLETE** (Phases 0–4, validated live 2026-10-18; a device `enable` password not yet seen live) |
 | `Docs/NetworkCopilot.md` | **Active.** Copilot reaches every open session, one memory per chat, a router/switch command path, and lifecycle-shaped skills (`load_skill`). Phases 1–3 done; Phases 4–7 reshaped 2026-10-16 (harness first, then skill library, then skills, then live cost validation). Read its "Design rules" before adding any rule to the developer prompt |
 | `Docs/Anthropic.md` | Direct Anthropic Messages API as a second AI provider next to OpenRouter — **COMPLETE** (Phases 0–6, validated live). Read its "Rules that shape the design" before touching AI transcript code |
 | `Docs/Bug84.md` | One terminal renderer per session across tab switches and split changes (per-session model store) — **COMPLETE** (Phases 0–5); Phase 5 has the live memory numbers |
@@ -586,33 +586,19 @@ and the session coordinators) has no spec file left; see `Docs/featurelist.md`.
 
 ## Next Session Plan
 
-**Active work: `Docs/CredentialPrompt.md` Phase 4 — live validation.** Phases 0–3 are done and
-none of it has been seen live. Needs a relaunched Release or Debug app (check the process start
-time against the build), the four VMs and the user at the keyboard. Run the spec's Phase 4 list:
-one host; four hosts needing sudo in one task (one card after another); wrong password then
-right; decline on one host (the model continues and reports); Stop while a prompt is up (no host
-left at a prompt, chat kept); `apply_patch` on a protected file (the sudo heredoc write);
-an ssh hop password; `enable` in FRR `vtysh` (also the NetworkCopilot Phase 3 `run_cli_command`
-checks: `show running-config`, `configure terminal` then `end`, `execute_and_wait` refused there);
-a session not in a visible pane; broadcast mode while a prompt is up; `execute_command` with sudo
-(no card). Measure whether 300 ms idle suits SSH. Watch for a card that blinks between attempts
-on device CLIs: a device error line such as `% Access denied` is not a known retry notice, so
-the wait may end and restart. Then decide on "Grant sudo on all hosts" and update
-`Docs/AIArchitecture.md`, CLAUDE.md and `Docs/featurelist.md`. Known VM state: the clone fixes
-are still waiting at `sudo` prompts on all four VMs (WireGuard `wg0` identical on all four is
-the urgent one).
+**Active work: `Docs/NetworkCopilot.md` Phase 4** (harness first: non-interactive execution
+environment, prompt audit, tool contract sweep), then Phase 5 (skill library, one-line index
+loaded once per chat), Phase 6 (lifecycle-shaped skills), Phase 7 (live validation with
+iteration and dollar counts). The spec's "Design rules" table is the test for where anything
+new goes: code, prompt, skill or user skill. Do not add vendor playbooks or new prompt rules.
+CredentialPrompt is complete (`Docs/CredentialPrompt.md` Phase 4 has the live results); the user
+decided against a "Grant sudo on all hosts" button.
 
-**Pre-existing red test (not from Phase 0):**
+**Pre-existing red test:**
 `AIBroadcastTests.testResolveTargetSessionsInvalidTargetFallsBackToBroadcast` fails on clean
 `master`. It is stale since `38c1b6b` (NetworkCopilot Phase 2): `resolveTargetSessions` now
 passes any UUID through because `target_session` is validated before dispatch. Confirm with the
 user, then update or delete the test.
-
-**Then `Docs/NetworkCopilot.md` Phase 4** (harness first: non-interactive execution
-environment, prompt audit, tool contract sweep), Phase 5 (skill library, one-line index loaded
-once per chat), Phase 6 (lifecycle-shaped skills), Phase 7 (live validation with iteration and
-dollar counts). The spec's "Design rules" table is the test for where anything new goes: code,
-prompt, skill or user skill. Do not add vendor playbooks or new prompt rules.
 
 **Next after that: Bug 88 + Bug 87 (tab selection vs. pane focus in split layouts).** Both are in
 `Docs/bugs.md` and touch the same interaction in `TerminalView`: tab selection, pane assignment
@@ -625,12 +611,20 @@ and `onChange(of: paneManager.focusedPaneId)`.
   overrides the selection made after `closePane`.
 - Extend `TerminalSurfaceIdentityTests` (it hosts the real `TerminalView`); fix both in one change.
   Small enough to skip a feature spec; log in `Docs/featurelist.md`.
+- Bug 91 (Split Right is a silent no-op when every session is in a pane) sits in the same code;
+  ask the user whether it should disable the item or split with a new session.
 
-**Queued after that:** Bug 89 (brightness flicker on every tab switch with CRT/bloom on; first
-check whether it goes away with CRT and bloom off and whether `240b260~1` shows it), Bug 83
-(registry audit), Bug 80 (one shared copy path and the draft/last-line fallback), Bug 86 (colour
-emoji render as silhouettes; not diagnosed). Optional: a shared glyph atlas, now the largest hidden
-renderer cost (`Docs/Bug84.md` Open questions).
+**Queued after that:** Bug 92 (copilot file-tool internals visible in the terminal), Bug 90
+(shell-integration setup line echoed at every remote bash login), Bug 89 (brightness flicker on
+every tab switch with CRT/bloom on; first check whether it goes away with CRT and bloom off and
+whether `240b260~1` shows it), Bug 83 (registry audit), Bug 80 (one shared copy path and the
+draft/last-line fallback), Bug 86 (colour emoji render as silhouettes; not diagnosed). Optional:
+a shared glyph atlas, now the largest hidden renderer cost (`Docs/Bug84.md` Open questions).
+
+**Bug 93 (panes overlapped once after switching terminal-only mode) is not reproduced.** The
+unmerged branch `debug/terminal-jump` (`251e010`) logs layout state, pane SwiftUI frames, Metal
+view frames and terminal resizes to `/tmp/prossh-jump.log`. If the user sees it again, run that
+branch and compare `swiftui.pane` with `appkit.metal` frames at that moment. Never merge it.
 
 **Paused: `Docs/RenderCost.md` R2b — explain or bound the throughput variability.**
 R2b (fewer engine actor calls per batch and per publish) is merged on `master` but unvalidated:
@@ -654,6 +648,9 @@ list is in `Docs/RenderCost.md` and the raw reports in `Docs/R2bBenchmarkResults
 returns, capture the call stack before changing anything.
 
 **Pending live checks (need a relaunched app and a user at the keyboard):**
+- A device `enable` *password* card (needs a daemon or device with an enable password; `sudo
+  vtysh` never asks). Watch whether the card blinks after `% Access denied`, which is not a
+  known retry notice.
 - Shift+Enter: inserts a newline at a plain zsh prompt and is distinguished inside Claude Code;
   not yet exercised over a live SSH session or in bash.
 - Reasoning panel: the native TextKit renderer was never validated live against the original

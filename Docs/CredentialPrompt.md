@@ -180,13 +180,42 @@ safety-mode path). Tests: new `CredentialPromptDetectorTests`,
   "Grant sudo on all hosts" button in the chat toolbar that runs `sudo -v` in every connected
   session through the same wait, one after another, so the user unlocks four VMs once, up
   front.
-- [ ] **Phase 4: Live validation.** On the four VMs, user at the keyboard: one host; four hosts
+- [x] **Phase 4: Live validation.** (2026-10-18) On the four VMs, user at the keyboard: one host; four hosts
   needing sudo in one task (one card after another); wrong password then right; decline on one
   host and confirm the model continues and reports; Stop while a prompt is up (no host left at
   a prompt, chat kept); a `sudo` inside `apply_patch`; an ssh hop password; `enable` in FRR
   `vtysh`; a session not in a visible pane; and `execute_command` with sudo (no card, prompt
   visible). Docs: `Docs/AIArchitecture.md`, CLAUDE.md (AI section, gotchas),
   `Docs/featurelist.md`.
+
+  **Results** (Debug build of `31d975a`, Claude Opus 5.5, four Ubuntu VMs over LAN SSH, bash).
+  All passed:
+  - One host (`sudo -k; sudo whoami`): card, password typed in the terminal, model got `root`.
+  - Wrong then right: the card stayed up through `Sorry, try again.` without blinking and no
+    "Password entered" line until the right password.
+  - Four hosts in one request: one card after another; Decline on testserv-03 Ctrl+C'd it,
+    the model carried on to testserv-04 and reported the decline without retrying.
+  - Stop with a card up: card gone, host back at its shell prompt, chat kept, no status line.
+  - `execute_command` with sudo: no card, prompt left visible in the terminal.
+  - `apply_patch` on a root-owned file: approval card, plain write refused, sudo write raised
+    the password card, file correct afterwards.
+  - Host hidden behind a maximized pane: card named it; Enter password restored the split and
+    focused it.
+  - Broadcast on: the password reached only the waiting host (also held during the ssh hop).
+  - ssh hop (`ssh -o PubkeyAuthentication=no … hostname` via `execute_and_wait`): card at
+    `kevin@192.168.2.33's password:`, result `testserv-02`.
+  - FRR `vtysh` through `run_cli_command`: `show running-config`, `configure terminal` then
+    `end`; `execute_and_wait` refused at the device prompt.
+
+  **Not exercised:** a device `enable` *password*. `sudo vtysh` is already privileged, so
+  `enable` asked nothing; the device-side card and the possible blink after `% Access denied`
+  remain unseen live. The 300 ms idle window felt immediate over LAN SSH; nothing was timed.
+
+  Found along the way, not caused by this feature: Bugs 91-93 in `Docs/bugs.md` (Split Right
+  is a silent no-op when every session is in a pane; file-tool internals visible in the
+  terminal; panes overlapped once after switching terminal-only mode). The password flow was
+  ruled out for Bug 93 with layout and geometry logging (branch `debug/terminal-jump`,
+  unmerged).
 
 ## Decisions
 
@@ -247,15 +276,16 @@ safety-mode path). Tests: new `CredentialPromptDetectorTests`,
   output callbacks; Decline and Stop mark the command interrupted, Ctrl+C, wait 250 ms, then
   unregister it, so the result never reaches the model before the tty settles. A device
   `Password:` is never returned as `awaiting_input`. (Phase 3.)
-- "Grant sudo on all hosts" is deferred: one card per host, one after another, has not been
-  seen live yet; decide after Phase 4 whether it is needed. (Phase 3.)
+- No "Grant sudo on all hosts" button. One card per host, one after another, was easy to follow
+  live with four hosts, and the user types every password. (User, Phase 4, 2026-10-18: "not
+  everything is a great idea".)
 - `CLICommandResult.Status.declined` is formatted for the model already (the exhaustive switch
   in `AIToolHandler+DeviceCLI` needs it); everything else about result formatting stays in
   Phase 3. (Phase 0.)
 
 ## Open questions
 
-- Should the idle window be configurable for slow links? 300 ms is a guess; the live phase
-  measures it over SSH to the VMs.
+- (Resolved for now) The 300 ms idle window felt immediate over LAN SSH in Phase 4; it stays
+  fixed. Revisit only if a slow or high-latency link shows a late or missing card.
 - (Resolved) Local shell sessions: every keystroke path, local and SSH, ends in
   `sendRawShellInputBytes`, so one hook covers both.
