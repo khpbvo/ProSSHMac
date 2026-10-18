@@ -133,7 +133,8 @@ final class AppDependencies: ObservableObject {
             persistConversationContext: true,
             anthropicClient: anthropicClient,
             anthropicModelStore: anthropicModelStore,
-            providerSelection: providerSelection
+            providerSelection: providerSelection,
+            skillLibrary: .standard
         )
 
         self.openRouterSettingsViewModel = OpenRouterSettingsViewModel(

@@ -60,7 +60,14 @@ import os.log
             : AIConversationState()
         let priorModelID = conversationState.lastModelID
         conversationState.prepare(for: modelID)
-        if service.persistConversationContext, priorModelID != nil, priorModelID != modelID {
+        // Skills load once per chat: a folder change reaches the next chat, never this prefix.
+        let skillsLoaded = conversationState.skills == nil
+        if skillsLoaded {
+            conversationState.skills = service.skillLibrary.load()
+        }
+        let skills = conversationState.skills ?? AISkillSet()
+        if service.persistConversationContext,
+           skillsLoaded || (priorModelID != nil && priorModelID != modelID) {
             service.conversationContext.update(state: conversationState, for: conversationID)
         }
 
@@ -88,7 +95,7 @@ import os.log
             userMessageText = focusLine + sessionsPreamble + trimmedPrompt
         }
 
-        let systemPrompt = AIToolDefinitions.developerPrompt()
+        let systemPrompt = AIToolDefinitions.developerPrompt(skills: skills.indexLines)
         let prefixFingerprint = provider.prefixFingerprint(systemPrompt: systemPrompt, tools: activeToolDefinitions)
         var currentTurn: [AITranscriptMessage] = [.user(userMessageText)]
         var totalToolCalls = 0
@@ -145,6 +152,7 @@ import os.log
                 sessionID: sessionID,
                 broadcastContext: broadcastContext,
                 toolCalls: toolCalls,
+                skills: skills,
                 traceID: traceID
             )
             currentTurn += toolOutputs.map { .toolResult($0) }

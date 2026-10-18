@@ -118,7 +118,7 @@ new `AISkillLibraryTests`, `DeviceCLITests`.
   - Tool contract sweep: a test that calls every exposed tool schema with valid minimal
     arguments against the mock provider and asserts no `{ok:false}`; every error path returns an
     actionable `hint`. Fix what it finds.
-- [ ] **Phase 5: Skill library and `load_skill`.**
+- [x] **Phase 5: Skill library and `load_skill`.** Done 2026-10-18; see "Phase 5 as built".
   - `AISkillLibrary`: bundled (`Resources/Skills/*.md`) + user folder
     (`~/Library/Application Support/ProSSHMac/Skills/`), front matter `name`, `description`,
     optional `platforms` (metadata returned by `load_skill`, never a filter on the index, which
@@ -293,6 +293,43 @@ by the fake device only.
   (`apply_patch` failure, `run_cli_command` statuses). `AIToolContractTests` runs every exposed
   schema on valid minimal input and 13 invalid inputs. Finding: a local `apply_patch` update
   without a diff reported success; now refused.
+
+## Phase 5 as built (2026-10-18)
+
+- **Library.** `Services/AI/AISkillLibrary.swift`: `AISkill` (name, description, platforms,
+  body, source), `AISkillSet` (sorted by name, `skill(named:)`, `indexLines`) and
+  `AISkillLibrary(bundledDirectory:userDirectory:)`. Front matter is `---` / `key: value` /
+  `---`. Rules: `name` is lowercase letters, digits and hyphens; `description` is one line of at
+  most 200 characters; `platforms` is `[a, b]` or `a, b`; the body must not be empty. An invalid
+  file is logged (`AICopilot.Skills`) and skipped. Within one folder the first file by name wins
+  a duplicate name; a user skill replaces a bundled one. A missing folder means no skills.
+- **Bundle layout.** Xcode's synchronized group **flattens** `ProSSHMac/Resources/Skills/*.md`
+  into `Contents/Resources/*.md` (checked with a probe file and a build). So
+  `AISkillLibrary.standard` reads every `.md` at the resource root as a bundled skill. Nothing
+  else in the app target is Markdown; if that changes, give skills their own extension.
+  User folder: `~/Library/Application Support/ProSSHMac/Skills/`.
+- **Once per chat.** `AIConversationState.skills` is filled on the chat's first turn
+  (`AIAgentRunner.run`) and kept, so the system prompt and the Anthropic prefix fingerprint stay
+  fixed. Clear drops the state, so the next chat reloads both folders. With
+  `persistConversationContext == false` the library loads each turn.
+- **Prompt.** `developerPrompt(skills:)` adds a blank line, `SKILLS (procedures and
+  checklists; call load_skill with the name before a task one covers):` and one
+  `- name — description` line per skill, only when skills exist. The base prompt is unchanged
+  (23 lines).
+- **Tool.** `load_skill {name}` (strict, no `target_session`), the 13th exposed schema; not
+  in the direct-action set. Returns `{ok, name, description, platforms, source, body}`. An
+  unknown name gives `{ok:false}` with the hint `Available skills: …` or "No skills are
+  installed". The handler gets the chat's snapshot through
+  `executeToolCalls(…, skills:, traceID:)`.
+- **Wiring.** `AIAgentService(skillLibrary:)` defaults to `.empty`, so tests never read the
+  developer's folders; `AppDependencies` passes `.standard`. Settings → AI Assistant has a
+  "SKILLS" group with **Open Skills Folder**, which creates the folder and opens it in Finder.
+- **Tests.** `AISkillLibraryTests` (parsing, invalid files skipped, override, duplicates,
+  absent folders, folder creation). `AIAgentServiceTests.testSkillIndexIsFixedPerChatAndReloadedByANewChat`:
+  a file added mid-chat leaves the system prompt unchanged, and a new chat lists it.
+  `AIToolContractTests` gains a `load_skill` case, two error cases and the hint check.
+  `AIToolDefinitionsTests` checks that the index adds 2 + n lines.
+- **Not yet seen live:** the Settings button, and a user skill loaded by the model in a real chat.
 
 ## Open questions
 

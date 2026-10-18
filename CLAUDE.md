@@ -137,7 +137,7 @@ xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform
 - **Toolchain: Xcode 27.0 (27A266a), Swift 6.4.** The Metal Toolchain component must be installed
   (`xcodebuild -showComponent metalToolchain`). Never exclude `TerminalShaders.metal` from a build;
   if the shader fails to compile, check the component first.
-- Test bundle: `ProSSHMacTests` — 5 files at the bundle root plus 59 in `ProSSHMacTests/Terminal/Tests/`,
+- Test bundle: `ProSSHMacTests` — 5 files at the bundle root plus 60 in `ProSSHMacTests/Terminal/Tests/`,
   ~920 test methods. No test sources live under `ProSSHMac/`.
 - Some tests require the host app process (UI/AppKit-backed suites).
 - **No full-suite baseline exists on Xcode 27.** Every suite touched since has been run targeted and
@@ -208,7 +208,7 @@ ProSSHMac/
 │   │                     #   OpenRouterClient/Types/ModelStore/APIKeyStore/ChatProvider,
 │   │                     #   AnthropicClient/Types/ModelStore/APIKeyStore, AIKeychain,
 │   │                     #   ApplyPatchTool, UnifiedDiffPatcher, apply_diff,
-│   │                     #   CredentialPromptDetector
+│   │                     #   CredentialPromptDetector, AISkillLibrary
 ├── Terminal/
 │   ├── Diagnostics/      # TerminalPerf (runtime-gated signposts + stage timers),
 │   │                     #   TerminalSchedulingDiagnostics (thread CPU vs wall, opt-in)
@@ -257,6 +257,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 | `Services/AI/AIToolHandler.swift` + 7 extensions | Tool dispatch (775L). Extensions: ArgumentParsing, RemoteExecution, RemotePatch (remote `apply_patch`: plain, then sudo on permission denied), LocalFilesystem, InteractiveInput, DeviceCLI (`run_cli_command`), OutputHelpers (incl. the password-wait `note` and decline error) |
 | `Services/AI/CredentialPromptDetector.swift` | Password/passphrase prompt lines (sudo, su, doas, ssh hop, key passphrase), retry notices, cursor line from a byte tail, progress after an answer (76L). See `Docs/CredentialPrompt.md` |
 | `Services/AI/DeviceCLI.swift` | Router/switch CLI support: `DeviceCLIPrompt` (cursor line → POSIX / device / unknown, prompt base), `DeviceCLICapture` (complete / pager / question decisions from text + idle time; cursor line and offsets for the password wait), `DeviceCLIText` |
+| `Services/AI/AISkillLibrary.swift` | Skills (Markdown playbooks): bundled `.md` at the bundle's resource root (the synchronized group flattens `Resources/Skills/`) plus `~/Library/Application Support/ProSSHMac/Skills/`; parse, user override, `indexLines`. Snapshotted per chat in `AIConversationState.skills`, so the prompt's SKILLS index never changes mid-chat; `load_skill` reads that snapshot |
 | `Services/AI/AISessionDirectory.swift` | The open sessions as the copilot sees them: per-turn list, `list_sessions` JSON, default targets, device-CLI marking |
 | `Services/TerminalRenderingCoordinator.swift` | Snapshot publishing, scroll state, resize debounce, alt-buffer policy, shell-buffer throttle (1,066L). An ordinary publish is two engine calls (`publishViewportState`, then `publishSnapshot` carrying housekeeping) with MainActor scroll-anchor policy between them |
 | `UI/Terminal/TerminalView.swift` | Main terminal UI, sidebar layout, focus, input capture (1,060L). `sessionPanel` is the only place a session's terminal surface is built |
@@ -281,7 +282,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 | `ViewModels/TerminalAIAssistantViewModel.swift` | AI sidebar VM: messages, streaming, patch approval, credential-prompt mirror and status lines, `stop()` (470L) |
 | `UI/Terminal/ExternalTerminalWindowView.swift` | Separate-window terminal session view (341L) |
 | `Terminal/Input/KeyEncoder.swift` | Key → byte encoding driven by `KeyEncoderOptions` (application cursor keys, kitty disambiguation, `modifyOtherKeys`); Shift+Enter fallback (315L) |
-| `Services/AI/AIToolDefinitions.swift` | Developer prompt, 9 tool schemas, direct-action filter, error helpers (`errorResult`/`errorObject`, hint required) (300L) |
+| `Services/AI/AIToolDefinitions.swift` | Developer prompt (+ per-chat skill index), 10 tool schemas, direct-action filter, error helpers (`errorResult`/`errorObject`, hint required) (300L) |
 | `Services/SessionShellIOCoordinator.swift` | Shell input, the batched parser reader, per-batch bookkeeping (307L). Each batch is one `feedAndCollectOutcome` call, applied in one MainActor handoff with no post-feed engine reads; also filters the AI tool wrapper echo |
 | `Services/LocalPTYProcess.swift` | Actor wrapping forkpty, async output stream (274L) |
 | `Terminal/Renderer/TerminalMetalView.swift` | NSViewRepresentable wrapping `TerminalMTKView` (left-mouse events with click count), wheel scrolling (204L) |
@@ -371,9 +372,9 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
   edit, reorder or re-encode them. Claude always gets the full tool set (direct-action mode only
   caps iterations for it). A trim or tool-set change strips all thinking via
   `AIConversationState.requestHistory`. See `Docs/Anthropic.md`.
-- **AI agent tools**: 12 exposed schemas — 9 in `AIToolDefinitions` (`get_command_output`,
+- **AI agent tools**: 13 exposed schemas — 10 in `AIToolDefinitions` (`get_command_output`,
   `get_current_screen`, `search_filesystem`, `search_file_contents`, `read_files`,
-  `get_recent_commands`, `execute_command`, `execute_and_wait`, `list_sessions`) plus `apply_patch`
+  `get_recent_commands`, `execute_command`, `execute_and_wait`, `list_sessions`, `load_skill`) plus `apply_patch`
   (gated on `patchToolEnabled`), `send_input` and `run_cli_command`. `target_session` may name **any connected
   session** (validated before dispatch, `AISessionDirectory`); null = broadcast set when
   broadcasting, else the focused session. Every turn's user message lists the open sessions. The handler also accepts the legacy/internal names
@@ -558,7 +559,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 | `Docs/RenderCost.md` | **Active spec.** What rendering actually costs — R0/R1/R2a done, **R2b open** (code merged, performance unvalidated). Read its "Measurement caveats" before any perf measurement |
 | `Docs/R2bBenchmarkResults.md` | R2b A/B evidence: exact commands and all raw reports for the six baseline/candidate pairs |
 | `Docs/CredentialPrompt.md` | Password prompts (sudo, su, ssh, passphrase, device `enable`) pause the awaited tool call with a card in the chat; the user types in the terminal, nothing is recorded, Decline Ctrl+Cs and tells the model. Replaced the prompt's SUDO rules and the `apply_patch` sudo dance — **COMPLETE** (Phases 0–4, validated live 2026-10-18; a device `enable` password not yet seen live) |
-| `Docs/NetworkCopilot.md` | **Active.** Copilot reaches every open session, one memory per chat, a router/switch command path, and lifecycle-shaped skills (`load_skill`). Phases 1–3 done; Phases 4–7 reshaped 2026-10-16 (harness first, then skill library, then skills, then live cost validation). Read its "Design rules" before adding any rule to the developer prompt |
+| `Docs/NetworkCopilot.md` | **Active.** Copilot reaches every open session, one memory per chat, a router/switch command path, and lifecycle-shaped skills (`load_skill`). Phases 1–5 done; Phases 4–7 reshaped 2026-10-16 (harness first, then skill library, then skills, then live cost validation). Read its "Design rules" before adding any rule to the developer prompt |
 | `Docs/Anthropic.md` | Direct Anthropic Messages API as a second AI provider next to OpenRouter — **COMPLETE** (Phases 0–6, validated live). Read its "Rules that shape the design" before touching AI transcript code |
 | `Docs/Bug84.md` | One terminal renderer per session across tab switches and split changes (per-session model store) — **COMPLETE** (Phases 0–5); Phase 5 has the live memory numbers |
 | `Docs/bugs.md` | Bug and tech-debt register by subsystem/severity (counts in its Summary table); paths are pre-refactor |
@@ -591,17 +592,23 @@ and the session coordinators) has no spec file left; see `Docs/featurelist.md`.
 
 ## Next Session Plan
 
-**Active work: `Docs/NetworkCopilot.md` Phase 5** (skill library: `AISkillLibrary`, bundled
-`Resources/Skills/*.md` plus the user folder, one-line index in the system prompt loaded once per
-chat, `load_skill`, "Open skills folder" in Settings), then Phase 6 (lifecycle-shaped skills),
-Phase 7 (live validation with iteration and dollar counts). Phase 4 is done (spec "Phase 4 as
-built"): the prompt is 23 lines, so the skill index is the next thing added to it. `load_skill`
-is a new exposed tool, so it needs an `AIToolContractTests` case. Phase 6 inherits two notes:
-`linux-host-operations` carries the sudo/apt idioms, and `baseline-and-diff` replaces the prompt's
-compare-then-stage line. Phase 4's wrapper environment and prompt are not yet seen live: in the
-next live session check that `systemctl status`/`git log` return without paging over SSH and
-that `echo $PAGER` in the terminal is unchanged afterwards. The spec's "Design rules" table is the test for where anything
-new goes: code, prompt, skill or user skill. Do not add vendor playbooks or new prompt rules.
+**Active work: `Docs/NetworkCopilot.md` Phase 6** (write the skills): `change-procedure`,
+`baseline-and-diff`, `troubleshooting`, `routing`, `services`, `access-safety`,
+`clone-deduplication`, `linux-host-operations`, each under ~80 lines, procedures and checklists
+only (no "never"/"always": rules live in the prompt). Put them in
+`ProSSHMac/Resources/Skills/*.md`; the synchronized group flattens them into the bundle root,
+where `AISkillLibrary.standard` reads them (Phase 5 as built). `baseline-and-diff` replaces the
+prompt's SESSIONS line "To compare hosts … then do the rest": delete it in the same change.
+`linux-host-operations` carries Phase 4's sudo/apt idioms (listed in the Phase 6 item).
+Add the example user skill `my-lab.md` to the docs. Before closing, read the prompt and all
+skills together once and strike any contradiction. Consider a test that loads the real bundled
+skills through `AISkillLibrary.standard` and asserts none are skipped (the parser only logs).
+Then Phase 7 (live validation with iteration and dollar counts). The spec's "Design rules"
+table decides where anything new goes; do not add vendor playbooks or new prompt rules.
+Phase 4's wrapper environment and prompt, and Phase 5's Settings button and a model loading a
+user skill, are not yet seen live: in the next live session check that `systemctl status`/`git
+log` return without paging over SSH, that `echo $PAGER` in the terminal is unchanged afterwards,
+and that Open Skills Folder plus a dropped-in skill reaches a new chat.
 CredentialPrompt is complete (`Docs/CredentialPrompt.md` Phase 4 has the live results); the user
 decided against a "Grant sudo on all hosts" button.
 

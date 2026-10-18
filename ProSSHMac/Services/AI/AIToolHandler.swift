@@ -24,6 +24,7 @@ struct BroadcastContext: Sendable {
         sessionID: UUID,
         broadcastContext: BroadcastContext?,
         toolCalls: [LLMToolCall],
+        skills: AISkillSet = AISkillSet(),
         traceID: String
     ) async -> [LLMToolOutput] {
         var outputs: [LLMToolOutput] = []
@@ -35,7 +36,8 @@ struct BroadcastContext: Sendable {
                 let output = try await executeSingleToolCall(
                     sessionID: sessionID,
                     broadcastContext: broadcastContext,
-                    toolCall: toolCall
+                    toolCall: toolCall,
+                    skills: skills
                 )
                 outputs.append(.init(callID: toolCall.id, output: output))
                 let toolMs = AIToolDefinitions.elapsedMillis(since: toolStart)
@@ -58,7 +60,8 @@ struct BroadcastContext: Sendable {
     private func executeSingleToolCall(
         sessionID: UUID,
         broadcastContext: BroadcastContext?,
-        toolCall: LLMToolCall
+        toolCall: LLMToolCall,
+        skills: AISkillSet
     ) async throws -> String {
         let arguments = try Self.decodeArguments(
             toolName: toolCall.name,
@@ -83,6 +86,26 @@ struct BroadcastContext: Sendable {
         }
 
         switch toolCall.name {
+        case "load_skill":
+            let name = try Self.requiredString(key: "name", in: arguments, toolName: toolCall.name)
+            guard let skill = skills.skill(named: name) else {
+                let names = skills.skills.map(\.name)
+                return AIToolDefinitions.errorResult(
+                    "Unknown skill \(name)",
+                    hint: names.isEmpty
+                        ? "No skills are installed; continue without one."
+                        : "Available skills: " + names.joined(separator: ", ") + "."
+                )
+            }
+            return AIToolDefinitions.jsonString(from: .object([
+                "ok": .bool(true),
+                "name": .string(skill.name),
+                "description": .string(skill.description),
+                "platforms": .array(skill.platforms.map(LLMJSONValue.string)),
+                "source": .string(skill.source.rawValue),
+                "body": .string(skill.body),
+            ]))
+
         case "list_sessions":
             let broadcastIDs = Set(broadcastContext.map { $0.isBroadcasting ? $0.allSessionIDs : [] } ?? [])
             return AIToolDefinitions.jsonString(from: AISessionDirectory.json(

@@ -54,6 +54,17 @@ final class AIToolDefinitionsTests: XCTestCase {
         XCTAssertTrue(executeAndWait?.description.contains("waits while the user types it") == true)
     }
 
+    /// The skill index is the only thing skills add to the prompt: a header and one line each.
+    func testSkillIndexAddsOneLinePerSkill() {
+        let base = AIToolDefinitions.developerPrompt()
+        let prompt = AIToolDefinitions.developerPrompt(skills: ["a — first", "b — second"])
+        XCTAssertTrue(prompt.hasPrefix(base))
+        XCTAssertEqual(prompt.split(separator: "\n", omittingEmptySubsequences: false).count,
+                       base.split(separator: "\n", omittingEmptySubsequences: false).count + 4)
+        XCTAssertTrue(prompt.hasSuffix("load_skill with the name before a task one covers):\n- a — first\n- b — second"))
+        XCTAssertFalse(base.contains("SKILLS"))
+    }
+
     // MARK: - isDirectActionPrompt
 
     func testIsDirectActionPromptTrueForRunPrefix() {

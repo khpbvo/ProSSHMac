@@ -292,6 +292,28 @@ struct SettingsView: View {
                     Text("When approval is required, the AI shows you the exact changes before applying them. Disabling \"Allow AI to edit files\" removes the tool entirely from the AI's capabilities.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+
+                    Divider()
+
+                    Group {
+                        Text("SKILLS")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+
+                        Button("Open Skills Folder") {
+                            do {
+                                if let folder = try AISkillLibrary.standard.ensureUserDirectory() {
+                                    PlatformURL.openInBrowser(folder)
+                                }
+                            } catch {
+                                operationMessage = "Could not create the skills folder: \(error.localizedDescription)"
+                            }
+                        }
+                    }
+
+                    Text("Markdown playbooks the copilot can load: your lab, your hosts, your procedures. A file with the name of a built-in skill replaces it. Changes apply to the next new chat.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
 
                 if supportsMultitaskingControls {

@@ -147,6 +147,8 @@ final class AIAgentService: AIAgentServicing {
     let requestTimeoutSeconds: Int
     let maxToolIterations: Int
     let persistConversationContext: Bool
+    /// Where each new chat loads its skills; `.empty` unless the app passes `.standard`.
+    let skillLibrary: AISkillLibrary
     let conversationContext = AIConversationContext()
     let toolHandler = AIToolHandler()
     let agentRunner = AIAgentRunner()
@@ -183,7 +185,8 @@ final class AIAgentService: AIAgentServicing {
         persistConversationContext: Bool = true,
         anthropicClient: (any AnthropicServicing)? = nil,
         anthropicModelStore: AnthropicModelStore? = nil,
-        providerSelection: AIProviderSelection? = nil
+        providerSelection: AIProviderSelection? = nil,
+        skillLibrary: AISkillLibrary = .empty
     ) {
         self.openRouterClient = openRouterClient
         self.sessionProvider = sessionProvider
@@ -194,6 +197,7 @@ final class AIAgentService: AIAgentServicing {
         self.requestTimeoutSeconds = max(10, requestTimeoutSeconds)
         self.maxToolIterations = max(1, maxToolIterations)
         self.persistConversationContext = persistConversationContext
+        self.skillLibrary = skillLibrary
         toolHandler.service = self
         agentRunner.service = self
     }

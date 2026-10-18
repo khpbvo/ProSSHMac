@@ -5,7 +5,17 @@ enum AIToolDefinitions {
 
     // MARK: - Developer Prompt
 
-    static func developerPrompt() -> String {
+    /// `skills` is the skill index, one line each (`AISkillSet.indexLines`); fixed per chat.
+    static func developerPrompt(skills: [String] = []) -> String {
+        guard !skills.isEmpty else { return basePrompt }
+        return basePrompt + """
+
+
+            SKILLS (procedures and checklists; call load_skill with the name before a task one covers):
+            """ + skills.map { "\n- " + $0 }.joined()
+    }
+
+    private static var basePrompt: String {
         """
         You are ProSSH Terminal Copilot, working in the user's open terminal sessions: local shells, SSH hosts, and routers, switches and appliances. The user sees every pane, so every command you run is visible as it runs.
 
@@ -234,6 +244,22 @@ enum AIToolDefinitions {
                     "type": .string("object"),
                     "properties": .object([:]),
                     "required": .array([]),
+                    "additionalProperties": commonNoExtraProperties,
+                ]),
+                strict: true
+            ),
+            LLMToolDefinition(
+                name: "load_skill",
+                description: "Load a skill from the SKILLS list in the system prompt: a procedure or checklist for a kind of task. Returns its full text and the platforms it was written for.",
+                parameters: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "name": .object([
+                            "type": .string("string"),
+                            "description": .string("The skill's name as listed."),
+                        ]),
+                    ]),
+                    "required": .array([.string("name")]),
                     "additionalProperties": commonNoExtraProperties,
                 ]),
                 strict: true

@@ -38,6 +38,42 @@ final class AIAgentServiceTests: XCTestCase {
         XCTAssertTrue(replay.first { $0.role == "tool" }?.content?.contains("\"ok\":true") == true)
     }
 
+    /// Skills load once per chat (Docs/NetworkCopilot.md Phase 5): a new file changes nothing
+    /// mid-chat, so the system prompt and the cache prefix stay put; the next chat picks it up.
+    func testSkillIndexIsFixedPerChatAndReloadedByANewChat() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("skills-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        func addSkill(_ name: String) throws {
+            try "---\nname: \(name)\ndescription: The \(name) skill\n---\nSteps.\n"
+                .write(to: folder.appendingPathComponent("\(name).md"), atomically: true, encoding: .utf8)
+        }
+        try addSkill("first")
+
+        let client = MockOpenRouterService()
+        let session = MockAgentSessionProvider()
+        client.enqueue(completion("one"))
+        client.enqueue(completion("two"))
+        client.enqueue(completion("three"))
+        let service = AIAgentService(
+            openRouterClient: client, sessionProvider: session, modelStore: try await store(client: client),
+            skillLibrary: AISkillLibrary(bundledDirectory: nil, userDirectory: folder)
+        )
+        func systemPrompt(_ request: Int) -> String {
+            client.requests[request].messages.first { $0.role == "system" }?.content ?? ""
+        }
+
+        _ = try await service.generateReply(sessionID: session.sessionID, prompt: "hello")
+        try addSkill("second")
+        _ = try await service.generateReply(sessionID: session.sessionID, prompt: "again")
+        XCTAssertTrue(systemPrompt(0).contains("- first — The first skill"))
+        XCTAssertEqual(systemPrompt(1), systemPrompt(0))
+
+        service.clearConversation(sessionID: session.sessionID)
+        _ = try await service.generateReply(sessionID: session.sessionID, prompt: "new chat")
+        XCTAssertTrue(systemPrompt(2).contains("- second — The second skill"))
+    }
+
     func testModelSwitchContinuesHistoryWithoutReasoning() async throws {
         let client = MockOpenRouterService()
         let session = MockAgentSessionProvider()

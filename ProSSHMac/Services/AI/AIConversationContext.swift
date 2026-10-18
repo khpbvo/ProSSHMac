@@ -5,6 +5,8 @@ struct AIConversationState: Sendable, Equatable {
     var lastModelID: String?
     /// The provider's prefix fingerprint on the last request that had one.
     var lastPrefixFingerprint: String?
+    /// The skills loaded when the chat started; fixed for the chat so the system prompt is.
+    var skills: AISkillSet?
 
     /// A model switch drops OpenRouter reasoning. Claude's thinking blocks stay: the API drops
     /// those the new model can't read, and stripping them itself can make a request invalid.

@@ -38,6 +38,7 @@ final class AIToolContractTests: XCTestCase {
             sessionID: provider.sessionID,
             broadcastContext: nil,
             toolCalls: [LLMToolCall(id: "call_1", name: name, arguments: arguments)],
+            skills: AISkillSet([AISkill(name: "probe", description: "A test skill", platforms: [], body: "Steps.", source: .bundled)]),
             traceID: "contract"
         )
         return outputs.first?.output ?? ""
@@ -56,6 +57,7 @@ final class AIToolContractTests: XCTestCase {
             "execute_command": #"{"command":"true","target_session":null}"#,
             "execute_and_wait": #"{"command":"true","timeout_seconds":5,"target_session":null}"#,
             "list_sessions": "{}",
+            "load_skill": #"{"name":"probe"}"#,
             "apply_patch": #"{"operation":"create","path":"new.txt","diff":"+created","target_session":null}"#,
             "send_input": #"{"keys":["enter"],"target_session":null}"#,
             "run_cli_command": #"{"command":"show version","timeout_seconds":5,"target_session":null}"#,
@@ -99,6 +101,8 @@ final class AIToolContractTests: XCTestCase {
             ("apply_patch", #"{"operation":"rename","path":"notes.txt","target_session":null}"#),
             ("apply_patch", #"{"operation":"update","path":"notes.txt","diff":"@@ nothing here\n-absent\n+present","target_session":null}"#),
             ("run_cli_command", #"{"command":"show version","timeout_seconds":5,"target_session":null}"#),
+            ("load_skill", #"{"name":"missing"}"#),
+            ("load_skill", "{}"),
         ]
 
         for (name, arguments) in cases {
@@ -111,6 +115,13 @@ final class AIToolContractTests: XCTestCase {
                 XCTAssertFalse(hint.isEmpty, "\(name) \(arguments): error without a hint: \(output)")
             }
         }
+    }
+
+    func testUnknownSkillHintListsTheInstalledSkills() async {
+        let output = await run("load_skill", #"{"name":"missing"}"#)
+        XCTAssertTrue(output.contains("Available skills: probe."), output)
+        let loaded = await run("load_skill", #"{"name":"probe"}"#)
+        XCTAssertTrue(loaded.contains(#""body":"Steps.""#), loaded)
     }
 
     /// Every object in a tool result whose `ok` is false, at any depth.
