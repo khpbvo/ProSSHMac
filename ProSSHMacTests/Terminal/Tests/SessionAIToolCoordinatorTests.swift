@@ -78,31 +78,67 @@ final class SessionAIToolCoordinatorTests: XCTestCase {
         await manager.disconnect(sessionID: session.id)
     }
 
-    // MARK: - Phase 2 regression: SGR reset must be sent on timeout
-
-    /// When `executeCommandAndWait` times out, it must send `\033[0m` to reset
-    /// any stuck SGR attributes on the terminal.
-    func testTimeoutSendsSGRReset() async throws {
+    /// A timed-out command may still be running, at an `apt` [Y/n] for example: anything sent
+    /// now would be typed into it.
+    func testTimeoutSendsNothingToTheRunningCommand() async throws {
         let (manager, sessionID, spy) = try await makeConnectedSessionWithSpy()
 
         let result = await manager.aiToolCoordinator.executeCommandAndWait(
             sessionID: sessionID,
-            command: "sleep 999",
+            command: "apt upgrade",
             timeoutSeconds: 0.1
         )
 
         XCTAssertTrue(result.timedOut, "Command should have timed out")
-
         let payloads = await spy.sentPayloads
-        // The last send should be the SGR reset.
-        guard let lastPayload = payloads.last else {
-            XCTFail("Expected at least one send after timeout")
-            return
+        XCTAssertEqual(payloads.count, 1, "Only the command line may be sent, got: \(payloads.debugDescription)")
+    }
+
+    /// The wrapper runs in each shell a host may use: the command sees the non-interactive
+    /// settings, and afterwards the shell has its own values back, the new directory and the exit code.
+    /// A line over 1,024 bytes never reaches a macOS shell, and the command shares the line.
+    func testWrapperLeavesMostOfTheLineToTheCommand() {
+        XCTAssertLessThan(SessionAIToolCoordinator.wrappedCommand("", token: "ABCDEF0123").utf8.count, 560)
+    }
+
+    func testWrapperScopesTheEnvironmentToTheCommandAndKeepsCd() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wrapper-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let command = "cd '\(directory.path)'; printf 'in:%s|%s|%s\\n' \"$PAGER\" \"$DEBIAN_FRONTEND\" \"${SYSTEMD_PAGER-unset}\"; "
+            + "sh -c 'printf \"child:%s\\n\" \"$GIT_PAGER\"'; false"
+        let wrapped = SessionAIToolCoordinator.wrappedCommand(command, token: "ABCDEF0123")
+        let script = "PAGER='less -R'; export PAGER; unset GIT_PAGER DEBIAN_FRONTEND; cd /\n\(wrapped)\n"
+            + "printf 'after:%s|%s|%s|%s\\n' \"$PAGER\" \"${GIT_PAGER-unset}\" \"${__o_PAGER-gone}\" \"$PWD\"\n"
+            + "sh -c 'printf \"afterchild:%s\\n\" \"${DEBIAN_FRONTEND-unset}\"'\n"
+
+        let shells = ["/bin/sh", "/bin/bash", "/bin/zsh", "/bin/ksh", "/bin/dash"]
+            .filter { FileManager.default.isExecutableFile(atPath: $0) }
+        XCTAssertFalse(shells.isEmpty)
+        for shell in shells {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: shell)
+            process.arguments = ["-c", script]
+            let pipe = Pipe()
+            process.standardOutput = pipe
+            process.standardError = pipe
+            try process.run()
+            process.waitUntilExit()
+            let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            let directoryPath = directory.resolvingSymlinksInPath().path
+
+            XCTAssertTrue(output.contains("in:cat|noninteractive|\n"), "\(shell): \(output)")
+            XCTAssertTrue(output.contains("child:cat\n"), "\(shell): \(output)")
+            XCTAssertTrue(output.contains("\u{1B}]7777;PSW;ABCDEF0123;1\u{07}"), "\(shell) lost the exit code: \(output)")
+            let after = try XCTUnwrap(output.components(separatedBy: "after:").last, shell)
+            XCTAssertTrue(after.hasPrefix("less -R|unset|gone|"), "\(shell) leaked: \(output)")
+            XCTAssertTrue(
+                after.contains(directory.path) || after.contains(directoryPath),
+                "\(shell) lost the cd: \(output)"
+            )
+            XCTAssertTrue(output.contains("afterchild:unset\n"), "\(shell) leaked to children: \(output)")
         }
-        XCTAssertTrue(
-            lastPayload.contains("\u{1B}[0m"),
-            "Timeout should send SGR reset (\\033[0m), got: \(lastPayload.debugDescription)"
-        )
     }
 
     /// A scripted device: echo, one page and a `--More--` pager, then the rest and the prompt.
@@ -265,9 +301,7 @@ final class SessionAIToolCoordinatorTests: XCTestCase {
         XCTAssertTrue(result.waitedForCredential)
         XCTAssertNil(coordinator.awaitingCredential[sessionID])
         let payloads = await spy.sentPayloads
-        XCTAssertEqual(payloads.count, 3)
-        XCTAssertEqual(payloads.dropFirst().first, "\u{03}", "Ctrl+C goes to the waiting host first")
-        XCTAssertEqual(payloads.last, "\u{1B}[0m\n")
+        XCTAssertEqual(Array(payloads.dropFirst()), ["\u{03}"], "Ctrl+C goes to the waiting host, and nothing after it")
     }
 
     func testSecondSessionPromptsAfterTheFirstResolves() async throws {

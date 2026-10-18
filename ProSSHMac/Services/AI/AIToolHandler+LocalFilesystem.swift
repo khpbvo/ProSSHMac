@@ -20,10 +20,7 @@ extension AIToolHandler {
 
             var isDirectory: ObjCBool = false
             guard fileManager.fileExists(atPath: rootURL.path, isDirectory: &isDirectory) else {
-                return LLMJSONValue.object([
-                    "ok": .bool(false),
-                    "error": .string("Path does not exist: \(rootURL.path)"),
-                ])
+                return AIToolDefinitions.errorObject("Path does not exist: \(rootURL.path)", hint: "Check the path with search_filesystem, or pass an absolute path.")
             }
 
             if !isDirectory.boolValue {
@@ -48,10 +45,7 @@ extension AIToolHandler {
                 options: [.skipsPackageDescendants],
                 errorHandler: { _, _ in true }
             ) else {
-                return .object([
-                    "ok": .bool(false),
-                    "error": .string("Failed to enumerate directory: \(rootURL.path)"),
-                ])
+                return AIToolDefinitions.errorObject("Failed to enumerate directory: \(rootURL.path)", hint: "Check the directory's permissions, or search a subdirectory.")
             }
 
             while let item = enumerator.nextObject() as? URL {
@@ -96,10 +90,7 @@ extension AIToolHandler {
 
             var isDirectory: ObjCBool = false
             guard fileManager.fileExists(atPath: rootURL.path, isDirectory: &isDirectory) else {
-                return LLMJSONValue.object([
-                    "ok": .bool(false),
-                    "error": .string("Path does not exist: \(rootURL.path)"),
-                ])
+                return AIToolDefinitions.errorObject("Path does not exist: \(rootURL.path)", hint: "Check the path with search_filesystem, or pass an absolute path.")
             }
 
             if !isDirectory.boolValue {
@@ -126,10 +117,7 @@ extension AIToolHandler {
                 options: [.skipsPackageDescendants],
                 errorHandler: { _, _ in true }
             ) else {
-                return .object([
-                    "ok": .bool(false),
-                    "error": .string("Failed to enumerate directory: \(rootURL.path)"),
-                ])
+                return AIToolDefinitions.errorObject("Failed to enumerate directory: \(rootURL.path)", hint: "Check the directory's permissions, or search a subdirectory.")
             }
 
             while let item = enumerator.nextObject() as? URL {
@@ -174,24 +162,15 @@ extension AIToolHandler {
 
             var isDirectory: ObjCBool = false
             guard fileManager.fileExists(atPath: fileURL.path, isDirectory: &isDirectory) else {
-                return LLMJSONValue.object([
-                    "ok": .bool(false),
-                    "error": .string("Path does not exist: \(fileURL.path)"),
-                ])
+                return AIToolDefinitions.errorObject("Path does not exist: \(fileURL.path)", hint: "Check the path with search_filesystem, or pass an absolute path.")
             }
             guard !isDirectory.boolValue else {
-                return LLMJSONValue.object([
-                    "ok": .bool(false),
-                    "error": .string("Path is a directory, not a regular file: \(fileURL.path)"),
-                ])
+                return AIToolDefinitions.errorObject("Path is a directory, not a regular file: \(fileURL.path)", hint: "Pass a file path; list a directory with search_filesystem.")
             }
 
             let data = try Data(contentsOf: fileURL, options: [.mappedIfSafe])
             if data.contains(0) {
-                return LLMJSONValue.object([
-                    "ok": .bool(false),
-                    "error": .string("File appears to be binary and cannot be read as text."),
-                ])
+                return AIToolDefinitions.errorObject("File appears to be binary and cannot be read as text.", hint: "Inspect it with execute_and_wait (file, strings | head) instead.")
             }
 
             let content: String
@@ -200,10 +179,7 @@ extension AIToolHandler {
             } else if let latin = String(data: data, encoding: .isoLatin1) {
                 content = latin
             } else {
-                return LLMJSONValue.object([
-                    "ok": .bool(false),
-                    "error": .string("Unable to decode file as UTF-8/Latin-1 text."),
-                ])
+                return AIToolDefinitions.errorObject("Unable to decode file as UTF-8/Latin-1 text.", hint: "Inspect it with execute_and_wait (file, iconv) instead.")
             }
 
             let splitLines = content

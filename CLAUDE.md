@@ -137,7 +137,7 @@ xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform
 - **Toolchain: Xcode 27.0 (27A266a), Swift 6.4.** The Metal Toolchain component must be installed
   (`xcodebuild -showComponent metalToolchain`). Never exclude `TerminalShaders.metal` from a build;
   if the shader fails to compile, check the component first.
-- Test bundle: `ProSSHMacTests` — 5 files at the bundle root plus 52 in `ProSSHMacTests/Terminal/Tests/`,
+- Test bundle: `ProSSHMacTests` — 5 files at the bundle root plus 59 in `ProSSHMacTests/Terminal/Tests/`,
   ~920 test methods. No test sources live under `ProSSHMac/`.
 - Some tests require the host app process (UI/AppKit-backed suites).
 - **No full-suite baseline exists on Xcode 27.** Every suite touched since has been run targeted and
@@ -254,7 +254,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 
 | File / Group | What it does |
 |---|---|
-| `Services/AI/AIToolHandler.swift` + 7 extensions | Tool dispatch (764L). Extensions: ArgumentParsing, RemoteExecution, RemotePatch (remote `apply_patch`: plain, then sudo on permission denied), LocalFilesystem, InteractiveInput, DeviceCLI (`run_cli_command`), OutputHelpers (incl. the password-wait `note` and decline error) |
+| `Services/AI/AIToolHandler.swift` + 7 extensions | Tool dispatch (775L). Extensions: ArgumentParsing, RemoteExecution, RemotePatch (remote `apply_patch`: plain, then sudo on permission denied), LocalFilesystem, InteractiveInput, DeviceCLI (`run_cli_command`), OutputHelpers (incl. the password-wait `note` and decline error) |
 | `Services/AI/CredentialPromptDetector.swift` | Password/passphrase prompt lines (sudo, su, doas, ssh hop, key passphrase), retry notices, cursor line from a byte tail, progress after an answer (76L). See `Docs/CredentialPrompt.md` |
 | `Services/AI/DeviceCLI.swift` | Router/switch CLI support: `DeviceCLIPrompt` (cursor line → POSIX / device / unknown, prompt base), `DeviceCLICapture` (complete / pager / question decisions from text + idle time; cursor line and offsets for the password wait), `DeviceCLIText` |
 | `Services/AI/AISessionDirectory.swift` | The open sessions as the copilot sees them: per-turn list, `list_sessions` JSON, default targets, device-CLI marking |
@@ -281,12 +281,12 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 | `ViewModels/TerminalAIAssistantViewModel.swift` | AI sidebar VM: messages, streaming, patch approval, credential-prompt mirror and status lines, `stop()` (470L) |
 | `UI/Terminal/ExternalTerminalWindowView.swift` | Separate-window terminal session view (341L) |
 | `Terminal/Input/KeyEncoder.swift` | Key → byte encoding driven by `KeyEncoderOptions` (application cursor keys, kitty disambiguation, `modifyOtherKeys`); Shift+Enter fallback (315L) |
-| `Services/AI/AIToolDefinitions.swift` | Developer prompt, 9 tool schemas, direct-action filter, error helpers (329L) |
+| `Services/AI/AIToolDefinitions.swift` | Developer prompt, 9 tool schemas, direct-action filter, error helpers (`errorResult`/`errorObject`, hint required) (300L) |
 | `Services/SessionShellIOCoordinator.swift` | Shell input, the batched parser reader, per-batch bookkeeping (307L). Each batch is one `feedAndCollectOutcome` call, applied in one MainActor handoff with no post-feed engine reads; also filters the AI tool wrapper echo |
 | `Services/LocalPTYProcess.swift` | Actor wrapping forkpty, async output stream (274L) |
 | `Terminal/Renderer/TerminalMetalView.swift` | NSViewRepresentable wrapping `TerminalMTKView` (left-mouse events with click count), wheel scrolling (204L) |
 | `Terminal/Diagnostics/TerminalPerf.swift` | Runtime-gated signposts + 19 in-process stage timers with span/busy tracking (236L). Start here for any perf work |
-| `Services/SessionAIToolCoordinator.swift` | AI one-shot command wrapping with private OSC 7777 start/completion events; `executeCLICommand` for device prompts; the credential-prompt wait (`awaitingCredential`) for both, the device one stepped from the CLI poll loop; shared `TerminalPlainText` (643L) |
+| `Services/SessionAIToolCoordinator.swift` | AI one-shot command wrapping (`wrappedCommand`) with private OSC 7777 start/completion events and the non-interactive environment; `executeCLICommand` for device prompts; the credential-prompt wait (`awaitingCredential`) for both, the device one stepped from the CLI poll loop; shared `TerminalPlainText` (659L) |
 | `Services/LocalShellBootstrap.swift` | Child env for local PTY, ZDOTDIR/BASH_ENV injection (202L) |
 | `UI/Terminal/PatchApprovalCardView.swift` | Inline patch approval card for `apply_patch` (177L) |
 | `UI/Terminal/ReasoningStreamView.swift` | Native `NSScrollView`/`NSTextView` (TextKit 1) reasoning panel (132L) |
@@ -341,7 +341,12 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 - **AI terminal tool completion**: `SessionAIToolCoordinator` wraps one-shot commands with private
   OSC 7777 start/completion events, filters the echoed wrapper in the parser reader, and takes the
   exit code from `TerminalEngine`'s event callback. Remote filesystem helpers use the same command
-  path. The chat pane renders pipe tables and collapses blank paragraph spacing.
+  path. The wrapper exports `nonInteractiveEnvironment` (pagers off, debconf/needrestart
+  non-interactive) for the command only and restores the shell's own values; `cd` persists.
+  **Keep the wrapper short:** a line over 1,024 bytes never reaches a macOS shell (`MAX_INPUT`),
+  and the command shares it (test cap 560 bytes). `sudo` drops the variables. **Nothing is sent
+  to the session on timeout**: the command may still be running, and a line would answer it.
+  The chat pane renders pipe tables and collapses blank paragraph spacing.
   Router/switch prompts can't run that wrapper: `executeCLICommand` (`run_cli_command`) sends the
   line with `\r`, leaves the output visible, presses Space at pagers and returns when the prompt
   is back (`DeviceCLICapture`). `execute_and_wait` refuses targets whose cursor line classifies as
@@ -350,8 +355,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
   (`awaitingCredential`, phases `.waiting`/`.verifying`) until the user answers in the terminal,
   declines, cancels or the session ends; detection reads the command's own output, not
   `shellBuffers`. Anything that interrupts a waiting session sends Ctrl+C, then waits 250 ms
-  before sending more (SIGINT flushes queued tty input). Never finish a superseded command
-  before its interrupt: it would send its timeout reset line into the prompt.
+  before sending more (SIGINT flushes queued tty input).
   While `isEnteringCredential` (wait up, or the cursor line already a prompt) the keystroke path
   `sendRawShellInputBytes` sends but records nothing: no history index, no recording. Any new
   per-keystroke recorder must sit behind that guard. The same check narrows broadcast/group
@@ -374,7 +378,8 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
   session** (validated before dispatch, `AISessionDirectory`); null = broadcast set when
   broadcasting, else the focused session. Every turn's user message lists the open sessions. The handler also accepts the legacy/internal names
   `read_file_chunk`, `get_session_info`, and the `search_terminal_history` alias.
-  Error format: `{ok:false, error, hint}`.
+  Error format: `{ok:false, error, hint}`; the hint is required (`AIToolDefinitions.errorObject`).
+  `AIToolContractTests` runs every exposed schema on valid minimal input: a new tool needs a case.
 - **Direct-action mode**: prompts starting `run `/`execute `/`cd ` filter to 8 tools and cap
   iterations at `min(maxToolIterations, 15)` (`AIAgentRunner`). Default `maxToolIterations` is 50;
   `AppDependencies` constructs the service with **200**.
@@ -586,10 +591,16 @@ and the session coordinators) has no spec file left; see `Docs/featurelist.md`.
 
 ## Next Session Plan
 
-**Active work: `Docs/NetworkCopilot.md` Phase 4** (harness first: non-interactive execution
-environment, prompt audit, tool contract sweep), then Phase 5 (skill library, one-line index
-loaded once per chat), Phase 6 (lifecycle-shaped skills), Phase 7 (live validation with
-iteration and dollar counts). The spec's "Design rules" table is the test for where anything
+**Active work: `Docs/NetworkCopilot.md` Phase 5** (skill library: `AISkillLibrary`, bundled
+`Resources/Skills/*.md` plus the user folder, one-line index in the system prompt loaded once per
+chat, `load_skill`, "Open skills folder" in Settings), then Phase 6 (lifecycle-shaped skills),
+Phase 7 (live validation with iteration and dollar counts). Phase 4 is done (spec "Phase 4 as
+built"): the prompt is 23 lines, so the skill index is the next thing added to it. `load_skill`
+is a new exposed tool, so it needs an `AIToolContractTests` case. Phase 6 inherits two notes:
+`linux-host-operations` carries the sudo/apt idioms, and `baseline-and-diff` replaces the prompt's
+compare-then-stage line. Phase 4's wrapper environment and prompt are not yet seen live: in the
+next live session check that `systemctl status`/`git log` return without paging over SSH and
+that `echo $PAGER` in the terminal is unchanged afterwards. The spec's "Design rules" table is the test for where anything
 new goes: code, prompt, skill or user skill. Do not add vendor playbooks or new prompt rules.
 CredentialPrompt is complete (`Docs/CredentialPrompt.md` Phase 4 has the live results); the user
 decided against a "Grant sudo on all hosts" button.

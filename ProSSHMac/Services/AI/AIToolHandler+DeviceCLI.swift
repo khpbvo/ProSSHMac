@@ -8,7 +8,7 @@ enum RunCLICommandToolDefinition {
     static func definition() -> LLMToolDefinition {
         LLMToolDefinition(
             name: "run_cli_command",
-            description: "Run one command at a router, switch or appliance CLI prompt (Cisco IOS, Junos, EOS, RouterOS, FRR vtysh, firewalls…) and return its complete output once the prompt returns. Pager prompts (--More--) are answered automatically, and the output is the device's own lines, not the wrapped screen. Use this wherever the session list marks a session as a device CLI; execute_and_wait only works in POSIX shells. If the device asks a question (confirm, password, filename), the result has completed=false and awaiting_input with the question: answer it with send_input. One command per call; for configuration, send each line as its own call.",
+            description: "Run one command at a router, switch or appliance CLI prompt (Cisco IOS, Junos, EOS, RouterOS, FRR vtysh, firewalls…) and return its complete output once the prompt returns. Pager prompts (--More--) are answered automatically, and the output is the device's own lines, not the wrapped screen. Use this wherever the session list marks a session as a device CLI; execute_and_wait only works in POSIX shells. If the device asks for a password (enable), the call waits while the user types it in the terminal. If it asks anything else (confirm, filename), the result has completed=false and awaiting_input with the question: answer it with send_input. One command per call; for configuration, send each line as its own call.",
             parameters: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -113,9 +113,11 @@ extension AIToolHandler {
         case .superseded:
             fields["ok"] = .bool(false)
             fields["error"] = .string("A newer command started in this session.")
+            fields["hint"] = .string("Another command took over this session. Check get_current_screen and run this one again if it is still needed.")
         case .failed:
             fields["ok"] = .bool(false)
             fields["error"] = .string(result.output)
+            fields["hint"] = .string("Check the session with get_current_screen and list_sessions before retrying.")
         case .declined:
             fields["ok"] = .bool(false)
             fields["error"] = .string(credentialDeclinedMessage(label: label))

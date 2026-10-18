@@ -94,7 +94,8 @@ new `AISkillLibraryTests`, `DeviceCLITests`.
     session map; `execute_and_wait` refuses on device CLIs with a hint.
   - Tests with a scripted fake device (echo, prompt, `--More--` paging).
 
-- [ ] **Phase 4: Harness first — nothing the model must remember because the code could not.**
+- [x] **Phase 4: Harness first — nothing the model must remember because the code could not.**
+  Done 2026-10-18; see "Phase 4 as built".
   Reshaped 2026-10-16 (see "Design rules" below). Depends on `Docs/CredentialPrompt.md`
   Phases 0–3 (the password wait; it deletes the SUDO section and the `apply_patch` sudo dance).
   - Non-interactive execution: commands run by `execute_and_wait` must not stall on things the
@@ -139,7 +140,8 @@ new `AISkillLibraryTests`, `DeviceCLITests`.
     platform safety net: Junos `commit confirmed`, IOS `reload in`, RouterOS safe mode, VyOS
     `commit-confirm`, nftables/iptables with a timed revert.
   - `baseline-and-diff`: capture state across hosts before touching anything, same read-only
-    commands in parallel, diff, change, diff again.
+    commands in parallel, diff, change, diff again. Then delete the prompt's SESSIONS line
+    "To compare hosts … then do the rest", which holds this until the skill exists.
   - `troubleshooting`: isolate by layer, change one variable, compare a working host with a
     broken one, capture when reasoning runs out.
   - `routing` (definition of done): adjacencies in the expected state on every neighbour,
@@ -156,6 +158,10 @@ new `AISkillLibraryTests`, `DeviceCLITests`.
     host.
   - `linux-host-operations`: what hangs or misleads in this harness (whatever Phase 4 could
     not fix in code), package and service idioms per family (apt/dnf/apk, systemd/OpenRC).
+    From Phase 4: `sudo` drops the non-interactive variables (`sudo DEBIAN_FRONTEND=noninteractive
+    NEEDRESTART_MODE=a apt-get -y …`, `systemctl --no-pager`, `journalctl --no-pager`); `apt`
+    without `-y` and ssh host-key questions (`-o StrictHostKeyChecking=accept-new`) are not
+    environment-controlled; a timed-out command may still be running (check the screen first).
   - An example user skill in the docs (`my-lab.md`: hosts, roles, what not to touch) so the
     folder's purpose is obvious.
 - [ ] **Phase 7: Live validation and cost.** The four cloned VMs, user at the keyboard: the
@@ -258,9 +264,39 @@ by the fake device only.
   The refusal and pager tests went red with their behaviour disabled. 100/100 across eleven
   suites.
 
+## Phase 4 as built (2026-10-18)
+
+- **Environment.** `SessionAIToolCoordinator.wrappedCommand(_:token:)` builds
+  `{ printf PSB; for __v in <names>; do eval "__s_$__v=\${$__v+1} __o_$__v=\${$__v-}"; done;
+  export <assignments>; eval '<cmd>'; __ps=$?; for __v in <names>; do eval "<restore or unset>;
+  unset __s_$__v __o_$__v"; done; unset __v; printf PSW; }` from `nonInteractiveEnvironment`
+  (`DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a SYSTEMD_PAGER= PAGER=cat GIT_PAGER=cat`).
+  Works in sh, dash, bash, zsh, ksh: the command and its children see the values, the shell
+  gets its own back (values with spaces too), `cd` persists, the exit code is kept.
+  `VAR=x eval` persists in POSIX shells; `VAR=x command eval` fails in zsh and leaks in ksh.
+  A variable the shell had but did not export comes back exported (accepted).
+- **Line length.** A line over 1,024 bytes never reaches a macOS shell (`MAX_INPUT`), even once
+  the shell is ready. Spelling each variable out made the wrapper 1,325 bytes and every local
+  command timed out; the loop form is ~530 bytes (was ~190), and
+  `testWrapperLeavesMostOfTheLineToTheCommand` caps it at 560. Linux allows 4,095.
+- **sudo.** `env_reset` drops the variables. Not fixable in the wrapper without rewriting the
+  model's command; the `execute_and_wait` description says to pass them after sudo, and
+  `linux-host-operations` (Phase 6) carries the idioms.
+- **Timeout.** Nothing is sent to the session on timeout any more (the old `ESC[0m` + newline
+  was typed into the still-running command).
+- **Prompt.** 55 → 23 lines, 702 → 332 words. Sections: APPROACH, SESSIONS (device CLIs folded
+  in), SAFETY (destructive commands, never cut the path you are connected over, secrets),
+  FORMAT (with the handover line). Everything about individual tools lives in their
+  descriptions; `send_input` and `run_cli_command` no longer mention answering passwords.
+- **Contract.** Every `{ok:false}` comes from `AIToolDefinitions.errorObject(_:hint:)` or
+  `errorResult(_:hint:)`, both with a required hint, or carries one explicitly
+  (`apply_patch` failure, `run_cli_command` statuses). `AIToolContractTests` runs every exposed
+  schema on valid minimal input and 13 invalid inputs. Finding: a local `apply_patch` update
+  without a diff reported success; now refused.
+
 ## Open questions
 
 - (Resolved 2026-10-16) No confirmation gate for unfocused hosts; user skills load once per
   chat, not watched live. Both recorded in Phase 4/5 and "Design rules".
-- Phase 4 non-interactive environment: can the wrapper set the variables for one command
-  without leaking into the user's shell or losing `cd`? Builder decides; fallback is the skill.
+- (Resolved 2026-10-18) The wrapper can scope the non-interactive variables to one command
+  without leaking or losing `cd`; see "Phase 4 as built". Only `sudo` defeats it.

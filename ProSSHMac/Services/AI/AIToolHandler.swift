@@ -43,7 +43,7 @@ struct BroadcastContext: Sendable {
                     "[\(traceID, privacy: .public)] tool_ok name=\(toolCall.name, privacy: .public) call_id=\(toolCall.id, privacy: .public) ms=\(toolMs) output_chars=\(output.count)"
                 )
             } catch {
-                let fallback = AIToolDefinitions.errorResult(error.localizedDescription)
+                let fallback = AIToolDefinitions.errorResult(error.localizedDescription, hint: Self.hint(for: error))
                 outputs.append(.init(callID: toolCall.id, output: fallback))
                 let toolMs = AIToolDefinitions.elapsedMillis(since: toolStart)
                 Self.logger.error(
@@ -406,10 +406,7 @@ struct BroadcastContext: Sendable {
                       case let .string(path)? = fileDict["path"],
                       case let .number(startNum)? = fileDict["start_line"],
                       case let .number(countNum)? = fileDict["line_count"] else {
-                    results.append(.object([
-                        "ok": .bool(false),
-                        "error": .string("Invalid file entry — requires path, start_line, line_count."),
-                    ]))
+                    results.append(AIToolDefinitions.errorObject("Invalid file entry — requires path, start_line, line_count.", hint: "Give each files entry path, start_line and line_count."))
                     continue
                 }
 
@@ -424,10 +421,7 @@ struct BroadcastContext: Sendable {
                         startLine: startLine,
                         lineCount: lineCount,
                         workingDirectory: workingDirectory
-                    )) ?? .object([
-                        "ok": .bool(false),
-                        "error": .string("Failed to read: \(path)"),
-                    ])
+                    )) ?? AIToolDefinitions.errorObject("Failed to read: \(path)", hint: "Check the path and its permissions with search_filesystem.")
                 } else {
                     result = await readRemoteFileChunk(
                         provider: provider,
@@ -564,10 +558,7 @@ struct BroadcastContext: Sendable {
 
                 guard let ctx = broadcastContext else {
                     // Shouldn't happen (targets.count > 1 implies broadcast)
-                    return AIToolDefinitions.jsonString(from: .object([
-                        "ok": .bool(false),
-                        "error": .string("Internal error: missing broadcast context"),
-                    ]))
+                    return AIToolDefinitions.errorResult("Internal error: missing broadcast context", hint: "Pass one target_session per call.")
                 }
 
                 let maxOutputChars = 16000
@@ -642,10 +633,7 @@ struct BroadcastContext: Sendable {
 
             // Delete safety gate
             if opType == .delete && !(service?.patchAllowDelete ?? false) {
-                return AIToolDefinitions.jsonString(from: .object([
-                    "ok": .bool(false),
-                    "error": .string("File deletion is disabled in AI settings."),
-                ]))
+                return AIToolDefinitions.errorResult("File deletion is disabled in AI settings.", hint: "Tell the user; they can turn on \"Allow file deletion\" in Settings › AI Assistant.")
             }
 
             let resolvedID = resolveTargetSessions(
@@ -656,7 +644,9 @@ struct BroadcastContext: Sendable {
             guard let session = provider.sessions.first(where: { $0.id == resolvedID }) else {
                 throw AIAgentServiceError.sessionNotFound
             }
-            if !session.isLocal, opType != .delete, diff == nil {
+            // An update without a diff changes nothing but would report success. A local create
+            // without one makes an empty file.
+            if (opType == .update && (diff ?? "").isEmpty) || (!session.isLocal && opType != .delete && diff == nil) {
                 return AIToolDefinitions.errorResult(
                     "diff is required for \(operationType). Nothing was changed.",
                     hint: "Pass the change as a V4A diff in the diff field; for create, every line prefixed with +."
@@ -672,7 +662,10 @@ struct BroadcastContext: Sendable {
                     )
                     if !approved {
                         Self.logger.info("patch_denied path=\(path, privacy: .public)")
-                        return AIToolDefinitions.errorResult("Patch denied by user")
+                        return AIToolDefinitions.errorResult(
+                            "Patch denied by user",
+                            hint: "The user rejected this change. Ask what they want instead; don't send the same patch again."
+                        )
                     }
                     if remember { svc.patchApprovalTracker.remember(fingerprint) }
                 }
@@ -707,6 +700,9 @@ struct BroadcastContext: Sendable {
                 "lines_changed": .number(Double(result.linesChanged)),
                 "warnings": .array(result.warnings.map { .string($0) }),
             ]
+            if !result.success {
+                payload["hint"] = .string("Read the file again with read_files and build the diff from its current lines.")
+            }
             if waitedForCredential {
                 payload["note"] = .string(Self.credentialWaitNote)
             }
@@ -729,7 +725,22 @@ struct BroadcastContext: Sendable {
             )
 
         default:
-            return AIToolDefinitions.errorResult("Unknown tool: \(toolCall.name)")
+            return AIToolDefinitions.errorResult(
+                "Unknown tool: \(toolCall.name)",
+                hint: "Use one of: " + AIToolDefinitions.buildToolDefinitions().map(\.name).joined(separator: ", ") + "."
+            )
+        }
+    }
+
+    /// What the model can do about an error thrown while running a tool.
+    static func hint(for error: Error) -> String {
+        switch error as? AIAgentServiceError {
+        case let .invalidToolArguments(toolName, _)?:
+            return "Fix the arguments to match the \(toolName) schema and call it again."
+        case .sessionNotFound?:
+            return "Call list_sessions and pass the id of an open session as target_session."
+        default:
+            return "Check the session with get_current_screen before retrying; don't repeat the call unchanged."
         }
     }
 

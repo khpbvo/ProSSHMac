@@ -48,10 +48,7 @@ struct CredentialWait: Equatable, Sendable {
             .prefix(10)
             .uppercased()
         let token = String(markerToken)
-        // Eval the quoted command after PSB: even malformed user shell syntax
-        // cannot prevent the start marker from executing and hiding the echo.
-        let quotedCommand = "'" + command.replacingOccurrences(of: "'", with: "'\\''") + "'"
-        let wrappedCommand = "{ printf '\\033]7777;PSB;%s\\007' '\(token)'; eval \(quotedCommand); __ps=$?; printf '\\033]7777;PSW;%s;%s\\007' '\(token)' \"$__ps\"; }"
+        let wrappedCommand = Self.wrappedCommand(command, token: token)
 
         guard let manager else {
             return CommandExecutionResult(output: "Session is not connected.", exitCode: nil, timedOut: false, blockID: nil)
@@ -82,7 +79,9 @@ struct CredentialWait: Equatable, Sendable {
             return CommandExecutionResult(output: "Error sending command: \(error.localizedDescription)", exitCode: nil, timedOut: false, blockID: nil)
         }
 
-        let result = await withTaskCancellationHandler {
+        // Nothing is sent on timeout: the command may still be running, and any line would be
+        // typed into it, answering an `apt` or dpkg question with Enter.
+        return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 pending.continuation = continuation
                 startTimeout(for: pending, sessionID: sessionID)
@@ -92,18 +91,35 @@ struct CredentialWait: Equatable, Sendable {
                 await self?.cancelToolCommand(sessionID: sessionID, token: token)
             }
         }
+    }
 
-        guard result.timedOut else { return result }
-        // A newer command owns the session; a reset line now would be typed into it.
-        guard pendingCommands[sessionID] == nil, pendingCLICommands[sessionID] == nil else { return result }
+    /// Settings that keep a command from stopping at something the model can't see coming:
+    /// pagers, debconf and needrestart dialogs. They apply to the command only, and `sudo`
+    /// drops them (`env_reset`).
+    nonisolated static let nonInteractiveEnvironment: KeyValuePairs<String, String> = [
+        "DEBIAN_FRONTEND": "noninteractive",
+        "NEEDRESTART_MODE": "a",
+        "SYSTEMD_PAGER": "",
+        "PAGER": "cat",
+        "GIT_PAGER": "cat",
+    ]
 
-        // Defense-in-depth: reset terminal SGR attributes on timeout to prevent
-        // stuck hidden/color state from a command that failed to complete its reset.
-        if let shell = manager.shellChannels[sessionID] {
-            try? await shell.send("\u{1B}[0m\n")
-        }
-
-        return result
+    /// The command as typed into the user's shell. It runs with `eval` in that shell, so `cd`
+    /// persists; the environment above is saved, exported for the command and then restored or
+    /// unset, which works in sh, dash, bash, zsh and ksh (`VAR=x eval` persists in POSIX shells,
+    /// and zsh's `command` can't run `eval`). The command is evaluated after PSB, so even
+    /// malformed syntax can't keep the start marker from running and hiding the echo.
+    /// Keep it short: a line over 1,024 bytes never reaches a macOS shell (`MAX_INPUT`), and the
+    /// command shares that line.
+    nonisolated static func wrappedCommand(_ command: String, token: String) -> String {
+        let quotedCommand = "'" + command.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        let names = nonInteractiveEnvironment.map(\.key).joined(separator: " ")
+        let assignments = nonInteractiveEnvironment.map { "\($0.key)=\($0.value)" }.joined(separator: " ")
+        return #"{ printf '\033]7777;PSB;%s\007' '\#(token)'; "#
+            + #"for __v in \#(names); do eval "__s_$__v=\${$__v+1} __o_$__v=\${$__v-}"; done; "#
+            + #"export \#(assignments); eval \#(quotedCommand); __ps=$?; "#
+            + #"for __v in \#(names); do eval "if [ -n \"\$__s_$__v\" ]; then $__v=\$__o_$__v; else unset $__v; fi; unset __s_$__v __o_$__v"; done; unset __v; "#
+            + #"printf '\033]7777;PSW;%s;%s\007' '\#(token)' "$__ps"; }"#
     }
 
     /// Runs one command at a router, switch or appliance prompt, which cannot run the POSIX
@@ -263,8 +279,8 @@ struct CredentialWait: Equatable, Sendable {
         if awaitingCredential.removeValue(forKey: sessionID) != nil {
             await interruptCredentialPrompt(sessionID: sessionID)
         }
-        // Finish last: the caller registers the new command before the previous one resumes,
-        // so the previous one sees it and sends nothing more to the session.
+        // Finish last, after any interrupt has settled, so the previous call returns only once
+        // the session is ready for the new command.
         previous?.finish(CommandExecutionResult(
             output: "A newer command started in this session.",
             exitCode: nil,

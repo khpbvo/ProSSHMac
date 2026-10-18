@@ -18,8 +18,28 @@ final class AIToolDefinitionsTests: XCTestCase {
                       "Developer prompt should mention execute_and_wait tool")
         XCTAssertTrue(prompt.lowercased().contains("terminal"),
                       "Developer prompt should mention terminal")
-        XCTAssertTrue(prompt.contains("Do not truncate diagnostic output"))
-        XCTAssertTrue(prompt.contains("compressed pages, swap usage and memory pressure"))
+        XCTAssertTrue(prompt.contains("Never cut the path you are connected over"))
+        XCTAssertTrue(prompt.contains("end with a handover, one line per host: what changed, how you verified it, how to undo it"))
+    }
+
+    /// The prompt holds what applies every turn (Docs/NetworkCopilot.md "Design rules"): no
+    /// domain playbooks, and no rule pulling against another.
+    func testPromptKeepsNoPlaybooksOrConflictingRules() {
+        let prompt = AIToolDefinitions.developerPrompt()
+        XCTAssertFalse(prompt.contains("compressed pages"))
+        XCTAssertFalse(prompt.contains("minimum tool calls"))
+        XCTAssertLessThan(prompt.split(separator: "\n").count, 30)
+    }
+
+    /// Passwords are typed by the user since Docs/CredentialPrompt.md; no tool may invite the
+    /// model to send one.
+    func testNoToolOffersToAnswerPasswords() {
+        let tools = AIToolDefinitions.buildToolDefinitions()
+        let sendInput = tools.first { $0.name == "send_input" }?.description ?? ""
+        XCTAssertTrue(sendInput.contains("never passwords"))
+        let cli = tools.first { $0.name == "run_cli_command" }?.description ?? ""
+        XCTAssertTrue(cli.contains("the call waits while the user types it"))
+        XCTAssertFalse(cli.contains("(confirm, password, filename)"))
     }
 
     /// Password prompts are handled in code (Docs/CredentialPrompt.md): no sudo choreography

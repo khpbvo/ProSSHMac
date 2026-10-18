@@ -45,16 +45,10 @@ extension AIToolHandler {
         let lines = normalized.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
 
         if lines.contains(remotePathNotFoundToken) {
-            return .object([
-                "ok": .bool(false),
-                "error": .string("Path does not exist: \(path)"),
-            ])
+            return AIToolDefinitions.errorObject("Path does not exist: \(path)", hint: "Check the path with search_filesystem, or pass an absolute path.")
         }
         if lines.contains(remoteNotRegularFileToken) {
-            return .object([
-                "ok": .bool(false),
-                "error": .string("Path is not a regular file: \(path)"),
-            ])
+            return AIToolDefinitions.errorObject("Path is not a regular file: \(path)", hint: "Pass a regular file path; list a directory with search_filesystem.")
         }
 
         let boundedCount = max(1, min(200, lineCount))

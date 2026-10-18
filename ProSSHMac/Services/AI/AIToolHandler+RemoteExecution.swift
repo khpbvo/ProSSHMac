@@ -31,16 +31,10 @@ extension AIToolHandler {
         )
 
         if execution.timedOut {
-            return .object([
-                "ok": .bool(false),
-                "error": .string("Remote filesystem search timed out."),
-            ])
+            return AIToolDefinitions.errorObject("Remote filesystem search timed out.", hint: "Search a narrower path or lower max_results.")
         }
         if execution.exitCode == 127 {
-            return .object([
-                "ok": .bool(false),
-                "error": .string("Remote shell is missing required search utilities (find/head)."),
-            ])
+            return AIToolDefinitions.errorObject("Remote shell is missing required search utilities (find/head).", hint: "Use execute_and_wait with the tools the host has (ls, cat) instead.")
         }
         return Self.parseRemoteFilesystemSearchOutput(
             execution.output,
@@ -69,16 +63,10 @@ extension AIToolHandler {
         )
 
         if execution.timedOut {
-            return .object([
-                "ok": .bool(false),
-                "error": .string("Remote file-content search timed out."),
-            ])
+            return AIToolDefinitions.errorObject("Remote file-content search timed out.", hint: "Search a narrower path or lower max_results.")
         }
         if execution.exitCode == 127 {
-            return .object([
-                "ok": .bool(false),
-                "error": .string("Remote shell is missing required search utilities (rg/grep/head)."),
-            ])
+            return AIToolDefinitions.errorObject("Remote shell is missing required search utilities (rg/grep/head).", hint: "Use execute_and_wait with the tools the host has (ls, cat) instead.")
         }
         return Self.parseRemoteFileContentSearchOutput(
             execution.output,
@@ -102,10 +90,7 @@ extension AIToolHandler {
         )
 
         if execution.timedOut {
-            return .object([
-                "ok": .bool(false),
-                "error": .string("Remote file read timed out."),
-            ])
+            return AIToolDefinitions.errorObject("Remote file read timed out.", hint: "Read fewer lines per call, or check the session with get_current_screen.")
         }
 
         guard let fullContent = RemotePatchCommandBuilder.decodeBase64FileOutput(
@@ -121,10 +106,7 @@ extension AIToolHandler {
                 provider: provider, sessionID: sessionID, commandBody: command
             )
             if fallback.timedOut {
-                return .object([
-                    "ok": .bool(false),
-                    "error": .string("Remote file read timed out."),
-                ])
+                return AIToolDefinitions.errorObject("Remote file read timed out.", hint: "Read fewer lines per call, or check the session with get_current_screen.")
             }
             return Self.parseReadFileChunkOutput(
                 fallback.output, path: path, startLine: startLine,
@@ -190,10 +172,7 @@ extension AIToolHandler {
             .map(String.init)
 
         if lines.contains(Self.remotePathNotFoundToken) {
-            return .object([
-                "ok": .bool(false),
-                "error": .string("Path does not exist: \(path)"),
-            ])
+            return AIToolDefinitions.errorObject("Path does not exist: \(path)", hint: "Check the path with search_filesystem, or pass an absolute path.")
         }
 
         var results: [LLMJSONValue] = []
@@ -234,10 +213,7 @@ extension AIToolHandler {
             .map(String.init)
 
         if lines.contains(Self.remotePathNotFoundToken) {
-            return .object([
-                "ok": .bool(false),
-                "error": .string("Path does not exist: \(path)"),
-            ])
+            return AIToolDefinitions.errorObject("Path does not exist: \(path)", hint: "Check the path with search_filesystem, or pass an absolute path.")
         }
 
         var matches: [LLMJSONValue] = []
