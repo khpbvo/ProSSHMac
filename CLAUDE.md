@@ -137,7 +137,7 @@ xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform
 - **Toolchain: Xcode 27.0 (27A266a), Swift 6.4.** The Metal Toolchain component must be installed
   (`xcodebuild -showComponent metalToolchain`). Never exclude `TerminalShaders.metal` from a build;
   if the shader fails to compile, check the component first.
-- Test bundle: `ProSSHMacTests` — 5 files at the bundle root plus 60 in `ProSSHMacTests/Terminal/Tests/`,
+- Test bundle: `ProSSHMacTests` — 5 files at the bundle root plus 61 in `ProSSHMacTests/Terminal/Tests/`,
   ~920 test methods. No test sources live under `ProSSHMac/`.
 - Some tests require the host app process (UI/AppKit-backed suites).
 - **No full-suite baseline exists on Xcode 27.** Every suite touched since has been run targeted and
@@ -188,6 +188,7 @@ ProSSHMac/
 ├── App/                  # AppDependencies, AppNavigationCoordinator/Section, AppAppearance,
 │   │                     #   AppLaunchCommandStore, ThroughputBenchmarkRunner (+Render)
 ├── AppIntents/           # ProSSHShortcuts (App Intents / Siri Shortcuts)
+├── Resources/Skills/     # Built-in copilot skills (*.md, flattened into the bundle root; see Docs/Skills.md)
 ├── CLibSSH/              # C wrapper around libssh (ProSSHLibSSHWrapper.c/.h, bridging header)
 ├── Models/               # Host, Session, Transfer, SSHKey, SSHCertificate, AuditLogEntry,
 │   │                     #   TOTPConfiguration
@@ -257,7 +258,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 | `Services/AI/AIToolHandler.swift` + 7 extensions | Tool dispatch (775L). Extensions: ArgumentParsing, RemoteExecution, RemotePatch (remote `apply_patch`: plain, then sudo on permission denied), LocalFilesystem, InteractiveInput, DeviceCLI (`run_cli_command`), OutputHelpers (incl. the password-wait `note` and decline error) |
 | `Services/AI/CredentialPromptDetector.swift` | Password/passphrase prompt lines (sudo, su, doas, ssh hop, key passphrase), retry notices, cursor line from a byte tail, progress after an answer (76L). See `Docs/CredentialPrompt.md` |
 | `Services/AI/DeviceCLI.swift` | Router/switch CLI support: `DeviceCLIPrompt` (cursor line → POSIX / device / unknown, prompt base), `DeviceCLICapture` (complete / pager / question decisions from text + idle time; cursor line and offsets for the password wait), `DeviceCLIText` |
-| `Services/AI/AISkillLibrary.swift` | Skills (Markdown playbooks): bundled `.md` at the bundle's resource root (the synchronized group flattens `Resources/Skills/`) plus `~/Library/Application Support/ProSSHMac/Skills/`; parse, user override, `indexLines`. Snapshotted per chat in `AIConversationState.skills`, so the prompt's SKILLS index never changes mid-chat; `load_skill` reads that snapshot |
+| `Services/AI/AISkillLibrary.swift` | Skills (Markdown playbooks): bundled `.md` at the bundle's resource root (the synchronized group flattens `Resources/Skills/`) plus `~/Library/Application Support/ProSSHMac/Skills/`; parse, user override, `indexLines`. Snapshotted per chat in `AIConversationState.skills`, so the prompt's SKILLS index never changes mid-chat; `load_skill` reads that snapshot. The eight built-in skills are checked by `BundledSkillsTests` (≤ 80 body lines, ≤ 120-char description, no "never"/"always") |
 | `Services/AI/AISessionDirectory.swift` | The open sessions as the copilot sees them: per-turn list, `list_sessions` JSON, default targets, device-CLI marking |
 | `Services/TerminalRenderingCoordinator.swift` | Snapshot publishing, scroll state, resize debounce, alt-buffer policy, shell-buffer throttle (1,066L). An ordinary publish is two engine calls (`publishViewportState`, then `publishSnapshot` carrying housekeeping) with MainActor scroll-anchor policy between them |
 | `UI/Terminal/TerminalView.swift` | Main terminal UI, sidebar layout, focus, input capture (1,060L). `sessionPanel` is the only place a session's terminal surface is built |
@@ -545,7 +546,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 - **`Docs/bugs.md` file paths predate the refactors** (`Views/` → `UI/`, `SSH/` → `Services/SSH/`,
   `Services/Security/` → `Services/`; some files no longer exist). Resolve by basename before
   trusting an entry. Open/fixed counts are in its Summary table.
-- **Docs directory case**: git tracks 23 files under `Docs/` and 4 under `docs/`
+- **Docs directory case**: git tracks 28 files under `Docs/` and 4 under `docs/`
   (`FutureFeatures.md`, `Optimization.md`, `RefactorTheFinalRun.md`, `screenshots/`). This only works
   because macOS is case-insensitive — a case-sensitive checkout splits them. Resolve by basename.
 
@@ -559,7 +560,8 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 | `Docs/RenderCost.md` | **Active spec.** What rendering actually costs — R0/R1/R2a done, **R2b open** (code merged, performance unvalidated). Read its "Measurement caveats" before any perf measurement |
 | `Docs/R2bBenchmarkResults.md` | R2b A/B evidence: exact commands and all raw reports for the six baseline/candidate pairs |
 | `Docs/CredentialPrompt.md` | Password prompts (sudo, su, ssh, passphrase, device `enable`) pause the awaited tool call with a card in the chat; the user types in the terminal, nothing is recorded, Decline Ctrl+Cs and tells the model. Replaced the prompt's SUDO rules and the `apply_patch` sudo dance — **COMPLETE** (Phases 0–4, validated live 2026-10-18; a device `enable` password not yet seen live) |
-| `Docs/NetworkCopilot.md` | **Active.** Copilot reaches every open session, one memory per chat, a router/switch command path, and lifecycle-shaped skills (`load_skill`). Phases 1–5 done; Phases 4–7 reshaped 2026-10-16 (harness first, then skill library, then skills, then live cost validation). Read its "Design rules" before adding any rule to the developer prompt |
+| `Docs/NetworkCopilot.md` | **Active.** Copilot reaches every open session, one memory per chat, a router/switch command path, and lifecycle-shaped skills (`load_skill`). Phases 1–6 done; Phases 4–7 reshaped 2026-10-16 (harness first, then skill library, then skills, then live cost validation). Read its "Design rules" before adding any rule to the developer prompt |
+| `Docs/Skills.md` | Copilot skills: format, built-in vs user folder, override by name, the built-in list, example `my-lab.md` |
 | `Docs/Anthropic.md` | Direct Anthropic Messages API as a second AI provider next to OpenRouter — **COMPLETE** (Phases 0–6, validated live). Read its "Rules that shape the design" before touching AI transcript code |
 | `Docs/Bug84.md` | One terminal renderer per session across tab switches and split changes (per-session model store) — **COMPLETE** (Phases 0–5); Phase 5 has the live memory numbers |
 | `Docs/bugs.md` | Bug and tech-debt register by subsystem/severity (counts in its Summary table); paths are pre-refactor |
@@ -592,23 +594,19 @@ and the session coordinators) has no spec file left; see `Docs/featurelist.md`.
 
 ## Next Session Plan
 
-**Active work: `Docs/NetworkCopilot.md` Phase 6** (write the skills): `change-procedure`,
-`baseline-and-diff`, `troubleshooting`, `routing`, `services`, `access-safety`,
-`clone-deduplication`, `linux-host-operations`, each under ~80 lines, procedures and checklists
-only (no "never"/"always": rules live in the prompt). Put them in
-`ProSSHMac/Resources/Skills/*.md`; the synchronized group flattens them into the bundle root,
-where `AISkillLibrary.standard` reads them (Phase 5 as built). `baseline-and-diff` replaces the
-prompt's SESSIONS line "To compare hosts … then do the rest": delete it in the same change.
-`linux-host-operations` carries Phase 4's sudo/apt idioms (listed in the Phase 6 item).
-Add the example user skill `my-lab.md` to the docs. Before closing, read the prompt and all
-skills together once and strike any contradiction. Consider a test that loads the real bundled
-skills through `AISkillLibrary.standard` and asserts none are skipped (the parser only logs).
-Then Phase 7 (live validation with iteration and dollar counts). The spec's "Design rules"
-table decides where anything new goes; do not add vendor playbooks or new prompt rules.
-Phase 4's wrapper environment and prompt, and Phase 5's Settings button and a model loading a
-user skill, are not yet seen live: in the next live session check that `systemctl status`/`git
-log` return without paging over SSH, that `echo $PAGER` in the terminal is unchanged afterwards,
-and that Open Skills Folder plus a dropped-in skill reaches a new chat.
+**Active work: `Docs/NetworkCopilot.md` Phase 7 (live validation and cost). Needs the user at
+the keyboard.** Use the four cloned Ubuntu VMs. Runs: the original de-duplication task end to
+end, with and without broadcast, focus changes between prompts, and the OSPF task again; a
+router/switch or lab image if available. Record iterations and dollars per run, with and
+without the skills (to run without them, temporarily move the eight `.md` files out of
+`ProSSHMac/Resources/Skills/` and rebuild; a user skill can replace one but not hide it). The 2026-10-15
+OSPF baseline was ~30 iterations and ~$1.50 on Opus 5.5; the skills earn their place only if
+iterations drop. Watch whether the model loads the right skill unprompted
+(`clone-deduplication`, `baseline-and-diff`, `routing`) and whether a loaded skill changes what
+it does. Live checks still open from Phases 4–5: `systemctl status`/`git log` return without
+paging over SSH, `echo $PAGER` is unchanged in the terminal afterwards, Open Skills Folder
+works, and a dropped-in user skill reaches a new chat. Docs at the end: `Docs/AIArchitecture.md`
+(skills, `load_skill`, the per-chat snapshot) and CLAUDE.md.
 CredentialPrompt is complete (`Docs/CredentialPrompt.md` Phase 4 has the live results); the user
 decided against a "Grant sudo on all hosts" button.
 

@@ -28,6 +28,8 @@ final class AIToolDefinitionsTests: XCTestCase {
         let prompt = AIToolDefinitions.developerPrompt()
         XCTAssertFalse(prompt.contains("compressed pages"))
         XCTAssertFalse(prompt.contains("minimum tool calls"))
+        // Moved to the baseline-and-diff and change-procedure skills (Phase 6).
+        XCTAssertFalse(prompt.contains("To compare hosts"))
         XCTAssertLessThan(prompt.split(separator: "\n").count, 30)
     }
 

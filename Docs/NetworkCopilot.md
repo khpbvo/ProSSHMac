@@ -130,7 +130,8 @@ new `AISkillLibraryTests`, `DeviceCLITests`.
   - `load_skill(name)` returns the body; unknown name → `{ok:false, hint: <index>}`.
   - Settings row: "Open skills folder".
   - Tests: parsing, override, unknown skill, index stable across turns, folder absent.
-- [ ] **Phase 6: Write the skills — shaped by the lifecycle, not the vendor.** Vendor syntax
+- [x] **Phase 6: Write the skills — shaped by the lifecycle, not the vendor.** Done 2026-10-18;
+  see "Phase 6 as built". Vendor syntax
   stays with the model. A skill is a procedure or a checklist a team would write down; it
   contains no rules ("never", "always" live in the prompt only, so nothing can conflict). Each
   under ~80 lines. Before closing the phase, read the prompt and all skills together once and
@@ -330,6 +331,37 @@ by the fake device only.
   `AIToolContractTests` gains a `load_skill` case, two error cases and the hint check.
   `AIToolDefinitionsTests` checks that the index adds 2 + n lines.
 - **Not yet seen live:** the Settings button, and a user skill loaded by the model in a real chat.
+
+## Phase 6 as built (2026-10-18)
+
+- **Eight skills** in `ProSSHMac/Resources/Skills/` (body lines): `change-procedure` (53),
+  `baseline-and-diff` (41), `troubleshooting` (47), `routing` (45), `services` (53),
+  `access-safety` (42), `clone-deduplication` (41), `linux-host-operations` (53). Each has a
+  "Done when" section. Skills point to each other with "load <name>".
+- **One home per fact.** The per-platform safety nets (Junos, IOS/IOS-XE, EOS, RouterOS, VyOS,
+  nftables/iptables, Netplan) are only in `change-procedure`; `access-safety` points there.
+  Staged rollout is only in `change-procedure`. Per-daemon config checks are only in
+  `services`. The sudo/apt/ssh idioms from Phase 4 are only in `linux-host-operations`; its
+  draft line about password prompts was struck because it repeated the `execute_and_wait`
+  description. `access-safety` keeps the `sudo -n true` check from this spec, reworded as
+  planning ("the user will have to type a password; say so before a multi-host run"). It is
+  not a harness probe, which CredentialPrompt removed.
+- **Prompt.** The SESSIONS line "To compare hosts … then do the rest" is deleted
+  (`baseline-and-diff` + `change-procedure`). Base prompt 23 → 22 lines, 332 → 310 words; with
+  the eight-line index the system prompt is 32 lines, about 470 words.
+- **Contradiction pass** (prompt and all skills read together), three findings:
+  1. The prompt's "Never repeat an identical tool call" contradicted every post-check, which
+     deliberately re-runs the same capture after a change. It now reads "… unless something
+     has changed since".
+  2. `access-safety` restated three safety nets; it now points to `change-procedure`.
+  3. `routing`'s restart-to-prove-persistence step could cut the session through that
+     router; it now says to load `access-safety` first.
+- **Enforced by `BundledSkillsTests`** (runs in the app host, so `Bundle.main` is the app):
+  all eight load and none are skipped (the `.md` file count matches); description ≤ 120
+  characters; body ≤ 80 lines; no "never"/"always" in any body (Design rules); every
+  "load <name>" names a real skill. `AIToolDefinitionsTests` checks that the compare line is gone.
+- **Example user skill**: `Docs/Skills.md` (format, folders, override, the built-in list and a
+  full `my-lab.md`).
 
 ## Open questions
 
