@@ -85,29 +85,6 @@ final class AIBroadcastTests: XCTestCase {
         XCTAssertEqual(result, [primary])
     }
 
-    func testResolveTargetSessionsInvalidTargetFallsBackToBroadcast() {
-        let handler = AIToolHandler()
-        let primary = UUID()
-        let other = UUID()
-        let ctx = BroadcastContext(
-            primarySessionID: primary,
-            allSessionIDs: [primary, other],
-            sessionLabels: [:]
-        )
-        // Pass an ID not in allSessionIDs — should fall back to broadcast
-        let bogusID = UUID()
-        let arguments: [String: LLMJSONValue] = [
-            "target_session": .string(bogusID.uuidString),
-        ]
-        let result = handler.resolveTargetSessions(
-            arguments: arguments,
-            primarySessionID: primary,
-            broadcastContext: ctx
-        )
-        // Falls back to broadcast (all sessions)
-        XCTAssertEqual(result, [primary, other])
-    }
-
     func testResolveTargetSessionsInvalidTargetFallsBackToPrimary() {
         let handler = AIToolHandler()
         let primary = UUID()

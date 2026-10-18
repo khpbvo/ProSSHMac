@@ -594,12 +594,6 @@ new goes: code, prompt, skill or user skill. Do not add vendor playbooks or new 
 CredentialPrompt is complete (`Docs/CredentialPrompt.md` Phase 4 has the live results); the user
 decided against a "Grant sudo on all hosts" button.
 
-**Pre-existing red test:**
-`AIBroadcastTests.testResolveTargetSessionsInvalidTargetFallsBackToBroadcast` fails on clean
-`master`. It is stale since `38c1b6b` (NetworkCopilot Phase 2): `resolveTargetSessions` now
-passes any UUID through because `target_session` is validated before dispatch. Confirm with the
-user, then update or delete the test.
-
 **Next after that: Bug 88 + Bug 87 (tab selection vs. pane focus in split layouts).** Both are in
 `Docs/bugs.md` and touch the same interaction in `TerminalView`: tab selection, pane assignment
 and `onChange(of: paneManager.focusedPaneId)`.
