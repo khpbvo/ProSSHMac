@@ -192,18 +192,26 @@ struct UnifiedDiffPatcher: Sendable {
             throw DiffError.malformedHunkHeader(headerLine)
         }
 
-        let originalStart = Int(nsHeader.substring(with: match.range(at: 1)))!
+        guard let originalStart = Int(nsHeader.substring(with: match.range(at: 1))),
+              let modifiedStart = Int(nsHeader.substring(with: match.range(at: 3))) else {
+            throw DiffError.malformedHunkHeader(headerLine)
+        }
         let originalCount: Int
         if match.range(at: 2).location != NSNotFound {
-            originalCount = Int(nsHeader.substring(with: match.range(at: 2)))!
+            guard let count = Int(nsHeader.substring(with: match.range(at: 2))) else {
+                throw DiffError.malformedHunkHeader(headerLine)
+            }
+            originalCount = count
         } else {
             originalCount = 1
         }
 
-        let modifiedStart = Int(nsHeader.substring(with: match.range(at: 3)))!
         let modifiedCount: Int
         if match.numberOfRanges > 4, match.range(at: 4).location != NSNotFound {
-            modifiedCount = Int(nsHeader.substring(with: match.range(at: 4)))!
+            guard let count = Int(nsHeader.substring(with: match.range(at: 4))) else {
+                throw DiffError.malformedHunkHeader(headerLine)
+            }
+            modifiedCount = count
         } else {
             modifiedCount = 1
         }
@@ -220,8 +228,7 @@ struct UnifiedDiffPatcher: Sendable {
 
             // Next hunk header or end of diff.
             if line.hasPrefix("@@") { break }
-            // File header for next file in multi-file diff.
-            if line.hasPrefix("---") || line.hasPrefix("+++") || line.hasPrefix("diff ") { break }
+            // Lines beginning --- or +++ are valid removals/additions inside a hunk.
 
             if line.hasPrefix("-") {
                 hunkLines.append(.removal(String(line.dropFirst())))
@@ -252,6 +259,10 @@ struct UnifiedDiffPatcher: Sendable {
             }
         }
 
+        guard contextSeen + removalSeen == originalCount,
+              contextSeen + additionSeen == modifiedCount else {
+            throw DiffError.malformedHunkHeader(headerLine)
+        }
         let hunk = DiffHunk(
             originalStart: originalStart,
             originalCount: originalCount,
@@ -304,7 +315,7 @@ struct UnifiedDiffPatcher: Sendable {
         for i in 0..<sortedHunks.count - 1 {
             let current = sortedHunks[i]
             let next = sortedHunks[i + 1]
-            if next.originalStart + next.originalCount > current.originalStart {
+            if next.originalCount > current.originalStart - next.originalStart {
                 throw DiffError.overlappingHunks(hunkIndex: hunks.firstIndex(of: current)!)
             }
         }
@@ -384,7 +395,7 @@ struct UnifiedDiffPatcher: Sendable {
         in sourceLines: [String]
     ) throws -> Int {
         // Unified diffs use 1-based line numbers.
-        let exactStart = hunk.originalStart - 1
+        let exactStart = hunk.originalCount == 0 ? hunk.originalStart : hunk.originalStart - 1
 
         // Try exact position first.
         if exactStart >= 0 && exactStart <= sourceLines.count {
@@ -394,10 +405,11 @@ struct UnifiedDiffPatcher: Sendable {
         }
 
         // Fuzzy search: try positions near the expected start.
-        for offset in 1...fuzzLines {
+        for zeroOffset in 0..<max(0, fuzzLines) {
+            let offset = zeroOffset + 1
             // Try below.
-            let below = exactStart + offset
-            if below >= 0 && below <= sourceLines.count {
+            let (below, overflow) = exactStart.addingReportingOverflow(offset)
+            if !overflow && below >= 0 && below <= sourceLines.count {
                 if verifyHunkContext(hunk: hunk, in: sourceLines, at: below) {
                     return below
                 }
@@ -421,7 +433,7 @@ struct UnifiedDiffPatcher: Sendable {
         }
 
         if !hasVerifiableLines {
-            return min(exactStart, sourceLines.count)
+            return max(0, min(exactStart, sourceLines.count))
         }
 
         // Hunk has verifiable lines but no position matched.

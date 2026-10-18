@@ -109,6 +109,26 @@ final class AIToolDefinitionsTests: XCTestCase {
                           "Direct action tools should be a strict subset of all tools")
         XCTAssertFalse(filtered.isEmpty)
     }
+
+    /// A direct request such as "run the routing checks" still has to load the playbook
+    /// required by the developer prompt. Filtering must not make that instruction impossible.
+    func testDirectActionModeCanLoadEveryAdvertisedSkill() {
+        for patchEnabled in [false, true] {
+            let tools = AIToolDefinitions.directActionToolDefinitions(
+                from: AIToolDefinitions.buildToolDefinitions(patchToolEnabled: patchEnabled)
+            )
+            XCTAssertTrue(tools.contains { $0.name == "load_skill" })
+            XCTAssertEqual(tools.contains { $0.name == "apply_patch" }, patchEnabled)
+        }
+    }
+
+    func testSerializationFailureStillReturnsAValidErrorWithAHint() throws {
+        let output = AIToolDefinitions.jsonString(from: .number(.infinity))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any])
+        XCTAssertEqual(json["ok"] as? Bool, false)
+        XCTAssertEqual(json["error"] as? String, "failed_to_encode_tool_output")
+        XCTAssertFalse((json["hint"] as? String ?? "").isEmpty)
+    }
 }
 
 #endif

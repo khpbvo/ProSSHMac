@@ -44,7 +44,7 @@ enum ShellIntegrationScripts: Sendable {
         case .mikrotikRouterOS: return #"^\[[\w\-.]+@[\w\-.]+\]\s*(\(SAFE\)\s*)?(/[\w/\-.]*)?>\s*$"#
         case .paloAltoPANOS:    return #"^(\[edit[^\]]*\]\s+)?[\w\-.]+@[\w\-.]+[>#]\s*$"#
         case .hpProCurve:       return #"^[A-Za-z0-9][\w\-.]*(\(config[a-z\-]*\))?[#>]\s*$"#
-        case .fortinetFortiOS:  return #"^[A-Za-z0-9][\w\-.]*(\s*\([\w\s\-]+\))?[#$]\s*$"#
+        case .fortinetFortiOS:  return #"^[A-Za-z0-9][\w\-.]*(\s*\([\w\s\-]+\))?\s*[#$]\s*$"#
         case .nokiaSROS:        return #"^[A-Z]:[\w\-.]+(\[/[\w\-.]*\])?[>#]\s*$"#
         case .custom:           return nil
         default:                return nil

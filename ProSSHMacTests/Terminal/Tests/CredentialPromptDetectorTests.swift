@@ -67,6 +67,8 @@ final class CredentialPromptDetectorTests: XCTestCase {
     func testRetryNotices() {
         XCTAssertTrue(CredentialPromptDetector.isRetryNotice("Sorry, try again."))
         XCTAssertTrue(CredentialPromptDetector.isRetryNotice("Permission denied, please try again."))
+        XCTAssertTrue(CredentialPromptDetector.isRetryNotice("% Access denied"))
+        XCTAssertTrue(CredentialPromptDetector.isRetryNotice("% Bad secrets"))
         XCTAssertFalse(CredentialPromptDetector.isRetryNotice("sudo: 3 incorrect password attempts"))
     }
 
@@ -74,6 +76,7 @@ final class CredentialPromptDetectorTests: XCTestCase {
         func progress(_ text: String) -> Bool { CredentialPromptDetector.showsProgress(afterAnswer: Array(text.utf8)) }
         XCTAssertFalse(progress("\r\n"), "sudo's own newline after reading the password")
         XCTAssertFalse(progress("\r\nSorry, try again.\r\n[sudo] password for kevin: "))
+        XCTAssertFalse(progress("\r\n% Access denied\r\nPassword: "))
         XCTAssertFalse(progress("\r\nhello"), "an incomplete line may still turn into a prompt")
         XCTAssertTrue(progress("\r\nhello\r\n"))
         XCTAssertTrue(progress("\r\nsudo: 3 incorrect password attempts\r\n"))

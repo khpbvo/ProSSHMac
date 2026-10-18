@@ -18,6 +18,14 @@ extension AIToolHandler {
         AIToolDefinitions.errorResult(credentialDeclinedMessage(label: label), hint: credentialDeclinedHint)
     }
 
+    static func credentialDeclinedObject(label: String) -> LLMJSONValue {
+        AIToolDefinitions.errorObject(credentialDeclinedMessage(label: label), hint: credentialDeclinedHint)
+    }
+
+    static func cancelledToolObject() -> LLMJSONValue {
+        AIToolDefinitions.errorObject("Tool call cancelled.", hint: hint(for: CancellationError()))
+    }
+
     static func sessionLabel(_ sessionID: UUID, in provider: any AIAgentSessionProviding) -> String {
         provider.sessions.first { $0.id == sessionID }?.hostLabel ?? String(sessionID.uuidString.prefix(8))
     }
@@ -51,7 +59,7 @@ extension AIToolHandler {
             return AIToolDefinitions.errorObject("Path is not a regular file: \(path)", hint: "Pass a regular file path; list a directory with search_filesystem.")
         }
 
-        let boundedCount = max(1, min(200, lineCount))
+        let boundedCount = max(1, min(500, lineCount))
         let content = lines.joined(separator: "\n")
         let hasMore = lines.count >= boundedCount
         let nextStart: LLMJSONValue = hasMore
@@ -72,30 +80,29 @@ extension AIToolHandler {
         let lowered = trimmed.lowercased()
 
         if lowered.hasPrefix("cat "), !lowered.contains("|"), !lowered.contains(">") {
-            return "Full-file reads via 'cat' are disabled for AI execution. Read files in chunks of at most 200 lines."
+            return "Full-file reads via 'cat' are disabled for AI execution. Read files in chunks of at most 500 lines."
         }
 
-        if let n = firstCapturedInt(in: lowered, pattern: #"\bhead\s+-n\s+([0-9]+)\b"#), n > 200 {
-            return "'head -n \(n)' exceeds the 200-line limit for AI file reads."
+        if let n = firstCapturedInt(in: lowered, pattern: #"\bhead\s+-n\s+([0-9]+)\b"#), n > 500 {
+            return "'head -n \(n)' exceeds the 500-line limit for AI file reads."
         }
 
-        if let n = firstCapturedInt(in: lowered, pattern: #"\btail\s+-n\s+([0-9]+)\b"#), n > 200 {
-            return "'tail -n \(n)' exceeds the 200-line limit for AI file reads."
+        if let n = firstCapturedInt(in: lowered, pattern: #"\btail\s+-n\s+([0-9]+)\b"#), n > 500 {
+            return "'tail -n \(n)' exceeds the 500-line limit for AI file reads."
         }
 
         if let range = firstCapturedRange(
             in: lowered,
             pattern: #"\bsed\s+-n\s+['\"]?([0-9]+),([0-9]+)p['\"]?"#
         ) {
-            let requested = (range.end - range.start) + 1
-            if requested > 200 {
-                return "'sed -n \(range.start),\(range.end)p' exceeds the 200-line limit for AI file reads."
+            if range.end >= range.start && range.end - range.start >= 500 {
+                return "'sed -n \(range.start),\(range.end)p' exceeds the 500-line limit for AI file reads."
             }
         }
 
         if (lowered.contains("python") || lowered.contains("python3")) &&
             (lowered.contains("read_text(") || lowered.contains(".read()")) {
-            return "Scripted full-file reads are disabled for AI execution. Read files in chunks of at most 200 lines."
+            return "Scripted full-file reads are disabled for AI execution. Read files in chunks of at most 500 lines."
         }
 
         return nil

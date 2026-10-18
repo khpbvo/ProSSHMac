@@ -62,6 +62,8 @@ final class TerminalAIAssistantViewModel: ObservableObject {
 
     private var activePatchApprovalContinuation: CheckedContinuation<(Bool, Bool), Never>?
     private var activeAgentTask: Task<Void, Never>?
+    /// Stream callbacks are queued independently of the task that produced them.
+    private var activeResponseID: UUID?
     private let credentialPrompts: (any CredentialPromptHandling)?
     private var credentialPromptSubscription: AnyCancellable?
     /// Prompts the chat itself ended, by wait id, so their end is not reported as the user's.
@@ -127,6 +129,7 @@ final class TerminalAIAssistantViewModel: ObservableObject {
     nonisolated deinit {}
 
     func clearConversation() {
+        activeResponseID = nil
         endCredentialPromptsForStop()
         activeAgentTask?.cancel()
         activeAgentTask = nil
@@ -143,6 +146,7 @@ final class TerminalAIAssistantViewModel: ObservableObject {
     /// prompt gets Ctrl+C.
     func stop() {
         guard isSending else { return }
+        activeResponseID = nil
         endCredentialPromptsForStop()
         activeAgentTask?.cancel()
         activeAgentTask = nil
@@ -202,7 +206,9 @@ final class TerminalAIAssistantViewModel: ObservableObject {
     func requestPatchApproval(
         operation: PatchOperation, fingerprint: String
     ) async -> (Bool, Bool) {
+        guard !Task.isCancelled else { return (false, false) }
         return await withCheckedContinuation { continuation in
+            denyPatch()
             activePatchApprovalContinuation = continuation
             activePatchApproval = PatchApprovalRequest(
                 id: UUID(),
@@ -270,6 +276,9 @@ final class TerminalAIAssistantViewModel: ObservableObject {
 
     private func sendPrompt(_ prompt: String, for sessionID: UUID, broadcastSessionIDs: [UUID]? = nil) {
         isSending = true
+        let assistantID = UUID()
+        activeResponseID = assistantID
+        let conversationID = conversationID
         clearReasoningPanel()
         messages.removeAll(where: { message in
             if case .reasoning = message.kind {
@@ -279,8 +288,7 @@ final class TerminalAIAssistantViewModel: ObservableObject {
         })
         activeAgentTask = Task { @MainActor [weak self] in
             // Stopped before it started: don't leave an empty streaming reply behind.
-            guard let self, !Task.isCancelled else { return }
-            let assistantID = UUID()
+            guard let self, !Task.isCancelled, self.activeResponseID == assistantID else { return }
             self.messages.append(
                 TerminalAIAssistantMessage(
                     id: assistantID,
@@ -292,7 +300,7 @@ final class TerminalAIAssistantViewModel: ObservableObject {
             )
             do {
                 let reply = try await self.agentService.generateReply(
-                    conversationID: self.conversationID,
+                    conversationID: conversationID,
                     sessionID: sessionID,
                     prompt: prompt,
                     broadcastSessionIDs: broadcastSessionIDs,
@@ -304,6 +312,7 @@ final class TerminalAIAssistantViewModel: ObservableObject {
                 )
                 guard !Task.isCancelled else { return }
                 await Task.yield()
+                guard !Task.isCancelled, self.activeResponseID == assistantID else { return }
                 let normalizedReply = self.normalizeAssistantReply(reply.text)
                 let hasReplyText = !normalizedReply.isEmpty
                 let finalText = hasReplyText ? normalizedReply : "No response from assistant."
@@ -324,9 +333,10 @@ final class TerminalAIAssistantViewModel: ObservableObject {
                 } else {
                     await self.streamReply(finalText, into: assistantID)
                 }
+                guard !Task.isCancelled, self.activeResponseID == assistantID else { return }
                 self.finishReasoningStreams()
             } catch {
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, self.activeResponseID == assistantID else { return }
                 self.finishReasoningStreams()
                 self.updateAssistantMessage(
                     id: assistantID,
@@ -336,11 +346,13 @@ final class TerminalAIAssistantViewModel: ObservableObject {
                 self.lastError = error.localizedDescription
             }
             self.isSending = false
+            self.activeResponseID = nil
             self.activeAgentTask = nil
         }
     }
 
     private func handleStreamEvent(_ event: AIAgentStreamEvent, assistantMessageID: UUID) {
+        guard activeResponseID == assistantMessageID else { return }
         switch event {
         case let .assistantTextDelta(delta):
             appendDelta(delta, to: assistantMessageID)
@@ -414,6 +426,7 @@ final class TerminalAIAssistantViewModel: ObservableObject {
 
         updateAssistantMessage(id: messageID, content: "", isStreaming: true)
         for chunk in chunks {
+            guard !Task.isCancelled, activeResponseID == messageID else { return }
             guard let index = messages.firstIndex(where: { $0.id == messageID }) else { break }
             messages[index].content += chunk
             if streamChunkDelayNanoseconds > 0 {

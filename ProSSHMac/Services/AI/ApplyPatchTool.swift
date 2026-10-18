@@ -10,6 +10,7 @@
 // and a new case in AIToolHandler.executeSingleToolCall().
 
 import Foundation
+import CryptoKit
 import os.log
 
 // MARK: - Approval Tracker
@@ -25,15 +26,11 @@ final class PatchApprovalTracker {
     private var approved: Set<String> = []
 
     /// Generate a fingerprint for a patch operation.
-    func fingerprint(operation: PatchOperation) -> String {
-        var components = [operation.type.rawValue, operation.path]
-        if let diff = operation.diff {
-            components.append(diff)
-        }
-        let joined = components.joined(separator: "\0")
-        // Simple hash — not cryptographic, just deduplication.
-        let data = Data(joined.utf8)
-        return data.base64EncodedString().prefix(32).description
+    func fingerprint(operation: PatchOperation, context: String? = nil) -> String {
+        // Encode component boundaries and hash the entire operation. A prefix of base64
+        // dropped nearly all diff content and let unrelated changes share approval.
+        let data = try! JSONEncoder().encode([operation.type.rawValue, operation.path, operation.diff, context])
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
     /// Check if an operation has been approved.
@@ -94,7 +91,7 @@ struct LocalWorkspacePatcher: Sendable {
     private let workspaceRoot: URL
 
     init(workspaceRoot: URL) {
-        self.workspaceRoot = workspaceRoot.standardizedFileURL
+        self.workspaceRoot = workspaceRoot.standardizedFileURL.resolvingSymlinksInPath()
     }
 
     /// Apply a patch operation to the local filesystem.
@@ -151,6 +148,7 @@ struct LocalWorkspacePatcher: Sendable {
         guard FileManager.default.fileExists(atPath: target.path) else {
             throw PatchToolError.fileNotFound(relativePath)
         }
+        try requireRegularFile(target, displayPath: relativePath)
 
         let original = try String(contentsOf: target, encoding: .utf8)
         let diff = operation.diff ?? ""
@@ -185,6 +183,7 @@ struct LocalWorkspacePatcher: Sendable {
         guard FileManager.default.fileExists(atPath: target.path) else {
             throw PatchToolError.fileNotFound(relativePath)
         }
+        try requireRegularFile(target, displayPath: relativePath)
 
         try FileManager.default.removeItem(at: target)
 
@@ -209,8 +208,12 @@ struct LocalWorkspacePatcher: Sendable {
             target = workspaceRoot.appendingPathComponent(expanded).standardizedFileURL
         }
 
-        // Security: verify the resolved path is within the workspace.
-        guard target.path.hasPrefix(workspaceRoot.path) else {
+        // Compare canonical path components: a textual prefix accepts sibling directories
+        // such as workspace-backup, and lexical paths miss symlinked parents.
+        let components = try canonicalTarget(target).pathComponents
+        let rootComponents = workspaceRoot.pathComponents
+        guard components.count > rootComponents.count,
+              components.starts(with: rootComponents) else {
             throw PatchToolError.outsideWorkspace(
                 path: path,
                 workspace: workspaceRoot.path
@@ -225,6 +228,36 @@ struct LocalWorkspacePatcher: Sendable {
         }
 
         return target
+    }
+
+    /// Foundation may leave every component unresolved when a descendant does not exist.
+    /// Resolve the nearest existing ancestor first, then reattach the missing suffix.
+    private func canonicalTarget(_ target: URL, remainingLinks: Int = 40) throws -> URL {
+        guard remainingLinks > 0 else {
+            throw PatchToolError.outsideWorkspace(path: target.path, workspace: workspaceRoot.path)
+        }
+        var ancestor = target
+        var missing: [String] = []
+        while ancestor.path != "/" {
+            if let destination = try? FileManager.default.destinationOfSymbolicLink(atPath: ancestor.path) {
+                let linkTarget = destination.hasPrefix("/")
+                    ? URL(fileURLWithPath: destination)
+                    : ancestor.deletingLastPathComponent().appendingPathComponent(destination)
+                let resolved = try canonicalTarget(linkTarget.standardizedFileURL, remainingLinks: remainingLinks - 1)
+                return missing.reversed().reduce(resolved) { $0.appendingPathComponent($1) }
+            }
+            if FileManager.default.fileExists(atPath: ancestor.path) { break }
+            missing.append(ancestor.lastPathComponent)
+            ancestor.deleteLastPathComponent()
+        }
+        let resolved = ancestor.resolvingSymlinksInPath()
+        return missing.reversed().reduce(resolved) { $0.appendingPathComponent($1) }
+    }
+
+    private func requireRegularFile(_ url: URL, displayPath: String) throws {
+        guard try url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else {
+            throw PatchToolError.notRegularFile(displayPath)
+        }
     }
 
     private func relativePath(_ url: URL) -> String {
@@ -421,6 +454,7 @@ struct RemotePatchCommandBuilder: Sendable {
 enum PatchToolError: LocalizedError, Sendable {
     case outsideWorkspace(path: String, workspace: String)
     case fileNotFound(String)
+    case notRegularFile(String)
     case invalidDiff(String)
     case approvalRequired(String)
     case remoteExecutionFailed(String)
@@ -431,6 +465,8 @@ enum PatchToolError: LocalizedError, Sendable {
             return "Path '\(path)' resolves outside the workspace '\(workspace)'"
         case .fileNotFound(let path):
             return "File not found: \(path)"
+        case .notRegularFile(let path):
+            return "Path is not a regular file: \(path)"
         case .invalidDiff(let reason):
             return "Invalid diff: \(reason)"
         case .approvalRequired(let description):
@@ -473,8 +509,9 @@ enum ApplyPatchToolDefinition {
 
                 "delete" — remove a file. No diff field needed.
 
-                Safer than execute_command because paths are sandboxed, anchors disambiguate
-                the right location, and writes are atomic.
+                Local paths are restricted to the session's working directory and writes
+                are atomic. Remote paths use the connected user's permissions and writes
+                replace file contents directly. Anchors help locate the change.
 
                 Protected remote files are retried with sudo, which may ask the user for a
                 password in the terminal; the call waits for them.

@@ -4,6 +4,10 @@ import XCTest
 
 @MainActor
 final class AIAgentServiceTests: XCTestCase {
+    private func isolatedDefaults() -> UserDefaults {
+        UserDefaults(suiteName: "AIAgentServicePolicyTests.\(UUID().uuidString)")!
+    }
+
     private func store(client: MockOpenRouterService) async throws -> OpenRouterModelStore {
         let suite = "OpenRouterAgentTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
@@ -27,7 +31,7 @@ final class AIAgentServiceTests: XCTestCase {
         let session = MockAgentSessionProvider()
         client.enqueue(toolCompletion("get_session_info", arguments: "{}"))
         client.enqueue(completion("Session healthy"))
-        let service = AIAgentService(openRouterClient: client, sessionProvider: session, modelStore: try await store(client: client))
+        let service = AIAgentService(openRouterClient: client, sessionProvider: session, modelStore: try await store(client: client), defaults: isolatedDefaults())
         let reply = try await service.generateReply(sessionID: session.sessionID, prompt: "status")
         XCTAssertEqual(reply.text, "Session healthy")
         XCTAssertEqual(reply.toolCallsExecuted, 1)
@@ -36,6 +40,42 @@ final class AIAgentServiceTests: XCTestCase {
         XCTAssertEqual(replay.first { $0.role == "assistant" }?.toolCalls?.first?.id, "call_1")
         XCTAssertEqual(replay.first { $0.role == "tool" }?.toolCallID, "call_1")
         XCTAssertTrue(replay.first { $0.role == "tool" }?.content?.contains("\"ok\":true") == true)
+    }
+
+    func testClearDuringAwaitedToolCannotRestoreTheOldConversation() async throws {
+        let client = MockOpenRouterService()
+        let session = MockAgentSessionProvider()
+        client.enqueue(toolCompletion("execute_and_wait", arguments: #"{"command":"uptime"}"#))
+        let service = AIAgentService(
+            openRouterClient: client, sessionProvider: session,
+            modelStore: try await store(client: client), maxToolIterations: 1, defaults: isolatedDefaults()
+        )
+        let conversationID = UUID()
+        var resumeCommand: CheckedContinuation<Void, Never>?
+        session.executeAndWaitGate = {
+            await withCheckedContinuation { resumeCommand = $0 }
+        }
+        let run = Task {
+            try await service.generateReply(
+                conversationID: conversationID, sessionID: session.sessionID,
+                prompt: "check uptime", broadcastSessionIDs: nil, streamHandler: nil
+            )
+        }
+        for _ in 0..<200 where resumeCommand == nil {
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        let continuation = try XCTUnwrap(resumeCommand)
+        XCTAssertNotNil(service.conversationContext.state(for: conversationID))
+        service.clearConversation(conversationID: conversationID)
+        continuation.resume()
+        do {
+            _ = try await run.value
+            XCTFail("A cleared run must end without another request")
+        } catch is CancellationError {
+            // The run was invalidated without relying on cancellation of its Task.
+        }
+        XCTAssertNil(service.conversationContext.state(for: conversationID))
+        XCTAssertEqual(client.requests.count, 1)
     }
 
     /// Skills load once per chat (Docs/NetworkCopilot.md Phase 5): a new file changes nothing
@@ -57,7 +97,7 @@ final class AIAgentServiceTests: XCTestCase {
         client.enqueue(completion("three"))
         let service = AIAgentService(
             openRouterClient: client, sessionProvider: session, modelStore: try await store(client: client),
-            skillLibrary: AISkillLibrary(bundledDirectory: nil, userDirectory: folder)
+            skillLibrary: AISkillLibrary(bundledDirectory: nil, userDirectory: folder), defaults: isolatedDefaults()
         )
         func systemPrompt(_ request: Int) -> String {
             client.requests[request].messages.first { $0.role == "system" }?.content ?? ""
@@ -82,7 +122,7 @@ final class AIAgentServiceTests: XCTestCase {
         first = .init(id: first.id, model: "test/one", choices: [.init(message: .init(role: "assistant", content: "The code is blue", reasoningDetails: [.object(["type": .string("reasoning.text"), "text": .string("private")])]), finishReason: "stop")], usage: nil)
         client.enqueue(first)
         client.enqueue(completion("blue"))
-        let service = AIAgentService(openRouterClient: client, sessionProvider: session, modelStore: modelStore)
+        let service = AIAgentService(openRouterClient: client, sessionProvider: session, modelStore: modelStore, defaults: isolatedDefaults())
         _ = try await service.generateReply(sessionID: session.sessionID, prompt: "Remember the code")
         try modelStore.select("test/two")
         _ = try await service.generateReply(sessionID: session.sessionID, prompt: "What is the code?")
@@ -99,7 +139,7 @@ final class AIAgentServiceTests: XCTestCase {
         client.enqueue(toolCompletion("get_session_info", arguments: "{}"))
         client.enqueue(completion("Local shell"))
         client.enqueue(completion("It is a local shell"))
-        let service = AIAgentService(openRouterClient: client, sessionProvider: session, modelStore: modelStore)
+        let service = AIAgentService(openRouterClient: client, sessionProvider: session, modelStore: modelStore, defaults: isolatedDefaults())
         _ = try await service.generateReply(sessionID: session.sessionID, prompt: "Inspect this session")
         try modelStore.select("test/two")
         _ = try await service.generateReply(sessionID: session.sessionID, prompt: "What did you inspect?")
@@ -114,7 +154,7 @@ final class AIAgentServiceTests: XCTestCase {
         let session = MockAgentSessionProvider()
         client.enqueue(toolCompletion("apply_patch", arguments: #"{"operation":"create","path":"/tmp/denied.txt","content":"blocked"}"#))
         client.enqueue(completion("Denied"))
-        let service = AIAgentService(openRouterClient: client, sessionProvider: session, modelStore: try await store(client: client))
+        let service = AIAgentService(openRouterClient: client, sessionProvider: session, modelStore: try await store(client: client), defaults: isolatedDefaults())
         service.patchApprovalCallback = { _, _ in (false, false) }
         _ = try await service.generateReply(sessionID: session.sessionID, prompt: "create a file")
         XCTAssertTrue(client.requests[1].messages.first { $0.role == "tool" }?.content?.contains("Patch denied by user") == true)
@@ -126,7 +166,7 @@ final class AIAgentServiceTests: XCTestCase {
         let session = MockAgentSessionProvider()
         let secondID = UUID()
         session.sessions.append(Session(id: secondID, kind: .local, hostLabel: "Second", username: "u", hostname: "localhost", port: 0, state: .connected))
-        let service = AIAgentService(openRouterClient: client, sessionProvider: session, modelStore: try await store(client: client))
+        let service = AIAgentService(openRouterClient: client, sessionProvider: session, modelStore: try await store(client: client), defaults: isolatedDefaults())
         client.enqueue(completion("first answer"))
         client.enqueue(completion("second answer"))
         client.enqueue(completion("new answer"))
@@ -143,7 +183,7 @@ final class AIAgentServiceTests: XCTestCase {
         let session = MockAgentSessionProvider()
         let secondID = UUID()
         session.sessions.append(Session(id: secondID, kind: .ssh(hostID: UUID()), hostLabel: "Testserv2", username: "kevin", hostname: "192.168.2.33", port: 22, state: .connected))
-        let service = AIAgentService(openRouterClient: client, sessionProvider: session, modelStore: try await store(client: client))
+        let service = AIAgentService(openRouterClient: client, sessionProvider: session, modelStore: try await store(client: client), defaults: isolatedDefaults())
         let chat = UUID()
         client.enqueue(completion("Noted: dedupe the clones"))
         client.enqueue(completion("You asked me to dedupe the clones"))
@@ -184,7 +224,7 @@ final class AIAgentServiceTests: XCTestCase {
             Session(id: third, kind: .ssh(hostID: UUID()), hostLabel: "Testserv3", username: "kevin", hostname: "192.168.2.19", port: 22, state: .connected),
             Session(id: closed, kind: .ssh(hostID: UUID()), hostLabel: "Testserv9", username: "kevin", hostname: "192.168.2.99", port: 22, state: .disconnected),
         ]
-        let service = AIAgentService(openRouterClient: client, sessionProvider: session, modelStore: try await store(client: client))
+        let service = AIAgentService(openRouterClient: client, sessionProvider: session, modelStore: try await store(client: client), defaults: isolatedDefaults())
         return Fleet(service: service, client: client, session: session, second: second, third: third, closed: closed)
     }
 
@@ -461,7 +501,7 @@ final class AIAgentServiceTests: XCTestCase {
             modelStore: try await store(client: openRouter),
             anthropicClient: claude,
             anthropicModelStore: AnthropicModelStore(client: claude, defaults: defaults),
-            providerSelection: selection
+            providerSelection: selection, defaults: defaults
         )
         return AnthropicStack(service: service, openRouter: openRouter, claude: claude, selection: selection, session: session)
     }
@@ -559,6 +599,7 @@ private final class MockAgentSessionProvider: AIAgentSessionProviding {
     var simulatedExecuteAndWaitExitCode: Int? = 0
     var simulatedExecuteAndWaitTimedOut: Bool = false
     var simulatedExecuteAndWaitResultsQueue: [CommandExecutionResult] = []
+    var executeAndWaitGate: (() async -> Void)?
     var cliCommands: [(UUID, String)] = []
     var simulatedCLIResult = CLICommandResult(output: "", status: .completed, finalPrompt: "router#")
 
@@ -619,6 +660,7 @@ private final class MockAgentSessionProvider: AIAgentSessionProviding {
     ) async -> CommandExecutionResult {
         sentCommands.append(command)
         commandSessions.append(sessionID)
+        await executeAndWaitGate?()
 
         if !simulatedExecuteAndWaitResultsQueue.isEmpty {
             return simulatedExecuteAndWaitResultsQueue.removeFirst()

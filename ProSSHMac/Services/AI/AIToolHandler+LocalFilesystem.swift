@@ -187,7 +187,7 @@ extension AIToolHandler {
                 .replacingOccurrences(of: "\r", with: "\n")
                 .split(separator: "\n", omittingEmptySubsequences: false)
             let safeStartLine = max(1, startLine)
-            let safeLineCount = max(1, min(200, lineCount))
+            let safeLineCount = max(1, min(500, lineCount))
             let startIndex = safeStartLine - 1
 
             if startIndex >= splitLines.count {
@@ -280,6 +280,9 @@ extension AIToolHandler {
         maxFileBytes: Int
     ) -> [LLMJSONValue]? {
         guard maxRemaining > 0 else { return nil }
+        // Check the size before mapping/reading: the search byte cap must bound I/O too.
+        guard let size = try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+              size <= maxFileBytes else { return nil }
         guard let data = try? Data(contentsOf: fileURL, options: [.mappedIfSafe]) else { return nil }
         guard data.count <= maxFileBytes else { return nil }
         if data.contains(0) { return nil }

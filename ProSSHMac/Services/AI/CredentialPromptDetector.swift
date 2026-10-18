@@ -37,6 +37,9 @@ nonisolated enum CredentialPromptDetector {
     private static let retryNotices: Set<String> = [
         "sorry, try again.",
         "permission denied, please try again.",
+        "% access denied",
+        "% bad secrets",
+        "% authentication failed",
     ]
 
     static func match(_ line: String) -> Match? {

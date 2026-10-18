@@ -10,6 +10,7 @@ extension AIToolHandler {
         var output: String
         var exitCode: Int?
         var timedOut: Bool
+        var declinedCredential: Bool
     }
 
     func searchFilesystemEntriesRemote(
@@ -19,6 +20,7 @@ extension AIToolHandler {
         namePattern: String,
         maxResults: Int
     ) async -> LLMJSONValue {
+        guard !Task.isCancelled else { return Self.cancelledToolObject() }
         let command = Self.buildRemoteFilesystemSearchCommand(
             path: path,
             namePattern: namePattern,
@@ -30,6 +32,10 @@ extension AIToolHandler {
             commandBody: command
         )
 
+        guard !Task.isCancelled else { return Self.cancelledToolObject() }
+        if execution.declinedCredential {
+            return Self.credentialDeclinedObject(label: Self.sessionLabel(sessionID, in: provider))
+        }
         if execution.timedOut {
             return AIToolDefinitions.errorObject("Remote filesystem search timed out.", hint: "Search a narrower path or lower max_results.")
         }
@@ -51,6 +57,7 @@ extension AIToolHandler {
         textPattern: String,
         maxResults: Int
     ) async -> LLMJSONValue {
+        guard !Task.isCancelled else { return Self.cancelledToolObject() }
         let command = Self.buildRemoteFileContentSearchCommand(
             path: path,
             textPattern: textPattern,
@@ -62,6 +69,10 @@ extension AIToolHandler {
             commandBody: command
         )
 
+        guard !Task.isCancelled else { return Self.cancelledToolObject() }
+        if execution.declinedCredential {
+            return Self.credentialDeclinedObject(label: Self.sessionLabel(sessionID, in: provider))
+        }
         if execution.timedOut {
             return AIToolDefinitions.errorObject("Remote file-content search timed out.", hint: "Search a narrower path or lower max_results.")
         }
@@ -83,19 +94,29 @@ extension AIToolHandler {
         startLine: Int,
         lineCount: Int
     ) async -> LLMJSONValue {
+        guard !Task.isCancelled else { return Self.cancelledToolObject() }
         // Use the same base64 read that apply_patch uses — immune to prompt contamination.
         let readCmd = RemotePatchCommandBuilder.buildReadCommand(path: path)
         let execution = await provider.executeCommandAndWait(
             sessionID: sessionID, command: readCmd, timeoutSeconds: 15
         )
 
+        guard !Task.isCancelled else { return Self.cancelledToolObject() }
+        if execution.declinedCredential {
+            return Self.credentialDeclinedObject(label: Self.sessionLabel(sessionID, in: provider))
+        }
         if execution.timedOut {
             return AIToolDefinitions.errorObject("Remote file read timed out.", hint: "Read fewer lines per call, or check the session with get_current_screen.")
         }
 
-        guard let fullContent = RemotePatchCommandBuilder.decodeBase64FileOutput(
-            execution.output
-        ) else {
+        let decoded: String?
+        if execution.exitCode == 0 {
+            decoded = execution.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "" : RemotePatchCommandBuilder.decodeBase64FileOutput(execution.output)
+        } else {
+            decoded = nil
+        }
+        guard let fullContent = decoded else {
             // Base64 decode failed — file might not exist or is binary.
             // Fall back to sed-based read which handles not-found/not-regular tokens.
             let endLine = startLine + lineCount - 1
@@ -105,8 +126,18 @@ extension AIToolHandler {
             let fallback = await executeRemoteToolCommand(
                 provider: provider, sessionID: sessionID, commandBody: command
             )
+            guard !Task.isCancelled else { return Self.cancelledToolObject() }
+            if fallback.declinedCredential {
+                return Self.credentialDeclinedObject(label: Self.sessionLabel(sessionID, in: provider))
+            }
             if fallback.timedOut {
                 return AIToolDefinitions.errorObject("Remote file read timed out.", hint: "Read fewer lines per call, or check the session with get_current_screen.")
+            }
+            guard fallback.exitCode == 0 else {
+                return AIToolDefinitions.errorObject(
+                    "Remote file read failed: \(Self.remoteOutputPreview(fallback.output))",
+                    hint: "Check the file path and permissions with execute_and_wait."
+                )
             }
             return Self.parseReadFileChunkOutput(
                 fallback.output, path: path, startLine: startLine,
@@ -140,6 +171,9 @@ extension AIToolHandler {
         commandBody: String,
         timeoutSeconds: TimeInterval = 20
     ) async -> RemoteToolExecutionResult {
+        guard !Task.isCancelled else {
+            return RemoteToolExecutionResult(output: "Tool call cancelled.", exitCode: nil, timedOut: false, declinedCredential: false)
+        }
         let result = await provider.executeCommandAndWait(
             sessionID: sessionID,
             command: commandBody,
@@ -148,7 +182,8 @@ extension AIToolHandler {
         return RemoteToolExecutionResult(
             output: result.output,
             exitCode: result.exitCode,
-            timedOut: result.timedOut
+            timedOut: result.timedOut,
+            declinedCredential: result.declinedCredential
         )
     }
 
@@ -341,9 +376,9 @@ extension AIToolHandler {
         if [ ! -e "$__prossh_root" ]; then printf '\(remotePathNotFoundToken)\\n'; \
         else __prossh_pattern=\(escapedPattern); \
         if command -v rg >/dev/null 2>&1; then \
-        rg --line-number --with-filename --ignore-case --color never --no-messages -- "$__prossh_pattern" "$__prossh_root" | head -n \(limit); \
+        rg --fixed-strings --line-number --with-filename --ignore-case --color never --no-messages -- "$__prossh_pattern" "$__prossh_root" | head -n \(limit); \
         else \
-        grep -RIn --binary-files=without-match -- "$__prossh_pattern" "$__prossh_root" 2>/dev/null | head -n \(limit); \
+        grep -RIniF --binary-files=without-match -- "$__prossh_pattern" "$__prossh_root" 2>/dev/null | head -n \(limit); \
         fi; fi
         """
     }

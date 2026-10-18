@@ -476,6 +476,74 @@ final class TerminalAIAssistantViewModelTests: XCTestCase {
         XCTAssertEqual(prompts.cancelCount, 0)
     }
 
+    func testStoppedStreamCannotChangeMessagesOrReasoningOfTheNextRun() async throws {
+        let service = SuspendedAgentService()
+        let viewModel = TerminalAIAssistantViewModel(agentService: service, streamChunkDelayNanoseconds: 0)
+        viewModel.draftPrompt = "first"
+        viewModel.submitPrompt(for: UUID())
+        try await waitUntil(timeout: 1) { service.requests.count == 1 }
+        service.requests[0].stream?(.assistantTextDelta("partial"))
+        try await waitUntil(timeout: 1) { viewModel.messages.last?.content == "partial" }
+        let firstAssistantID = try XCTUnwrap(viewModel.messages.last?.id)
+        viewModel.stop()
+        viewModel.draftPrompt = "second"
+        viewModel.submitPrompt(for: UUID())
+        try await waitUntil(timeout: 1) { service.requests.count == 2 }
+        service.requests[0].stream?(.assistantTextDelta(" stale"))
+        service.requests[0].stream?(.reasoningTextDelta("old reasoning"))
+        service.requests[0].continuation.resume(returning: AIAgentReply(text: "old final", toolCallsExecuted: 0))
+        service.requests[1].stream?(.reasoningTextDelta("new reasoning"))
+        try await waitUntil(timeout: 1) { viewModel.reasoningDetails.contains("new reasoning") }
+        XCTAssertEqual(viewModel.reasoningDetails, "new reasoning")
+        XCTAssertEqual(viewModel.messages.first { $0.id == firstAssistantID }?.content, "partial")
+        XCTAssertFalse(viewModel.messages.first { $0.id == firstAssistantID }?.isStreaming ?? true)
+        XCTAssertTrue(viewModel.isSending)
+        service.requests[1].continuation.resume(returning: AIAgentReply(text: "new final", toolCallsExecuted: 0))
+        try await waitUntilIdle(viewModel)
+        XCTAssertEqual(viewModel.messages.last?.content, "new final")
+    }
+
+    func testClearDiscardsLateReasoningFromThePreviousChat() async throws {
+        let service = SuspendedAgentService()
+        let viewModel = TerminalAIAssistantViewModel(agentService: service, streamChunkDelayNanoseconds: 0)
+        viewModel.draftPrompt = "first"
+        viewModel.submitPrompt(for: UUID())
+        try await waitUntil(timeout: 1) { service.requests.count == 1 }
+        viewModel.clearConversation()
+        service.requests[0].stream?(.reasoningSummaryDone("stale summary"))
+        service.requests[0].continuation.resume(returning: AIAgentReply(text: "stale reply", toolCallsExecuted: 0))
+        // Enqueue a second run behind the old stream callback on the main actor.
+        viewModel.draftPrompt = "second"
+        viewModel.submitPrompt(for: UUID())
+        try await waitUntil(timeout: 1) { service.requests.count == 2 }
+        XCTAssertTrue(viewModel.reasoningPanelText.isEmpty)
+        XCTAssertEqual(viewModel.messages.first?.content, "second")
+        service.requests[1].continuation.resume(returning: AIAgentReply(text: "fresh", toolCallsExecuted: 0))
+        try await waitUntilIdle(viewModel)
+    }
+
+    func testStopDuringFallbackAnimationKeepsTheNextRunActive() async throws {
+        let service = SuspendedAgentService()
+        let viewModel = TerminalAIAssistantViewModel(
+            agentService: service, streamChunkDelayNanoseconds: 30_000_000,
+            minChunkSize: 10, maxChunkSize: 10
+        )
+        viewModel.draftPrompt = "first"
+        viewModel.submitPrompt(for: UUID())
+        try await waitUntil(timeout: 1) { service.requests.count == 1 }
+        service.requests[0].continuation.resume(returning: AIAgentReply(text: String(repeating: "a", count: 1000), toolCallsExecuted: 0))
+        try await waitUntil(timeout: 1) { (viewModel.messages.last?.content.count ?? 0) == 10 }
+        let oldID = try XCTUnwrap(viewModel.messages.last?.id)
+        viewModel.stop()
+        viewModel.draftPrompt = "second"
+        viewModel.submitPrompt(for: UUID())
+        try await waitUntil(timeout: 1) { service.requests.count == 2 }
+        XCTAssertTrue(viewModel.isSending)
+        XCTAssertEqual(viewModel.messages.first { $0.id == oldID }?.content.count, 10)
+        service.requests[1].continuation.resume(returning: AIAgentReply(text: "done", toolCallsExecuted: 0))
+        try await waitUntilIdle(viewModel)
+    }
+
     private func makeViewModel(
         service: MockAgentService = MockAgentService(nextReply: AIAgentReply(text: "ok", toolCallsExecuted: 0)),
         credentialPrompts: FakeCredentialPrompts
@@ -538,6 +606,23 @@ private final class FakeCredentialPrompts: CredentialPromptHandling {
     func cancelCredentialPrompts() async {
         cancelCount += 1
         subject.send(nil)
+    }
+}
+
+@MainActor
+private final class SuspendedAgentService: AIAgentServicing {
+    struct Request {
+        let stream: (@Sendable (AIAgentStreamEvent) -> Void)?
+        let continuation: CheckedContinuation<AIAgentReply, Never>
+    }
+    var requests: [Request] = []
+    var toolDefinitions: [LLMToolDefinition] { [] }
+    func clearConversation(conversationID: UUID) {}
+    func generateReply(
+        conversationID: UUID, sessionID: UUID, prompt: String,
+        broadcastSessionIDs: [UUID]?, streamHandler: (@Sendable (AIAgentStreamEvent) -> Void)?
+    ) async throws -> AIAgentReply {
+        await withCheckedContinuation { requests.append(Request(stream: streamHandler, continuation: $0)) }
     }
 }
 

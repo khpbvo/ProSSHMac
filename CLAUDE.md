@@ -334,7 +334,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
   own key store, client, model store and settings view model (`AIKeySettingsViewModel` subclasses).
   See `Docs/Anthropic.md`.
   `OpenRouterModelStore` requires explicit selection and refreshes the tool-capable text-model catalog.
-  `AIConversationContext` stores per-session structured turns; a model switch drops reasoning blocks
+  `AIConversationContext` stores per-chat structured turns; a model switch drops reasoning blocks
   but keeps messages and tool history. `OpenRouterAPIKeyStore` owns the single Keychain entry.
   `Docs/multiprovider-architecture.md` is superseded historical context.
 - **AI reasoning panel**: `ReasoningStreamView` bridges a native `ReasoningStreamScrollView`;
@@ -382,7 +382,14 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
   `read_file_chunk`, `get_session_info`, and the `search_terminal_history` alias.
   Error format: `{ok:false, error, hint}`; the hint is required (`AIToolDefinitions.errorObject`).
   `AIToolContractTests` runs every exposed schema on valid minimal input: a new tool needs a case.
-- **Direct-action mode**: prompts starting `run `/`execute `/`cd ` filter to 8 tools and cap
+- **AI cancellation**: response IDs reject queued stream events after Stop/Clear; conversation
+  run IDs guard persistence after awaited tools. Clear invalidates memory; Stop keeps completed
+  tool/results. Side-effect loops and remote patch stages check cancellation before the next
+  action. Keep these checks when adding an await, tool or broadcast path.
+- **Local patch containment**: resolve the nearest existing ancestor before checking canonical
+  path components; resolving only a missing target can leave its symlinked parent unresolved.
+  Approval fingerprints hash the full operation plus target session and working directory.
+- **Direct-action mode**: prompts starting `run `/`execute `/`cd ` filter to 11 tools (10 with patch disabled, including `load_skill`) and cap
   iterations at `min(maxToolIterations, 15)` (`AIAgentRunner`). Default `maxToolIterations` is 50;
   `AppDependencies` constructs the service with **200**.
 - **`apply_patch` remote flow** (`AIToolHandler+RemotePatch`): base64 read → V4A in-process
@@ -541,8 +548,9 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
   split across PTY chunks. Don't inline the sentinel back into one string.
 
 ### Repo and docs
-- **AI test isolation**: agent and model-store tests use isolated defaults suites, mock OpenRouter
-  responses, and never read the developer's saved model or API key.
+- **AI test isolation**: agent, contract and model-store tests use isolated defaults suites
+  (`AIAgentService(defaults:)` includes patch policy), mock provider responses, and never read the
+  developer's saved model or API key.
 - **`Docs/bugs.md` file paths predate the refactors** (`Views/` → `UI/`, `SSH/` → `Services/SSH/`,
   `Services/Security/` → `Services/`; some files no longer exist). Resolve by basename before
   trusting an entry. Open/fixed counts are in its Summary table.
@@ -566,6 +574,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 | `Docs/Bug84.md` | One terminal renderer per session across tab switches and split changes (per-session model store) — **COMPLETE** (Phases 0–5); Phase 5 has the live memory numbers |
 | `Docs/bugs.md` | Bug and tech-debt register by subsystem/severity (counts in its Summary table); paths are pre-refactor |
 | `Docs/PhaseB.md` | Local Input V2 Phase B checklist (make byte-first local input the only path) — open |
+| `Docs/AIAgentOptimization.md` | AI audit/optimization plan and verification; links to the core, tool, execution and prompt/skill reports and reproducible function inventory |
 | `Docs/AIArchitecture.md` | Current AI assistant architecture for both providers (OpenRouter, Anthropic): settings, transcript, replay rules, logging, verification |
 | `docs/FutureFeatures.md` | Prioritized feature roadmap (competitive analysis) |
 | `docs/Optimization.md` | Performance bottleneck analysis, benchmark commands, current numbers |
@@ -593,6 +602,13 @@ and the session coordinators) has no spec file left; see `Docs/featurelist.md`.
 ---
 
 ## Next Session Plan
+
+**AI audit and optimization complete: `Docs/AIAgentOptimization.md`.** Primary plus three
+subagents traced 501 declarations in 48 files; 314 targeted tests and the Debug build pass.
+Reports hold remaining limitations: output pagination/full-file reads, remote atomicity and
+path semantics, tool-ID mapping, aggregate stream bounds, and unmeasured loading/polling costs.
+Keep run/response identities and cancellation gates when extending AI work. Live cost validation
+remains the next AI phase below; this source audit did not run a real model or change hosts.
 
 **Active work: `Docs/NetworkCopilot.md` Phase 7 (live validation and cost). Needs the user at
 the keyboard.** Use the four cloned Ubuntu VMs. Runs: the original de-duplication task end to

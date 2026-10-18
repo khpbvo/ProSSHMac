@@ -33,6 +33,7 @@ struct BroadcastContext: Sendable {
         for toolCall in toolCalls {
             let toolStart = DispatchTime.now().uptimeNanoseconds
             do {
+                try Task.checkCancellation()
                 let output = try await executeSingleToolCall(
                     sessionID: sessionID,
                     broadcastContext: broadcastContext,
@@ -45,11 +46,12 @@ struct BroadcastContext: Sendable {
                     "[\(traceID, privacy: .public)] tool_ok name=\(toolCall.name, privacy: .public) call_id=\(toolCall.id, privacy: .public) ms=\(toolMs) output_chars=\(output.count)"
                 )
             } catch {
-                let fallback = AIToolDefinitions.errorResult(error.localizedDescription, hint: Self.hint(for: error))
+                let message = error is CancellationError ? "Tool call cancelled." : error.localizedDescription
+                let fallback = AIToolDefinitions.errorResult(message, hint: Self.hint(for: error))
                 outputs.append(.init(callID: toolCall.id, output: fallback))
                 let toolMs = AIToolDefinitions.elapsedMillis(since: toolStart)
                 Self.logger.error(
-                    "[\(traceID, privacy: .public)] tool_failed name=\(toolCall.name, privacy: .public) call_id=\(toolCall.id, privacy: .public) ms=\(toolMs) error=\(error.localizedDescription, privacy: .public)"
+                    "[\(traceID, privacy: .public)] tool_failed name=\(toolCall.name, privacy: .public) call_id=\(toolCall.id, privacy: .public) ms=\(toolMs) error=\(error.localizedDescription, privacy: .private)"
                 )
             }
         }
@@ -63,6 +65,7 @@ struct BroadcastContext: Sendable {
         toolCall: LLMToolCall,
         skills: AISkillSet
     ) async throws -> String {
+        try Task.checkCancellation()
         let arguments = try Self.decodeArguments(
             toolName: toolCall.name,
             rawArguments: toolCall.arguments
@@ -73,7 +76,12 @@ struct BroadcastContext: Sendable {
         }
 
         // Any connected session can be targeted by id; anything else is refused before it runs.
-        if let target = Self.optionalString(key: "target_session", in: arguments), !target.isEmpty {
+        if let suppliedTarget = arguments["target_session"], suppliedTarget != .null {
+            guard case let .string(target) = suppliedTarget, !target.isEmpty else {
+                throw AIAgentServiceError.invalidToolArguments(
+                    toolName: toolCall.name, message: "target_session must be a connected session UUID or null"
+                )
+            }
             let isOpen = UUID(uuidString: target).map { id in
                 provider.sessions.contains { $0.id == id && $0.state == .connected }
             } ?? false
@@ -83,6 +91,18 @@ struct BroadcastContext: Sendable {
                     hint: "Call list_sessions for the ids of the open sessions."
                 )
             }
+        }
+
+        // Remote file helpers use the same POSIX shell wrapper as execute_and_wait.
+        // Refuse before sending any of that syntax to a router or appliance CLI.
+        if ["search_filesystem", "search_file_contents", "read_file_chunk", "read_files", "apply_patch"].contains(toolCall.name),
+           let target = resolveTargetSessions(arguments: arguments, primarySessionID: sessionID, broadcastContext: broadcastContext).first,
+           provider.sessions.first(where: { $0.id == target })?.isLocal == false,
+           !deviceCLITargets([target], provider: provider).isEmpty {
+            return AIToolDefinitions.errorResult(
+                "File tools need a POSIX shell; this session is at a device CLI prompt. Nothing was run.",
+                hint: "Use run_cli_command to inspect or configure the device."
+            )
         }
 
         switch toolCall.name {
@@ -425,16 +445,18 @@ struct BroadcastContext: Sendable {
             results.reserveCapacity(capped.count)
 
             for fileEntry in capped {
+                try Task.checkCancellation()
                 guard case let .object(fileDict) = fileEntry,
                       case let .string(path)? = fileDict["path"],
-                      case let .number(startNum)? = fileDict["start_line"],
-                      case let .number(countNum)? = fileDict["line_count"] else {
+                      !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      let start = Self.optionalInt(key: "start_line", in: fileDict),
+                      let count = Self.optionalInt(key: "line_count", in: fileDict) else {
                     results.append(AIToolDefinitions.errorObject("Invalid file entry — requires path, start_line, line_count.", hint: "Give each files entry path, start_line and line_count."))
                     continue
                 }
 
-                let startLine = Self.clamp(Int(startNum.rounded()), min: 1, max: 2_000_000_000)
-                let lineCount = Self.clamp(Int(countNum.rounded()), min: 1, max: 500)
+                let startLine = Self.clamp(start, min: 1, max: 2_000_000_000)
+                let lineCount = Self.clamp(count, min: 1, max: 500)
 
                 let result: LLMJSONValue
                 if session.isLocal {
@@ -482,6 +504,7 @@ struct BroadcastContext: Sendable {
                 broadcastContext: broadcastContext
             )
             for target in targets {
+                try Task.checkCancellation()
                 await provider.sendShellInput(
                     sessionID: target,
                     input: command,
@@ -535,6 +558,7 @@ struct BroadcastContext: Sendable {
             }
 
             if targets.count <= 1 {
+                try Task.checkCancellation()
                 let target = targets.first ?? sessionID
                 let result = await provider.executeCommandAndWait(
                     sessionID: target,
@@ -571,6 +595,7 @@ struct BroadcastContext: Sendable {
                 // Sequential execution across broadcast sessions (MainActor-safe)
                 var collected: [(UUID, CommandExecutionResult)] = []
                 for target in targets {
+                    try Task.checkCancellation()
                     let r = await provider.executeCommandAndWait(
                         sessionID: target,
                         command: command,
@@ -644,7 +669,9 @@ struct BroadcastContext: Sendable {
         case "apply_patch":
             let operationType = try Self.requiredString(key: "operation", in: arguments, toolName: toolCall.name)
             let path = try Self.requiredString(key: "path", in: arguments, toolName: toolCall.name)
-            let diff = Self.optionalString(key: "diff", in: arguments)
+            // Whitespace is file content, including the final added line's indentation.
+            let diff: String?
+            if case let .string(value)? = arguments["diff"] { diff = value } else { diff = nil }
 
             guard let opType = PatchOperation.OperationType(rawValue: operationType) else {
                 throw AIAgentServiceError.invalidToolArguments(
@@ -678,11 +705,15 @@ struct BroadcastContext: Sendable {
 
             // Approval gate
             if let svc = service, svc.patchApprovalRequired {
-                let fingerprint = svc.patchApprovalTracker.fingerprint(operation: operation)
+                let fingerprint = svc.patchApprovalTracker.fingerprint(
+                    operation: operation,
+                    context: resolvedID.uuidString + "\0" + (provider.workingDirectoryBySessionID[resolvedID] ?? "")
+                )
                 if !svc.patchApprovalTracker.isApproved(fingerprint) {
                     let (approved, remember) = await svc.requestPatchApproval(
                         operation: operation, fingerprint: fingerprint
                     )
+                    try Task.checkCancellation()
                     if !approved {
                         Self.logger.info("patch_denied path=\(path, privacy: .public)")
                         return AIToolDefinitions.errorResult(
@@ -695,6 +726,7 @@ struct BroadcastContext: Sendable {
             }
 
             // Execute
+            try Task.checkCancellation()
             var result: PatchResult
             var waitedForCredential = false
             if session.isLocal {
@@ -704,6 +736,7 @@ struct BroadcastContext: Sendable {
                 result = try patcher.apply(operation)
             } else {
                 let outcome = await applyRemotePatch(operation, sessionID: resolvedID, provider: provider)
+                try Task.checkCancellation()
                 if outcome.declinedCredential {
                     Self.logger.info("patch_declined_password path=\(path, privacy: .public)")
                     return Self.credentialDeclinedResult(label: session.hostLabel)
@@ -757,6 +790,7 @@ struct BroadcastContext: Sendable {
 
     /// What the model can do about an error thrown while running a tool.
     static func hint(for error: Error) -> String {
+        if error is CancellationError { return "Wait for the user's next instruction before running more tools." }
         switch error as? AIAgentServiceError {
         case let .invalidToolArguments(toolName, _)?:
             return "Fix the arguments to match the \(toolName) schema and call it again."

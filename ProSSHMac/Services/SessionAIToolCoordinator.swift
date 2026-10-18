@@ -84,7 +84,11 @@ struct CredentialWait: Equatable, Sendable {
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 pending.continuation = continuation
-                startTimeout(for: pending, sessionID: sessionID)
+                // A slow send can already have reached a password prompt, or even completed.
+                if pendingCommands[sessionID] === pending,
+                   awaitingCredential[sessionID]?.phase != .waiting {
+                    startTimeout(for: pending, sessionID: sessionID)
+                }
             }
         } onCancel: {
             Task { @MainActor [weak self] in
@@ -469,7 +473,8 @@ struct CredentialWait: Equatable, Sendable {
         guard pendingCommands[sessionID] === pending else { return }
         let line = pending.cursorLine
         guard let match = CredentialPromptDetector.match(line) else {
-            if awaitingCredential[sessionID]?.phase == .verifying, !line.isEmpty {
+            if awaitingCredential[sessionID]?.phase == .verifying, !line.isEmpty,
+               !CredentialPromptDetector.isRetryNotice(line) {
                 awaitingCredential.removeValue(forKey: sessionID)
             }
             return

@@ -27,13 +27,27 @@ struct AIConversationState: Sendable, Equatable {
         contextLength: Int,
         size: ([AITranscriptMessage]) -> Int
     ) throws -> [AITranscriptMessage] {
-        let turnCount = turns.count
-        var history = try fittedHistory(currentTurn: currentTurn, contextLength: contextLength, size: size)
-        let trimmed = turns.count < turnCount
         let prefixChanged = prefixFingerprint != nil
             && lastPrefixFingerprint != nil
             && prefixFingerprint != lastPrefixFingerprint
-        if trimmed || prefixChanged {
+        // A changed prefix invalidates thinking before measuring the request. Otherwise an
+        // unusable large thinking block can discard valid history or reject the turn entirely.
+        if prefixChanged {
+            turns = turns.map { $0.map(Self.removingAnthropicThinking) }
+            currentTurn = currentTurn.map(Self.removingAnthropicThinking)
+        }
+        let turnCount = turns.count
+        // Removing the first old turn also invalidates thinking in the current tool loop.
+        // Strip it before fitting the remainder, so stale signatures cannot exhaust the budget.
+        if !turns.isEmpty,
+           size(turns.flatMap { $0 } + currentTurn) > Int(Double(max(1, contextLength)) * 1.4) {
+            turns.removeFirst()
+            turns = turns.map { $0.map(Self.removingAnthropicThinking) }
+            currentTurn = currentTurn.map(Self.removingAnthropicThinking)
+        }
+        var history = try fittedHistory(currentTurn: currentTurn, contextLength: contextLength, size: size)
+        let trimmed = turns.count < turnCount
+        if trimmed {
             turns = turns.map { $0.map(Self.removingAnthropicThinking) }
             currentTurn = currentTurn.map(Self.removingAnthropicThinking)
             history = turns.flatMap { $0 } + currentTurn
@@ -85,6 +99,29 @@ struct AIConversationState: Sendable, Equatable {
 /// Conversation state per chat (conversation id), not per terminal session.
 @MainActor final class AIConversationContext {
     private(set) var stateByConversationID: [UUID: AIConversationState] = [:]
+    private var activeRuns: [UUID: UUID] = [:]
+
+    /// A cleared or superseded run may finish an awaited tool, but cannot restore old memory.
+    func beginRun(for conversationID: UUID) -> UUID {
+        let runID = UUID()
+        activeRuns[conversationID] = runID
+        return runID
+    }
+
+    func isCurrentRun(_ runID: UUID, for conversationID: UUID) -> Bool {
+        activeRuns[conversationID] == runID
+    }
+
+    func finishRun(_ runID: UUID, for conversationID: UUID) {
+        if isCurrentRun(runID, for: conversationID) {
+            activeRuns.removeValue(forKey: conversationID)
+        }
+    }
+
+    func update(state: AIConversationState, for conversationID: UUID, runID: UUID) {
+        guard isCurrentRun(runID, for: conversationID) else { return }
+        stateByConversationID[conversationID] = state
+    }
 
     func state(for conversationID: UUID) -> AIConversationState? {
         stateByConversationID[conversationID]
@@ -95,6 +132,7 @@ struct AIConversationState: Sendable, Equatable {
     }
 
     func clear(conversationID: UUID) {
+        activeRuns.removeValue(forKey: conversationID)
         stateByConversationID.removeValue(forKey: conversationID)
     }
 }

@@ -19,6 +19,7 @@ final class DeviceCLITests: XCTestCase {
             "kevin@r1>", "kevin@r1#",       // Junos
             "[admin@MikroTik] >", "[admin@MikroTik] /ip/address>",  // RouterOS
             "leaf1(config)#",               // EOS
+            "firewall #", "firewall (root) #",  // FortiOS includes a space before #
         ] {
             XCTAssertEqual(DeviceCLIPrompt.classify(prompt), .deviceCLI, prompt)
         }
@@ -71,6 +72,27 @@ final class DeviceCLITests: XCTestCase {
         var capture = DeviceCLICapture(command: "show run", startPrompt: "testserv-02#")
         capture.ingest(Array("show run\r\n!\r\ninterface lo\r\n ip address 10.255.255.2/32 >".utf8))
         XCTAssertEqual(capture.poll(idleFor: .seconds(1)), .wait)
+    }
+
+    func testMatchingPrefixAndPercentOutputDoNotComplete() {
+        for tail in ["Router2#", "Router utilization 90%", "Router configuration>"] {
+            var capture = DeviceCLICapture(command: "show run", startPrompt: "Router#")
+            capture.ingest(Array(("show run\r\n" + tail).utf8))
+            XCTAssertEqual(capture.poll(idleFor: .seconds(1)), .wait, tail)
+        }
+    }
+
+    func testStructuredDevicePromptSuffixesRemainSupported() {
+        for (initial, final) in [
+            ("Router#", "Router(config-if)#"),
+            ("firewall #", "firewall (root) #"),
+            ("[admin@MikroTik] >", "[admin@MikroTik] (SAFE) /ip/address>"),
+            ("A:router#", "A:router[/configure]#"),
+        ] {
+            var capture = DeviceCLICapture(command: "command", startPrompt: initial)
+            capture.ingest(Array(("command\r\n" + final).utf8))
+            XCTAssertEqual(capture.poll(idleFor: .seconds(1)), .complete, final)
+        }
     }
 
     func testPagerIsAdvancedOncePerPageAndErased() {

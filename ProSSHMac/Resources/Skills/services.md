@@ -48,8 +48,10 @@ Prefer `reload` over `restart` where the daemon supports it; it keeps connection
   expiry).
 
 ## Survives a restart
-- Restart the unit once and repeat the checks above. A change that only works until the next
-  restart is not done.
+- If the management path depends on this service (SSH, VPN, routing or authentication), load
+  access-safety and prepare a tested rollback before restarting it.
+- Restart the unit once when safe and repeat the checks above. If it must be deferred,
+  report restart persistence as unverified in the handover.
 - After package upgrades: services restarted onto the new libraries (`needrestart -b` lists
   them where installed).
 

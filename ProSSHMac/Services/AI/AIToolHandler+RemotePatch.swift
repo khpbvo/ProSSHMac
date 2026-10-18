@@ -37,6 +37,7 @@ extension AIToolHandler {
             )
             outcome.waitedForCredential = outcome.waitedForCredential || step.waitedForCredential
             outcome.declinedCredential = step.result.declinedCredential
+            if Task.isCancelled { outcome.result = Self.failedPatch("Tool call cancelled; no further patch commands were sent.") }
             return step
         }
 
@@ -44,8 +45,19 @@ extension AIToolHandler {
         case .update:
             let diff = operation.diff ?? ""
             let read = await run(timeout: 10) { RemotePatchCommandBuilder.buildReadCommand(path: path, useSudo: $0) }
-            if outcome.declinedCredential { return outcome }
-            guard let original = RemotePatchCommandBuilder.decodeBase64FileOutput(read.result.output) else {
+            if outcome.declinedCredential || Task.isCancelled { return outcome }
+            // Partial base64 can decode successfully after a timeout or a failed read.
+            // Never build a replacement from an incomplete source file.
+            guard !read.result.timedOut, read.result.exitCode == 0 else {
+                outcome.result = Self.failedPatch(Self.buildPatchFailureMessage(
+                    prefix: read.result.timedOut ? "Read timed out; nothing was written" : "Read failed; nothing was written",
+                    rawOutput: read.result.output
+                ))
+                return outcome
+            }
+            let decoded = read.result.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "" : RemotePatchCommandBuilder.decodeBase64FileOutput(read.result.output)
+            guard let original = decoded else {
                 outcome.result = Self.failedPatch(
                     read.usedSudo
                         ? Self.buildPatchFailureMessage(prefix: "Sudo read failed", rawOutput: read.result.output)
@@ -70,8 +82,8 @@ extension AIToolHandler {
             let write = await run(sudoFirst: read.usedSudo, timeout: 20) {
                 RemotePatchCommandBuilder.buildWriteCommand(path: path, content: patched, useSudo: $0)
             }
-            if outcome.declinedCredential { return outcome }
-            outcome.result = write.result.exitCode == 0
+            if outcome.declinedCredential || Task.isCancelled { return outcome }
+            outcome.result = !write.result.timedOut && write.result.exitCode == 0
                 ? PatchResult(
                     success: true,
                     output: "Updated \(path) (\(linesChanged) lines changed\(write.usedSudo ? ", using sudo" : ""))",
@@ -97,8 +109,8 @@ extension AIToolHandler {
             let write = await run(timeout: 20) {
                 RemotePatchCommandBuilder.buildWriteCommand(path: path, content: content, useSudo: $0)
             }
-            if outcome.declinedCredential { return outcome }
-            outcome.result = write.result.exitCode == 0
+            if outcome.declinedCredential || Task.isCancelled { return outcome }
+            outcome.result = !write.result.timedOut && write.result.exitCode == 0
                 ? PatchResult(
                     success: true,
                     output: "Created \(path) (\(lineCount) lines\(write.usedSudo ? ", using sudo" : ""))",
@@ -114,8 +126,8 @@ extension AIToolHandler {
 
         case .delete:
             let delete = await run(timeout: 15) { RemotePatchCommandBuilder.buildDeleteCommand(path: path, useSudo: $0) }
-            if outcome.declinedCredential { return outcome }
-            if delete.result.exitCode == 0 {
+            if outcome.declinedCredential || Task.isCancelled { return outcome }
+            if !delete.result.timedOut && delete.result.exitCode == 0 {
                 let parsed = RemotePatchCommandBuilder.parseResult(delete.result.output, operation: operation)
                 outcome.result = parsed.success && delete.usedSudo
                     ? PatchResult(success: true, output: "Deleted \(path) (using sudo)", linesChanged: 0, warnings: [])
@@ -142,10 +154,16 @@ extension AIToolHandler {
         sudoFirst: Bool,
         command: (Bool) -> String
     ) async -> RemotePatchStep {
+        guard !Task.isCancelled else {
+            return RemotePatchStep(
+                result: CommandExecutionResult(output: "Tool call cancelled.", exitCode: nil, timedOut: false, blockID: nil),
+                usedSudo: sudoFirst, waitedForCredential: false
+            )
+        }
         let first = await provider.executeCommandAndWait(
             sessionID: sessionID, command: command(sudoFirst), timeoutSeconds: timeoutSeconds
         )
-        guard !sudoFirst, !first.declinedCredential, !first.timedOut, first.exitCode != 0,
+        guard !Task.isCancelled, !sudoFirst, !first.declinedCredential, !first.timedOut, first.exitCode != 0,
               Self.isPermissionDeniedPatchOutput(Self.trimmedPatchOutput(first.output)) else {
             return RemotePatchStep(result: first, usedSudo: sudoFirst, waitedForCredential: first.waitedForCredential)
         }

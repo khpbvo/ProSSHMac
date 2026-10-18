@@ -33,6 +33,8 @@ The body: steps, checklists, tables.
 - `description`: one line, at most 200 characters (built-in skills keep to 120). It is sent
   with every request, so say *when* to use the skill, not what is in it.
 - `platforms` (optional): `[a, b]` or `a, b`. Returned with the skill; it does not hide it.
+- Front matter uses one unindented `key: value` per line, with no repeated keys or multiline
+  values. A colon inside a description is fine.
 - Body: anything Markdown. Built-in skills stay under 80 lines and hold procedures and
   checklists only; rules ("never", "always") live in the system prompt so nothing can conflict.
 

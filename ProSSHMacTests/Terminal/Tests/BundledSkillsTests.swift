@@ -49,8 +49,13 @@ final class BundledSkillsTests: XCTestCase {
     func testCrossReferencesNameRealSkills() {
         let names = Set(Self.expectedNames)
         for skill in bundled.skills {
-            for match in skill.body.matches(of: /load ([a-z]+(?:-[a-z]+)+)/) {
+            // Include capitalized "Load" and single-word skills, including both names in
+            // "load routing or services". The previous expression skipped these references.
+            for match in skill.body.lowercased().matches(of: /\bload ([a-z][a-z0-9-]*)(?: or ([a-z][a-z0-9-]*))?/) {
                 XCTAssertTrue(names.contains(String(match.1)), "\(skill.name) refers to \(match.1)")
+                if let second = match.2 {
+                    XCTAssertTrue(names.contains(String(second)), "\(skill.name) refers to \(second)")
+                }
             }
         }
     }

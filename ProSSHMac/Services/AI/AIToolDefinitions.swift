@@ -118,7 +118,7 @@ enum AIToolDefinitions {
             ),
             LLMToolDefinition(
                 name: "search_file_contents",
-                description: "Search for text inside files under a directory tree. Works on both local and remote sessions. Uses ripgrep (rg) if available, falls back to grep. Returns matching lines grouped by file with line numbers.",
+                description: "Search for case-insensitive literal text inside files under a directory tree, locally or over SSH. Returns matching lines grouped by file with line numbers.",
                 parameters: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -128,7 +128,7 @@ enum AIToolDefinitions {
                         ]),
                         "text_pattern": .object([
                             "type": .string("string"),
-                            "description": .string("Text pattern to find in files."),
+                            "description": .string("Literal text to find in files (case-insensitive; not a regular expression)."),
                         ]),
                         "max_results": .object([
                             "type": .string("integer"),
@@ -200,7 +200,7 @@ enum AIToolDefinitions {
             ),
             LLMToolDefinition(
                 name: "execute_command",
-                description: "Execute a shell command in the terminal (fire-and-forget). The command is sent to the shell but this tool does NOT wait for output — it returns immediately with status 'queued'. Use get_current_screen or get_command_output afterward to see results. Best for: interactive programs (vim, top, nano), long-running tasks, or when you just need to send input. For one-shot commands where you need the output, prefer execute_and_wait instead.",
+                description: "Execute a command at a POSIX shell prompt without waiting; returns status 'queued'. Use for interactive programs (vim, top, nano) or long-running tasks, then get_current_screen or get_command_output to inspect results. For one-shot commands prefer execute_and_wait; for input to an already running program use send_input.",
                 parameters: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -275,7 +275,7 @@ enum AIToolDefinitions {
         let allowedNames: Set<String> = [
             "execute_command", "execute_and_wait", "get_current_screen",
             "get_recent_commands", "get_command_output", "read_files",
-            "apply_patch", "send_input", "list_sessions", "run_cli_command",
+            "apply_patch", "send_input", "list_sessions", "run_cli_command", "load_skill",
         ]
         let filtered = tools.filter { allowedNames.contains($0.name) }
         return filtered.isEmpty ? tools : filtered
@@ -303,7 +303,7 @@ enum AIToolDefinitions {
         encoder.outputFormatting = [.sortedKeys]
         guard let data = try? encoder.encode(value),
               let string = String(data: data, encoding: .utf8) else {
-            return #"{"ok":false,"error":"failed_to_encode_tool_output"}"#
+            return #"{"ok":false,"error":"failed_to_encode_tool_output","hint":"The tool returned invalid JSON values; use another tool to inspect the result."}"#
         }
         return string
     }

@@ -39,7 +39,13 @@ import os.log
 
         // Snapshot the provider and model so a Settings change cannot split one tool loop
         // across two models. The next user turn may continue with the new selection.
+        let runID = service.conversationContext.beginRun(for: conversationID)
+        defer { service.conversationContext.finishRun(runID, for: conversationID) }
         let activeModel = try await service.activeModel()
+        try Task.checkCancellation()
+        guard service.conversationContext.isCurrentRun(runID, for: conversationID) else {
+            throw CancellationError()
+        }
         let provider = activeModel.provider
         let modelID = activeModel.modelID
         let directActionMode = AIToolDefinitions.isDirectActionPrompt(trimmedPrompt)
@@ -68,7 +74,7 @@ import os.log
         let skills = conversationState.skills ?? AISkillSet()
         if service.persistConversationContext,
            skillsLoaded || (priorModelID != nil && priorModelID != modelID) {
-            service.conversationContext.update(state: conversationState, for: conversationID)
+            service.conversationContext.update(state: conversationState, for: conversationID, runID: runID)
         }
 
         let screenLines = service.sessionProvider.shellBuffers[sessionID] ?? []
@@ -101,6 +107,10 @@ import os.log
         var totalToolCalls = 0
 
         for iteration in 1...iterationLimit {
+            try Task.checkCancellation()
+            guard service.conversationContext.isCurrentRun(runID, for: conversationID) else {
+                throw CancellationError()
+            }
             let iterationStart = DispatchTime.now().uptimeNanoseconds
             let messages = try conversationState.requestHistory(
                 currentTurn: &currentTurn,
@@ -124,6 +134,9 @@ import os.log
                 }
             }
             try Task.checkCancellation()
+            guard service.conversationContext.isCurrentRun(runID, for: conversationID) else {
+                throw CancellationError()
+            }
             let responseMs = AIToolDefinitions.elapsedMillis(since: iterationStart)
             currentTurn.append(.assistant(assistantTurn))
             let toolCalls = assistantTurn.toolCalls
@@ -134,7 +147,7 @@ import os.log
             guard !toolCalls.isEmpty else {
                 conversationState.appendTurn(currentTurn)
                 if service.persistConversationContext {
-                    service.conversationContext.update(state: conversationState, for: conversationID)
+                    service.conversationContext.update(state: conversationState, for: conversationID, runID: runID)
                 }
                 let totalMs = AIToolDefinitions.elapsedMillis(since: turnStart)
                 Self.logger.info(
@@ -159,9 +172,12 @@ import os.log
             if service.persistConversationContext {
                 var persisted = conversationState
                 persisted.appendTurn(currentTurn)
-                service.conversationContext.update(state: persisted, for: conversationID)
+                service.conversationContext.update(state: persisted, for: conversationID, runID: runID)
             }
             try Task.checkCancellation()
+            guard service.conversationContext.isCurrentRun(runID, for: conversationID) else {
+                throw CancellationError()
+            }
             let toolMs = AIToolDefinitions.elapsedMillis(since: toolStart)
             Self.logger.debug(
                 "[\(traceID, privacy: .public)] iteration_tools i=\(iteration) tool_calls=\(toolCalls.count) tool_ms=\(toolMs)"

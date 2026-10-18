@@ -464,8 +464,9 @@ final class ShellIntegrationTests: XCTestCase {
         let pattern = try XCTUnwrap(ShellIntegrationScripts.vendorPromptPattern(for: .fortinetFortiOS))
         let regex = try NSRegularExpression(pattern: pattern)
 
-        let positives = ["FortiGate-60F#", "FortiGate-60F (global)#", "my-firewall#"]
-        let negatives = ["FortiGate-60F", "(global)#"]
+        let positives = ["FortiGate-60F#", "FortiGate-60F (global)#", "my-firewall#",
+                         "FortiGate-60F #", "FortiGate-60F (global) #", "firewall (root) #"]
+        let negatives = ["FortiGate-60F", "(global)#", "firewall configuration #", "firewall configuration>"]
 
         for prompt in positives {
             let range = NSRange(prompt.startIndex..., in: prompt)

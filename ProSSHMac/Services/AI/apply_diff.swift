@@ -229,8 +229,14 @@ private func v4aParseUpdateDiff(lines: [String], input: String) throws -> V4APar
         }
 
         // Non-empty anchor: advance cursor to the anchor line in the input
-        if !anchor.trimmingCharacters(in: .whitespaces).isEmpty {
-            cursor = v4aAdvanceCursorToAnchor(
+        // Older callers sent unified numeric headers here; those are location metadata,
+        // not literal source anchors. Keep their existing context-based compatibility.
+        let numericHeader = anchor.range(
+            of: #"^-[0-9]+(?:,[0-9]+)? \+[0-9]+(?:,[0-9]+)? @@(?:.*)?$"#,
+            options: .regularExpression
+        ) != nil
+        if !anchor.trimmingCharacters(in: .whitespaces).isEmpty && !numericHeader {
+            cursor = try v4aAdvanceCursorToAnchor(
                 anchor: anchor,
                 inputLines: inputLines,
                 cursor: cursor,
@@ -277,7 +283,7 @@ private func v4aAdvanceCursorToAnchor(
     inputLines: [String],
     cursor: Int,
     parser: V4AParserState
-) -> Int {
+) throws -> Int {
     var cursor = cursor
 
     // Pass 1: exact-string match
@@ -303,9 +309,12 @@ private func v4aAdvanceCursorToAnchor(
             if inputLines[i].trimmingCharacters(in: .whitespaces) == anchorStripped {
                 cursor = i + 1
                 parser.fuzz += 1
-                break
+                return cursor
             }
         }
+        // An absent anchor previously fell back to cursor, so a pure insertion
+        // could silently land at the start of the wrong section or file.
+        throw V4ADiffError.invalidContext(cursor: cursor, context: anchor)
     }
 
     return cursor

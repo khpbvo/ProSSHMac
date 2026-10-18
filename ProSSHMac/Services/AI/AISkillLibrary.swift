@@ -51,6 +51,8 @@ nonisolated struct AISkillLibrary: Sendable {
         case missingField(String)
         case invalidName(String)
         case invalidDescription
+        case invalidFrontMatter
+        case duplicateField(String)
         case emptyBody
 
         var errorDescription: String? {
@@ -59,6 +61,8 @@ nonisolated struct AISkillLibrary: Sendable {
             case let .missingField(field): "front matter has no \(field)"
             case let .invalidName(name): "name '\(name)' must be lowercase letters, digits and hyphens"
             case .invalidDescription: "description must be one line of at most \(AISkillLibrary.maxDescriptionLength) characters"
+            case .invalidFrontMatter: "front matter must use one unindented key: value per line"
+            case let .duplicateField(field): "front matter repeats \(field)"
             case .emptyBody: "the skill has no body"
             }
         }
@@ -134,20 +138,23 @@ nonisolated struct AISkillLibrary: Sendable {
 
         var fields: [String: String] = [:]
         for line in lines[..<end] {
-            guard let colon = line.firstIndex(of: ":") else { continue }
+            guard !line.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
+            guard line.first?.isWhitespace == false,
+                  let colon = line.firstIndex(of: ":") else { throw ParseError.invalidFrontMatter }
             let key = line[..<colon].trimmingCharacters(in: .whitespaces).lowercased()
+            guard !key.isEmpty else { throw ParseError.invalidFrontMatter }
+            guard fields[key] == nil else { throw ParseError.duplicateField(key) }
             fields[key] = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
         }
 
         guard let name = fields["name"], !name.isEmpty else { throw ParseError.missingField("name") }
         guard name.allSatisfy({ ("a"..."z").contains($0) || ("0"..."9").contains($0) || $0 == "-" }),
               name.first != "-" else { throw ParseError.invalidName(name) }
-        // A description continued on the next line would leave that line without a key.
         guard let description = fields["description"], !description.isEmpty else {
             throw ParseError.missingField("description")
         }
         guard description.count <= maxDescriptionLength,
-              lines[..<end].allSatisfy({ $0.trimmingCharacters(in: .whitespaces).isEmpty || $0.contains(":") }) else {
+              description.rangeOfCharacter(from: .newlines) == nil else {
             throw ParseError.invalidDescription
         }
 

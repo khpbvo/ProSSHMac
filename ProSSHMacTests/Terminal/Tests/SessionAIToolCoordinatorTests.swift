@@ -536,6 +536,68 @@ final class SessionAIToolCoordinatorTests: XCTestCase {
 
     // MARK: - Secret entry (Docs/CredentialPrompt.md Phase 1)
 
+    func testCredentialPauseDuringSendDoesNotStartANewTimeout() async throws {
+        let (manager, sessionID, spy) = try await makeConnectedSessionWithSpy()
+        var releaseSend = false
+        spy.beforeStringSendReturns = { [self] payload in
+            let marker = try token(from: payload)
+            feed("\u{1B}]7777;PSB;\(marker)\u{07}Password: ", manager, sessionID)
+            try await waitUntil { releaseSend }
+        }
+        let (execution, marker) = try await startCommand("sudo whoami", on: manager, sessionID: sessionID, spy: spy, timeout: 0.15)
+        try await waitUntil { manager.credentialPrompt != nil }
+        releaseSend = true
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertNotNil(manager.credentialPrompt, "Registering the continuation after send must preserve the pause")
+        manager.aiToolCoordinator.completeToolCommand(sessionID: sessionID, token: marker, exitCode: 0)
+        let result = await execution.value
+        XCTAssertFalse(result.timedOut)
+    }
+
+    func testPasswordIsNotRecordedWhenCompletionOccursDuringSend() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("SecretSend.\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let recorder = SessionRecorder(recordingsDirectoryURL: directory)
+        let (manager, sessionID, spy) = try await makeConnectedSessionWithSpy(sessionRecorder: recorder)
+        await manager.startRecording(sessionID: sessionID)
+        let (execution, marker) = try await startCommand("sudo whoami", on: manager, sessionID: sessionID, spy: spy, timeout: 5)
+        feed("\u{1B}]7777;PSB;\(marker)\u{07}Password: ", manager, sessionID)
+        try await waitUntil { manager.credentialPrompt != nil }
+        spy.beforeBytesSendReturns = {
+            manager.aiToolCoordinator.completeToolCommand(sessionID: sessionID, token: marker, exitCode: 0)
+        }
+        let secret = "secret-during-send"
+        await manager.sendRawShellInput(sessionID: sessionID, input: secret + "\r")
+        _ = await execution.value
+        XCTAssertNil(manager.credentialPrompt)
+        XCTAssertTrue(spy.sentPayloads.contains(secret + "\r"))
+        await manager.stopRecording(sessionID: sessionID)
+        let recording = try recorder.loadLatestRecording(sessionID: sessionID)
+        XCTAssertFalse(recording.chunks.map(\.text).joined().contains(secret))
+        _ = await manager.terminalHistoryIndex.flushActiveCommand(sessionID: sessionID)
+        let history = await manager.terminalHistoryIndex.recentCommands(sessionID: sessionID)
+        XCTAssertFalse(history.contains { $0.command.contains(secret) })
+    }
+
+    func testDeviceAccessDeniedKeepsTheSameCredentialCard() async throws {
+        let (manager, sessionID, spy) = try await makeConnectedSessionWithSpy()
+        let execution = try await startCLICommand("enable", on: manager, sessionID: sessionID, spy: spy, timeout: 5)
+        feed("enable\r\nPassword: ", manager, sessionID)
+        try await waitUntil { manager.credentialPrompt != nil }
+        let originalID = manager.credentialPrompt?.id
+        feed("\r\n% Access denied\r\n", manager, sessionID)
+        try await waitUntil { manager.credentialPrompt?.phase == .verifying }
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(manager.credentialPrompt?.id, originalID)
+        feed("Password: ", manager, sessionID)
+        try await waitUntil { manager.credentialPrompt?.phase == .waiting }
+        XCTAssertEqual(manager.credentialPrompt?.id, originalID)
+        feed("\r\nrouter#", manager, sessionID)
+        let result = await execution.value
+        XCTAssertEqual(result.status, .completed)
+    }
+
     /// A password typed at a copilot command's prompt reaches the host and is recorded nowhere.
     /// Host output takes the real path: parser reader, history index, recorder, engine, shellBuffers.
     func testTypedPasswordIsRecordedNowhere() async throws {
@@ -732,6 +794,12 @@ final class SessionAIToolCoordinatorTests: XCTestCase {
         let session = try await manager.connect(to: host)
         let sessionID = session.id
 
+        // Stop the original mock reader before replacing its channel. Its buffered connection
+        // banner must not arrive inside the spy's scripted command/password output.
+        let originalReader = manager.shellIOCoordinator.parserReaderTasks[sessionID]
+        manager.shellIOCoordinator.cancelParserTask(for: sessionID)
+        await originalReader?.value
+
         // Replace the mock shell channel with a spy that captures sent payloads.
         let spy = SpyShellChannel()
         manager.shellChannels[sessionID] = spy
@@ -747,6 +815,8 @@ final class SessionAIToolCoordinatorTests: XCTestCase {
     let rawOutput: AsyncStream<Data>
     private let continuation: AsyncStream<Data>.Continuation
     private(set) var sentPayloads: [String] = []
+    var beforeStringSendReturns: ((String) async throws -> Void)?
+    var beforeBytesSendReturns: (() -> Void)?
 
     init() {
         var captured: AsyncStream<Data>.Continuation?
@@ -756,10 +826,12 @@ final class SessionAIToolCoordinatorTests: XCTestCase {
 
     func send(_ input: String) async throws {
         sentPayloads.append(input)
+        try await beforeStringSendReturns?(input)
     }
 
     func send(bytes: [UInt8]) async throws {
         sentPayloads.append(String(decoding: bytes, as: UTF8.self))
+        beforeBytesSendReturns?()
     }
 
     func resizePTY(columns: Int, rows: Int) async throws {}

@@ -149,6 +149,7 @@ final class AIAgentService: AIAgentServicing {
     let persistConversationContext: Bool
     /// Where each new chat loads its skills; `.empty` unless the app passes `.standard`.
     let skillLibrary: AISkillLibrary
+    private let defaults: UserDefaults
     let conversationContext = AIConversationContext()
     let toolHandler = AIToolHandler()
     let agentRunner = AIAgentRunner()
@@ -160,13 +161,13 @@ final class AIAgentService: AIAgentServicing {
 
     // Computed — read UserDefaults live so SettingsView toggles take effect immediately.
     var patchToolEnabled: Bool {
-        UserDefaults.standard.object(forKey: "ai.patchTool.enabled") as? Bool ?? true
+        defaults.object(forKey: "ai.patchTool.enabled") as? Bool ?? true
     }
     var patchApprovalRequired: Bool {
-        UserDefaults.standard.object(forKey: "ai.patchTool.requireApproval") as? Bool ?? true
+        defaults.object(forKey: "ai.patchTool.requireApproval") as? Bool ?? true
     }
     var patchAllowDelete: Bool {
-        UserDefaults.standard.bool(forKey: "ai.patchTool.allowDelete")
+        defaults.bool(forKey: "ai.patchTool.allowDelete")
     }
 
     func requestPatchApproval(
@@ -186,7 +187,8 @@ final class AIAgentService: AIAgentServicing {
         anthropicClient: (any AnthropicServicing)? = nil,
         anthropicModelStore: AnthropicModelStore? = nil,
         providerSelection: AIProviderSelection? = nil,
-        skillLibrary: AISkillLibrary = .empty
+        skillLibrary: AISkillLibrary = .empty,
+        defaults: UserDefaults = .standard
     ) {
         self.openRouterClient = openRouterClient
         self.sessionProvider = sessionProvider
@@ -198,6 +200,7 @@ final class AIAgentService: AIAgentServicing {
         self.maxToolIterations = max(1, maxToolIterations)
         self.persistConversationContext = persistConversationContext
         self.skillLibrary = skillLibrary
+        self.defaults = defaults
         toolHandler.service = self
         agentRunner.service = self
     }

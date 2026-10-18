@@ -66,7 +66,7 @@ extension AIToolHandler {
         }
         switch raw {
         case let .number(number):
-            return Int(number.rounded())
+            if let value = Int(exactly: number) { return value }
         case let .string(string):
             let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
             if let value = Int(trimmed) {
@@ -103,7 +103,7 @@ extension AIToolHandler {
         }
         switch value {
         case let .number(number):
-            return Int(number.rounded())
+            return Int(exactly: number)
         case let .string(string):
             return Int(string.trimmingCharacters(in: .whitespacesAndNewlines))
         default:

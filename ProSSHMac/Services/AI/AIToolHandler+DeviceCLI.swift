@@ -42,6 +42,11 @@ extension AIToolHandler {
         provider: any AIAgentSessionProviding
     ) async throws -> String {
         let command = try Self.requiredString(key: "command", in: arguments, toolName: "run_cli_command")
+        guard !command.contains("\n"), !command.contains("\r") else {
+            throw AIAgentServiceError.invalidToolArguments(
+                toolName: "run_cli_command", message: "'command' must contain exactly one line; send each CLI command in a separate call"
+            )
+        }
         let timeout = TimeInterval(Self.clamp(
             Self.optionalInt(key: "timeout_seconds", in: arguments) ?? 30,
             min: 5,
@@ -55,6 +60,7 @@ extension AIToolHandler {
 
         var results: [(UUID, CLICommandResult)] = []
         for target in targets {
+            try Task.checkCancellation()
             results.append((target, await provider.executeCLICommand(
                 sessionID: target,
                 command: command,

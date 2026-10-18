@@ -42,8 +42,13 @@ extension AIToolHandler {
             )
         }
 
-        let tokens: [String] = keysArray.compactMap {
-            if case let .string(s) = $0 { return s } else { return nil }
+        let tokens: [String] = try keysArray.map {
+            guard case let .string(value) = $0 else {
+                throw AIAgentServiceError.invalidToolArguments(
+                    toolName: "send_input", message: "every element of 'keys' must be a string"
+                )
+            }
+            return value
         }
         guard !tokens.isEmpty else {
             throw AIAgentServiceError.invalidToolArguments(
@@ -52,12 +57,18 @@ extension AIToolHandler {
         }
 
         let payload = Self.resolveKeys(tokens)
+        guard !payload.isEmpty else {
+            throw AIAgentServiceError.invalidToolArguments(
+                toolName: "send_input", message: "'keys' must resolve to non-empty input"
+            )
+        }
         let targets = resolveTargetSessions(
             arguments: arguments,
             primarySessionID: sessionID,
             broadcastContext: broadcastContext
         )
         for target in targets {
+            try Task.checkCancellation()
             await provider.sendRawShellInput(sessionID: target, input: payload)
         }
 

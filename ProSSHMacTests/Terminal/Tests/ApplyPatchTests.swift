@@ -12,6 +12,20 @@ import XCTest
 
 final class UnifiedDiffParserTests: XCTestCase {
 
+    func testOversizedHunkNumbersThrowInsteadOfTrapping() {
+        let diff = "@@ -999999999999999999999999999999,1 +1,1 @@\n-old\n+new"
+        XCTAssertThrowsError(try UnifiedDiffPatcher().parse(diff: diff))
+    }
+
+    func testHunkCountsMustMatchTheBody() {
+        XCTAssertThrowsError(try UnifiedDiffPatcher().parse(diff: "@@ -1,2 +1,2 @@\n-old\n+new"))
+    }
+
+    func testHeaderLookingContentRemainsPartOfAHunk() throws {
+        let result = try UnifiedDiffPatcher().apply(diff: "@@ -1 +1 @@\n---old\n+++new", to: "--old")
+        XCTAssertEqual(result, "++new")
+    }
+
     private let patcher = UnifiedDiffPatcher()
 
     func testParseSingleHunk() throws {
@@ -178,6 +192,17 @@ final class UnifiedDiffParserTests: XCTestCase {
 // MARK: - Diff Application Tests
 
 final class UnifiedDiffApplyTests: XCTestCase {
+
+    func testZeroFuzzRejectsMismatchedContextWithoutTrapping() {
+        var patcher = UnifiedDiffPatcher()
+        patcher.fuzzLines = 0
+        XCTAssertThrowsError(try patcher.apply(diff: "@@ -1 +1 @@\n-absent\n+new", to: "existing"))
+    }
+
+    func testPureInsertionUsesTheDeclaredPosition() throws {
+        let result = try UnifiedDiffPatcher().apply(diff: "@@ -2,0 +3,1 @@\n+inserted", to: "first\nsecond\nthird")
+        XCTAssertEqual(result, "first\nsecond\ninserted\nthird")
+    }
 
     private let patcher = UnifiedDiffPatcher()
 
@@ -365,7 +390,7 @@ final class UnifiedDiffCreateTests: XCTestCase {
     func testCreateIgnoresRemovals() throws {
         // In create mode, removal lines are skipped.
         let diff = """
-        @@ -1,2 +1,1 @@
+        @@ -1,1 +1,1 @@
         -this shouldn't matter
         +only this line
         """
@@ -378,7 +403,7 @@ final class UnifiedDiffCreateTests: XCTestCase {
 
     func testCreatePreservesContextLines() throws {
         let diff = """
-        @@ -0,0 +1,3 @@
+        @@ -1,2 +1,3 @@
          context line (treated as content in create mode)
         +added line
          another context line
@@ -429,6 +454,20 @@ final class PatchApprovalTrackerTests: XCTestCase {
         tracker.remember(fp)
 
         XCTAssertTrue(tracker.isApproved(fp))
+    }
+
+    @MainActor
+    func testFingerprintIncludesEntireDiffAndTargetContext() {
+        let tracker = PatchApprovalTracker()
+        let path = "a/long/path/that/exhausted/the/old/fingerprint/config.txt"
+        let first = PatchOperation(type: .update, path: path, diff: "@@\n-old\n+first")
+        let second = PatchOperation(type: .update, path: path, diff: "@@\n-old\n+second")
+        let approved = tracker.fingerprint(operation: first, context: "host-a:/etc")
+        tracker.remember(approved)
+
+        XCTAssertNotEqual(approved, tracker.fingerprint(operation: second, context: "host-a:/etc"))
+        XCTAssertFalse(tracker.isApproved(tracker.fingerprint(operation: first, context: "host-b:/etc")))
+        XCTAssertFalse(tracker.isApproved(tracker.fingerprint(operation: first, context: "host-a:/other")))
     }
 
     @MainActor
@@ -595,6 +634,57 @@ final class LocalWorkspacePatcherTests: XCTestCase {
                 XCTFail("Expected outsideWorkspace, got \(error)")
             }
         }
+    }
+
+    func testSiblingWithWorkspacePrefixIsRejectedBeforeCreatingParents() throws {
+        let sibling = URL(fileURLWithPath: tempDir.path + "-outside", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: sibling) }
+        let patcher = LocalWorkspacePatcher(workspaceRoot: tempDir)
+        XCTAssertThrowsError(try patcher.apply(PatchOperation(
+            type: .create, path: sibling.appendingPathComponent("nested/file.txt").path, diff: "+outside"
+        )))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: sibling.path))
+    }
+
+    func testSymlinkedParentCannotEscapeWorkspace() throws {
+        let outside = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: outside) }
+        let victim = outside.appendingPathComponent("victim.txt")
+        try "untouched".write(to: victim, atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(at: tempDir.appendingPathComponent("linked"), withDestinationURL: outside)
+        let patcher = LocalWorkspacePatcher(workspaceRoot: tempDir)
+
+        for operation in [
+            PatchOperation(type: .create, path: "linked/nested/new.txt", diff: "+outside"),
+            PatchOperation(type: .update, path: "linked/victim.txt", diff: "@@\n-untouched\n+changed"),
+            PatchOperation(type: .delete, path: "linked/victim.txt", diff: nil),
+        ] {
+            XCTAssertThrowsError(try patcher.apply(operation), operation.type.rawValue)
+        }
+        XCTAssertEqual(try String(contentsOf: victim, encoding: .utf8), "untouched")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: outside.appendingPathComponent("nested").path))
+    }
+
+    func testDeleteRejectsDirectoriesAndWorkspaceRoot() throws {
+        let nested = tempDir.appendingPathComponent("nested")
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try "keep".write(to: nested.appendingPathComponent("keep.txt"), atomically: true, encoding: .utf8)
+        let patcher = LocalWorkspacePatcher(workspaceRoot: tempDir)
+        XCTAssertThrowsError(try patcher.apply(PatchOperation(type: .delete, path: "nested", diff: nil)))
+        XCTAssertThrowsError(try patcher.apply(PatchOperation(type: .delete, path: ".", diff: nil)))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: nested.appendingPathComponent("keep.txt").path))
+    }
+
+    func testWorkspaceRootMayItselfBeASymlink() throws {
+        let alias = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: tempDir)
+        defer { try? FileManager.default.removeItem(at: alias) }
+        let result = try LocalWorkspacePatcher(workspaceRoot: alias).apply(
+            PatchOperation(type: .create, path: "safe.txt", diff: "+safe")
+        )
+        XCTAssertTrue(result.success)
+        XCTAssertEqual(try String(contentsOf: tempDir.appendingPathComponent("safe.txt"), encoding: .utf8), "safe")
     }
 
     func testUpdateNonexistentFileThrows() {
@@ -873,7 +963,7 @@ final class PatchRoundTripTests: XCTestCase {
 
         // AI generates a diff to add HTTPS redirect.
         let aiDiff = """
-        @@ -1,4 +1,6 @@
+        @@ -1,3 +1,5 @@
          server {
         -    listen 80;
         +    listen 443 ssl;

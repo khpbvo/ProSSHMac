@@ -84,6 +84,38 @@ final class AISkillLibraryTests: XCTestCase {
         ])
     }
 
+    func testIndentedDescriptionContinuationWithColonIsRejected() throws {
+        let text = "---\nname: wrapped\ndescription: first line\n  caution: this must not be silently dropped\n---\nbody"
+        XCTAssertThrowsError(try AISkillLibrary.parse(text, source: .user)) { error in
+            XCTAssertEqual(error as? AISkillLibrary.ParseError, .invalidFrontMatter)
+        }
+    }
+
+    func testDuplicateMetadataKeysAreRejectedInsteadOfLastValueWinning() throws {
+        let text = "---\nname: intended\nName: shadowed\ndescription: x\n---\nbody"
+        XCTAssertThrowsError(try AISkillLibrary.parse(text, source: .user)) { error in
+            XCTAssertEqual(error as? AISkillLibrary.ParseError, .duplicateField("name"))
+        }
+    }
+
+    func testUnicodeLineSeparatorsCannotExpandThePromptIndex() throws {
+        for separator in ["\u{0085}", "\u{2028}", "\u{2029}"] {
+            XCTAssertThrowsError(try AISkillLibrary.parse(
+                skill("wrapped", description: "first\(separator)second"), source: .user
+            )) { error in
+                XCTAssertEqual(error as? AISkillLibrary.ParseError, .invalidDescription)
+            }
+        }
+    }
+
+    func testInvalidUserOverridePreservesTheBundledSkill() throws {
+        try write(skill("routing", description: "Built in"), "routing.md", in: bundled)
+        try write("---\nname: routing\ndescription: first\n  wrapped: discarded before\n---\nbody", "routing.md", in: user)
+        let loaded = AISkillLibrary(bundledDirectory: bundled, userDirectory: user).load()
+        XCTAssertEqual(loaded.skill(named: "routing")?.source, .bundled)
+        XCTAssertEqual(loaded.skill(named: "routing")?.description, "Built in")
+    }
+
     func testDuplicateNameInOneFolderKeepsTheFirstFile() throws {
         try write(skill("dup", description: "first"), "a.md", in: user)
         try write(skill("dup", description: "second"), "b.md", in: user)

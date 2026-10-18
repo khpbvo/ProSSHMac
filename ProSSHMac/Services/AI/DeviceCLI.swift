@@ -73,6 +73,11 @@ nonisolated struct DeviceCLICapture {
     static let promptIdleWithoutBase: Duration = .seconds(1)
     static let questionIdle: Duration = .seconds(2)
     private static let maxBytes = 4_000_000
+    /// Modes may contain spaces (FortiOS), RouterOS has a path, and SR OS prefixes the host
+    /// with its node letter. Arbitrary words after the hostname are output, not a prompt.
+    private static let promptSuffix = try? NSRegularExpression(
+        pattern: #"^(?:(?:\s*\([^\r\n)]+\))?\s*[#>$%]|(?:\s*\(SAFE\))?\s*/[\w/.\-]*>|:[\w.\-]+(?:\[/[\w.\-]*\])?[>#])$"#
+    )
 
     let command: String
     let promptBase: String
@@ -162,7 +167,13 @@ nonisolated struct DeviceCLICapture {
 
     private func isPrompt(_ line: String) -> Bool {
         guard let last = line.last, "#>$%".contains(last), line.count <= 200 else { return false }
-        return promptBase.isEmpty || line.hasPrefix(promptBase)
+        // Output such as `Router2#` or `Router utilization 90%` is not Router's prompt.
+        let kind = DeviceCLIPrompt.classify(line)
+        guard kind == .deviceCLI || (kind == .posixShell && line == promptBase + String(last)) else { return false }
+        let base = DeviceCLIPrompt.base(of: line)
+        guard promptBase.isEmpty || base == promptBase, let suffixPattern = Self.promptSuffix else { return false }
+        let suffix = String(line.dropFirst(base.count))
+        return suffixPattern.firstMatch(in: suffix, range: NSRange(suffix.startIndex..., in: suffix)) != nil
     }
 }
 

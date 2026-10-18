@@ -30,6 +30,10 @@ final class ApplyDiffCreateTests: XCTestCase {
 
 final class ApplyDiffUpdateTests: XCTestCase {
 
+    func testPureInsertionRejectsAnAbsentAnchor() {
+        XCTAssertThrowsError(try applyDiff(input: "first\nsecond", diff: "@@ missing anchor\n+inserted"))
+    }
+
     func testUpdateWithAnchor() throws {
         let input = "def foo():\n    return old_val\n"
         let diff = "@@ def foo():\n-    return old_val\n+    return new_val"
