@@ -71,8 +71,8 @@ nonisolated struct AISkillLibrary: Sendable {
     private static let logger = Logger(subsystem: "com.prossh", category: "AICopilot.Skills")
     static let maxDescriptionLength = 200
 
-    /// Bundled skills. Xcode's synchronized group flattens `Resources/Skills/*.md` into the
-    /// bundle's resource root, so every `.md` there is a skill.
+    /// Bundled skills: every `.md` at the bundle's resource root. None ship since Phase 7
+    /// measured no gain from them (Docs/NetworkCopilot.md); skills are the user's.
     var bundledDirectory: URL?
     /// The user's skills; a user skill with a bundled skill's name replaces it.
     var userDirectory: URL?

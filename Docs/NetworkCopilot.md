@@ -131,7 +131,8 @@ new `AISkillLibraryTests`, `DeviceCLITests`.
   - Settings row: "Open skills folder".
   - Tests: parsing, override, unknown skill, index stable across turns, folder absent.
 - [x] **Phase 6: Write the skills — shaped by the lifecycle, not the vendor.** Done 2026-10-18;
-  see "Phase 6 as built". Vendor syntax
+  see "Phase 6 as built". **All eight removed 2026-10-20 after Phase 7 measured no gain**
+  (see "Phase 7 results so far"); kept below as history. Vendor syntax
   stays with the model. A skill is a procedure or a checklist a team would write down; it
   contains no rules ("never", "always" live in the prompt only, so nothing can conflict). Each
   under ~80 lines. Before closing the phase, read the prompt and all skills together once and
@@ -413,11 +414,49 @@ Skill names come from `load_skill` `output_chars`: every one is its skill's JSON
 - **New bug: the broadcast toolbar button has no icon.** `TerminalView.swift:117` uses
   `antenna.radiowaves.left.and.right.fill`, which macOS 26 lacks ("No symbol named …", 16 times).
 
-**Still open for Phase 7:** the same tasks without the skills (move the eight `.md` files out
-and rebuild), de-duplication with broadcast versus without, a router/switch or lab image, and
-the live checks (`systemctl status`/`git log` not paging over SSH, `$PAGER` unchanged
-afterwards, Open Skills Folder, a dropped-in user skill reaching a new chat). Before the next
-run, record the prompts and the time: the log carries neither.
+### Runs 2 and 3 (2026-10-20): fixed skills versus no skills
+
+Fresh clones each run, broadcast off, Clear before each task, the same prompts letter for
+letter:
+
+- De-duplication (138 chars): `These four servers were cloned from the same VM image. Find
+  everything that is duplicated between them and make each one a unique machine.`
+- OSPF (186 chars): `Install FRR on all four servers and set up OSPF in area 0 on the network
+  they share. Give each server a unique router ID and make sure each one has a full adjacency
+  with the other three.`
+
+Evidence: `Docs/debuglogs/phase7-run2-ai.txt`, `phase7-run3-ai.txt`.
+
+| | Run 1: skills (old clone skill) | Run 2: skills (fixed) | Run 3: no skills |
+|---|---|---|---|
+| De-duplication | 1 turn, 14 iter, $0.40 (with reboots) | **3 turns**, 22 iter, 39 tools, $0.74 | **1 turn, 12 iter, 25 tools, $0.53**, 3m54s |
+| OSPF | 9 iter, $0.31 | 9 iter, 27 tools, $0.30 | 9 iter, 32 tools, $0.32, 7m31s |
+
+- **OSPF: the skills changed nothing measurable.** 9 iterations in all three runs. The drop
+  from ~30 / ~$1.50 on 2026-10-15 came from Phase 4 (harness and prompt), not the skills.
+- **De-duplication with skills needed babysitting.** Run 2 loaded `clone-deduplication`, which
+  pulled in `baseline-and-diff` and `change-procedure`, captured all four hosts once and stopped
+  without changing anything. `change-procedure` says to get confirmation before irreversible
+  steps (new host keys, machine-id) and to report after the first host before continuing.
+  The user prompted twice more (27 and 60 chars; the second loaded `access-safety`). Run 1
+  carried the same instruction and did not stop, so whether the model follows it varies from
+  run to run. Without skills it finished in one turn.
+- User report, run 2 OSPF: no IP forwarding and no loopback interfaces. `routing` listed
+  forwarding only as something to check and never mentioned loopbacks. The prompt asked for
+  neither. Run 3 was not checked.
+- Prompt 3 (the `run …` pager checks) did not run in either run.
+
+**Decision (user, 2026-10-20): no built-in skills.** All eight were deleted, with
+`BundledSkillsTests`. The mechanism stays for user skills: the skills folder, `load_skill`, the
+per-chat index and Open Skills Folder. The loader still reads `.md` files at the bundle root,
+but none ship. One run per arm is a small sample, but the measured gain was zero and the cost
+was extra user turns. This matches the Design rules: generic procedure repeats what the model
+already knows.
+
+**Still open for Phase 7:** de-duplication with broadcast versus without, a router/switch or
+lab image, and the live checks (`systemctl status`/`journalctl` not paging over SSH, `$PAGER`
+unchanged afterwards, Open Skills Folder, a dropped-in user skill reaching a new chat). Record
+the prompts and the time: the log carries neither.
 
 ## Open questions
 

@@ -1,17 +1,22 @@
 # Copilot skills
 
-Skills are Markdown playbooks the AI copilot loads when a task calls for one. The system prompt
-lists each skill's name and description; the model calls `load_skill` to read the rest. Design
-and history: `Docs/NetworkCopilot.md` (Phases 5–6, "Design rules").
+Skills are Markdown files you write for the AI copilot: what it cannot know about your hosts
+and how you work. The system prompt lists each skill's name and description; the model calls
+`load_skill` to read the rest. Design and history: `Docs/NetworkCopilot.md` (Phases 5–7,
+"Design rules").
+
+**No skills ship with the app.** Eight built-in playbooks (change procedure, routing, clone
+de-duplication, …) were removed on 2026-10-20: live runs with and without them showed no fewer
+iterations, and their stop-and-confirm steps cost the user extra turns. Opus already knows
+generic procedure; see `Docs/NetworkCopilot.md` "Phase 7 results so far".
 
 ## Where they live
 
-| Kind | Location | Notes |
-|---|---|---|
-| Built in | `ProSSHMac/Resources/Skills/*.md` in the repo | Shipped in the app; the build copies them flat into `Contents/Resources/` |
-| Yours | `~/Library/Application Support/ProSSHMac/Skills/*.md` | Settings → AI Assistant → **Open Skills Folder** creates and opens it |
+`~/Library/Application Support/ProSSHMac/Skills/*.md`. Settings → AI Assistant → **Open Skills
+Folder** creates and opens it.
 
-- A file of yours with a built-in skill's `name` replaces that skill.
+- The loader still reads `.md` files at the app bundle's resource root as built-in skills
+  (none exist); a user skill with the same `name` would replace one.
 - Skills are read when a chat starts. After adding or editing one, start a new chat (Clear).
 - A file that does not parse is skipped and logged under the `AICopilot.Skills` category
   (Console.app, subsystem `com.prossh`).
@@ -30,26 +35,14 @@ The body: steps, checklists, tables.
 ```
 
 - `name`: lowercase letters, digits and hyphens.
-- `description`: one line, at most 200 characters (built-in skills keep to 120). It is sent
-  with every request, so say *when* to use the skill, not what is in it.
+- `description`: one line, at most 200 characters. It is sent with every request, so say
+  *when* to use the skill, not what is in it.
 - `platforms` (optional): `[a, b]` or `a, b`. Returned with the skill; it does not hide it.
 - Front matter uses one unindented `key: value` per line, with no repeated keys or multiline
   values. A colon inside a description is fine.
-- Body: anything Markdown. Built-in skills stay under 80 lines and hold procedures and
-  checklists only; rules ("never", "always") live in the system prompt so nothing can conflict.
-
-## Built-in skills
-
-| Skill | For |
-|---|---|
-| `change-procedure` | Any change: pre-checks, steps, post-checks, rollback, staged rollout, per-platform safety nets |
-| `baseline-and-diff` | Comparing hosts, or before/after a change |
-| `troubleshooting` | Diagnosing an unknown fault |
-| `routing` | Definition of done for OSPF/BGP/static |
-| `services` | Definition of done for a daemon change |
-| `access-safety` | Changes that the management path runs through |
-| `clone-deduplication` | VMs cloned from one image |
-| `linux-host-operations` | Package and service idioms; what stalls commands in this terminal |
+- Body: anything Markdown. Keep it short; every load costs tokens. Generic procedure
+  ("make a rollback plan", "confirm before changing") makes the model stop and ask more, not
+  work better: the removed built-ins showed that.
 
 ## Example: a skill only you can write
 

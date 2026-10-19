@@ -50,4 +50,4 @@ WARNINGS_BASELINE.txt
 
 # Claude Code session data
 .claude/
-Docs/debuglogs/debugoutput1.txt
+Docs/debuglogs/debugoutput*.txt
