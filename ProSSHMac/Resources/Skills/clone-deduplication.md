@@ -15,7 +15,7 @@ change-procedure (one host first).
 |---|---|---|
 | Hostname | `hostnamectl --static`, `/etc/hostname` | `hostnamectl set-hostname <name>` |
 | `/etc/hosts` | the `127.0.1.1` line | update it to the new name |
-| machine-id | `cat /etc/machine-id` | `rm -f /etc/machine-id /var/lib/dbus/machine-id && systemd-machine-id-setup`, then reboot |
+| machine-id | `cat /etc/machine-id` | `rm -f /etc/machine-id /var/lib/dbus/machine-id && systemd-machine-id-setup`; running services keep the old id until the next boot |
 | D-Bus id | `cat /var/lib/dbus/machine-id` (often a link to the above) | `dbus-uuidgen --ensure` if it is a separate file |
 | SSH host keys | `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` | `rm /etc/ssh/ssh_host_*key*` then `ssh-keygen -A`, reload sshd |
 | DHCP DUID / client id | leases in `/var/lib/dhcp/`, `/var/lib/NetworkManager/`; `networkctl status` | systemd-networkd derives it from machine-id; delete the stored DUID and lease for dhclient/NM, renew |
@@ -32,7 +32,9 @@ change-procedure (one host first).
 2. machine-id (and with it the networkd DUID), SSH host keys, cloud-init state.
 3. Network identity: addresses, router IDs, DHCP leases.
 4. Agents and domain joins last; they register under the new identity.
-5. Reboot where the table says so, one host at a time, and reconnect.
+5. A reboot is the user's call. Finish the whole task first, then name which hosts need one
+   and why (machine-id, cloud-init state), and reboot only after the user agrees, one host at
+   a time.
 
 ## Side effects to tell the user
 - New SSH host keys: the next connection from any client reports a changed host key.
@@ -44,3 +46,4 @@ change-procedure (one host first).
 - A second capture across all hosts shows every item in the table unique per host (or
   intentionally shared), each host reachable under its new identity, and agents reporting
   under the new names.
+- Any reboot still pending is named per host in the handover.

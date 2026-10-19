@@ -611,7 +611,11 @@ Keep run/response identities and cancellation gates when extending AI work. Live
 remains the next AI phase below; this source audit did not run a real model or change hosts.
 
 **Active work: `Docs/NetworkCopilot.md` Phase 7 (live validation and cost). Needs the user at
-the keyboard.** Use the four cloned Ubuntu VMs. Runs: the original de-duplication task end to
+the keyboard.** Run 1 (with skills) is recorded in its "Phase 7 results so far": OSPF took
+9 iterations and $0.31, de-duplication 14 and $0.40, and the right skills loaded unprompted.
+De-duplication rebooted the VMs because `clone-deduplication` said so (since fixed: the reboot
+is the user's call, at the end), so re-run it with the fixed skill, then the same pair *without* skills. Debug logs are mostly renderer stats: extract with
+`grep -vE '^\[(RenderCoord|Renderer)\]'` and never read a raw log whole. Use the four cloned Ubuntu VMs. Runs: the original de-duplication task end to
 end, with and without broadcast, focus changes between prompts, and the OSPF task again; a
 router/switch or lab image if available. Record iterations and dollars per run, with and
 without the skills (to run without them, temporarily move the eight `.md` files out of

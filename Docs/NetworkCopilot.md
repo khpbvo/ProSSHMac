@@ -363,6 +363,62 @@ by the fake device only.
 - **Example user skill**: `Docs/Skills.md` (format, folders, override, the built-in list and a
   full `my-lab.md`).
 
+## Phase 7 results so far
+
+### Run 1 (2026-10-19): four fresh cloned Ubuntu VMs, skills installed
+
+Debug build of `68a1eb2`, Claude Opus 5.5, one window. The user's account of it: the clones
+were de-duplicated, OSPF came up across all four, then a few follow-up commands. Raw evidence:
+`Docs/debuglogs/phase7-run1-ai.txt` (the AI lines of `debugoutput1.txt`, a 4 MB log that is
+99% renderer stats and is gitignored). The log has no prompt text and no timestamps, so which
+prompt each turn was is inferred from its size and tools. Cost is from the logged `usage` at
+$4 in / $20 out / $0.20 cache read / $5 cache write (5-minute TTL, the client's default).
+
+| Turn | Session | What (inferred) | Iter | Tools | Skills loaded | Wall | Cost |
+|---|---|---|---|---|---|---|---|
+| 1 | c1428e7a | De-duplication, 4 hosts (new chat) | 14 | 22 | `clone-deduplication` | 5m46s | $0.40 |
+| 2 | 8f4b9a67 | Follow-up check, 4 hosts | 2 | 4 | — | 22s | $0.07 |
+| 3 | 8f4b9a67 | OSPF (new chat, `messages=2`) | 9 | 20 | `routing`, `linux-host-operations` | 6m26s | $0.31 |
+| 4 | 8f4b9a67 | Follow-up check, 4 hosts | 2 | 4 | — | 45s | $0.07 |
+| 5 | 8f4b9a67 | Direct action, broadcast on | 2 | 1 | — | 11s | $0.03 |
+| 6 | 053ca4ca | Direct action, other focus | 2 | 1 | — | 7s | $0.02 |
+| 7 | 053ca4ca | Question, 1 command | 2 | 1 | — | 18s | $0.05 |
+| | | **Total** | **33** | **53** | | | **$0.95** |
+
+Skill names come from `load_skill` `output_chars`: every one is its skill's JSON size + 17.
+
+- **OSPF: 9 iterations and $0.31, against ~30 and ~$1.50 on 2026-10-15.** Not yet credit for the
+  skills: Phase 4 changed the prompt and the harness in between. The run without skills
+  decides it.
+- **The right skills loaded unprompted** as the first action of both tasks.
+- **Focus changes keep the chat**: the message count carries on across three focused sessions
+  (37→39 at turn 2, 41→43 at turn 6). Broadcast was switched on before turn 5 (inferred from the
+  toolbar log below).
+- **Caching works**: after the first request of a chat, each request writes 0.1–4.6k tokens and
+  reads the rest. A new chat's first request writes ~6.6k (tools + system) with nothing read.
+- Turn 1, iteration 3: an `execute_and_wait` ran to its 30 s default timeout (121 chars back),
+  then `get_current_screen` and `send_input`. That reads as an interactive prompt the
+  non-interactive environment did not cover. `linux-host-operations` was not loaded in that
+  chat. **The log cannot show which command it was; ask the user.**
+- **The model rebooted the VMs mid-task and asked for sudo to do it (user report), because the
+  skill told it to.** `clone-deduplication` said "then reboot" on the machine-id row and
+  "Reboot where the table says so" in its order. The run without skills (2026-10-15) never
+  rebooted. Turn 1 iterations 8, 11 and 12 (an `execute_command`, then a ~50 s
+  `execute_and_wait`) fit reboot-and-reconnect. Fixed 2026-10-19: the reboot is the user's
+  call, deferred to the end of the whole task and named in the handover; running services keep
+  the old machine-id until the next boot. **Turn 1's iterations, time and cost include the
+  reboots, so re-run de-duplication with the fixed skill before comparing.**
+- Turn 3's four parallel `execute_and_wait` calls each took 45.1 s: a long command or a
+  timeout; the log cannot tell.
+- **New bug: the broadcast toolbar button has no icon.** `TerminalView.swift:117` uses
+  `antenna.radiowaves.left.and.right.fill`, which macOS 26 lacks ("No symbol named …", 16 times).
+
+**Still open for Phase 7:** the same tasks without the skills (move the eight `.md` files out
+and rebuild), de-duplication with broadcast versus without, a router/switch or lab image, and
+the live checks (`systemctl status`/`git log` not paging over SSH, `$PAGER` unchanged
+afterwards, Open Skills Folder, a dropped-in user skill reaching a new chat). Before the next
+run, record the prompts and the time: the log carries neither.
+
 ## Open questions
 
 - (Resolved 2026-10-16) No confirmation gate for unfocused hosts; user skills load once per
