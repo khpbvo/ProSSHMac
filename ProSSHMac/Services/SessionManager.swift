@@ -426,13 +426,14 @@ final class SessionManager: ObservableObject {
             try await openShell(for: session)
             keepaliveCoordinator.startIfNeeded()
 
-            // Inject shell integration script for SSH sessions (Unix shell types only).
-            // Uses compact single-line version to minimize terminal echo noise.
-            if let script = ShellIntegrationScripts.sshInjectionScript(for: host.shellIntegration.type) {
+            // Inject shell integration for SSH sessions (Unix shell types only), once the shell
+            // sits at a prompt, with its echo hidden and nothing recorded (Bug 90).
+            let integrationType = host.shellIntegration.type
+            if ShellIntegrationScripts.sshInjectionScript(for: integrationType) != nil {
                 let sid = sessionID
-                Task { @MainActor [weak self] in
-                    try? await Task.sleep(for: .milliseconds(500))
-                    await self?.sendRawShellInput(sessionID: sid, input: script + "\n")
+                let coordinator = shellIOCoordinator
+                Task { @MainActor in
+                    await coordinator.injectShellIntegration(sessionID: sid, type: integrationType)
                 }
             }
 

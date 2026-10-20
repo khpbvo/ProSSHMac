@@ -20,6 +20,7 @@ enum ShellIntegrationScripts: Sendable {
 
     /// Returns a compact single-line version of the integration script for SSH injection.
     /// Prefixed with a space (suppresses bash history when HISTCONTROL=ignorespace).
+    /// What is actually typed is `sshInjectionLine(for:token:)`, which adds the end marker.
     /// Returns `nil` for types that don't use script injection.
     static nonisolated func sshInjectionScript(for type: ShellIntegrationType) -> String? {
         switch type {
@@ -32,6 +33,28 @@ enum ShellIntegrationScripts: Sendable {
              .paloAltoPANOS, .hpProCurve, .fortinetFortiOS, .nokiaSROS:
             return nil
         }
+    }
+
+    /// The line typed into a remote shell: the integration script, then a private end marker
+    /// (`OSC 7777;PSI;<token> ST`) and CR + erase-line. The shell echoes the line as it is
+    /// typed; `ShellIntegrationEchoFilter` holds the output back until the marker, so the echo
+    /// never reaches the terminal, and the CR + erase-line puts the cursor back at column 0 of
+    /// the prompt line so the shell's next prompt redraws in the old one's place. The marker
+    /// follows the closing `fi`/`end`, so it prints even when the guard is already set. The echo
+    /// carries the marker only as escaped text (`\033`), never as the bytes the filter matches.
+    /// Keep it short: a line over 1,024 bytes never reaches a macOS shell (`MAX_INPUT`).
+    static nonisolated func sshInjectionLine(for type: ShellIntegrationType, token: String) -> String? {
+        guard let script = sshInjectionScript(for: type) else { return nil }
+        // fish's printf takes `\e`; dash's doesn't, so the POSIX family uses `\033`.
+        let marker = type == .fish
+            ? #"printf '\e]7777;PSI;%s\e\\\r\e[K' '\#(token)'"#
+            : #"printf '\033]7777;PSI;%s\033\\\r\033[K' '\#(token)'"#
+        return script + "; " + marker
+    }
+
+    /// The bytes the end marker of `sshInjectionLine(for:token:)` prints.
+    static nonisolated func injectionEndMarker(token: String) -> [UInt8] {
+        Array("\u{1B}]7777;PSI;\(token)\u{1B}\\".utf8)
     }
 
     /// Returns the vendor prompt regex pattern string for the given type,

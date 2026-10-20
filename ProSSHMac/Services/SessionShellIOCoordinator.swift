@@ -13,6 +13,10 @@ enum RawShellInputSource: String {
 
     weak var manager: SessionManager?
     var parserReaderTasks: [UUID: Task<Void, Never>] = [:]
+    private var batchAccumulators: [UUID: ChunkBatchAccumulator] = [:]
+    /// Armed while a shell-integration line's echo is held back. See ShellIntegrationEchoFilter.
+    private var shellIntegrationFilters: [UUID: ShellIntegrationEchoFilter] = [:]
+    var shellIntegrationTiming = ShellIntegrationInjectionTiming.standard
     private var localInputFailureLogByKey: [String: Date] = [:]
     private let localInputFailureDedupWindow: TimeInterval = 1.5
 
@@ -23,6 +27,131 @@ enum RawShellInputSource: String {
     func cancelParserTask(for sessionID: UUID) {
         parserReaderTasks[sessionID]?.cancel()
         parserReaderTasks.removeValue(forKey: sessionID)
+        batchAccumulators.removeValue(forKey: sessionID)
+        shellIntegrationFilters.removeValue(forKey: sessionID)
+    }
+
+    // MARK: - Shell integration injection
+
+    /// Types the OSC 133 integration line into a remote shell once it sits at a prompt, with
+    /// its echo hidden. Nothing is sent to a shell that never looks ready, or once the user has
+    /// typed (the line would join their input). The line is recorded nowhere: not in the
+    /// history index, not in a recording. See Bug 90 in Docs/bugs.md.
+    @discardableResult
+    func injectShellIntegration(sessionID: UUID, type: ShellIntegrationType) async -> ShellIntegrationInjectionResult {
+        let token = String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(10)).uppercased()
+        guard let line = ShellIntegrationScripts.sshInjectionLine(for: type, token: token) else {
+            return .skipped(.unsupportedType)
+        }
+        let timing = shellIntegrationTiming
+        let sentAtStart = manager?.bytesSentBySessionID[sessionID] ?? 0
+        let deadline = ContinuousClock.now + timing.readinessTimeout
+        while true {
+            switch await shellReadiness(sessionID: sessionID, sentAtStart: sentAtStart, quietPeriod: timing.quietPeriod) {
+            case .ready:
+                return await sendShellIntegrationLine(line, token: token, sessionID: sessionID)
+            case .skip(let reason):
+                Self.logger.info("shell_integration skipped reason=\(String(describing: reason), privacy: .public)")
+                return .skipped(reason)
+            case .notYet:
+                guard ContinuousClock.now < deadline else {
+                    Self.logger.info("shell_integration skipped reason=not_ready")
+                    return .skipped(.notReady)
+                }
+                try? await Task.sleep(for: timing.pollInterval)
+            }
+        }
+    }
+
+    private enum ShellReadiness {
+        case ready
+        case notYet
+        case skip(ShellIntegrationInjectionResult.SkipReason)
+    }
+
+    /// Ready: some output arrived and then stopped, the cursor sits mid-line on the primary
+    /// screen (a prompt, not the end of a MOTD line), and that line is not a password prompt.
+    private func shellReadiness(sessionID: UUID, sentAtStart: Int64, quietPeriod: Duration) async -> ShellReadiness {
+        guard let manager,
+              manager.sessions.contains(where: { $0.id == sessionID && $0.state == .connected }),
+              manager.shellChannels[sessionID] != nil,
+              let engine = manager.engines[sessionID] else {
+            return .skip(.sessionGone)
+        }
+        if (manager.bytesSentBySessionID[sessionID] ?? 0) != sentAtStart {
+            return .skip(.userInput)
+        }
+        guard (manager.bytesReceivedBySessionID[sessionID] ?? 0) > 0,
+              let lastOutput = manager.lastActivityBySessionID[sessionID],
+              Date.now.timeIntervalSince(lastOutput) >= Self.seconds(quietPeriod) else {
+            return .notYet
+        }
+        guard !(await engine.usingAlternateBuffer) else { return .notYet }
+        let cursor = await engine.cursor
+        guard cursor.col > 0 else { return .notYet }
+        let lines = await engine.visibleText()
+        if lines.indices.contains(cursor.row), CredentialPromptDetector.match(lines[cursor.row]) != nil {
+            return .notYet
+        }
+        return .ready
+    }
+
+    private static func seconds(_ duration: Duration) -> TimeInterval {
+        let parts = duration.components
+        return TimeInterval(parts.seconds) + TimeInterval(parts.attoseconds) / 1e18
+    }
+
+    private func sendShellIntegrationLine(_ line: String, token: String, sessionID: UUID) async -> ShellIntegrationInjectionResult {
+        guard let manager, let shell = manager.shellChannels[sessionID] else {
+            return .skipped(.sessionGone)
+        }
+        // Armed before the send, so not even an early echo byte gets past.
+        shellIntegrationFilters[sessionID] = ShellIntegrationEchoFilter(token: token)
+        let bytes = Array((line + "\n").utf8)
+        do {
+            try await shell.send(bytes: bytes)
+        } catch {
+            releaseShellIntegrationFilter(sessionID: sessionID, token: token)
+            return .skipped(.sendFailed)
+        }
+        manager.bytesSentBySessionID[sessionID, default: 0] += Int64(bytes.count)
+        let releaseTimeout = shellIntegrationTiming.releaseTimeout
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: releaseTimeout)
+            self?.releaseShellIntegrationFilter(sessionID: sessionID, token: token)
+        }
+        return .injected
+    }
+
+    /// The marker never came: let the parser pass everything held, in order. The release goes
+    /// through the parser's own stream (an empty batch) so it cannot overtake a batch in flight,
+    /// and so it happens even when the shell has gone quiet.
+    private func releaseShellIntegrationFilter(sessionID: UUID, token: String) {
+        guard shellIntegrationFilters[sessionID]?.token == token else { return }
+        shellIntegrationFilters[sessionID]?.requestRelease()
+        let accumulator = batchAccumulators[sessionID]
+        Task { await accumulator?.kick() }
+    }
+
+    func isHoldingShellIntegrationEcho(sessionID: UUID) -> Bool {
+        shellIntegrationFilters[sessionID] != nil
+    }
+
+    /// Output with the shell-integration echo removed. A dictionary lookup when nothing is armed.
+    private func filterShellIntegrationEcho(sessionID: UUID, chunk: Data) -> Data {
+        guard var filter = shellIntegrationFilters[sessionID] else { return chunk }
+        if let visible = filter.process(chunk) {
+            shellIntegrationFilters.removeValue(forKey: sessionID)
+            return visible
+        }
+        shellIntegrationFilters[sessionID] = filter
+        return Data()
+    }
+
+    /// The stream ended while output was held: hand it over rather than lose it.
+    private func drainShellIntegrationFilter(sessionID: UUID) -> Data {
+        guard var filter = shellIntegrationFilters.removeValue(forKey: sessionID) else { return Data() }
+        return filter.drain()
     }
 
     func sendShellInput(sessionID: UUID, input: String, suppressEcho: Bool = false) async {
@@ -181,6 +310,7 @@ enum RawShellInputSource: String {
 
         let (batchedStream, batchContinuation) = AsyncStream<Data>.makeStream(bufferingPolicy: .unbounded)
         let accumulator = ChunkBatchAccumulator(continuation: batchContinuation)
+        batchAccumulators[sessionID] = accumulator
 
         // Accumulator task: batch raw chunks into 4ms windows to reduce actor-hop
         // frequency on engine.feed(). Bookkeeping used to run here per raw chunk —
@@ -219,6 +349,15 @@ enum RawShellInputSource: String {
                 TerminalPerf.record(.batchFollowUp, since: followUpStart, byteCount: batch.count)
             }
 
+            if !Task.isCancelled, let held = await self?.drainShellIntegrationFilter(sessionID: sessionID), !held.isEmpty {
+                let outcome = await engine.feedAndCollectOutcome(held)
+                await self?.manager?.renderingCoordinator.handleFeedOutcome(
+                    sessionID: sessionID,
+                    engine: engine,
+                    outcome: outcome
+                )
+            }
+
             await self?.manager?.renderingCoordinator.flushPendingSnapshotPublishIfNeeded(
                 for: sessionID,
                 engine: engine
@@ -252,7 +391,8 @@ enum RawShellInputSource: String {
         guard let manager else { return chunk }
         manager.lastActivityBySessionID[sessionID] = .now
         manager.bytesReceivedBySessionID[sessionID, default: 0] += Int64(chunk.count)
-        let visibleChunk = manager.aiToolCoordinator.filterToolOutput(sessionID: sessionID, chunk: chunk)
+        let withoutSetupEcho = filterShellIntegrationEcho(sessionID: sessionID, chunk: chunk)
+        let visibleChunk = manager.aiToolCoordinator.filterToolOutput(sessionID: sessionID, chunk: withoutSetupEcho)
         let historyStart = TerminalPerf.now()
         await manager.terminalHistoryIndex.recordOutputChunk(
             sessionID: sessionID,
@@ -296,6 +436,13 @@ private actor ChunkBatchAccumulator {
     func finish() {
         flush()
         continuation.finish()
+    }
+
+    /// Wakes the parser with an empty batch after anything buffered, so held output can be
+    /// released when no new output arrives.
+    func kick() {
+        flush()
+        continuation.yield(Data())
     }
 
     private func flush() {
