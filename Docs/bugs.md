@@ -12,10 +12,10 @@ sequentially, and tagged by severity: **Critical**, **High**, **Medium**, or **L
 | Critical | 1     | 1     | 0    |
 | High     | 20    | 7     | 13   |
 | Medium   | 39    | 20    | 19   |
-| Low      | 33    | 5     | 28   |
-| **Total**| **93**| **33**| **60**|
+| Low      | 34    | 5     | 29   |
+| **Total**| **94**| **33**| **61**|
 
-Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13, Bug 85 fixed and Bugs 86-87 added 2026-10-14, Bug 84 fixed and Bugs 88-90 added 2026-10-15, Bugs 91-93 added 2026-10-18. The `**File:**` paths below predate the
+Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13, Bug 85 fixed and Bugs 86-87 added 2026-10-14, Bug 84 fixed and Bugs 88-90 added 2026-10-15, Bugs 91-93 added 2026-10-18, Bug 94 added 2026-10-20. The `**File:**` paths below predate the
 refactors (`Views/` → `UI/`, `SSH/` → `Services/SSH/`, `Services/Security/` → `Services/`) and some
 files no longer exist — resolve by basename.
 
@@ -1648,6 +1648,27 @@ run animated all four terminals through per-frame resizes and settled with Metal
 the SwiftUI pane frames. Most likely the screenshot caught that animation, or a rare bad settle.
 If it recurs, run that branch and compare the `swiftui.pane` and `appkit.metal` frames at the
 moment it happens.
+
+---
+
+### Bug 94 — Clicking the Reasoning Panel While It Streams Raises an NSRangeException (Low)
+
+**Files:** `UI/Terminal/ReasoningStreamView.swift` (`update(summary:details:)`)
+
+Seen 2026-10-20 during NetworkCopilot Phase 7 run 4 (Opus 5.5, extra high effort): the user
+clicked in the chat/reasoning area while the model was thinking, and AppKit logged
+`NSRangeException: -[NSBigMutableString _getBlockStart:end:contentsEnd:forRange:stopAtLineSeparators:]:
+Range {8053, 14466} out of bounds; string length 8733` from `-[NSTextView mouseDown:]` →
+`selectionRangeForProposedRange:granularity:` → `paragraphRangeForRange:`. AppKit caught it; the
+app and the copilot turn carried on.
+
+**Not yet diagnosed.** The requested range ends at 22,519 characters, the new text is 8,733 long,
+and a new thinking chain had just started after a 13k-token one, so the likely cause is
+`update` replacing the text with a shorter chain *during* `mouseDown`'s tracking loop, leaving
+AppKit's selection anchor in the old text. `update` clamps the selection it restores, but cannot
+reach the anchor AppKit holds while tracking. Unconfirmed: not yet reproduced, and the stack
+does not name the text view (the composer is the only other `NSTextView`). To reproduce,
+drag-select or triple-click in the reasoning panel as a long chain is replaced by a new one.
 
 ---
 

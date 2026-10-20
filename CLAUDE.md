@@ -610,9 +610,10 @@ Keep run/response identities and cancellation gates when extending AI work. Live
 remains the next AI phase below; this source audit did not run a real model or change hosts.
 
 **Active work: `Docs/NetworkCopilot.md` Phase 7 (live validation and cost). Needs the user at
-the keyboard.** Three runs are recorded in its "Phase 7 results so far". OSPF took
+the keyboard.** Four runs are recorded in its "Phase 7 results so far". OSPF took
 9 iterations each time, with or without skills, and the skills cost the user extra turns on
-de-duplication. **The user decided on 2026-10-20 that no built-in skills ship.** The user-skill
+de-duplication. Run 4 did everything (loopbacks, forwarding, verified) in one prompt at extra
+high effort for $3.98, mostly thinking output; it found Bug 94 (reasoning-panel click). **The user decided on 2026-10-20 that no built-in skills ship.** The user-skill
 mechanism stays. Remaining, on four fresh cloned Ubuntu VMs with the fixed prompts in
 the spec: de-duplication with broadcast on (compare with run 3), a router/switch or lab image
 if available, and the live checks: `run systemctl status ssh …`/`run journalctl …` return

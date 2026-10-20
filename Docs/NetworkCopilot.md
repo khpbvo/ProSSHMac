@@ -453,6 +453,46 @@ but none ship. One run per arm is a small sample, but the measured gain was zero
 was extra user turns. This matches the Design rules: generic procedure repeats what the model
 already knows.
 
+### Run 4 (2026-10-20): one mission at extra high effort, no skills
+
+Four fresh clones, broadcast off, effort set to **extra high** in the UI (runs 1–3 used the
+default). One prompt (828 chars) combining both jobs and spelling out what run 2 missed:
+
+```
+These four servers were cloned from the same VM image. Do the following as one job, without rebooting any of them:
+
+1. Find everything that is duplicated between them and make each one a unique machine.
+2. Install FRR on all four and set up OSPF in area 0 on the network they share. Give each server a loopback interface with its own /32 address, use that address as its router ID, and advertise it into OSPF. Enable IP forwarding. Make all of this survive a reboot.
+3. Verify everything: every identifier from step 1 is now unique, each server has a full adjacency with the other three, every server can ping every other server's loopback, and the configuration is saved.
+
+When you are done, give me a table per server with what you changed and how you verified it, and list anything that would only take effect after a reboot.
+```
+
+Evidence: `Docs/debuglogs/phase7-run4-ai.txt`.
+
+| | Run 3 (default effort, two prompts) | Run 4 (extra high, one mission) |
+|---|---|---|
+| User turns | 2 | **1** (the only input was the sudo password, in the card) |
+| Iterations | 21 (12 + 9) | 38 |
+| Tool calls | 57 | 84 (60 `execute_and_wait`, 8 `execute_command`, 15 `get_current_screen`, 1 `get_recent_commands`) |
+| Cost | $0.85 | **$3.98** |
+| Wall time | 11m25s | 22m29s (18m52s model, 3m37s tools) |
+
+- **Result (user check): everything done.** Identifiers unique, loopback /32s advertised,
+  forwarding on, all adjacencies Full, loopback pings pass. No reboot; no intervention beyond
+  the sudo password.
+- **Output is the cost.** $2.36 of $3.98 is output, mostly thinking: iterations 3–6 alone wrote
+  53k output tokens ($1.06) over 8.5 minutes, iteration 3 thought for 3 minutes. Cache reads
+  were $0.78 (context reached 167k tokens), cache writes $0.84; the cache held on every call.
+  The handover was 8,900 characters (~10k output tokens).
+- **Two polling stretches** (iterations 13–18 and 29–33): a long job started with
+  `execute_command`, then repeated `get_current_screen` until it finished. 11 cheap iterations.
+- **Not an effort measurement.** Effort and prompt both changed (the prompt asks for loopbacks,
+  forwarding and verification that runs 2–3 never did), so this is the price of one complete,
+  verified mission at extra high, not the effect of the effort setting alone.
+- Found Bug 94 (an AppKit `NSRangeException` when the user clicked the reasoning panel while it
+  was streaming); unrelated to the model.
+
 **Still open for Phase 7:** de-duplication with broadcast versus without, a router/switch or
 lab image, and the live checks (`systemctl status`/`journalctl` not paging over SSH, `$PAGER`
 unchanged afterwards, Open Skills Folder, a dropped-in user skill reaching a new chat). Record
