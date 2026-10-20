@@ -72,6 +72,48 @@ final class ReasoningStreamViewTests: XCTestCase {
         XCTAssertEqual(view.reasoningTextView.selectedRange(), NSRange(location: 0, length: 0))
     }
 
+    // Bug 94: a chain replaced inside mouseDown's tracking loop left AppKit's selection
+    // anchor in the old, longer text. The update must wait for the mouse to come up.
+    func testChainReplacementDuringClickWaitsForMouseUp() throws {
+        let view = ReasoningStreamScrollView()
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 296, height: 200),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = view
+        resize(view, width: 296, height: 200)
+        view.update(summary: "", details: String(repeating: "A long thinking chain fills and scrolls the panel.\n", count: 400))
+        let textView = view.reasoningTextView
+        let oldText = textView.string
+        let manager = try XCTUnwrap(textView.layoutManager)
+        let container = try XCTUnwrap(textView.textContainer)
+
+        // Click on the last line, where the panel has scrolled to.
+        let glyph = manager.glyphIndexForCharacter(at: (oldText as NSString).length - 2)
+        let rect = manager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: container)
+        let down = textView.convert(NSPoint(x: rect.midX, y: rect.midY), to: nil)
+        let drag = NSPoint(x: down.x - 20, y: down.y)
+        var textDuringClick: String?
+        Task { @MainActor in
+            view.update(summary: "", details: "Next chain.")
+            textDuringClick = textView.string
+            NSApp.postEvent(self.mouseEvent(.leftMouseDragged, at: drag, in: window), atStart: false)
+            NSApp.postEvent(self.mouseEvent(.leftMouseUp, at: drag, in: window), atStart: false)
+        }
+        textView.mouseDown(with: mouseEvent(.leftMouseDown, at: down, in: window))
+
+        XCTAssertTrue(textDuringClick == oldText, "The chain was replaced while the mouse was down")
+        XCTAssertFalse(textView.isTrackingMouse)
+        XCTAssertEqual(textView.string, "THINKING\nNext chain.")
+        XCTAssertEqual(textView.selectedRange(), NSRange(location: 0, length: 0))
+    }
+
+    private func mouseEvent(_ type: NSEvent.EventType, at point: NSPoint, in window: NSWindow) -> NSEvent {
+        NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
+                           timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                           context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+    }
+
     private func resize(_ view: ReasoningStreamScrollView, width: CGFloat, height: CGFloat) {
         view.setFrameSize(NSSize(width: width, height: height))
         view.needsLayout = true

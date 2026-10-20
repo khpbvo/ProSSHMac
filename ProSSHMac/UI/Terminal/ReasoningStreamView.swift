@@ -16,11 +16,30 @@ struct ReasoningStreamView: NSViewRepresentable {
     }
 }
 
+/// `mouseDown` runs AppKit's own tracking loop until the button comes up, and main-queue
+/// work (SwiftUI updates) still runs inside it. Replacing the text there leaves AppKit's
+/// selection anchor in the old string, and a word or paragraph selection then raises
+/// NSRangeException (Bug 94), so the scroll view holds updates until tracking ends.
+final class ReasoningTextView: NSTextView {
+    private(set) var isTrackingMouse = false
+    var onMouseTrackingEnded: (() -> Void)?
+
+    override func mouseDown(with event: NSEvent) {
+        isTrackingMouse = true
+        defer {
+            isTrackingMouse = false
+            onMouseTrackingEnded?()
+        }
+        super.mouseDown(with: event)
+    }
+}
+
 /// Owns the text container's width and document height explicitly. Stream updates,
 /// chain replacements and sidebar resizes all go through the same TextKit layout.
 final class ReasoningStreamScrollView: NSScrollView {
-    let reasoningTextView: NSTextView
+    let reasoningTextView: ReasoningTextView
     private var followAfterLayout = true
+    private var pendingUpdate: (summary: String, details: String)?
 
     init() {
         let storage = NSTextStorage()
@@ -28,7 +47,7 @@ final class ReasoningStreamScrollView: NSScrollView {
         let container = NSTextContainer(size: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
         storage.addLayoutManager(manager)
         manager.addTextContainer(container)
-        reasoningTextView = NSTextView(frame: .zero, textContainer: container)
+        reasoningTextView = ReasoningTextView(frame: .zero, textContainer: container)
         super.init(frame: .zero)
 
         drawsBackground = false
@@ -49,11 +68,17 @@ final class ReasoningStreamScrollView: NSScrollView {
         container.heightTracksTextView = false
         reasoningTextView.setAccessibilityLabel("Reasoning Stream")
         documentView = reasoningTextView
+        reasoningTextView.onMouseTrackingEnded = { [weak self] in self?.applyPendingUpdate() }
     }
 
     required init?(coder: NSCoder) { nil }
 
     func update(summary: String, details: String) {
+        guard !reasoningTextView.isTrackingMouse else {
+            pendingUpdate = (summary, details)
+            return
+        }
+        pendingUpdate = nil
         let text = Self.attributedText(summary: summary, details: details)
         guard let storage = reasoningTextView.textStorage, !storage.isEqual(to: text) else { return }
         let selection = reasoningTextView.selectedRange()
@@ -65,6 +90,11 @@ final class ReasoningStreamScrollView: NSScrollView {
         followAfterLayout = true
         needsLayout = true
         layoutSubtreeIfNeeded()
+    }
+
+    private func applyPendingUpdate() {
+        guard let pending = pendingUpdate else { return }
+        update(summary: pending.summary, details: pending.details)
     }
 
     override func layout() {
