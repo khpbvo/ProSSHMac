@@ -194,7 +194,7 @@ ProSSHMac/
 ├── Services/             # SessionManager (+Queries, +CredentialPrompt) + 7 coordinators, TransferManager,
 │   │                     #   EncryptedStorage, PersistentStore, PortForwardingManager,
 │   │                     #   LocalPTYProcess, LocalShellBootstrap, LocalShellChannel,
-│   │                     #   ZshStartupWarningFilter, SSHBinaryReader,
+│   │                     #   ZshStartupWarningFilter, ShellIntegrationEchoFilter, SSHBinaryReader,
 │   │                     #   KeyForgeService, KeyStore, KnownHostsStore, CertificateStore,
 │   │                     #   CertificateAuthorityService (+3 ext) / Store, AuditLogManager/Store,
 │   │                     #   TOTPGenerator/Store, BiometricPasswordStore, SecureEnclaveKeyManager,
@@ -283,7 +283,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 | `UI/Terminal/ExternalTerminalWindowView.swift` | Separate-window terminal session view (341L) |
 | `Terminal/Input/KeyEncoder.swift` | Key → byte encoding driven by `KeyEncoderOptions` (application cursor keys, kitty disambiguation, `modifyOtherKeys`); Shift+Enter fallback (315L) |
 | `Services/AI/AIToolDefinitions.swift` | Developer prompt (+ per-chat skill index), 10 tool schemas, direct-action filter, error helpers (`errorResult`/`errorObject`, hint required) (300L) |
-| `Services/SessionShellIOCoordinator.swift` | Shell input, the batched parser reader, per-batch bookkeeping (307L). Each batch is one `feedAndCollectOutcome` call, applied in one MainActor handoff with no post-feed engine reads; also filters the AI tool wrapper echo |
+| `Services/SessionShellIOCoordinator.swift` | Shell input, the batched parser reader, per-batch bookkeeping (307L). Each batch is one `feedAndCollectOutcome` call, applied in one MainActor handoff with no post-feed engine reads; also filters the AI tool wrapper echo, and injects SSH shell integration (`injectShellIntegration`) |
 | `Services/LocalPTYProcess.swift` | Actor wrapping forkpty, async output stream (274L) |
 | `Terminal/Renderer/TerminalMetalView.swift` | NSViewRepresentable wrapping `TerminalMTKView` (left-mouse events with click count), wheel scrolling (204L) |
 | `Terminal/Diagnostics/TerminalPerf.swift` | Runtime-gated signposts + 19 in-process stage timers with span/busy tracking (236L). Start here for any perf work |
@@ -291,6 +291,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 | `Services/LocalShellBootstrap.swift` | Child env for local PTY, ZDOTDIR/BASH_ENV injection (202L) |
 | `UI/Terminal/PatchApprovalCardView.swift` | Inline patch approval card for `apply_patch` (177L) |
 | `UI/Terminal/ReasoningStreamView.swift` | Native `NSScrollView`/`NSTextView` (TextKit 1) reasoning panel (132L) |
+| `Services/ShellIntegrationEchoFilter.swift` | Holds a remote shell's output from the integration-line send until its private `OSC 7777;PSI;<token>` end marker; bounded release (16 KB, 3 s, stream end). Plus injection timing/result types |
 | `Services/ZshStartupWarningFilter.swift` | Bounded zsh startup-warning filter for the PTY path (120L) |
 | `Terminal/Input/InputModeState.swift` | Actor mirroring grid input modes for the encoder; synced from grid snapshots (103L) |
 | `Terminal/Diagnostics/TerminalSchedulingDiagnostics.swift` | Opt-in (`--perf-scheduling`) thread CPU vs wall sampling around synchronous grid work, batch sizes, burst events (96L) |
@@ -446,6 +447,13 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
   completion. Tests: `testThrottledShellBufferRefreshCatchesUpAfterOutputStops`,
   `testDeferredShellBufferRefreshSkipsAlternateBuffer`,
   `testLocalSessionStreamsProgressiveCommandOutput` (a failure there is a real regression).
+- **SSH shell integration is typed, so its echo is filtered.** `injectShellIntegration`
+  (`SessionShellIOCoordinator`) sends `sshInjectionLine` only at a ready prompt, never through
+  `sendRawShellInput` (nothing recorded), and sends nothing if the user typed first.
+  `ShellIntegrationEchoFilter` runs before the AI-wrapper filter in `recordParsedChunk`. The
+  line's CR + erase-line after the marker is required: the hidden bytes never reach the engine.
+  Change the script and you must keep the marker after the closing `fi`/`end`. Tests:
+  `ShellIntegrationEchoFilterTests`.
 - **Bounded startup filters**: `ZshStartupWarningFilter` strips zsh's one-off `can't set tty pgrp`
   warning and **switches off after 32 KB** whether or not it found it. Any "scan the opening output
   for X" filter added to the PTY path must be bounded the same way — an unbounded one once cost 92.6%
@@ -529,6 +537,9 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
   delicate. Must resign at AppKit level, not just SwiftUI state. See `focusSessionAndPane()`.
 - **SwiftUI state mutations during `updateNSView`** cause warnings. Use `DispatchQueue.main.async` or
   `Task { @MainActor in await Task.yield() }` deferral.
+- **`ReasoningStreamScrollView.update` defers while `ReasoningTextView.isTrackingMouse`.**
+  Main-queue work runs inside `NSTextView.mouseDown`'s tracking loop; replacing text there
+  breaks AppKit's selection anchor (Bug 94). Any other streamed `NSTextView` needs the same.
 - **Live validation needs a relaunch.** A running Debug app does not pick up a rebuild; compare the
   process start time with the binary's build time before judging a fix from a screenshot.
 
@@ -640,8 +651,9 @@ and `onChange(of: paneManager.focusedPaneId)`.
 - Bug 91 (Split Right is a silent no-op when every session is in a pane) sits in the same code;
   ask the user whether it should disable the item or split with a new session.
 
-**Queued after that:** Bug 92 (copilot file-tool internals visible in the terminal), Bug 90
-(shell-integration setup line echoed at every remote bash login), Bug 89 (brightness flicker on
+**Queued after that:** Bug 92 (copilot file-tool internals visible in the terminal; reuse the
+Bug 90 marker/filter pattern in `ShellIntegrationEchoFilter` where it fits), Bug 95 (local bash
+likely ignores the `BASH_ENV` overlay; verify first), Bug 89 (brightness flicker on
 every tab switch with CRT/bloom on; first check whether it goes away with CRT and bloom off and
 whether `240b260~1` shows it), Bug 83 (registry audit), Bug 80 (one shared copy path and the
 draft/last-line fallback), Bug 86 (colour emoji render as silhouettes; not diagnosed). Optional:
@@ -674,6 +686,9 @@ list is in `Docs/RenderCost.md` and the raw reports in `Docs/R2bBenchmarkResults
 returns, capture the call stack before changing anything.
 
 **Pending live checks (need a relaunched app and a user at the keyboard):**
+- Bug 90: SSH to the four Ubuntu VMs shows a clean prompt at login (no setup line), prompt marks
+  still work, `history | tail` and `get_current_screen` hold no `__PROSSH` text.
+- Bug 94: triple-click/drag in the reasoning panel while a new chain replaces a long one.
 - A device `enable` *password* card (needs a daemon or device with an enable password; `sudo
   vtysh` never asks). Watch whether the card blinks after `% Access denied`, which is not a
   known retry notice.

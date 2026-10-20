@@ -10,12 +10,12 @@ sequentially, and tagged by severity: **Critical**, **High**, **Medium**, or **L
 | Severity | Total | Fixed | Open |
 |----------|-------|-------|------|
 | Critical | 1     | 1     | 0    |
-| High     | 20    | 7     | 13   |
-| Medium   | 39    | 20    | 19   |
-| Low      | 34    | 5     | 29   |
-| **Total**| **94**| **33**| **61**|
+| High     | 20    | 8     | 12   |
+| Medium   | 39    | 21    | 18   |
+| Low      | 35    | 7     | 28   |
+| **Total**| **95**| **37**| **58**|
 
-Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13, Bug 85 fixed and Bugs 86-87 added 2026-10-14, Bug 84 fixed and Bugs 88-90 added 2026-10-15, Bugs 91-93 added 2026-10-18, Bug 94 added 2026-10-20. The `**File:**` paths below predate the
+Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13, Bug 85 fixed and Bugs 86-87 added 2026-10-14, Bug 84 fixed and Bugs 88-90 added 2026-10-15, Bugs 91-93 added 2026-10-18, Bug 94 added 2026-10-20; Bugs 43, 44, 90 and 94 fixed and Bug 95 added 2026-10-20 (43 and 44 were found already fixed in the code). The `**File:**` paths below predate the
 refactors (`Views/` → `UI/`, `SSH/` → `Services/SSH/`, `Services/Security/` → `Services/`) and some
 files no longer exist — resolve by basename.
 
@@ -812,7 +812,7 @@ if nextX + width > pageSize {
 
 ---
 
-### Bug 43 — RendererPerformanceMonitor Is Not Thread-Safe (High)
+### Bug 43 — ~~RendererPerformanceMonitor Is Not Thread-Safe~~ [FIXED] (High)
 
 **File:** `Terminal/Renderer/RendererPerformanceMonitor.swift`
 
@@ -825,9 +825,11 @@ displays.
 
 **Suggested fix:** Make the monitor an actor, or protect its mutable state with a lock.
 
+**Fixed (found 2026-10-20):** all mutable state is behind an `NSLock`; the entry was never updated.
+
 ---
 
-### Bug 44 — RendererPerformanceMonitor Uses Quadratic `removeFirst()` (Medium)
+### Bug 44 — ~~RendererPerformanceMonitor Uses Quadratic `removeFirst()`~~ [FIXED] (Medium)
 
 **File:** `Terminal/Renderer/RendererPerformanceMonitor.swift`
 
@@ -839,6 +841,8 @@ CPU overhead in the render loop.
 histories but avoidable.
 
 **Suggested fix:** Use a ring buffer or `Deque` instead of Array.
+
+**Fixed (found 2026-10-20):** samples live in a fixed-capacity `RingBuffer`; the entry was never updated.
 
 ---
 
@@ -1578,7 +1582,7 @@ previous frame on reattach; keeping them costs ~20 MB per hidden session at full
 
 ---
 
-### Bug 90 — Shell-Integration Setup Line Is Visible in Remote Bash Sessions (Low)
+### Bug 90 — ~~Shell-Integration Setup Line Is Visible in Remote Bash Sessions~~ [FIXED] (Low)
 
 **Files:** `Terminal/Features/ShellIntegrationScripts.swift`, the code that injects it on connect
 
@@ -1593,6 +1597,22 @@ it typed at the prompt, and whether it can be sent with echo suppressed or follo
 those lines. Expected: no visible setup text, as in iTerm2's shell integration.
 
 Seen again 2026-10-18 on the same four VMs at every login.
+
+**Cause (2026-10-20):** `SessionManager` typed the line into the remote shell 500 ms after
+`openShell`, and readline echoed it (five rows at 80 columns). Sent before the prompt it also
+appeared twice, once from the tty's canonical echo. It went through `sendRawShellInput`, so the
+history index recorded it as a command, and so would a recording; without `ignorespace` it also
+landed in bash history.
+
+**Fixed 2026-10-20:** `SessionShellIOCoordinator.injectShellIntegration` sends
+`ShellIntegrationScripts.sshInjectionLine(for:token:)` once the shell looks ready (300 ms quiet,
+cursor past column 0, primary screen, not a password prompt), recorded nowhere. It sends nothing
+after 10 s without a ready prompt, or if the user typed first. The line ends by printing a
+private `OSC 7777;PSI;<token>` marker and CR + erase-line; `ShellIntegrationEchoFilter` holds the
+output from the send until the marker and drops it. A hold without the marker is released in
+order at 16 KB or after 3 s (an empty batch through the parser's stream), and at stream end.
+Known limit: with a multi-line prompt the first prompt row shows twice. Not yet run over a live
+SSH session; tests: `ShellIntegrationEchoFilterTests` (incl. real local bash and zsh).
 
 ---
 
@@ -1651,7 +1671,7 @@ moment it happens.
 
 ---
 
-### Bug 94 — Clicking the Reasoning Panel While It Streams Raises an NSRangeException (Low)
+### Bug 94 — ~~Clicking the Reasoning Panel While It Streams Raises an NSRangeException~~ [FIXED] (Low)
 
 **Files:** `UI/Terminal/ReasoningStreamView.swift` (`update(summary:details:)`)
 
@@ -1669,6 +1689,29 @@ AppKit's selection anchor in the old text. `update` clamps the selection it rest
 reach the anchor AppKit holds while tracking. Unconfirmed: not yet reproduced, and the stack
 does not name the text view (the composer is the only other `NSTextView`). To reproduce,
 drag-select or triple-click in the reasoning panel as a long chain is replaced by a new one.
+
+**Cause (confirmed 2026-10-20):** as suspected. Main-queue work, SwiftUI's `updateNSView`
+included, runs inside `NSTextView.mouseDown`'s tracking loop (`NSEventTrackingRunLoopMode`). A
+scratch repro showed AppKit proposing `{25235, -16846}` after a 25k-character text was replaced
+by an 8k one mid-drag; character granularity tolerates that, but word and paragraph granularity
+raise `NSRangeException` with the crash's exact range.
+
+**Fixed 2026-10-20:** `ReasoningTextView` marks the span of `super.mouseDown`, and
+`ReasoningStreamScrollView.update` keeps only the latest update while it lasts, applying it when
+the mouse comes up. The panel pauses while the button is held. Test:
+`ReasoningStreamViewTests.testChainReplacementDuringClickWaitsForMouseUp` (fails without the fix).
+
+---
+
+### Bug 95 — Local Bash Sessions Probably Get No Shell Integration or Prompt Overlay (Low)
+
+**Files:** `Services/LocalShellBootstrap.swift` (`BASH_ENV`)
+
+Found 2026-10-20 while diagnosing Bug 90. `LocalShellBootstrap` hands bash its overlay rc file
+through `BASH_ENV`, but bash reads `BASH_ENV` only for non-interactive shells, so an interactive
+local bash would get neither the prompt overlay nor the OSC 133 integration. **Unverified:** from
+bash's documented behaviour, not run. Check with a local bash session first (prompt marks,
+command blocks); a fix would likely use `--rcfile` and source the user's `~/.bashrc` from it.
 
 ---
 
