@@ -665,6 +665,9 @@ white fallback as shell prompt generation. Build and 2 focused tests passed.
 sidebar no longer clears the shared transfer session on disappearance. Build and 12 focused tests
 passed; live Files/Transfers switching remains useful.
 
+**Bug 22 is fixed** (2026-10-21): local shell restart no longer cleans the session twice.
+Build and 23 focused SessionManager tests passed; restart itself was not live-tested.
+
 The older `Docs/bugs.md` register contains stale descriptions; verify current source before
 implementing one. A 2026-10-21 source audit corrected 17 such headings and the summary counts.
 

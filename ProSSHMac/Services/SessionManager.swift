@@ -236,7 +236,6 @@ final class SessionManager: ObservableObject {
         if let shell = shellChannels[sessionID] {
             await shell.close()
         }
-        removeSessionArtifacts(sessionID: sessionID)
         removeSession(sessionID: sessionID)
 
         return try await openLocalSession(
