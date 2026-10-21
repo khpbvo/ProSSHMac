@@ -11,9 +11,9 @@ sequentially, and tagged by severity: **Critical**, **High**, **Medium**, or **L
 |----------|-------|-------|------|
 | Critical | 1     | 1     | 0    |
 | High     | 20    | 16    | 4    |
-| Medium   | 40    | 36    | 4    |
-| Low      | 35    | 29    | 6    |
-| **Total**| **96**| **82**| **14**|
+| Medium   | 40    | 37    | 3    |
+| Low      | 35    | 30    | 5    |
+| **Total**| **96**| **84**| **12**|
 
 Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13, Bug 85 fixed and Bugs 86-87 added 2026-10-14, Bug 84 fixed and Bugs 88-90 added 2026-10-15, Bugs 91-93 added 2026-10-18, Bug 94 added 2026-10-20; Bugs 43, 44, 90 and 94 fixed and Bug 95 added 2026-10-20 (43 and 44 were found already fixed in the code); Bugs 87 and 88 fixed 2026-10-21. The `**File:**` paths below predate the
 refactors (`Views/` → `UI/`, `SSH/` → `Services/SSH/`, `Services/Security/` → `Services/`) and some
@@ -195,7 +195,7 @@ fails or the function returns early, the `strdup`'d strings are never freed.
 
 ---
 
-### Bug 8 — LocalShellChannel `ioctl` Called From Async Context Without Isolation (Low)
+### Bug 8 — ~~LocalShellChannel `ioctl` Called From Async Context Without Isolation~~ [FIXED] (Low)
 
 **File:** `Services/Session/LocalShellChannel.swift`
 
@@ -205,6 +205,9 @@ Swift Concurrency context without explicit thread isolation.
 
 **Impact:** Theoretical data-race under strict concurrency checking; no practical impact
 observed.
+
+**Verified 2026-10-21:** PTY resize now lives in the `LocalPTYProcess` actor. Its synchronous
+`ioctl` call runs within the actor-isolated method; the old unisolated channel path is gone.
 
 ---
 
@@ -279,7 +282,7 @@ func deleteAuthority(_ ca: CertificateAuthority) throws {
 
 ---
 
-### Bug 12 — CertificateAuthorityService `generateCertificate` Discards Extension Values (Medium)
+### Bug 12 — ~~CertificateAuthorityService `generateCertificate` Discards Extension Values~~ [FIXED] (Medium)
 
 **File:** `Services/Security/CertificateAuthorityService.swift`
 
@@ -293,6 +296,10 @@ not contain the intended extension data.
 
 **Suggested fix:** Pass extension values (not just OIDs) through the certificate
 generation pipeline.
+
+**Verified 2026-10-21:** `encodeNameValueMap` serializes each extension name and value, and
+`signCertificate` appends that map to the bytes signed and stored in `rawCertificateData`.
+`SSHCertificate.extensions` keeps names for display, while the signed certificate retains values.
 
 ---
 
