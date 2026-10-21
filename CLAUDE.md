@@ -671,7 +671,8 @@ implementing one. A 2026-10-21 source audit corrected 17 such headings and the s
 **Next independent bug: Bug 92.** Copilot file-tool internals are visible in the terminal;
 reuse the Bug 90 marker/filter pattern in `ShellIntegrationEchoFilter` where it fits.
 
-**Queued after that:** Bug 95 (local bash likely ignores the `BASH_ENV` overlay; verify first),
+**Queued after that:** Bug 95 (isolated PTY confirmed login Bash ignores `BASH_ENV`; a
+`--rcfile` launch lost the login profile, so preserve login behavior in any fix),
 Bug 89 (brightness flicker on every tab switch with CRT/bloom on; first check whether it goes away
 with CRT and bloom off and whether `240b260~1` shows it),
 Bug 86 (colour emoji render as silhouettes; not diagnosed). Optional:

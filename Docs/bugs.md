@@ -10,10 +10,10 @@ sequentially, and tagged by severity: **Critical**, **High**, **Medium**, or **L
 | Severity | Total | Fixed | Open |
 |----------|-------|-------|------|
 | Critical | 1     | 1     | 0    |
-| High     | 20    | 12    | 8    |
-| Medium   | 40    | 30    | 10   |
+| High     | 20    | 14    | 6    |
+| Medium   | 40    | 31    | 9    |
 | Low      | 35    | 18    | 17   |
-| **Total**| **96**| **61**| **35**|
+| **Total**| **96**| **64**| **32**|
 
 Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13, Bug 85 fixed and Bugs 86-87 added 2026-10-14, Bug 84 fixed and Bugs 88-90 added 2026-10-15, Bugs 91-93 added 2026-10-18, Bug 94 added 2026-10-20; Bugs 43, 44, 90 and 94 fixed and Bug 95 added 2026-10-20 (43 and 44 were found already fixed in the code); Bugs 87 and 88 fixed 2026-10-21. The `**File:**` paths below predate the
 refactors (`Views/` → `UI/`, `SSH/` → `Services/SSH/`, `Services/Security/` → `Services/`) and some
@@ -26,7 +26,8 @@ biometric errors; tracked restart directory; symmetric Host encoding; jump-host 
 serial overflow guard; mapped REP character; OSC 4 pair loop; exact DCS intermediate match;
 UUID quick-command variable IDs; screensaver monitor cleanup and state updates outside Canvas;
 quoted file drops; persisted legacy setting; sorted host groups; reset import label; and macOS
-availability on Shortcuts. Focused tests also verified Bugs 54 and 55 already resolved. Counts
+availability on Shortcuts. Focused tests also verified Bugs 54 and 55 already resolved. Later
+source inspection confirmed Bugs 9, 10, and 11 resolved as well. Counts
 above were recomputed from all 96 headings after this audit.
 
 ---
@@ -198,7 +199,7 @@ observed.
 
 ## 2. Services & Storage
 
-### Bug 9 — EncryptedStorage Deletes Legacy Keychain Item Before Verifying Migration (High)
+### Bug 9 — ~~EncryptedStorage Deletes Legacy Keychain Item Before Verifying Migration~~ [FIXED] (High)
 
 **File:** `Services/Security/EncryptedStorage.swift`
 
@@ -216,9 +217,12 @@ try newStorage.write(data)
 deleteLegacyKeychainItem()
 ```
 
+**Verified 2026-10-21:** `loadOrCreateMasterKey` saves the legacy key into the new keychain
+before deleting the old item.
+
 ---
 
-### Bug 10 — CertificateAuthorityService Non-Atomic Save Can Corrupt CA Store (High)
+### Bug 10 — ~~CertificateAuthorityService Non-Atomic Save Can Corrupt CA Store~~ [FIXED] (High)
 
 **File:** `Services/Security/CertificateAuthorityService.swift`
 
@@ -235,9 +239,12 @@ try data.write(to: tmp, options: .atomic)
 // .atomic already does write-then-rename on Apple platforms
 ```
 
+**Verified 2026-10-21:** CA saves use `PersistentStore`, whose `EncryptedStorage` writer uses
+`Data.write(options: .atomic)`.
+
 ---
 
-### Bug 11 — CertificateAuthorityService Deleting a CA Orphans Its Secure Enclave Key (Medium)
+### Bug 11 — ~~CertificateAuthorityService Deleting a CA Orphans Its Secure Enclave Key~~ [FIXED] (Medium)
 
 **File:** `Services/Security/CertificateAuthorityService.swift`
 
@@ -255,6 +262,9 @@ func deleteAuthority(_ ca: CertificateAuthority) throws {
     try saveAuthorities()
 }
 ```
+
+**Verified 2026-10-21:** `deleteAuthorities` saves the updated CA list, then calls
+`deleteP256Key` for each deleted authority's nonempty Secure Enclave reference.
 
 ---
 
@@ -1749,15 +1759,18 @@ the mouse comes up. The panel pauses while the button is held. Test:
 
 ---
 
-### Bug 95 — Local Bash Sessions Probably Get No Shell Integration or Prompt Overlay (Low)
+### Bug 95 — Local Bash Sessions Get No Shell Integration or Prompt Overlay (Low)
 
 **Files:** `Services/LocalShellBootstrap.swift` (`BASH_ENV`)
 
 Found 2026-10-20 while diagnosing Bug 90. `LocalShellBootstrap` hands bash its overlay rc file
 through `BASH_ENV`, but bash reads `BASH_ENV` only for non-interactive shells, so an interactive
-local bash would get neither the prompt overlay nor the OSC 133 integration. **Unverified:** from
-bash's documented behaviour, not run. Check with a local bash session first (prompt marks,
-command blocks); a fix would likely use `--rcfile` and source the user's `~/.bashrc` from it.
+local bash would get neither the prompt overlay nor the OSC 133 integration.
+
+**Verified 2026-10-21 in an isolated PTY:** A login interactive Bash (`argv[0] = "-bash"`)
+ignored the `BASH_ENV` overlay. Launching with `--rcfile` and `-i` loaded the overlay only when
+Bash was not a login shell; that variant stopped loading the login profile. A fix must preserve
+normal login-profile behavior. The app's own local Bash UI was not exercised.
 
 ---
 
