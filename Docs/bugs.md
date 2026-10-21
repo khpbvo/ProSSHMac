@@ -12,8 +12,8 @@ sequentially, and tagged by severity: **Critical**, **High**, **Medium**, or **L
 | Critical | 1     | 1     | 0    |
 | High     | 20    | 16    | 4    |
 | Medium   | 40    | 36    | 4    |
-| Low      | 35    | 27    | 8    |
-| **Total**| **96**| **80**| **16**|
+| Low      | 35    | 28    | 7    |
+| **Total**| **96**| **81**| **15**|
 
 Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13, Bug 85 fixed and Bugs 86-87 added 2026-10-14, Bug 84 fixed and Bugs 88-90 added 2026-10-15, Bugs 91-93 added 2026-10-18, Bug 94 added 2026-10-20; Bugs 43, 44, 90 and 94 fixed and Bug 95 added 2026-10-20 (43 and 44 were found already fixed in the code); Bugs 87 and 88 fixed 2026-10-21. The `**File:**` paths below predate the
 refactors (`Views/` → `UI/`, `SSH/` → `Services/SSH/`, `Services/Security/` → `Services/`) and some
@@ -812,7 +812,7 @@ let mouseEvent = MouseEvent(
 
 ---
 
-### Bug 41 — KeyEncoder `encodeBackspace` Ignores Ctrl When Alt Is Held (Low)
+### Bug 41 — ~~KeyEncoder `encodeBackspace` Ignores Ctrl When Alt Is Held~~ [FIXED] (Low)
 
 **File:** `Terminal/Input/KeyEncoder.swift`, lines 217–225
 
@@ -821,6 +821,10 @@ Alt+Ctrl+Backspace and Alt+Backspace (with `backspaceSendsDelete = true`) both p
 happens to be correct by accident for the common case, but the code path is inconsistent.
 
 **Impact:** Very low — no incorrect behavior in practice for standard configurations.
+
+**Verified 2026-10-21:** Current encoder applies Ctrl's opposite-byte mapping before Alt's
+escape prefix. Added regression cases for both Backspace settings; `KeyEncoderTests` passed
+14/14 and the Debug build passed.
 
 ---
 

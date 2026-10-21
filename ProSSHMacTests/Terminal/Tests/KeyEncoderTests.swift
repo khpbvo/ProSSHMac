@@ -113,6 +113,10 @@ final class KeyEncoderTests: XCTestCase {
 
         // Ctrl+Backspace should always map to DEL.
         assertEncoded(bsEncoder, event: KeyEvent(key: .backspace, modifiers: [.ctrl]), expected: [0x7F])
+
+        // Alt prefixes ESC without hiding Ctrl's opposite-byte mapping.
+        assertEncoded(delEncoder, event: KeyEvent(key: .backspace, modifiers: [.alt, .ctrl]), expected: [0x1B, 0x08])
+        assertEncoded(bsEncoder, event: KeyEvent(key: .backspace, modifiers: [.alt, .ctrl]), expected: [0x1B, 0x7F])
     }
 
     @MainActor

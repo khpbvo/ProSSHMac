@@ -232,6 +232,7 @@ Current AI architecture (2026-09-25): the assistant uses OpenRouter Chat Complet
 
 ## Loop Log
 
+- 2026-10-21: **Bug 41 verified already fixed.** `KeyEncoderTests` now exercises Ctrl+Alt+Backspace with both Backspace settings and confirms Ctrl's byte mapping survives the Alt escape prefix. Focused suite passed 14/14 with 0 failures/skips; Debug build passed. Register: 96 total, 81 fixed, 15 open.
 - 2026-10-21: **Bug 46 verified fixed by regression test; Bugs 23, 47, and 75 found obsolete.** `PaneManager.restoreMaximize` retains pane additions/removals; new focused test plus the pane suite passed 28/28, and Debug build passed. The reconnect coordinator has no window reference, PaneManager has no force-unwrapped `restoreLayout`, and Matrix character index arithmetic wraps before modulo. Register: 96 total, 80 fixed, 16 open.
 - 2026-10-21: **Eleven more stale bug headings corrected** (Bugs 4, 6, 7, 21, 57, 59, 61, 63, 77, 87, 88). Current source handles the first nine, and Bugs 87/88 already contained fixed notes and tests; only their headings were open. No production code changed. Recomputed register: 96 total, 76 fixed, 20 open; `git diff --check` passed.
 - 2026-10-21: **Bug 22 fixed** (`SessionManager`). `restartLocalSession` no longer calls `removeSessionArtifacts` before `removeSession` repeats the same cleanup. The older delegate-callback description was stale. Debug build and `SessionManagerRenderingPathTests` passed 23/23 with 0 failures/skips; no direct restart test was run. Bug register counts: 96 total, 65 fixed, 31 open.
