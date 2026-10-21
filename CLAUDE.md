@@ -661,12 +661,16 @@ path, entries, or loading state. Build and 4 focused tests passed; live UI valid
 **Bug 65 is fixed** (2026-10-21): prompt preview handles an empty rainbow palette with the same
 white fallback as shell prompt generation. Build and 2 focused tests passed.
 
+**Bug 83 audit is complete** (2026-10-21): no keyed view-lifecycle registry remains. The file
+sidebar no longer clears the shared transfer session on disappearance. Build and 12 focused tests
+passed; live Files/Transfers switching remains useful.
+
 **Next independent bug: Bug 92.** Copilot file-tool internals are visible in the terminal;
 reuse the Bug 90 marker/filter pattern in `ShellIntegrationEchoFilter` where it fits.
 
 **Queued after that:** Bug 95 (local bash likely ignores the `BASH_ENV` overlay; verify first),
 Bug 89 (brightness flicker on every tab switch with CRT/bloom on; first check whether it goes away
-with CRT and bloom off and whether `240b260~1` shows it), Bug 83 (registry audit),
+with CRT and bloom off and whether `240b260~1` shows it),
 Bug 86 (colour emoji render as silhouettes; not diagnosed). Optional:
 a shared glyph atlas, now the largest hidden renderer cost (`Docs/Bug84.md` Open questions).
 

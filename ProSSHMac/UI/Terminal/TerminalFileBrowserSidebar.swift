@@ -112,7 +112,6 @@ struct TerminalFileBrowserSidebar: View {
             Divider()
         }
         .onAppear { syncSession() }
-        .onDisappear { transferManager.setActiveSession(nil) }
         .onChange(of: session?.id) { _, _ in syncSession() }
     }
 

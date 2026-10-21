@@ -1432,7 +1432,7 @@ Other layout changes still rebuild the surface — see Bug 84.
 
 ---
 
-### Bug 83 — Audit for Other "Register on Appear, Remove by Key on Disappear" Registries (Low)
+### Bug 83 — ~~Audit for Other "Register on Appear, Remove by Key on Disappear" Registries~~ [FIXED] (Low)
 
 Bug 81's pattern — a shared registry keyed by session ID, filled in `onAppear` and cleared by key in
 `onDisappear` — breaks whenever SwiftUI rebuilds a view, because the new view's `onAppear` can run
@@ -1444,6 +1444,14 @@ view-lifecycle instance; the remaining per-session removals (`TerminalHistoryInd
 **Next:** extend the audit to `Services/` coordinators and AppKit bridges (first-responder and
 input-capture state per pane), and check any registry added later against this rule. The Bug 81
 registry itself (`TerminalSelectionCoordinator`) was deleted in Bug 84 Phase 3.
+
+**Audited 2026-10-21:** No remaining keyed view-lifecycle registry was found in `UI/`,
+`Terminal/`, or the service coordinators. `TerminalInputCaptureView` removes its own AppKit
+observer tokens on window changes and deinit. One related shared-state race was found:
+`TerminalFileBrowserSidebar.onDisappear` cleared `TransferManager.activeSessionID` even if
+`TransfersView` or a replacement sidebar had selected a session. That teardown write was removed;
+the visible sidebar and Transfers view still select a session on appearance or change. The Debug
+build and `TerminalSurfaceIdentityTests` passed (12/12); the handoff still needs live UI checking.
 
 ---
 
