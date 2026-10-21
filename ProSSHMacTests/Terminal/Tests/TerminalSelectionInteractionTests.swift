@@ -62,6 +62,31 @@ final class TerminalSelectionInteractionTests: XCTestCase {
         XCTAssertEqual(store.existingModel(for: sessionID, duplicateInPane: laterPane)?.copySelection(), "bbb")
     }
 
+    func testCopyWithoutSelectionLeavesClipboardUntouched() {
+        let model = MetalTerminalSurfaceModel()
+        var writes: [String] = []
+        let write: (String) -> Bool = { value in
+            writes.append(value)
+            return true
+        }
+
+        XCTAssertFalse(TerminalSelectionClipboard.copy(from: nil, write: write))
+        XCTAssertFalse(TerminalSelectionClipboard.copy(from: model, write: write))
+        XCTAssertTrue(writes.isEmpty)
+    }
+
+    func testCopyUsesOnlySelectedText() throws {
+        let model = MetalTerminalSurfaceModel()
+        try selectText("selected", in: model)
+        var writes: [String] = []
+
+        XCTAssertTrue(TerminalSelectionClipboard.copy(from: model) { value in
+            writes.append(value)
+            return true
+        })
+        XCTAssertEqual(writes, ["selected"])
+    }
+
     /// Gives the surface's renderer a one-row snapshot containing `text` and selects all of it.
     private func selectText(_ text: String, in model: MetalTerminalSurfaceModel) throws {
         let renderer = try XCTUnwrap(model.renderer)

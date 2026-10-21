@@ -406,7 +406,7 @@ struct TerminalView: View {
                     tabManager: tabManager,
                     onFocusTap: { focusSessionAndPane(session.id, paneID: paneID) },
                     onPaste: { sid in pasteClipboardToSession(sid) },
-                    onCopy: { sid in copyContentToClipboard(sessionID: sid, surfaceModel: model) },
+                    onCopy: { _ in TerminalSelectionClipboard.copy(from: model) },
                     onSplitWithExisting: { sid, pid, dir in splitWithExistingSession(sid, beside: pid, direction: dir) }
                 )
                 .id(session.id)
@@ -917,28 +917,7 @@ struct TerminalView: View {
 
     private func copyActiveContentToClipboard() {
         guard let target = focusedSurfaceModel() else { return }
-        copyContentToClipboard(sessionID: target.sessionID, surfaceModel: target.model)
-    }
-
-    /// Copies `surfaceModel`'s selection, else the unsent draft, else the last line (Bug 80).
-    @discardableResult
-    private func copyContentToClipboard(sessionID: UUID, surfaceModel: MetalTerminalSurfaceModel?) -> Bool {
-        if let selectedText = surfaceModel?.copySelection(), !selectedText.isEmpty {
-            _ = PlatformClipboard.writeString(selectedText)
-            return true
-        }
-        let draft = pendingInput[sessionID, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
-        if !draft.isEmpty {
-            _ = PlatformClipboard.writeString(draft)
-            return true
-        }
-
-        if let lastLine = sessionManager.shellBuffers[sessionID]?.last,
-           !lastLine.isEmpty {
-            _ = PlatformClipboard.writeString(lastLine)
-            return true
-        }
-        return false
+        TerminalSelectionClipboard.copy(from: target.model)
     }
 
     private func pasteClipboardToSession(_ sessionID: UUID) {

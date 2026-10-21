@@ -67,3 +67,18 @@ final class TerminalSurfaceModelStore: ObservableObject {
         }
     }
 }
+
+@MainActor
+enum TerminalSelectionClipboard {
+    /// Keep Copy consistent across terminal windows and leave the clipboard alone without a selection.
+    @discardableResult
+    static func copy(
+        from surfaceModel: MetalTerminalSurfaceModel?,
+        write: @MainActor (String) -> Bool = PlatformClipboard.writeString
+    ) -> Bool {
+        guard let selectedText = surfaceModel?.copySelection(), !selectedText.isEmpty else {
+            return false
+        }
+        return write(selectedText)
+    }
+}

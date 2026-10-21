@@ -267,20 +267,7 @@ struct ExternalTerminalWindowView: View {
 
     private func copyActiveContentToClipboard() {
         guard let sessionID = session?.id else { return }
-        copyContentToClipboard(sessionID: sessionID)
-    }
-
-    @discardableResult
-    private func copyContentToClipboard(sessionID: UUID) -> Bool {
-        if let selectedText = surfaceModels.existingModel(for: sessionID)?.copySelection(), !selectedText.isEmpty {
-            _ = PlatformClipboard.writeString(selectedText)
-            return true
-        }
-        if let lastLine = sessionManager.shellBuffers[sessionID]?.last, !lastLine.isEmpty {
-            _ = PlatformClipboard.writeString(lastLine)
-            return true
-        }
-        return false
+        TerminalSelectionClipboard.copy(from: surfaceModels.existingModel(for: sessionID))
     }
 
     private func pasteClipboardToSession(_ sessionID: UUID) {

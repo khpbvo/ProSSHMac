@@ -1345,7 +1345,7 @@ performing redundant file I/O on the main thread.
 
 ---
 
-### Bug 80 — Terminal Copy Is Implemented Twice and Silently Copies a Fallback (Medium)
+### Bug 80 — ~~Terminal Copy Is Implemented Twice and Silently Copies a Fallback~~ [FIXED] (Medium)
 
 **Files:** `UI/Terminal/TerminalView.swift` (`copyActiveContentToClipboard`, `copyContentToClipboard`),
 `UI/Terminal/ExternalTerminalWindowView.swift` (same two functions), `UI/Terminal/MetalTerminalSessionSurface.swift`
@@ -1373,6 +1373,10 @@ reads the selection from its `TerminalSurfaceModelStore` (the main window by foc
 main window's "copy any other visible pane's selection" fallback is gone. Still open: the two
 windows' duplicated copy functions, and the draft/last-line fallback. Bug 84 closed 2026-10-15
 without changing either.
+
+**Fixed 2026-10-21:** Both windows now call `TerminalSelectionClipboard.copy` with their selected
+surface model. Copy writes only nonempty selected text; without a selection it leaves the clipboard
+unchanged. The draft and last-line fallbacks were removed. The focused selection tests passed 6/6.
 
 ---
 
