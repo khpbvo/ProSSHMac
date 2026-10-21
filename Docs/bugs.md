@@ -11,11 +11,11 @@ sequentially, and tagged by severity: **Critical**, **High**, **Medium**, or **L
 |----------|-------|-------|------|
 | Critical | 1     | 1     | 0    |
 | High     | 20    | 8     | 12   |
-| Medium   | 39    | 21    | 18   |
-| Low      | 35    | 7     | 28   |
-| **Total**| **95**| **37**| **58**|
+| Medium   | 39    | 22    | 17   |
+| Low      | 35    | 8     | 27   |
+| **Total**| **95**| **39**| **56**|
 
-Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13, Bug 85 fixed and Bugs 86-87 added 2026-10-14, Bug 84 fixed and Bugs 88-90 added 2026-10-15, Bugs 91-93 added 2026-10-18, Bug 94 added 2026-10-20; Bugs 43, 44, 90 and 94 fixed and Bug 95 added 2026-10-20 (43 and 44 were found already fixed in the code). The `**File:**` paths below predate the
+Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13, Bug 85 fixed and Bugs 86-87 added 2026-10-14, Bug 84 fixed and Bugs 88-90 added 2026-10-15, Bugs 91-93 added 2026-10-18, Bug 94 added 2026-10-20; Bugs 43, 44, 90 and 94 fixed and Bug 95 added 2026-10-20 (43 and 44 were found already fixed in the code); Bugs 87 and 88 fixed 2026-10-21. The `**File:**` paths below predate the
 refactors (`Views/` → `UI/`, `SSH/` → `Services/SSH/`, `Services/Security/` → `Services/`) and some
 files no longer exist — resolve by basename.
 
@@ -1543,6 +1543,10 @@ is shown.
 been applied, or have the focus handler skip a pane change caused by closing a pane. Test: the
 moved session is selected once the layout settles.
 
+**Fixed (2026-10-21):** `PaneTabSelectionCoordinator` skips the focus and tab-selection updates
+caused by removing a pane. The moved session remains selected after the layout settles. The
+`TerminalSurfaceIdentityTests` regression also checks its renderer is reused.
+
 ---
 
 ### Bug 88 — In a Split Layout, Clicking a Tab Does Not Show Its Session (Medium)
@@ -1561,6 +1565,11 @@ pane focuses that pane; otherwise the session replaces the focused pane's sessio
 with Bug 87, which is the same interaction between tab selection and
 `onChange(of: paneManager.focusedPaneId)`. Test: in a two-pane layout, selecting a third tab shows
 it in the focused pane and keeps its renderer.
+
+**Fixed (2026-10-21):** tab selection now focuses an existing pane or assigns the session to the
+focused pane, including keyboard selection and a click on an already-selected tab. A hidden
+session's renderer is reused when shown again. A targeted hosted-`TerminalView` test covers both
+pane assignment and renderer identity.
 
 ---
 

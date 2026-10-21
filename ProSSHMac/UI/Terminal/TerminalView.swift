@@ -34,6 +34,7 @@ struct TerminalView: View {
     @StateObject private var surfaceModels = TerminalSurfaceModelStore()
     @StateObject private var paneManager: PaneManager
     @State private var pendingPaneSessionCreation: Set<UUID> = []
+    @StateObject private var paneTabSelection: PaneTabSelectionCoordinator
     @StateObject private var quickCommands = QuickCommands()
     @FocusState private var focusedSessionID: UUID?
     @State private var closeConfirmationSession: Session?
@@ -52,9 +53,14 @@ struct TerminalView: View {
 
     /// Managers are injectable so tests can drive tabs and panes without the developer's
     /// persisted layout. `StateObject(wrappedValue:)` builds each default only once.
-    init(tabManager: SessionTabManager? = nil, paneManager: PaneManager? = nil) {
+    init(
+        tabManager: SessionTabManager? = nil,
+        paneManager: PaneManager? = nil,
+        paneTabSelection: PaneTabSelectionCoordinator? = nil
+    ) {
         _tabManager = StateObject(wrappedValue: tabManager ?? SessionTabManager())
         _paneManager = StateObject(wrappedValue: paneManager ?? PaneManager())
+        _paneTabSelection = StateObject(wrappedValue: paneTabSelection ?? PaneTabSelectionCoordinator())
     }
 
     var body: some View {
@@ -226,10 +232,13 @@ struct TerminalView: View {
         .onChange(of: paneManager.allPanes.map(\.id)) { _, _ in
             pruneSurfaceModels()
         }
-        .onChange(of: tabManager.selectedSessionID) { _, _ in
+        .onChange(of: tabManager.selectedSessionID) { _, newSessionID in
             resizeEffect.reset()
             updateSearchLines()
             restoreSidebarLayoutForSelection()
+            if let newSessionID, !paneTabSelection.consumeIgnoredTabSelection(newSessionID) {
+                showSelectedSessionInPane(newSessionID)
+            }
         }
         .onChange(of: showFileBrowser) { _, _ in
             persistSidebarLayoutForSelection()
@@ -256,6 +265,9 @@ struct TerminalView: View {
             persistSidebarLayoutForSelection()
         }
         .onChange(of: paneManager.focusedPaneId) { _, newPaneID in
+            if paneTabSelection.consumeIgnoredFocusChange(newPaneID) {
+                return
+            }
             // When the user clicks a different pane, sync tab selection
             // so that DirectTerminalInputCaptureView enables for the
             // correct session and keyboard input is routed properly.
@@ -295,6 +307,7 @@ struct TerminalView: View {
                     TerminalSessionTabBar(
                         tabManager: tabManager,
                         paneManager: paneManager,
+                        onSelectSession: { selectSessionTab($0) },
                         onRequestClose: { s in requestCloseSession(s) },
                         onOpenLocalTerminal: { openLocalTerminal() },
                         onSplitWithExisting: { sid, pid, dir in splitWithExistingSession(sid, beside: pid, direction: dir) }
@@ -336,6 +349,7 @@ struct TerminalView: View {
                     TerminalSessionTabBar(
                         tabManager: tabManager,
                         paneManager: paneManager,
+                        onSelectSession: { selectSessionTab($0) },
                         onRequestClose: { s in requestCloseSession(s) },
                         onOpenLocalTerminal: { openLocalTerminal() },
                         onSplitWithExisting: { sid, pid, dir in splitWithExistingSession(sid, beside: pid, direction: dir) }
@@ -591,6 +605,42 @@ struct TerminalView: View {
         return tabManager.tabs.first(where: { $0.id == sessionID })?.session
     }
 
+    private func selectSessionTab(_ sessionID: UUID) {
+        guard tabManager.tabs.contains(where: { $0.id == sessionID }) else { return }
+        // A click on the already-selected tab still needs to reveal it after Move to New Tab.
+        showSelectedSessionInPane(sessionID)
+    }
+
+    private func showSelectedSessionInPane(_ sessionID: UUID) {
+        guard tabManager.tabs.contains(where: { $0.id == sessionID }) else { return }
+        if paneManager.paneCount > 1 {
+            if let pane = paneManager.allPanes.first(where: { $0.sessionID == sessionID }) {
+                if let maximized = paneManager.maximizedPaneId, maximized != pane.id {
+                    paneManager.restoreMaximize()
+                }
+                focusSessionAndPane(sessionID, paneID: pane.id)
+                return
+            }
+
+            let paneID = paneManager.maximizedPaneId ?? paneManager.focusedPaneId
+            guard !pendingPaneSessionCreation.contains(paneID) else { return }
+            paneManager.assignSession(sessionID, to: paneID, sessionType: paneSessionType(for: sessionID))
+            focusSessionAndPane(sessionID, paneID: paneID)
+        } else {
+            focusSessionAndPane(sessionID)
+        }
+    }
+
+    private func paneSessionType(for sessionID: UUID) -> PaneSessionType {
+        guard let session = tabManager.tabs.first(where: { $0.id == sessionID })?.session else {
+            return .local
+        }
+        if case let .ssh(hostID) = session.kind {
+            return .ssh(hostID: hostID, hostLabel: session.hostLabel)
+        }
+        return .local
+    }
+
     private func focusSessionAndPane(_ sessionID: UUID, paneID: UUID? = nil) {
         // If a text input (e.g. AI composer) holds first-responder status,
         // resign it at the AppKit level so the terminal can reclaim focus.
@@ -771,7 +821,7 @@ struct TerminalView: View {
 
     private func switchSessionTab(oneBasedIndex: Int) {
         guard let tab = tabManager.tab(atOneBasedIndex: oneBasedIndex) else { return }
-        tabManager.select(sessionID: tab.id)
+        selectSessionTab(tab.id)
     }
 
     private func syncPaneManagerSessions() {
@@ -852,11 +902,7 @@ struct TerminalView: View {
     }
 
     private func moveToNewTab(paneID: UUID) {
-        // Detach the pane's session from the split tree and select it in a standalone tab.
-        if let sessionID = paneManager.rootNode.findPane(id: paneID)?.sessionID {
-            paneManager.closePane(paneID)
-            tabManager.select(sessionID: sessionID)
-        }
+        paneTabSelection.moveToNewTab(paneID: paneID, paneManager: paneManager, tabManager: tabManager)
     }
 
     private func disconnectOrCloseSelectedSession() {
@@ -1056,5 +1102,39 @@ struct TerminalView: View {
                 // Surface error via existing session state mechanism.
             }
         }
+    }
+}
+
+/// Keeps a pane removal's focus update from overriding the tab the user just moved out.
+/// The view's two `onChange` handlers can run in either order after `closePane`.
+@MainActor
+final class PaneTabSelectionCoordinator: ObservableObject {
+    private var ignoredFocusChangeAfterPaneClose: UUID?
+    private var ignoredTabSelectionAfterPaneClose: UUID?
+
+    func moveToNewTab(paneID: UUID, paneManager: PaneManager, tabManager: SessionTabManager) {
+        guard paneManager.canClose(paneID),
+              let sessionID = paneManager.rootNode.findPane(id: paneID)?.sessionID else { return }
+
+        if paneID == paneManager.focusedPaneId {
+            ignoredFocusChangeAfterPaneClose = paneManager.allPanes.first(where: { $0.id != paneID })?.id
+        }
+        if tabManager.selectedSessionID != sessionID {
+            ignoredTabSelectionAfterPaneClose = sessionID
+        }
+        paneManager.closePane(paneID)
+        tabManager.select(sessionID: sessionID)
+    }
+
+    func consumeIgnoredFocusChange(_ paneID: UUID) -> Bool {
+        guard ignoredFocusChangeAfterPaneClose == paneID else { return false }
+        ignoredFocusChangeAfterPaneClose = nil
+        return true
+    }
+
+    func consumeIgnoredTabSelection(_ sessionID: UUID) -> Bool {
+        guard ignoredTabSelectionAfterPaneClose == sessionID else { return false }
+        ignoredTabSelectionAfterPaneClose = nil
+        return true
     }
 }

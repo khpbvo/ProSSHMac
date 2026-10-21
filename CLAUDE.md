@@ -325,6 +325,12 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
   is supported and reported. Soft/full reset clears all keyboard modes.
 - **Focus management**: `isAIAssistantComposerFocused` state. `focusSessionAndPane()` resigns at AppKit
   level, then re-arms terminal. See Known Issues.
+- **Tab selection in split layouts**: selecting a session focuses the pane already showing it;
+  otherwise it assigns that session to the focused pane. `TerminalSessionTabBar` routes clicks
+  through `TerminalView.selectSessionTab`, including clicks on an already-selected tab, while
+  `onChange(of: selectedSessionID)` handles keyboard and programmatic selection. Moving a pane to
+  a tab uses `PaneTabSelectionCoordinator` to ignore the close-induced focus/selection updates.
+  Keep the per-session surface model so hidden sessions retain their renderer.
 - **AI service stack**: the agent loop and `AIConversationContext` use provider-neutral types
   (`AITranscriptMessage`, `AIAssistantTurn`, `AIChatProviding` in `AISharedTypes.swift`);
   `OpenRouterChatProvider` maps them to Chat Completions, `AnthropicChatProvider` to the Anthropic
@@ -637,27 +643,21 @@ text or timestamps, so ask the user for them. Docs at the end: `Docs/AIArchitect
 CredentialPrompt is complete (`Docs/CredentialPrompt.md` Phase 4 has the live results); the user
 decided against a "Grant sudo on all hosts" button.
 
-**Next after that: Bug 88 + Bug 87 (tab selection vs. pane focus in split layouts).** Both are in
-`Docs/bugs.md` and touch the same interaction in `TerminalView`: tab selection, pane assignment
-and `onChange(of: paneManager.focusedPaneId)`.
-- Bug 88: in a split layout a tab click only changes `tabManager.selectedSessionID`; panes draw
-  `pane.sessionID`, so nothing new appears. Proposed: a tab already in a pane focuses that pane,
-  otherwise the session replaces the focused pane's session (keeping its store model/renderer).
-  Confirm that behaviour with the user before implementing.
-- Bug 87: Move to New Tab selects the remaining pane's session because the focus-change handler
-  overrides the selection made after `closePane`.
-- Extend `TerminalSurfaceIdentityTests` (it hosts the real `TerminalView`); fix both in one change.
-  Small enough to skip a feature spec; log in `Docs/featurelist.md`.
-- Bug 91 (Split Right is a silent no-op when every session is in a pane) sits in the same code;
-  ask the user whether it should disable the item or split with a new session.
+**Bugs 87 and 88 are fixed** (2026-10-21): split tab selection shows its session, and Move to New
+Tab keeps the moved session selected. Build and 42 focused tests passed; a relaunched-app check
+with live sessions remains useful.
 
-**Queued after that:** Bug 92 (copilot file-tool internals visible in the terminal; reuse the
-Bug 90 marker/filter pattern in `ShellIntegrationEchoFilter` where it fits), Bug 95 (local bash
-likely ignores the `BASH_ENV` overlay; verify first), Bug 89 (brightness flicker on
-every tab switch with CRT/bloom on; first check whether it goes away with CRT and bloom off and
-whether `240b260~1` shows it), Bug 83 (registry audit), Bug 80 (one shared copy path and the
+**Next independent bug: Bug 92.** Copilot file-tool internals are visible in the terminal;
+reuse the Bug 90 marker/filter pattern in `ShellIntegrationEchoFilter` where it fits.
+
+**Queued after that:** Bug 95 (local bash likely ignores the `BASH_ENV` overlay; verify first),
+Bug 89 (brightness flicker on every tab switch with CRT/bloom on; first check whether it goes away
+with CRT and bloom off and whether `240b260~1` shows it), Bug 83 (registry audit),
+Bug 80 (one shared copy path and the
 draft/last-line fallback), Bug 86 (colour emoji render as silhouettes; not diagnosed). Optional:
 a shared glyph atlas, now the largest hidden renderer cost (`Docs/Bug84.md` Open questions).
+Bug 91 (Split Right silently does nothing when all sessions are in panes) needs a product choice:
+disable the item or create a new session when splitting.
 
 **Bug 93 (panes overlapped once after switching terminal-only mode) is not reproduced.** The
 unmerged branch `debug/terminal-jump` (`251e010`) logs layout state, pane SwiftUI frames, Metal

@@ -54,6 +54,39 @@ final class TerminalSurfaceIdentityTests: XCTestCase {
     }
 
     @MainActor
+    func testSplitTabSelectionShowsItsSessionAndKeepsRenderers() async throws {
+        let harness = try await SurfaceHarness.make()
+        defer { harness.close() }
+        let (a, b, c) = (harness.sessionIDs[0], harness.sessionIDs[1], harness.sessionIDs[2])
+
+        try await harness.select(a)
+        let paneA = harness.paneManager.focusedPaneId
+        let aRenderer = try await harness.renderers(count: 1)[0]
+        let paneB = try await harness.split(with: b)
+        let showingB = try await harness.renderers(count: 2)
+        let bRenderer = try XCTUnwrap(showingB.first { $0 !== aRenderer })
+
+        try await harness.select(c)
+        XCTAssertEqual(harness.paneManager.focusedPaneId, paneB)
+        XCTAssertEqual(harness.paneManager.rootNode.findPane(id: paneB)?.sessionID, c)
+        XCTAssertEqual(harness.paneManager.rootNode.findPane(id: paneB)?.sessionType, .local)
+        let showingC = try await harness.renderers(count: 2)
+        XCTAssertTrue(showingC.contains { $0 === aRenderer })
+        XCTAssertFalse(showingC.contains { $0 === bRenderer })
+
+        try await harness.select(b)
+        XCTAssertEqual(harness.paneManager.rootNode.findPane(id: paneB)?.sessionID, b)
+        let showingBAgain = try await harness.renderers(count: 2)
+        XCTAssertTrue(showingBAgain.contains { $0 === bRenderer },
+                      "Returning to a hidden session rebuilt its renderer")
+
+        try await harness.select(a)
+        XCTAssertEqual(harness.paneManager.focusedPaneId, paneA,
+                       "Selecting a session already visible should focus its pane")
+        XCTAssertEqual(harness.paneManager.rootNode.findPane(id: paneB)?.sessionID, b)
+    }
+
+    @MainActor
     func testSplitUnsplitAndMoveToNewTabKeepTheRenderers() async throws {
         let harness = try await SurfaceHarness.make()
         defer { harness.close() }
@@ -72,15 +105,14 @@ final class TerminalSurfaceIdentityTests: XCTestCase {
         let unsplit = try await harness.renderers(count: 1)[0]
         XCTAssertTrue(unsplit === a0, "Unsplitting rebuilt the remaining session's renderer")
 
-        // Split again, then move B's pane to its own tab (TerminalView.moveToNewTab). Closing the
-        // pane moves focus to A's pane, and TerminalView's focus handler then selects A, so B is
-        // selected only once that has settled. This test is about renderers, not that race.
+        // Split again, then take the same Move to New Tab path as TerminalView.
         let paneB2 = try await harness.split(with: b)
         let resplit = try await harness.renderers(count: 2)
         XCTAssertTrue(resplit.contains { $0 === b0 }, "Splitting with B again rebuilt B's renderer")
-        harness.paneManager.closePane(paneB2)
+        harness.moveToNewTab(paneB2)
         try await harness.settle()
-        try await harness.select(b)
+        XCTAssertEqual(harness.tabManager.selectedSessionID, b,
+                       "Moving B to a tab selected the remaining pane's session instead")
         let moved = try await harness.renderers(count: 1)[0]
         XCTAssertTrue(moved === b0, "Moving a pane to a new tab rebuilt its renderer")
     }
@@ -282,6 +314,7 @@ private final class SurfaceHarness {
     let navigationCoordinator: AppNavigationCoordinator
     let tabManager: SessionTabManager
     let paneManager: PaneManager
+    let paneTabSelection: PaneTabSelectionCoordinator
     let sessionIDs: [UUID]
     private let suiteName: String
     private var retained: [MetalTerminalRenderer] = []
@@ -293,6 +326,7 @@ private final class SurfaceHarness {
         navigationCoordinator: AppNavigationCoordinator,
         tabManager: SessionTabManager,
         paneManager: PaneManager,
+        paneTabSelection: PaneTabSelectionCoordinator,
         suiteName: String
     ) {
         self.window = window
@@ -300,6 +334,7 @@ private final class SurfaceHarness {
         self.navigationCoordinator = navigationCoordinator
         self.tabManager = tabManager
         self.paneManager = paneManager
+        self.paneTabSelection = paneTabSelection
         self.sessionIDs = sessionManager.sessions.map(\.id)
         self.suiteName = suiteName
     }
@@ -318,8 +353,13 @@ private final class SurfaceHarness {
         let navigationCoordinator = AppNavigationCoordinator()
         let tabManager = SessionTabManager(defaults: defaults)
         let paneManager = PaneManager(layoutStore: PaneLayoutStore(defaults: defaults))
+        let paneTabSelection = PaneTabSelectionCoordinator()
 
-        let rootView = TerminalView(tabManager: tabManager, paneManager: paneManager)
+        let rootView = TerminalView(
+            tabManager: tabManager,
+            paneManager: paneManager,
+            paneTabSelection: paneTabSelection
+        )
             .environmentObject(navigationCoordinator)
             .environmentObject(sessionManager)
             .environmentObject(TransferManager())
@@ -342,6 +382,7 @@ private final class SurfaceHarness {
             navigationCoordinator: navigationCoordinator,
             tabManager: tabManager,
             paneManager: paneManager,
+            paneTabSelection: paneTabSelection,
             suiteName: suiteName
         )
         try await harness.settle()
@@ -392,6 +433,10 @@ private final class SurfaceHarness {
     func select(_ sessionID: UUID) async throws {
         tabManager.select(sessionID: sessionID)
         try await settle()
+    }
+
+    func moveToNewTab(_ paneID: UUID) {
+        paneTabSelection.moveToNewTab(paneID: paneID, paneManager: paneManager, tabManager: tabManager)
     }
 
     /// Splits the focused pane and shows `sessionID` in the new pane, as

@@ -4,6 +4,7 @@ import SwiftUI
 struct TerminalSessionTabBar: View {
     @ObservedObject var tabManager: SessionTabManager
     @ObservedObject var paneManager: PaneManager
+    var onSelectSession: (UUID) -> Void
     var onRequestClose: (Session) -> Void
     var onOpenLocalTerminal: () -> Void
     var onSplitWithExisting: (UUID, UUID, SplitDirection) -> Void
@@ -24,7 +25,7 @@ struct TerminalSessionTabBar: View {
                         let isSelected = tabManager.selectedSessionID == session.id
                         let isTabHovered = hoveredTabID == session.id
                         Button {
-                            tabManager.select(sessionID: session.id)
+                            onSelectSession(session.id)
                         } label: {
                             HStack(spacing: 6) {
                                 if tab.isPinned {
