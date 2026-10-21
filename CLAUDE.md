@@ -665,6 +665,9 @@ white fallback as shell prompt generation. Build and 2 focused tests passed.
 sidebar no longer clears the shared transfer session on disappearance. Build and 12 focused tests
 passed; live Files/Transfers switching remains useful.
 
+The older `Docs/bugs.md` register contains stale descriptions; verify current source before
+implementing one. A 2026-10-21 source audit corrected 17 such headings and the summary counts.
+
 **Next independent bug: Bug 92.** Copilot file-tool internals are visible in the terminal;
 reuse the Bug 90 marker/filter pattern in `ShellIntegrationEchoFilter` where it fits.
 
