@@ -232,6 +232,7 @@ Current AI architecture (2026-09-25): the assistant uses OpenRouter Chat Complet
 
 ## Loop Log
 
+- 2026-10-21: **Bug 58 verified already fixed.** The current Metal vertex shader clamps its six-corner lookup and the draw loop uses `cellBuffer.cellCount` for instances. Corrected the stale register entry; 96 total, 85 fixed, 11 open. Documentation only; `git diff --check` passed.
 - 2026-10-21: **Bugs 8 and 12 verified already fixed.** PTY resize is actor isolated in `LocalPTYProcess`; certificate signing encodes extension names and values into the signed raw payload (the model's display list keeps names). Documentation only, register now 96 total, 84 fixed, 12 open; `git diff --check` passed.
 - 2026-10-21: **Bug 53 fixed** (`TerminalSearch`). Search matches now remember their source line and refuse to highlight a changed line during the SwiftUI line-update handoff, including replacement text of the same length. Added a stale-match regression. Debug build and `TerminalSearchTests` passed 6/6 with 0 failures/skips. Register: 96 total, 82 fixed, 14 open; live terminal search still needs a relaunched-app check.
 - 2026-10-21: **Bug 41 verified already fixed.** `KeyEncoderTests` now exercises Ctrl+Alt+Backspace with both Backspace settings and confirms Ctrl's byte mapping survives the Alt escape prefix. Focused suite passed 14/14 with 0 failures/skips; Debug build passed. Register: 96 total, 81 fixed, 15 open.

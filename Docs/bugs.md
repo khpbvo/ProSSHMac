@@ -11,9 +11,9 @@ sequentially, and tagged by severity: **Critical**, **High**, **Medium**, or **L
 |----------|-------|-------|------|
 | Critical | 1     | 1     | 0    |
 | High     | 20    | 16    | 4    |
-| Medium   | 40    | 37    | 3    |
+| Medium   | 40    | 38    | 2    |
 | Low      | 35    | 30    | 5    |
-| **Total**| **96**| **84**| **12**|
+| **Total**| **96**| **85**| **11**|
 
 Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13, Bug 85 fixed and Bugs 86-87 added 2026-10-14, Bug 84 fixed and Bugs 88-90 added 2026-10-15, Bugs 91-93 added 2026-10-18, Bug 94 added 2026-10-20; Bugs 43, 44, 90 and 94 fixed and Bug 95 added 2026-10-20 (43 and 44 were found already fixed in the code); Bugs 87 and 88 fixed 2026-10-21. The `**File:**` paths below predate the
 refactors (`Views/` → `UI/`, `SSH/` → `Services/SSH/`, `Services/Security/` → `Services/`) and some
@@ -1117,7 +1117,7 @@ task is sleeping, the task retains `self` and fires on a zombie object.
 
 ## 11. Metal Shaders
 
-### Bug 58 — Vertex Shader `vid` Has No Bounds Safety (Medium)
+### Bug 58 — ~~Vertex Shader `vid` Has No Bounds Safety~~ [FIXED] (Medium)
 
 **File:** `Terminal/Renderer/Shaders.metal`
 
@@ -1126,6 +1126,10 @@ bounds checking. If the draw call specifies more vertices than instances, the sh
 reads out-of-bounds GPU memory.
 
 **Impact:** GPU crash or visual artifacts if instance count is miscalculated.
+
+**Verified 2026-10-21:** The shader clamps `vid` before indexing its six-corner array. The draw
+loop submits exactly six vertices per instance and uses `cellBuffer.cellCount` as the instance
+count. The current shader indexes `cells` by the instance ID, not by `vid`.
 
 ---
 
