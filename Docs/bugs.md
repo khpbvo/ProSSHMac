@@ -1143,7 +1143,7 @@ instead of remaining fixed on screen.
 
 ## 12. UI Layer
 
-### Bug 65 — PromptPreviewRenderer Rainbow Mode Crashes on Empty Segments (High)
+### Bug 65 — ~~PromptPreviewRenderer Rainbow Mode Crashes on Empty Segments~~ [FIXED] (High)
 
 **File:** `Views/Settings/PromptPreviewRenderer.swift`
 
@@ -1157,6 +1157,10 @@ this is a division by zero, causing an immediate crash.
 ```swift
 guard !colors.isEmpty else { return defaultColor }
 ```
+
+**Fixed 2026-10-21:** The preview uses white when the rainbow palette is empty, matching the
+existing shell prompt fallback. Palette lookup is guarded before indexing. Focused tests cover
+empty and cycling palettes (2/2 passed); the Debug build passed.
 
 ---
 

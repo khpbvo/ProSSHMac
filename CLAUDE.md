@@ -658,6 +658,9 @@ relaunched-app clipboard check remains useful.
 **Bug 96 is fixed** (2026-10-21): older SFTP directory responses cannot replace a new session's
 path, entries, or loading state. Build and 4 focused tests passed; live UI validation remains useful.
 
+**Bug 65 is fixed** (2026-10-21): prompt preview handles an empty rainbow palette with the same
+white fallback as shell prompt generation. Build and 2 focused tests passed.
+
 **Next independent bug: Bug 92.** Copilot file-tool internals are visible in the terminal;
 reuse the Bug 90 marker/filter pattern in `ShellIntegrationEchoFilter` where it fits.
 

@@ -234,8 +234,11 @@ struct PromptPreviewRenderer: View {
                         blue: Double(config.usernameColor.blue)
                     )
                 case .rainbow:
-                    let c = config.rainbowColors[i % max(config.rainbowColors.count, 1)]
-                    charColor = Color(red: Double(c.red), green: Double(c.green), blue: Double(c.blue))
+                    if let c = Self.rainbowColor(at: i, in: config.rainbowColors) {
+                        charColor = Color(red: Double(c.red), green: Double(c.green), blue: Double(c.blue))
+                    } else {
+                        charColor = .white
+                    }
                 }
 
                 let text = context.resolve(
@@ -288,5 +291,10 @@ struct PromptPreviewRenderer: View {
             )
             context.draw(symbolText, at: CGPoint(x: x, y: y), anchor: .leading)
         }
+    }
+
+    static func rainbowColor(at index: Int, in colors: [GradientColor]) -> GradientColor? {
+        guard !colors.isEmpty else { return nil }
+        return colors[index % colors.count]
     }
 }
