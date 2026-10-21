@@ -17,6 +17,7 @@ final class TransferManager: ObservableObject {
     private var workerTask: Task<Void, Never>?
     private var activeTransferTask: Task<SFTPTransferResult, Error>?
     private var activeTransferID: UUID?
+    private var activeListingRequestID: UUID?
 
     func configure(sessionManager: SessionManager) {
         if self.sessionManager == nil {
@@ -27,6 +28,9 @@ final class TransferManager: ObservableObject {
     func setActiveSession(_ sessionID: UUID?) {
         guard activeSessionID != sessionID else { return }
         activeSessionID = sessionID
+        activeListingRequestID = nil
+        isListing = false
+        errorMessage = nil
         remoteEntries = []
         currentRemotePath = "/"
 
@@ -38,19 +42,31 @@ final class TransferManager: ObservableObject {
 
     func refreshDirectory(path: String? = nil) async {
         guard let sessionID = activeSessionID, let sessionManager else {
+            activeListingRequestID = nil
+            isListing = false
             remoteEntries = []
             return
         }
 
+        let requestID = UUID()
+        activeListingRequestID = requestID
         isListing = true
-        defer { isListing = false }
+        errorMessage = nil
+        defer {
+            if activeListingRequestID == requestID {
+                activeListingRequestID = nil
+                isListing = false
+            }
+        }
 
         let targetPath = normalizeRemotePath(path ?? currentRemotePath)
         do {
             let entries = try await sessionManager.listRemoteDirectory(sessionID: sessionID, path: targetPath)
+            guard activeSessionID == sessionID, activeListingRequestID == requestID else { return }
             currentRemotePath = targetPath
             remoteEntries = entries
         } catch {
+            guard activeSessionID == sessionID, activeListingRequestID == requestID else { return }
             errorMessage = "Failed to list remote directory: \(error.localizedDescription)"
         }
     }

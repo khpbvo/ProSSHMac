@@ -74,6 +74,45 @@ final class SessionManagerSFTPSidebarTests: XCTestCase {
         }
     }
 
+    func testOlderTransferListingCannotReplaceNewSessionResults() async throws {
+        let pending = SidebarPendingListings()
+        let transport = SidebarSFTPTransportStub(listHandler: { sessionID, _ in
+            try await pending.list(sessionID: sessionID)
+        })
+        let manager = SessionManager(transport: transport, knownHostsStore: SidebarKnownHostsStore())
+        let first = try await manager.connect(to: makeHost())
+        let second = try await manager.connect(to: makeHost())
+        defer {
+            Task { @MainActor in
+                await manager.disconnect(sessionID: first.id)
+                await manager.disconnect(sessionID: second.id)
+            }
+        }
+        let transfers = TransferManager()
+        transfers.configure(sessionManager: manager)
+
+        transfers.activeSessionID = first.id
+        let older = Task { await transfers.refreshDirectory(path: "/first") }
+        await pending.waitForRequest(sessionID: first.id)
+
+        transfers.activeSessionID = second.id
+        let newer = Task { await transfers.refreshDirectory(path: "/second") }
+        await pending.waitForRequest(sessionID: second.id)
+        let secondEntries = [SFTPDirectoryEntry(
+            path: "/second/file", name: "file", isDirectory: false,
+            size: 1, permissions: 0o644, modifiedAt: nil
+        )]
+        pending.complete(sessionID: second.id, entries: secondEntries)
+        await newer.value
+
+        pending.complete(sessionID: first.id, entries: [])
+        await older.value
+        XCTAssertEqual(transfers.activeSessionID, second.id)
+        XCTAssertEqual(transfers.currentRemotePath, "/second")
+        XCTAssertEqual(transfers.remoteEntries, secondEntries)
+        XCTAssertFalse(transfers.isListing)
+    }
+
     private func makeHost() -> ProSSHMac.Host {
         ProSSHMac.Host(
             id: UUID(),
@@ -122,13 +161,16 @@ final class SessionManagerSFTPSidebarTests: XCTestCase {
     private var listResponsesByPath: [String: [SFTPDirectoryEntry]]
     private var listErrorsByPath: [String: SSHTransportError]
     private var listCalls: [String] = []
+    private let listHandler: (@MainActor (UUID, String) async throws -> [SFTPDirectoryEntry])?
 
     init(
         listResponsesByPath: [String: [SFTPDirectoryEntry]] = [:],
-        listErrorsByPath: [String: SSHTransportError] = [:]
+        listErrorsByPath: [String: SSHTransportError] = [:],
+        listHandler: (@MainActor (UUID, String) async throws -> [SFTPDirectoryEntry])? = nil
     ) {
         self.listResponsesByPath = listResponsesByPath
         self.listErrorsByPath = listErrorsByPath
+        self.listHandler = listHandler
     }
 
     func connect(sessionID: UUID, to host: ProSSHMac.Host, jumpHostConfig: JumpHostConfig?) async throws -> SSHConnectionDetails {
@@ -163,6 +205,9 @@ final class SessionManagerSFTPSidebarTests: XCTestCase {
             throw SSHTransportError.sessionNotFound
         }
         listCalls.append(path)
+        if let listHandler {
+            return try await listHandler(sessionID, path)
+        }
         if let error = listErrorsByPath[path] {
             throw error
         }
@@ -201,6 +246,29 @@ final class SessionManagerSFTPSidebarTests: XCTestCase {
 
     func capturedListCalls() -> [String] {
         listCalls
+    }
+}
+
+@MainActor private final class SidebarPendingListings {
+    private var pending: [UUID: CheckedContinuation<[SFTPDirectoryEntry], Error>] = [:]
+    private var waiters: [UUID: CheckedContinuation<Void, Never>] = [:]
+
+    func list(sessionID: UUID) async throws -> [SFTPDirectoryEntry] {
+        try await withCheckedThrowingContinuation { continuation in
+            pending[sessionID] = continuation
+            waiters.removeValue(forKey: sessionID)?.resume()
+        }
+    }
+
+    func waitForRequest(sessionID: UUID) async {
+        if pending[sessionID] != nil { return }
+        await withCheckedContinuation { continuation in
+            waiters[sessionID] = continuation
+        }
+    }
+
+    func complete(sessionID: UUID, entries: [SFTPDirectoryEntry]) {
+        pending.removeValue(forKey: sessionID)?.resume(returning: entries)
     }
 }
 

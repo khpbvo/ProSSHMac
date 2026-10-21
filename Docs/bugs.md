@@ -1733,6 +1733,21 @@ command blocks); a fix would likely use `--rcfile` and source the user's `~/.bas
 
 ---
 
+### Bug 96 — ~~Older SFTP Listing Overwrites the Newly Selected Session~~ [FIXED] (Medium)
+
+**File:** `Services/TransferManager.swift` (`refreshDirectory`)
+
+An SFTP directory listing could finish after the active session changed, then replace the new
+session's path and entries with results from the old session. A slower older listing could also
+clear `isListing` while a newer request was in progress.
+
+**Fixed 2026-10-21:** Each listing has a request ID. Session changes invalidate it; only the
+current request for the current session may update results, errors, or the loading state. A
+controlled test completes the older request last and confirms the newer session's results remain.
+Debug build and `SessionManagerSFTPSidebarTests` passed (4/4).
+
+---
+
 ## 13. AppIntents
 
 ### Bug 79 — ProSSHShortcuts Uses Wrong `@available` Platform (Medium)
