@@ -647,6 +647,10 @@ decided against a "Grant sudo on all hosts" button.
 Tab keeps the moved session selected. Build and 42 focused tests passed; a relaunched-app check
 with live sessions remains useful.
 
+**Bug 91 is fixed** (2026-10-21): the user chose to disable Split Right/Down when no unplaced tab
+is available or the focused pane cannot split. Build and 27 focused pane tests passed; a
+relaunched-app menu check remains useful.
+
 **Next independent bug: Bug 92.** Copilot file-tool internals are visible in the terminal;
 reuse the Bug 90 marker/filter pattern in `ShellIntegrationEchoFilter` where it fits.
 
@@ -656,8 +660,6 @@ with CRT and bloom off and whether `240b260~1` shows it), Bug 83 (registry audit
 Bug 80 (one shared copy path and the
 draft/last-line fallback), Bug 86 (colour emoji render as silhouettes; not diagnosed). Optional:
 a shared glyph atlas, now the largest hidden renderer cost (`Docs/Bug84.md` Open questions).
-Bug 91 (Split Right silently does nothing when all sessions are in panes) needs a product choice:
-disable the item or create a new session when splitting.
 
 **Bug 93 (panes overlapped once after switching terminal-only mode) is not reproduced.** The
 unmerged branch `debug/terminal-jump` (`251e010`) logs layout state, pane SwiftUI frames, Metal

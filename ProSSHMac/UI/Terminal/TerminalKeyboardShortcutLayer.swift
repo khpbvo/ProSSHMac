@@ -2,6 +2,7 @@
 import SwiftUI
 
 struct TerminalKeyboardShortcutLayer: View {
+    var canSplitWithAvailableSession: Bool
     var onSendCommand:          () -> Void
     var onSendCtrlC:            () -> Void
     var onSendCtrlD:            () -> Void
@@ -53,8 +54,10 @@ struct TerminalKeyboardShortcutLayer: View {
                 .keyboardShortcut("x", modifiers: [.command, .shift])
             Button("Split Right")              { onSplitRight() }
                 .keyboardShortcut("d", modifiers: [.command])
+                .disabled(!canSplitWithAvailableSession)
             Button("Split Down")               { onSplitDown() }
                 .keyboardShortcut("d", modifiers: [.command, .shift])
+                .disabled(!canSplitWithAvailableSession)
             Button("Focus Next Pane")          { onFocusNextPane() }
                 .keyboardShortcut("]", modifiers: [.command])
             Button("Focus Previous Pane")      { onFocusPreviousPane() }

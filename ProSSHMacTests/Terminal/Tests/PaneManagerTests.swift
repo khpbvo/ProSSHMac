@@ -69,6 +69,25 @@ final class PaneManagerTests: XCTestCase {
         XCTAssertEqual(manager.rootNode.maxDepth, depthBeforeExtraAttempt)
         XCTAssertEqual(manager.paneCount, countBefore)
     }
+
+    @MainActor
+    func testKeyboardSplitAvailabilityRequiresAnUnassignedSessionAndSplittablePane() {
+        let manager = makeManager(testName: #function)
+        let firstSession = UUID()
+        let secondSession = UUID()
+        manager.assignSession(firstSession, to: manager.focusedPaneId)
+
+        XCTAssertEqual(manager.nextUnassignedSessionID(in: [firstSession, secondSession]), secondSession)
+
+        manager.splitPane(manager.focusedPaneId, direction: .vertical)
+        manager.assignSession(secondSession, to: manager.focusedPaneId)
+        XCTAssertNil(manager.nextUnassignedSessionID(in: [firstSession, secondSession]))
+
+        for _ in manager.rootNode.maxDepth..<PaneManager.maxDepth {
+            manager.splitPane(manager.focusedPaneId, direction: .vertical)
+        }
+        XCTAssertNil(manager.nextUnassignedSessionID(in: [UUID()]))
+    }
     @MainActor
     func testNestedSplitCreatesDeepTree() {
         let manager = makeManager(testName: #function)

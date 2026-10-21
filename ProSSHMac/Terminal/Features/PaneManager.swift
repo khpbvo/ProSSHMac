@@ -181,6 +181,13 @@ final class PaneManager: ObservableObject {
         return depth < Self.maxDepth
     }
 
+    /// The keyboard split command uses an existing tab that is not shown in any pane.
+    func nextUnassignedSessionID(in tabSessionIDs: [UUID]) -> UUID? {
+        guard canSplit(focusedPaneId) else { return nil }
+        let assignedSessionIDs = Set(allPanes.compactMap(\.sessionID))
+        return tabSessionIDs.first { !assignedSessionIDs.contains($0) }
+    }
+
     func canClose(_ paneID: UUID) -> Bool {
         paneCount > 1
     }

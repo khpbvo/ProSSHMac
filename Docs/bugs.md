@@ -1625,7 +1625,7 @@ SSH session; tests: `ShellIntegrationEchoFilterTests` (incl. real local bash and
 
 ---
 
-### Bug 91 — Split Right / Split Down Silently Do Nothing When Every Session Is in a Pane (Low)
+### Bug 91 — ~~Split Right / Split Down Silently Do Nothing When Every Session Is in a Pane~~ [FIXED] (Low)
 
 **Files:** `UI/Terminal/TerminalView.swift` (`splitNextAvailableSession`),
 `UI/Terminal/TerminalKeyboardShortcutLayer.swift`
@@ -1638,6 +1638,11 @@ new pane and returns when there is none. The items stay enabled, so it looks bro
 **Expected:** either disable the items when no unplaced session exists, or split with a new
 session (as the pane context menu's "split with new session" does through
 `createSessionForNewPane`). Ask the user which before changing it.
+
+**Fixed 2026-10-21:** The user chose to disable the unavailable action. Both keyboard shortcut
+buttons are disabled unless the focused pane can split and an open tab is not already shown in a
+pane. The action uses the same availability check, so the enabled state and behavior agree.
+`PaneManagerTests` covers the available, fully assigned, and depth-limited cases (27/27 passed).
 
 ---
 

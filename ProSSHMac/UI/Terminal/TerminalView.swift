@@ -153,6 +153,7 @@ struct TerminalView: View {
             terminalContentWithFileBrowser
 
             TerminalKeyboardShortcutLayer(
+                canSplitWithAvailableSession: paneManager.nextUnassignedSessionID(in: tabManager.tabs.map(\.id)) != nil,
                 onSendCommand:         { sendSelectedCommandShortcut() },
                 onSendCtrlC:           { sendControl("\u{03}") },
                 onSendCtrlD:           { sendControl("\u{04}") },
@@ -891,14 +892,12 @@ struct TerminalView: View {
     }
 
     /// Keyboard shortcut helper: splits the focused pane with the next available
-    /// tab session that isn't already displayed in a pane. Does nothing if there
-    /// are no unassigned sessions to split with.
+    /// tab session that isn't already displayed in a pane.
     private func splitNextAvailableSession(direction: SplitDirection) {
-        let paneSessionIDs = Set(paneManager.allPanes.compactMap(\.sessionID))
-        guard let nextSession = tabManager.tabs.first(where: { !paneSessionIDs.contains($0.id) }) else {
+        guard let nextSessionID = paneManager.nextUnassignedSessionID(in: tabManager.tabs.map(\.id)) else {
             return
         }
-        splitWithExistingSession(nextSession.id, beside: paneManager.focusedPaneId, direction: direction)
+        splitWithExistingSession(nextSessionID, beside: paneManager.focusedPaneId, direction: direction)
     }
 
     private func moveToNewTab(paneID: UUID) {
