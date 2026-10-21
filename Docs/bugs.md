@@ -10,10 +10,10 @@ sequentially, and tagged by severity: **Critical**, **High**, **Medium**, or **L
 | Severity | Total | Fixed | Open |
 |----------|-------|-------|------|
 | Critical | 1     | 1     | 0    |
-| High     | 20    | 15    | 5    |
-| Medium   | 40    | 35    | 5    |
-| Low      | 35    | 25    | 10   |
-| **Total**| **96**| **76**| **20**|
+| High     | 20    | 16    | 4    |
+| Medium   | 40    | 36    | 4    |
+| Low      | 35    | 27    | 8    |
+| **Total**| **96**| **80**| **16**|
 
 Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13, Bug 85 fixed and Bugs 86-87 added 2026-10-14, Bug 84 fixed and Bugs 88-90 added 2026-10-15, Bugs 91-93 added 2026-10-18, Bug 94 added 2026-10-20; Bugs 43, 44, 90 and 94 fixed and Bug 95 added 2026-10-20 (43 and 44 were found already fixed in the code); Bugs 87 and 88 fixed 2026-10-21. The `**File:**` paths below predate the
 refactors (`Views/` → `UI/`, `SSH/` → `Services/SSH/`, `Services/Security/` → `Services/`) and some
@@ -36,6 +36,10 @@ A further 2026-10-21 source pass corrected Bugs 4, 6, 7, 21, 57, 59, 61, 63, and
 use session IDs, the idle timer uses weak capture and cancellation, the shader skips missing
 glyphs and clamps glow radius, blink uses `M_PI_F`, and KeyForge's file-import error update is
 on the main actor. Bugs 87 and 88 already had verified fixes below their stale headings.
+Bug 46 was confirmed by a new maximize/restore regression test. Bugs 23, 47, and 75 refer to
+old implementations: reconnect has no window capture, `restoreLayout` no longer exists or
+force-unwraps pane lookups, and Matrix character indexing uses wrapping arithmetic before
+modulo. These headings were corrected after source inspection on 2026-10-21.
 
 ---
 
@@ -459,7 +463,7 @@ the same cleanup again. Restart now calls only `removeSession`. Debug build and 
 
 ---
 
-### Bug 23 — `reconnectTask` Captures `nil` Window Reference (Low)
+### Bug 23 — ~~`reconnectTask` Captures `nil` Window Reference~~ [FIXED] (Low)
 
 **File:** `Services/Session/SessionManager.swift`
 
@@ -901,7 +905,7 @@ for pane in deadPanes { removePane(pane.id) }
 
 ---
 
-### Bug 46 — PaneManager `restoreMaximizedPane` Discards Pending Layout Changes (Medium)
+### Bug 46 — ~~PaneManager `restoreMaximizedPane` Discards Pending Layout Changes~~ [FIXED] (Medium)
 
 **File:** `Terminal/Features/PaneManager.swift`
 
@@ -911,9 +915,13 @@ while maximized are discarded. The tree reverts to the pre-maximization state.
 **Impact:** Panes opened while another pane was maximized silently disappear on
 un-maximize.
 
+**Verified 2026-10-21:** `restoreMaximize` merges additions and removals made while maximized.
+`PaneManagerTests.testRestoreMaximizeKeepsPanesAddedAndRemovedWhileMaximized` passed, as did the
+full focused pane suite (28/28) and Debug build.
+
 ---
 
-### Bug 47 — PaneManager Force-Unwraps During `restoreLayout` (High)
+### Bug 47 — ~~PaneManager Force-Unwraps During `restoreLayout`~~ [FIXED] (High)
 
 **File:** `Terminal/Features/PaneManager.swift`
 
@@ -1342,7 +1350,7 @@ change between app launches.
 
 ---
 
-### Bug 75 — MatrixScreensaverView `charIndex` Can Overflow (Low)
+### Bug 75 — ~~MatrixScreensaverView `charIndex` Can Overflow~~ [FIXED] (Low)
 
 **File:** `Views/Screensaver/MatrixScreensaverView.swift`
 

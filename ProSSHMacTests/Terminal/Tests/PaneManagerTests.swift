@@ -267,6 +267,22 @@ final class PaneManagerTests: XCTestCase {
         XCTAssertEqual(manager.rootNode, rootBefore)
     }
     @MainActor
+    func testRestoreMaximizeKeepsPanesAddedAndRemovedWhileMaximized() {
+        let manager = makeManager(testName: #function)
+        let first = manager.focusedPaneId
+        manager.splitPane(first, direction: .vertical)
+        let removed = manager.focusedPaneId
+
+        manager.maximizePane(first)
+        manager.splitPane(first, direction: .horizontal)
+        let added = manager.focusedPaneId
+        manager.closePane(removed)
+        manager.restoreMaximize()
+
+        XCTAssertNil(manager.maximizedPaneId)
+        XCTAssertEqual(Set(manager.allPanes.map(\.id)), Set([first, added]))
+    }
+    @MainActor
     func testToggleMaximize() {
         let manager = makeManager(testName: #function)
         let first = manager.focusedPaneId
