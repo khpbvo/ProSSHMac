@@ -674,8 +674,14 @@ Build and 6 focused tests passed; live search remains to be checked.
 The older `Docs/bugs.md` register contains stale descriptions; verify current source before
 implementing one. A 2026-10-21 source audit corrected 17 such headings and the summary counts.
 
-**Next independent bug: Bug 92.** Copilot file-tool internals are visible in the terminal;
-reuse the Bug 90 marker/filter pattern in `ShellIntegrationEchoFilter` where it fits.
+**Next independent bug: Bug 92.** Copilot file-tool internals are visible in the terminal.
+`SessionAIToolCoordinator` captures command output from the same stream fed to the parser, which
+also carries OSC completion markers and credential prompts. Design separate capture and display
+handling before hiding any bytes; do not reuse the setup-echo filter for whole command output.
+
+**Remaining high-severity register items:** Bugs 1-3 need transport lifecycle review and live
+stress validation; Bug 49 still performs recording persistence/export I/O on the main actor.
+The register has 11 open entries after the 2026-10-21 sweep; `Docs/bugs.md` holds the exact list.
 
 **Queued after that:** Bug 95 (isolated PTY confirmed login Bash ignores `BASH_ENV`; a
 `--rcfile` launch lost the login profile, so preserve login behavior in any fix),
