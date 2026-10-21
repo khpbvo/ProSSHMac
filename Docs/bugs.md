@@ -10,10 +10,10 @@ sequentially, and tagged by severity: **Critical**, **High**, **Medium**, or **L
 | Severity | Total | Fixed | Open |
 |----------|-------|-------|------|
 | Critical | 1     | 1     | 0    |
-| High     | 20    | 14    | 6    |
-| Medium   | 40    | 31    | 9    |
-| Low      | 35    | 19    | 16   |
-| **Total**| **96**| **65**| **31**|
+| High     | 20    | 15    | 5    |
+| Medium   | 40    | 35    | 5    |
+| Low      | 35    | 25    | 10   |
+| **Total**| **96**| **76**| **20**|
 
 Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13, Bug 85 fixed and Bugs 86-87 added 2026-10-14, Bug 84 fixed and Bugs 88-90 added 2026-10-15, Bugs 91-93 added 2026-10-18, Bug 94 added 2026-10-20; Bugs 43, 44, 90 and 94 fixed and Bug 95 added 2026-10-20 (43 and 44 were found already fixed in the code); Bugs 87 and 88 fixed 2026-10-21. The `**File:**` paths below predate the
 refactors (`Views/` → `UI/`, `SSH/` → `Services/SSH/`, `Services/Security/` → `Services/`) and some
@@ -29,6 +29,13 @@ quoted file drops; persisted legacy setting; sorted host groups; reset import la
 availability on Shortcuts. Focused tests also verified Bugs 54 and 55 already resolved. Later
 source inspection confirmed Bugs 9, 10, and 11 resolved as well. Counts
 above were recomputed from all 96 headings after this audit.
+
+A further 2026-10-21 source pass corrected Bugs 4, 6, 7, 21, 57, 59, 61, 63, and 77:
+`waitpid` is dispatched off the async task, CFError formatting uses optional binding,
+`strdup` occurs only in the child after `fork` and is freed if `execve` fails, reconnect entries
+use session IDs, the idle timer uses weak capture and cancellation, the shader skips missing
+glyphs and clamps glow radius, blink uses `M_PI_F`, and KeyForge's file-import error update is
+on the main actor. Bugs 87 and 88 already had verified fixes below their stale headings.
 
 ---
 
@@ -104,7 +111,7 @@ to interrupt blocking reads).
 
 ---
 
-### Bug 4 — LocalShellChannel `waitpid` Blocks the Calling Task (High)
+### Bug 4 — ~~LocalShellChannel `waitpid` Blocks the Calling Task~~ [FIXED] (High)
 
 **Files:** `SSH/Channels/LocalShellChannel.swift`, `Services/Session/LocalShellChannel.swift`
 
@@ -150,7 +157,7 @@ for component in segments {
 
 ---
 
-### Bug 6 — `cfErrorMessage` Uses `takeRetainedValue` Unsafely (Medium)
+### Bug 6 — ~~`cfErrorMessage` Uses `takeRetainedValue` Unsafely~~ [FIXED] (Medium)
 
 **File:** `SSH/Transport/SSHTransport.swift`
 
@@ -170,7 +177,7 @@ let msg = SecCopyErrorMessageString(status, nil)
 
 ---
 
-### Bug 7 — LocalShellChannel `strdup` Memory Not Freed on Failure Path (Low)
+### Bug 7 — ~~LocalShellChannel `strdup` Memory Not Freed on Failure Path~~ [FIXED] (Low)
 
 **Files:** `SSH/Channels/LocalShellChannel.swift`, `Services/Session/LocalShellChannel.swift`
 
@@ -418,7 +425,7 @@ and use it as the restart directory.
 
 ---
 
-### Bug 21 — `applicationDidEnterBackground` Matches Sessions by `host.id` Instead of `session.id` (Medium)
+### Bug 21 — ~~`applicationDidEnterBackground` Matches Sessions by `host.id` Instead of `session.id`~~ [FIXED] (Medium)
 
 **File:** `Services/Session/SessionManager.swift`
 
@@ -1071,7 +1078,7 @@ func stop() {
 
 ---
 
-### Bug 57 — IdleScreensaverManager Timer Task May Outlive Manager (Low)
+### Bug 57 — ~~IdleScreensaverManager Timer Task May Outlive Manager~~ [FIXED] (Low)
 
 **File:** `Terminal/Effects/IdleScreensaverManager.swift`
 
@@ -1098,7 +1105,7 @@ reads out-of-bounds GPU memory.
 
 ---
 
-### Bug 59 — Atlas UV for `GLYPH_INDEX_NONE` Samples Arbitrary Texels (Low)
+### Bug 59 — ~~Atlas UV for `GLYPH_INDEX_NONE` Samples Arbitrary Texels~~ [FIXED] (Low)
 
 **File:** `Terminal/Renderer/Shaders.metal`
 
@@ -1125,7 +1132,7 @@ enabled.
 
 ---
 
-### Bug 61 — Gradient Glow Division by Zero (Medium)
+### Bug 61 — ~~Gradient Glow Division by Zero~~ [FIXED] (Medium)
 
 **File:** `Terminal/Renderer/Effects/GradientGlow.metal`
 
@@ -1150,7 +1157,7 @@ animation jumps when crossing the -π/+π boundary.
 
 ---
 
-### Bug 63 — Blink Effect Uses Truncated Pi Constant (Low)
+### Bug 63 — ~~Blink Effect Uses Truncated Pi Constant~~ [FIXED] (Low)
 
 **File:** `Terminal/Renderer/Effects/Blink.metal`
 
@@ -1358,7 +1365,7 @@ the imported key. Subsequent visits to the import view show the stale filename.
 
 ---
 
-### Bug 77 — KeyForgeView `errorMessage` Read From Non-Main-Actor Context (Low)
+### Bug 77 — ~~KeyForgeView `errorMessage` Read From Non-Main-Actor Context~~ [FIXED] (Low)
 
 **File:** `Views/KeyForge/KeyForgeView.swift`
 
@@ -1575,7 +1582,7 @@ no glyph in the fallback chain. Expected (Terminal.app, iTerm2): colour emoji.
 
 ---
 
-### Bug 87 — Move to New Tab Shows the Remaining Pane's Session, Not the Moved One (Low)
+### Bug 87 — ~~Move to New Tab Shows the Remaining Pane's Session, Not the Moved One~~ [FIXED] (Low)
 
 **File:** `UI/Terminal/TerminalView.swift` (`moveToNewTab`, `onChange(of: paneManager.focusedPaneId)`)
 
@@ -1597,7 +1604,7 @@ caused by removing a pane. The moved session remains selected after the layout s
 
 ---
 
-### Bug 88 — In a Split Layout, Clicking a Tab Does Not Show Its Session (Medium)
+### Bug 88 — ~~In a Split Layout, Clicking a Tab Does Not Show Its Session~~ [FIXED] (Medium)
 
 **Files:** `UI/Terminal/TerminalView.swift` (`macOSBody` split branch, `sessionForPane`),
 `UI/Terminal/TerminalSessionTabBar.swift`
