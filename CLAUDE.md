@@ -668,6 +668,9 @@ passed; live Files/Transfers switching remains useful.
 **Bug 22 is fixed** (2026-10-21): local shell restart no longer cleans the session twice.
 Build and 23 focused SessionManager tests passed; restart itself was not live-tested.
 
+**Bug 53 is fixed** (2026-10-21): search matches reject changed source lines during UI refresh.
+Build and 6 focused tests passed; live search remains to be checked.
+
 The older `Docs/bugs.md` register contains stale descriptions; verify current source before
 implementing one. A 2026-10-21 source audit corrected 17 such headings and the summary counts.
 

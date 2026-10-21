@@ -12,8 +12,8 @@ sequentially, and tagged by severity: **Critical**, **High**, **Medium**, or **L
 | Critical | 1     | 1     | 0    |
 | High     | 20    | 16    | 4    |
 | Medium   | 40    | 36    | 4    |
-| Low      | 35    | 28    | 7    |
-| **Total**| **96**| **81**| **15**|
+| Low      | 35    | 29    | 6    |
+| **Total**| **96**| **82**| **14**|
 
 Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13, Bug 85 fixed and Bugs 86-87 added 2026-10-14, Bug 84 fixed and Bugs 88-90 added 2026-10-15, Bugs 91-93 added 2026-10-18, Bug 94 added 2026-10-20; Bugs 43, 44, 90 and 94 fixed and Bug 95 added 2026-10-20 (43 and 44 were found already fixed in the code); Bugs 87 and 88 fixed 2026-10-21. The `**File:**` paths below predate the
 refactors (`Views/` → `UI/`, `SSH/` → `Services/SSH/`, `Services/Security/` → `Services/`) and some
@@ -1019,7 +1019,7 @@ same variable in SwiftUI lists.
 
 ---
 
-### Bug 53 — TerminalSearch Range Validation Is Fragile (Low)
+### Bug 53 — ~~TerminalSearch Range Validation Is Fragile~~ [FIXED] (Low)
 
 **File:** `Terminal/Features/TerminalSearch.swift`
 
@@ -1028,6 +1028,11 @@ the live terminal state. If content scrolls between search and highlight, the ra
 may be invalid.
 
 **Impact:** Incorrect highlight positions after terminal content changes during search.
+
+**Fixed 2026-10-21:** Each match stores the source line. Before a stale match is applied to a
+newly rendered line, `stringRange(in:)` checks that the whole line is unchanged; otherwise no
+highlight is drawn until `updateLines` refreshes matches. This also avoids range arithmetic
+overflow in `isMatchValid`. The Debug build and `TerminalSearchTests` passed (6/6).
 
 ---
 

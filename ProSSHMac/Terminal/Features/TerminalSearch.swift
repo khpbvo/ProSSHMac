@@ -10,6 +10,7 @@ struct TerminalSearchMatch: Identifiable, Hashable, Sendable {
     let lineIndex: Int
     let location: Int
     let length: Int
+    let sourceLine: String
 
     var id: String { "\(lineIndex):\(location):\(length)" }
 
@@ -18,7 +19,8 @@ struct TerminalSearchMatch: Identifiable, Hashable, Sendable {
     }
 
     func stringRange(in line: String) -> Range<String.Index>? {
-        Range(range, in: line)
+        guard line == sourceLine else { return nil }
+        return Range(range, in: line)
     }
 }
 
@@ -95,10 +97,7 @@ final class TerminalSearch: ObservableObject {
         guard match.lineIndex >= 0, match.lineIndex < currentLines.count else {
             return false
         }
-        let line = currentLines[match.lineIndex]
-        let lineLength = (line as NSString).length
-        let endLocation = match.location + match.length
-        return match.location >= 0 && endLocation <= lineLength
+        return match.stringRange(in: currentLines[match.lineIndex]) != nil
     }
 
     /// Returns only those matches whose ranges are still valid against the given live content.
@@ -129,7 +128,8 @@ final class TerminalSearch: ObservableObject {
                             TerminalSearchMatch(
                                 lineIndex: lineIndex,
                                 location: match.range.location,
-                                length: match.range.length
+                                length: match.range.length,
+                                sourceLine: line
                             )
                         )
                     }
@@ -149,7 +149,8 @@ final class TerminalSearch: ObservableObject {
                         TerminalSearchMatch(
                             lineIndex: lineIndex,
                             location: nsRange.location,
-                            length: nsRange.length
+                            length: nsRange.length,
+                            sourceLine: line
                         )
                     )
                     searchRange = found.upperBound..<line.endIndex

@@ -110,5 +110,20 @@ final class TerminalSearchTests: XCTestCase {
         XCTAssertEqual(updatedSelectedLine, 1)
         XCTAssertEqual(updatedCount, 3)
     }
+
+    @MainActor
+    func testStaleMatchDoesNotHighlightDifferentLineOfSameLength() throws {
+        let search = TerminalSearch()
+        search.updateLines(["foo"])
+        search.query = "foo"
+        let oldMatch = try XCTUnwrap(search.matches.first)
+
+        XCTAssertNotNil(oldMatch.stringRange(in: "foo"))
+        XCTAssertNil(oldMatch.stringRange(in: "bar"))
+        XCTAssertFalse(search.isMatchValid(oldMatch, in: ["bar"]))
+
+        search.updateLines(["bar", "foo"])
+        XCTAssertEqual(search.matches.map(\.lineIndex), [1])
+    }
 }
 #endif
