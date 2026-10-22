@@ -105,6 +105,15 @@ final class GlyphRasterizerTests: XCTestCase {
         )
         XCTAssertTrue(result.isColor, "Emoji should be color")
         XCTAssertTrue(result.pixelData.contains(where: { $0 != 0 }), "Emoji should have visible pixels")
+        // BGRA pixels must retain chroma for the shader's color composition path.
+        let coloredPixels = stride(from: 0, to: result.pixelData.count, by: 4).filter { offset in
+            let blue = result.pixelData[offset]
+            let green = result.pixelData[offset + 1]
+            let red = result.pixelData[offset + 2]
+            let alpha = result.pixelData[offset + 3]
+            return alpha > 32 && (abs(Int(red) - Int(green)) > 20 || abs(Int(blue) - Int(green)) > 20)
+        }
+        XCTAssertFalse(coloredPixels.isEmpty, "Emoji atlas pixels should contain color, not just coverage")
     }
 
     // MARK: - Grapheme cluster (always slow path)

@@ -19,6 +19,25 @@ final class GlyphIndexPackingTests: XCTestCase {
         XCTAssertEqual(unpacked?.atlasPage, entry.atlasPage)
         XCTAssertEqual(unpacked?.x, entry.x)
         XCTAssertEqual(unpacked?.y, entry.y)
+        XCTAssertEqual(unpacked?.isColor, false)
+    }
+
+    func testColorFlagSurvivesPackingWithoutChangingAtlasCoordinates() {
+        let monochrome = AtlasEntry(
+            atlasPage: 7, x: 2047, y: 2047, width: 16,
+            bearingX: 0, bearingY: 0
+        )
+        let color = AtlasEntry(
+            atlasPage: 7, x: 2047, y: 2047, width: 16,
+            bearingX: 0, bearingY: 0, isColor: true
+        )
+
+        XCTAssertNotEqual(GlyphIndexPacking.pack(monochrome), GlyphIndexPacking.pack(color))
+        let unpacked = GlyphIndexPacking.unpack(GlyphIndexPacking.pack(color))
+        XCTAssertEqual(unpacked?.atlasPage, 7)
+        XCTAssertEqual(unpacked?.x, 2047)
+        XCTAssertEqual(unpacked?.y, 2047)
+        XCTAssertEqual(unpacked?.isColor, true)
     }
 
     func testPackingDiffersAcrossAtlasPagesForSameCoordinates() {

@@ -312,7 +312,8 @@ extension MetalTerminalRenderer {
                             width: rasterized.width, height: rasterized.height,
                             pixelData: base,
                             bearingX: Int8(clamping: rasterized.bearingX),
-                            bearingY: Int8(clamping: rasterized.bearingY)
+                            bearingY: Int8(clamping: rasterized.bearingY),
+                            isColor: rasterized.isColor
                         )
                     }
                     if let entry { self.glyphCache.insert(key, entry: entry) }

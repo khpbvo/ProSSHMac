@@ -205,7 +205,8 @@ final class GlyphAtlas {
         height: Int,
         pixelData: UnsafeRawPointer,
         bearingX: Int8 = 0,
-        bearingY: Int8 = 0
+        bearingY: Int8 = 0,
+        isColor: Bool = false
     ) -> AtlasEntry? {
         guard width > 0, height > 0 else { return nil }
         guard width <= pageSize, height <= pageSize else { return nil }
@@ -224,7 +225,7 @@ final class GlyphAtlas {
             let pageIndex = Int(slot.page)
             guard pageIndex < pages.count else {
                 // Page was removed (e.g., after clear/rebuild) — fall through.
-                return allocateFresh(width: width, height: height, pixelData: pixelData, bearingX: bearingX, bearingY: bearingY)
+                return allocateFresh(width: width, height: height, pixelData: pixelData, bearingX: bearingX, bearingY: bearingY, isColor: isColor)
             }
 
             uploadRegion(
@@ -244,11 +245,12 @@ final class GlyphAtlas {
                 y: slot.y,
                 width: UInt8(clamping: width),
                 bearingX: bearingX,
-                bearingY: bearingY
+                bearingY: bearingY,
+                isColor: isColor
             )
         }
 
-        return allocateFresh(width: width, height: height, pixelData: pixelData, bearingX: bearingX, bearingY: bearingY)
+        return allocateFresh(width: width, height: height, pixelData: pixelData, bearingX: bearingX, bearingY: bearingY, isColor: isColor)
     }
 
     /// Cursor-advance allocation path (original row-major packing).
@@ -257,7 +259,8 @@ final class GlyphAtlas {
         height: Int,
         pixelData: UnsafeRawPointer,
         bearingX: Int8,
-        bearingY: Int8
+        bearingY: Int8,
+        isColor: Bool
     ) -> AtlasEntry? {
         // Ensure we have at least one page.
         if pages.isEmpty {
@@ -309,7 +312,8 @@ final class GlyphAtlas {
             y: UInt16(placedY),
             width: UInt8(clamping: width),
             bearingX: bearingX,
-            bearingY: bearingY
+            bearingY: bearingY,
+            isColor: isColor
         )
     }
 

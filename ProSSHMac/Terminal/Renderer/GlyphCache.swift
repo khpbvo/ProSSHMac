@@ -10,7 +10,6 @@ import Foundation
 // MARK: - AtlasEntry
 
 /// Describes where a rasterized glyph lives inside a texture atlas page.
-/// Packed for minimal memory footprint (8 bytes total).
 struct AtlasEntry: Sendable {
     /// Which atlas texture page this glyph resides in.
     let atlasPage: UInt8
@@ -29,6 +28,20 @@ struct AtlasEntry: Sendable {
 
     /// Vertical bearing offset from the baseline (pixels, positive = up).
     let bearingY: Int8
+
+    /// Whether the atlas pixels contain premultiplied color rather than a text mask.
+    let isColor: Bool
+
+    init(atlasPage: UInt8, x: UInt16, y: UInt16, width: UInt8,
+         bearingX: Int8, bearingY: Int8, isColor: Bool = false) {
+        self.atlasPage = atlasPage
+        self.x = x
+        self.y = y
+        self.width = width
+        self.bearingX = bearingX
+        self.bearingY = bearingY
+        self.isColor = isColor
+    }
 }
 
 // MARK: - GlyphCache

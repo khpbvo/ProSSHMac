@@ -14,7 +14,9 @@ struct RasterFontSet: @unchecked Sendable {
 }
 
 enum GlyphIndexPacking {
-    private static let coordinateMask: UInt32 = 0x3FFF
+    // Atlas pages are at most 2048px; bit 13 of the X field carries color metadata.
+    private static let coordinateMask: UInt32 = 0x1FFF
+    private static let colorBit: UInt32 = 1 << 13
     private static let yShift: UInt32 = 14
     private static let pageShift: UInt32 = 28
 
@@ -22,10 +24,10 @@ enum GlyphIndexPacking {
         let page = UInt32(entry.atlasPage & 0x0F) << pageShift
         let y = (UInt32(entry.y) & coordinateMask) << yShift
         let x = UInt32(entry.x) & coordinateMask
-        return page | y | x
+        return page | y | x | (entry.isColor ? colorBit : 0)
     }
 
-    static func unpack(_ packed: UInt32) -> (atlasPage: UInt8, x: UInt16, y: UInt16)? {
+    static func unpack(_ packed: UInt32) -> (atlasPage: UInt8, x: UInt16, y: UInt16, isColor: Bool)? {
         guard packed != MetalTerminalRenderer.noGlyphIndex else {
             return nil
         }
@@ -33,7 +35,7 @@ enum GlyphIndexPacking {
         let atlasPage = UInt8((packed >> pageShift) & 0x0F)
         let y = UInt16((packed >> yShift) & coordinateMask)
         let x = UInt16(packed & coordinateMask)
-        return (atlasPage: atlasPage, x: x, y: y)
+        return (atlasPage: atlasPage, x: x, y: y, isColor: (packed & colorBit) != 0)
     }
 }
 
@@ -94,7 +96,8 @@ extension MetalTerminalRenderer: GlyphResolver {
                 height: rasterized.height,
                 pixelData: baseAddress,
                 bearingX: Int8(clamping: rasterized.bearingX),
-                bearingY: Int8(clamping: rasterized.bearingY)
+                bearingY: Int8(clamping: rasterized.bearingY),
+                isColor: rasterized.isColor
             )
         }
 

@@ -37,7 +37,8 @@ constant uint CURSOR_BAR       = 2;
 
 /// Sentinel glyph index value meaning "no glyph".
 constant uint GLYPH_INDEX_NONE = 0xFFFFFFFFu;
-constant uint GLYPH_COORD_MASK = 0x3FFFu;
+constant uint GLYPH_COORD_MASK = 0x1FFFu;
+constant uint GLYPH_COLOR_BIT = 0x2000u;
 constant uint GLYPH_Y_SHIFT = 14u;
 constant uint GLYPH_PAGE_SHIFT = 28u;
 constant uint MAX_ATLAS_PAGES = 16u;
@@ -74,7 +75,7 @@ constant float GLOW_STRENGTH = 0.12;  // max glow alpha
 struct CellInstance {
     ushort  row;            // grid row
     ushort  col;            // grid column
-    uint    glyphIndex;     // atlas position: [page:4][y:14][x:14]
+    uint    glyphIndex;     // atlas position: [page:4][y:14][color:1][x:13]
     uint    fgColor;        // packed RGBA (R in high byte)
     uint    bgColor;        // packed RGBA (R in high byte)
     uint    underlineColor; // packed RGBA for underline (0 = use fgColor)
@@ -371,12 +372,12 @@ fragment float4 terminal_fragment(
         address::clamp_to_zero
     );
 
-    float glyphAlpha = 0.0;
+    float4 glyphSample = float4(0.0);
     if (in.glyphIndex != GLYPH_INDEX_NONE) {
         uint atlasPage = min(in.atlasPage, MAX_ATLAS_PAGES - 1u);
-        float4 glyphSample = atlasPages[atlasPage].sample(atlasSampler, in.uv);
-        glyphAlpha = glyphSample.a;
+        glyphSample = atlasPages[atlasPage].sample(atlasSampler, in.uv);
     }
+    float glyphAlpha = glyphSample.a;
 
     // -------------------------------------------------------------------
     // 3. Compose base color: blend fg over bg using glyph coverage
@@ -386,8 +387,13 @@ fragment float4 terminal_fragment(
         // Hidden or blink-off: show only background.
         color = bg;
     } else {
-        // Standard alpha blend: fg over bg weighted by glyph alpha.
-        color.rgb = mix(bg.rgb, fg.rgb, glyphAlpha);
+        if (in.glyphIndex & GLYPH_COLOR_BIT) {
+            // Color atlas pixels are premultiplied BGRA; preserve their RGB.
+            color.rgb = glyphSample.rgb + bg.rgb * (1.0 - glyphAlpha);
+        } else {
+            // Text atlas pixels are coverage masks tinted by foreground color.
+            color.rgb = mix(bg.rgb, fg.rgb, glyphAlpha);
+        }
         color.a   = 1.0;
     }
 

@@ -11,9 +11,9 @@ sequentially, and tagged by severity: **Critical**, **High**, **Medium**, or **L
 |----------|-------|-------|------|
 | Critical | 1     | 1     | 0    |
 | High     | 20    | 20    | 0    |
-| Medium   | 40    | 39    | 1    |
+| Medium   | 40    | 40    | 0    |
 | Low      | 35    | 33    | 2    |
-| **Total**| **96**| **93**| **3**|
+| **Total**| **96**| **94**| **2**|
 
 Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13, Bug 85 fixed and Bugs 86-87 added 2026-10-14, Bug 84 fixed and Bugs 88-90 added 2026-10-15, Bugs 91-93 added 2026-10-18, Bug 94 added 2026-10-20; Bugs 43, 44, 90 and 94 fixed and Bug 95 added 2026-10-20 (43 and 44 were found already fixed in the code); Bugs 87 and 88 fixed 2026-10-21. The `**File:**` paths below predate the
 refactors (`Views/` → `UI/`, `SSH/` → `Services/SSH/`, `Services/Security/` → `Services/`) and some
@@ -1587,7 +1587,7 @@ Terminal.app selects the whole blank run. Left as is — it needs a deliberate d
 
 ---
 
-### Bug 86 — Colour Emoji Render as Single-Colour Silhouettes; Some Show as `[?]` Boxes (Medium)
+### Bug 86 — ~~Colour Emoji Render as Single-Colour Silhouettes; Some Show as `[?]` Boxes~~ [FIXED] (Medium)
 
 **Files:** `Terminal/Renderer/GlyphRasterizer.swift` (`isColorGlyph`, the CTLine slow path),
 `Terminal/Renderer/TerminalShaders.metal`; check also `GlyphCache`/atlas colour flags
@@ -1599,10 +1599,15 @@ box-drawing in the same output rendered as expected. `GlyphRasterizer` has an ex
 emoji are rasterized as premultiplied BGRA and flagged as colour glyphs, so the shader should sample
 them rather than tint them.
 
-**Not yet diagnosed.** Candidates: `isColorGlyph` returns false, so the glyph takes the alpha-mask
-path; the colour flag is lost between the rasterizer, the cache and the cell buffer; or the shader
-ignores it. The `[?]` cells may be codepoints that need a variation selector (U+FE0F) or that have
-no glyph in the fallback chain. Expected (Terminal.app, iTerm2): colour emoji.
+**Cause and fix (2026-10-22):** the rasterizer produced premultiplied color BGRA, but atlas
+allocation discarded `isColor` and the fragment shader used only alpha, tinting every glyph with
+the terminal foreground. `AtlasEntry` now retains the flag, one unused bit in the packed atlas X
+field carries it to Metal, and the shader composites color pixels over the cell background while
+ordinary text still uses its foreground color. The range-dump boxes are a separate input issue:
+on macOS 26.6.2, all emoji scalars in U+1F300–U+1F5FF have Apple Color Emoji glyphs, while 131
+other scalars in the indiscriminate dump have none in that font. `GlyphRasterizerTests` verifies
+actual chroma in the rasterized bitmap; `GlyphIndexPackingTests` verifies color and coordinates;
+19 focused tests and the Debug build pass. A relaunched-app visual check remains useful.
 
 ---
 

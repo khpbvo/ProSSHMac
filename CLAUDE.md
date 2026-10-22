@@ -705,10 +705,13 @@ The remaining register entries are in `Docs/bugs.md`.
 **Bug 89 is fixed in the renderer** (2026-10-22): the first frame after CRT history is
 released samples the current scene with a normal phosphor blend. The 13-test hosted
 surface suite and Debug build passed; visible tab switching still needs a relaunched-app
-check. The register has 3 open entries.
+check. Bug 86 was fixed subsequently; current register counts are below.
 
-**Queued after that:** Bug 86 (colour emoji render as silhouettes; not diagnosed). Optional:
-a shared glyph atlas, now the largest hidden renderer cost (`Docs/Bug84.md` Open questions).
+**Bug 86 is fixed in the renderer** (2026-10-22): atlas entries retain color metadata in
+the packed glyph index; Metal composites premultiplied emoji RGB instead of tinting alpha.
+The focused glyph tests passed 19/19 and Debug build passed; a relaunched-app visual check
+remains. There are 2 open register entries (Bugs 92 and 93). A shared glyph atlas is still
+the largest hidden renderer cost (`Docs/Bug84.md` Open questions).
 
 **Bug 93 (panes overlapped once after switching terminal-only mode) is not reproduced.** The
 unmerged branch `debug/terminal-jump` (`251e010`) logs layout state, pane SwiftUI frames, Metal
