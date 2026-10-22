@@ -41,9 +41,7 @@ struct TerminalSurfaceView: View {
 
     var body: some View {
         Group {
-            if isMacOSTerminalSafetyModeEnabled {
-                safeTerminalBuffer(for: session)
-            } else if supportsMetalTerminalSurface {
+            if supportsMetalTerminalSurface {
                 metalTerminalBuffer(for: session, isFocused: isFocused, paneID: paneID)
             } else {
                 terminalBuffer(for: session)
@@ -75,8 +73,6 @@ struct TerminalSurfaceView: View {
         useMetalRenderer && isMetalRendererAvailable
     }
 
-    private var isMacOSTerminalSafetyModeEnabled: Bool { false }
-
     private func inputModeSnapshot(for sessionID: UUID) -> InputModeSnapshot {
         sessionManager.inputModeSnapshotsBySessionID[sessionID] ?? .default
     }
@@ -89,54 +85,6 @@ struct TerminalSurfaceView: View {
 
     private var terminalSurfaceBorderColor: Color {
         colorScheme == .dark ? Color.white.opacity(0.14) : Color.black.opacity(0.12)
-    }
-
-    // MARK: - Safe terminal buffer (dead code: isMacOSTerminalSafetyModeEnabled = false)
-
-    @ViewBuilder
-    private func safeTerminalBuffer(for session: Session) -> some View {
-        let renderedLines = safeTerminalDisplayLines(for: session)
-        let scrollSpaceName = "terminal-scroll-safe-\(session.id.uuidString)"
-
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 2) {
-                    ForEach(renderedLines) { line in
-                        Text(verbatim: line.text)
-                            .font(.custom(terminalUIFontFamily, size: terminalUIFontSize))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .id(line.id)
-                    }
-                }
-                .padding(8)
-            }
-            .coordinateSpace(name: scrollSpaceName)
-            .onAppear {
-                guard let last = renderedLines.indices.last else { return }
-                proxy.scrollTo(last, anchor: .bottom)
-            }
-            .onChange(of: renderedLines.count) { _, _ in
-                guard let last = renderedLines.indices.last else { return }
-                proxy.scrollTo(last, anchor: .bottom)
-            }
-        }
-        .frame(minHeight: 220, maxHeight: .infinity)
-        .background(terminalSurfaceColor, in: RoundedRectangle(cornerRadius: 10))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(terminalSurfaceBorderColor, lineWidth: 1)
-        )
-    }
-
-    private func safeTerminalDisplayLines(for session: Session) -> [SafeTerminalRenderedLine] {
-        // stub: shouldEnableDirectTerminalInput
-        // live in TerminalView; this entire function is unreachable (isMacOSTerminalSafetyModeEnabled = false)
-        let lines = sessionManager.shellBuffers[session.id] ?? []
-
-        return lines.enumerated().map { index, line in
-            let stableID = "\(index)-\(line.hashValue)"
-            return SafeTerminalRenderedLine(id: stableID, lineNumber: index, text: line)
-        }
     }
 
     // MARK: - Metal terminal buffer

@@ -4,12 +4,6 @@ import AppKit
 
 // MetalTerminalSessionSurface and MetalTerminalSurfaceModel moved to MetalTerminalSessionSurface.swift
 
-struct SafeTerminalRenderedLine: Identifiable {
-    let id: String
-    let lineNumber: Int
-    let text: String
-}
-
 struct DirectTerminalInputCaptureView: NSViewRepresentable {
     let isEnabled: Bool
     let sessionID: UUID

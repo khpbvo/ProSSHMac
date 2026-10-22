@@ -11,9 +11,9 @@ sequentially, and tagged by severity: **Critical**, **High**, **Medium**, or **L
 |----------|-------|-------|------|
 | Critical | 1     | 1     | 0    |
 | High     | 20    | 19    | 1    |
-| Medium   | 40    | 38    | 2    |
-| Low      | 35    | 30    | 5    |
-| **Total**| **96**| **88**| **8**|
+| Medium   | 40    | 39    | 1    |
+| Low      | 35    | 31    | 4    |
+| **Total**| **96**| **90**| **6**|
 
 Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13, Bug 85 fixed and Bugs 86-87 added 2026-10-14, Bug 84 fixed and Bugs 88-90 added 2026-10-15, Bugs 91-93 added 2026-10-18, Bug 94 added 2026-10-20; Bugs 43, 44, 90 and 94 fixed and Bug 95 added 2026-10-20 (43 and 44 were found already fixed in the code); Bugs 87 and 88 fixed 2026-10-21. The `**File:**` paths below predate the
 refactors (`Views/` → `UI/`, `SSH/` → `Services/SSH/`, `Services/Security/` → `Services/`) and some
@@ -46,6 +46,9 @@ open failure, and closes and frees it after wrapper allocation failure; there is
 later PTY/environment configuration. Bug 49 was
 fixed by moving encrypted save/load and cast export to a storage actor. Bugs 1 and 3
 remain open pending transport lifecycle review.
+
+On 2026-10-22, Bugs 62 and 72 were closed: the scanner shader has no angular sweep,
+and the hardcoded-off safety terminal renderer with unstable line IDs was removed.
 
 ---
 
@@ -1169,14 +1172,14 @@ through the fragment output.
 
 ---
 
-### Bug 62 — Scanner Sweep Effect Has Angular Discontinuity (Low)
+### Bug 62 — ~~Scanner Sweep Effect Has Angular Discontinuity~~ [FIXED] (Low)
 
-**File:** `Terminal/Renderer/Effects/ScannerSweep.metal`
+**File:** `Terminal/Renderer/TerminalShaders.metal`
 
-The sweep angle is computed with `atan2` which has a discontinuity at ±π. The sweep
-animation jumps when crossing the -π/+π boundary.
-
-**Impact:** Visible "seam" in the scanner sweep animation at one angle.
+The referenced shader no longer exists. The current scanner moves along the username
+with a linear ping-pong position computed from `fract`, with no `atan2` seam. Its settings
+preview uses the same ping-pong motion. Source inspection on 2026-10-22 found this
+report obsolete; no code change was needed.
 
 ---
 
@@ -1326,19 +1329,14 @@ black.
 
 ---
 
-### Bug 72 — `safeTerminalDisplayLines` Uses Array Index as SwiftUI List ID (Medium)
+### Bug 72 — ~~`safeTerminalDisplayLines` Uses Array Index as SwiftUI List ID~~ [FIXED] (Medium)
 
-**File:** `Views/Terminal/TerminalView.swift`
+**File:** `UI/Terminal/TerminalSurfaceView.swift`
 
-Terminal display lines are identified by their array index in a `ForEach`. When lines are
-inserted or removed (scrolling), SwiftUI reuses cell views incorrectly because the IDs
-shift. This causes visual glitches and incorrect cell recycling.
-
-**Impact:** Visual glitches in the terminal display — lines may flicker or show stale
-content during scroll.
-
-**Suggested fix:** Use a stable identifier (e.g., line number or content hash) instead of
-array index.
+The affected safety-mode branch was hardcoded off. On 2026-10-22, that unreachable
+rendering path and `SafeTerminalRenderedLine` were removed. The supported Metal and
+non-Metal terminal paths remain. This eliminates the stale list-ID behavior without
+introducing a third renderer identity scheme.
 
 ---
 
