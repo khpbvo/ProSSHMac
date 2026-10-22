@@ -700,11 +700,14 @@ the dormant safety terminal renderer with unstable line IDs was removed. Debug b
 **Bug 95 is fixed** (2026-10-22): local login Bash sources a prompt-only overlay after
 readiness through the hidden setup-line filter; no `BASH_ENV` or double `.bashrc` source.
 The real Bash PTY check, 75 focused tests, and Debug build passed. Live UI check remains.
-The register has 4 open entries.
+The remaining register entries are in `Docs/bugs.md`.
 
-**Queued after that:** Bug 89 (brightness flicker on every tab switch with CRT/bloom on; first check whether it goes away
-with CRT and bloom off and whether `240b260~1` shows it),
-Bug 86 (colour emoji render as silhouettes; not diagnosed). Optional:
+**Bug 89 is fixed in the renderer** (2026-10-22): the first frame after CRT history is
+released samples the current scene with a normal phosphor blend. The 13-test hosted
+surface suite and Debug build passed; visible tab switching still needs a relaunched-app
+check. The register has 3 open entries.
+
+**Queued after that:** Bug 86 (colour emoji render as silhouettes; not diagnosed). Optional:
 a shared glyph atlas, now the largest hidden renderer cost (`Docs/Bug84.md` Open questions).
 
 **Bug 93 (panes overlapped once after switching terminal-only mode) is not reproduced.** The

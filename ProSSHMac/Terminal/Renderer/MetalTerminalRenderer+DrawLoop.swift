@@ -82,8 +82,14 @@ extension MetalTerminalRenderer {
         // Update uniforms for this frame via the TerminalUniformBuffer.
         let cursorFrame = cursorRenderer.frame(at: frameNow)
         let scrollFrame = smoothScrollEngine.frame(cellHeight: cellHeight * screenScale, time: frameNow)
-        let frameDelta = max(0, uniformBuffer.currentTime - previousUniformTime)
-        let phosphorBlend = (postProcessingReady && hasCapturedPreviousFrame)
+        // After a hidden renderer releases its history texture, seed the first
+        // visible frame from the current scene at a normal frame interval. Using
+        // zero blend on that frame makes CRT scanlines briefly darker than every
+        // subsequent frame even when the terminal contents are unchanged.
+        let frameDelta = hasCapturedPreviousFrame
+            ? max(0, uniformBuffer.currentTime - previousUniformTime)
+            : (1.0 / 60.0)
+        let phosphorBlend = (postProcessingReady && crtConfiguration.isEnabled)
             ? CRTEffect.phosphorBlend(
                 persistence: crtConfiguration.phosphorPersistence,
                 frameDeltaSeconds: frameDelta
@@ -172,7 +178,10 @@ extension MetalTerminalRenderer {
             postEncoder.setRenderPipelineState(postProcessPipelineState)
             postEncoder.setFragmentBuffer(uniformBuffer.buffer, offset: 0, index: 1)
             postEncoder.setFragmentTexture(sceneTexture, index: 0)
-            postEncoder.setFragmentTexture(previousFrameTexture ?? crtFallbackTexture, index: 1)
+            postEncoder.setFragmentTexture(
+                hasCapturedPreviousFrame ? previousFrameTexture : sceneTexture,
+                index: 1
+            )
             let effectiveBloomTex = bloomConfiguration.isEnabled ? bloomBlurV : nil
             postEncoder.setFragmentTexture(effectiveBloomTex ?? crtFallbackTexture, index: 2)
             postEncoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)

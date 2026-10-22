@@ -170,6 +170,26 @@ final class TerminalSurfaceIdentityTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testColdCRTHistorySeedsTheFirstPostProcessFrame() async throws {
+        let harness = try await SurfaceHarness.make()
+        defer { harness.close() }
+        let renderer = try await harness.renderers(count: 1)[0]
+        let view = try XCTUnwrap(renderer.configuredMTKView)
+        view.isPaused = true
+        renderer.crtConfiguration.isEnabled = true
+        renderer.bloomConfiguration.isEnabled = true
+        renderer.releaseOffscreenTextures()
+        renderer.isDirty = true
+
+        renderer.draw(in: view)
+
+        let uniforms = renderer.uniformBuffer.buffer.contents()
+            .assumingMemoryBound(to: TerminalUniformData.self).pointee
+        XCTAssertGreaterThan(uniforms.phosphorBlend, 0.5)
+        XCTAssertTrue(renderer.hasCapturedPreviousFrame)
+    }
+
     /// Guard: the store must not keep a closed session's renderer alive.
     @MainActor
     func testClosedSessionsRendererIsReleased() async throws {
