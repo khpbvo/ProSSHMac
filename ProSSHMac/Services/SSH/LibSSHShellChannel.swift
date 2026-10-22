@@ -59,6 +59,7 @@ actor LibSSHShellChannel: SSHShellChannel {
     }
 
     private func startReaderTask() {
+        guard !isClosed, readerTask == nil else { return }
         readerTask = Task { [weak self] in
             await self?.readLoop()
         }

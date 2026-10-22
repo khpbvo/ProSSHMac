@@ -26,6 +26,7 @@ final class PortForwardingManager: ObservableObject {
     private var listeners: [UUID: NWListener] = [:]
     private var connectionProxies: [UUID: [ForwardConnectionProxy]] = [:]
     private var openingConnections: [UUID: Int] = [:]
+    private var openingDrainWaiters: [UUID: [CheckedContinuation<Void, Never>]] = [:]
     private let maxConnectionsPerRule = 32
 
     init(transport: any SSHTransporting, auditLogManager: AuditLogManager? = nil) {
@@ -112,9 +113,8 @@ final class PortForwardingManager: ObservableObject {
     }
 
     func stopForward(id: UUID) async {
-        // Remove admission state before awaiting proxy shutdown. Any pending open
-        // that completes afterward must close its new SSH channel immediately.
-        openingConnections.removeValue(forKey: id)
+        // Stop admitting connections before awaiting proxy shutdown. Pending opens
+        // close their channels and drain before the owning SSH session is destroyed.
         if let listener = listeners.removeValue(forKey: id) {
             listener.cancel()
         }
@@ -124,6 +124,13 @@ final class PortForwardingManager: ObservableObject {
                 await proxy.stop()
             }
         }
+
+        if openingConnections[id, default: 0] > 0 {
+            await withCheckedContinuation { continuation in
+                openingDrainWaiters[id, default: []].append(continuation)
+            }
+        }
+        openingConnections.removeValue(forKey: id)
 
         activeForwards.removeAll(where: { $0.id == id })
     }
@@ -146,7 +153,12 @@ final class PortForwardingManager: ObservableObject {
         openingConnections[forwardID] = openingCount + 1
         defer {
             if let pending = openingConnections[forwardID] {
-                openingConnections[forwardID] = max(0, pending - 1)
+                let remaining = max(0, pending - 1)
+                openingConnections[forwardID] = remaining
+                if remaining == 0 {
+                    let waiters = openingDrainWaiters.removeValue(forKey: forwardID) ?? []
+                    for waiter in waiters { waiter.resume() }
+                }
             }
         }
 

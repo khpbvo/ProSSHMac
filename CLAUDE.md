@@ -686,10 +686,12 @@ failure closes and frees it.
 **Bug 1 is fixed** (2026-10-22): in-flight forward opens reserve a slot and close a channel
 returned after stop; a stopped proxy refuses late start. Debug build and delayed-open test passed.
 
-**Remaining high-severity register item:** Bug 3 needs transport lifecycle review and
-live stress validation. `LibSSHTransport.disconnect` destroys the C handle without retaining or
-closing its `LibSSHShellChannel` first; the C read/close lock alone does not protect a later
-read from a freed handle. The register has 6 open entries; `Docs/bugs.md` holds the exact list.
+**Bug 3 is fixed** (2026-10-22): `LibSSHTransport` waits for shell opening, closes its
+channel, then destroys the C handle; connection generations reject superseded opens.
+The forward-stop path also drains late opens before transport teardown. Five normal and
+five concurrent cycles against temporary loopback `sshd` passed, along with 25 focused
+tests and the Debug build. Remote-server stress remains useful. The register has 5 open
+entries; `Docs/bugs.md` holds the exact list.
 
 **Bugs 62 and 72 are closed** (2026-10-22): the scanner effect has no angular sweep;
 the dormant safety terminal renderer with unstable line IDs was removed. Debug build and

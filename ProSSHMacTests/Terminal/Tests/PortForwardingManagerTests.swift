@@ -26,11 +26,13 @@ final class PortForwardingManagerTests: XCTestCase {
             )
         }
         await transport.waitUntilOpening()
-        await manager.stopForward(id: forwardID)
+        let stopTask = Task { await manager.stopForward(id: forwardID) }
+        await Task.yield()
 
         let channel = ClosingForwardChannel()
         transport.finishOpen(with: channel)
         await openTask.value
+        await stopTask.value
 
         XCTAssertTrue(channel.wasClosed)
         XCTAssertTrue(manager.activeForwards.isEmpty)

@@ -10,10 +10,10 @@ sequentially, and tagged by severity: **Critical**, **High**, **Medium**, or **L
 | Severity | Total | Fixed | Open |
 |----------|-------|-------|------|
 | Critical | 1     | 1     | 0    |
-| High     | 20    | 19    | 1    |
+| High     | 20    | 20    | 0    |
 | Medium   | 40    | 39    | 1    |
 | Low      | 35    | 31    | 4    |
-| **Total**| **96**| **90**| **6**|
+| **Total**| **96**| **91**| **5**|
 
 Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13, Bug 85 fixed and Bugs 86-87 added 2026-10-14, Bug 84 fixed and Bugs 88-90 added 2026-10-15, Bugs 91-93 added 2026-10-18, Bug 94 added 2026-10-20; Bugs 43, 44, 90 and 94 fixed and Bug 95 added 2026-10-20 (43 and 44 were found already fixed in the code); Bugs 87 and 88 fixed 2026-10-21. The `**File:**` paths below predate the
 refactors (`Views/` → `UI/`, `SSH/` → `Services/SSH/`, `Services/Security/` → `Services/`) and some
@@ -43,12 +43,13 @@ modulo. These headings were corrected after source inspection on 2026-10-21.
 
 On 2026-10-22, Bug 2 was found obsolete: the C forward-open path frees the channel on
 open failure, and closes and frees it after wrapper allocation failure; there is no
-later PTY/environment configuration. Bug 49 was
-fixed by moving encrypted save/load and cast export to a storage actor. Bugs 1 and 3
-remain open pending transport lifecycle review.
+later PTY/environment configuration. Bug 49 was fixed by moving encrypted save/load and
+cast export to a storage actor. Bug 1's late-open race was fixed in the forwarding manager.
 
 On 2026-10-22, Bugs 62 and 72 were closed: the scanner shader has no angular sweep,
 and the hardcoded-off safety terminal renderer with unstable line IDs was removed.
+Bug 3 was then fixed by making `LibSSHTransport` await shell opening and closing before
+destroying its C session handle; Bug 1's forward-stop path now drains pending opens too.
 
 ---
 
@@ -81,7 +82,8 @@ race was in `PortForwardingManager`: an SSH channel opened after `stopForward` c
 recreate proxy state for a stopped rule. The manager now reserves slots for in-flight
 opens, removes admission state before awaiting shutdown, and closes a channel that arrives
 after stop. A stopped proxy also refuses a late `start`. The Debug build and focused
-delayed-open regression passed on 2026-10-22. Live forwarding stress remains to be checked.
+delayed-open regression passed on 2026-10-22. `stopForward` also waits for in-flight opens
+to close before the SSH transport is disconnected. Live forwarding stress remains to be checked.
 
 ---
 
@@ -97,20 +99,18 @@ testing remains separate from this source-level finding.
 
 ---
 
-### Bug 3 — LibSSHShellChannel `close()` / `read()` Race (High)
+### Bug 3 — ~~LibSSHShellChannel `close()` / `read()` Race~~ [FIXED] (High)
 
-**File:** `SSH/Channels/LibSSHShellChannel.swift`
+**File:** `Services/SSH/LibSSHShellChannel.swift`, `Services/SSH/LibSSHTransport.swift`
 
-`close()` sets internal state and frees the channel, but a concurrent `read()` call may
-still be blocked waiting for data on that channel handle. On some libssh versions this
-causes a use-after-free; on others it returns an opaque error that is silently swallowed.
-
-**Impact:** Potential crash (use-after-free) or silent data loss when closing a shell
-channel while reads are in-flight.
-
-**Suggested fix:** Signal the read loop to exit before freeing the channel (e.g., via a
-cancellation flag checked inside the read loop, or by using `ssh_channel_request_send_signal`
-to interrupt blocking reads).
+The shell actor serializes read and close, and C reads are nonblocking and locked. The
+remaining risk was transport teardown: `disconnect` could destroy the shared C handle
+while the shell reader retained it, including during an in-flight `openShell`. The
+transport now owns the shell channel, awaits any open task, closes the channel, then
+destroys the handle. Connection generations reject results from a superseded open.
+A temporary loopback `sshd` integration test completed repeated normal and concurrent
+open/disconnect cycles on 2026-10-22; focused session tests and the Debug build passed.
+This does not replace stress testing against a remote server.
 
 ---
 

@@ -6,8 +6,8 @@ import Foundation
 
 
 
-// safe: OpaquePointer is a C session handle owned exclusively
-// by LibSSHTransport's actor-isolated `handles` dict; never shared across actors.
+// The transport owns the C session handle. Shell open/close tasks may use it,
+// so connect/disconnect await those tasks before destroying the handle.
 nonisolated private struct LibSSHConnectResult: @unchecked Sendable {
     let handle: OpaquePointer
     let details: SSHConnectionDetails
@@ -155,6 +155,10 @@ struct LibSSHJumpCallParams: Sendable {
 
 actor LibSSHTransport: SSHTransporting {
     private var handles: [UUID: OpaquePointer] = [:]
+    private var shellChannels: [UUID: LibSSHShellChannel] = [:]
+    private var openingShellTasks: [UUID: Task<LibSSHShellChannel, Error>] = [:]
+    private var connectionGeneration: [UUID: UInt64] = [:]
+    private var nextConnectionGeneration: UInt64 = 0
     private let credentialResolver: any SSHCredentialResolving
 
     init(credentialResolver: any SSHCredentialResolving = DefaultSSHCredentialResolver()) {
@@ -162,15 +166,29 @@ actor LibSSHTransport: SSHTransporting {
     }
 
     func connect(sessionID: UUID, to host: Host, jumpHostConfig: JumpHostConfig?) async throws -> SSHConnectionDetails {
-        if let existing = handles.removeValue(forKey: sessionID) {
-            prossh_libssh_destroy(existing)
-        }
+        nextConnectionGeneration &+= 1
+        let generation = nextConnectionGeneration
+        connectionGeneration[sessionID] = generation
+        let oldHandle = handles.removeValue(forKey: sessionID)
+        let oldShell = shellChannels.removeValue(forKey: sessionID)
+        let oldOpeningShell = openingShellTasks.removeValue(forKey: sessionID)
+        if let oldOpeningShell,
+           let channel = try? await oldOpeningShell.value { await channel.close() }
+        if let oldShell { await oldShell.close() }
+        if let oldHandle { prossh_libssh_destroy(oldHandle) }
+        guard connectionGeneration[sessionID] == generation else { throw CancellationError() }
 
-        if let jumpConfig = jumpHostConfig {
-            return try connectViaJumpHost(sessionID: sessionID, host: host, jumpConfig: jumpConfig)
+        do {
+            if let jumpConfig = jumpHostConfig {
+                return try connectViaJumpHost(sessionID: sessionID, host: host, jumpConfig: jumpConfig)
+            }
+            return try connectDirect(sessionID: sessionID, host: host)
+        } catch {
+            if connectionGeneration[sessionID] == generation {
+                connectionGeneration.removeValue(forKey: sessionID)
+            }
+            throw error
         }
-
-        return try connectDirect(sessionID: sessionID, host: host)
     }
 
     private func connectDirect(sessionID: UUID, host: Host) throws -> SSHConnectionDetails {
@@ -334,12 +352,40 @@ actor LibSSHTransport: SSHTransporting {
         guard let handle = handles[sessionID] else {
             throw SSHTransportError.sessionNotFound
         }
+        if let existing = shellChannels[sessionID] { return existing }
+        guard openingShellTasks[sessionID] == nil else {
+            throw SSHTransportError.transportFailure(message: "Shell channel is already opening.")
+        }
+        guard let generation = connectionGeneration[sessionID] else {
+            throw SSHTransportError.sessionNotFound
+        }
+        let wrappedHandle = UncheckedOpaquePointer(raw: handle)
 
-        return try await LibSSHShellChannel.create(
-            handle: UncheckedOpaquePointer(raw: handle),
-            pty: pty,
-            enableAgentForwarding: enableAgentForwarding
-        )
+        let task = Task { [wrappedHandle, pty, enableAgentForwarding] in
+            try await LibSSHShellChannel.create(
+                handle: wrappedHandle,
+                pty: pty,
+                enableAgentForwarding: enableAgentForwarding
+            )
+        }
+        openingShellTasks[sessionID] = task
+        let channel: LibSSHShellChannel
+        do {
+            channel = try await task.value
+        } catch {
+            if connectionGeneration[sessionID] == generation {
+                openingShellTasks.removeValue(forKey: sessionID)
+            }
+            throw error
+        }
+        guard handles[sessionID] == handle,
+              connectionGeneration[sessionID] == generation else {
+            await channel.close()
+            throw SSHTransportError.sessionNotFound
+        }
+        openingShellTasks.removeValue(forKey: sessionID)
+        shellChannels[sessionID] = channel
+        return channel
     }
 
     func listDirectory(sessionID: UUID, path: String) async throws -> [SFTPDirectoryEntry] {
@@ -547,10 +593,14 @@ actor LibSSHTransport: SSHTransporting {
     }
 
     func disconnect(sessionID: UUID) async {
-        guard let handle = handles.removeValue(forKey: sessionID) else {
-            return
-        }
-        prossh_libssh_destroy(handle)
+        connectionGeneration.removeValue(forKey: sessionID)
+        let handle = handles.removeValue(forKey: sessionID)
+        let shell = shellChannels.removeValue(forKey: sessionID)
+        let openingShell = openingShellTasks.removeValue(forKey: sessionID)
+        if let openingShell,
+           let channel = try? await openingShell.value { await channel.close() }
+        if let shell { await shell.close() }
+        if let handle { prossh_libssh_destroy(handle) }
     }
 
     /// Forces the kernel to re-evaluate the route to a hostname by performing a throwaway
