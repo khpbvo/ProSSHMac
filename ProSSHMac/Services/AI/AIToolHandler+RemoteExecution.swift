@@ -97,7 +97,7 @@ extension AIToolHandler {
         guard !Task.isCancelled else { return Self.cancelledToolObject() }
         // Use the same base64 read that apply_patch uses — immune to prompt contamination.
         let readCmd = RemotePatchCommandBuilder.buildReadCommand(path: path)
-        let execution = await provider.executeCommandAndWait(
+        let execution = await provider.executeInternalCommandAndWait(
             sessionID: sessionID, command: readCmd, timeoutSeconds: 15
         )
 
@@ -174,7 +174,7 @@ extension AIToolHandler {
         guard !Task.isCancelled else {
             return RemoteToolExecutionResult(output: "Tool call cancelled.", exitCode: nil, timedOut: false, declinedCredential: false)
         }
-        let result = await provider.executeCommandAndWait(
+        let result = await provider.executeInternalCommandAndWait(
             sessionID: sessionID,
             command: commandBody,
             timeoutSeconds: timeoutSeconds

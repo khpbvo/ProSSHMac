@@ -96,7 +96,14 @@ protocol AIAgentSessionProviding: AnyObject {
     func sendShellInput(sessionID: UUID, input: String, suppressEcho: Bool) async
     func sendRawShellInput(sessionID: UUID, input: String) async
     func executeCommandAndWait(sessionID: UUID, command: String, timeoutSeconds: TimeInterval) async -> CommandExecutionResult
+    func executeInternalCommandAndWait(sessionID: UUID, command: String, timeoutSeconds: TimeInterval) async -> CommandExecutionResult
     func executeCLICommand(sessionID: UUID, command: String, timeoutSeconds: TimeInterval) async -> CLICommandResult
+}
+
+extension AIAgentSessionProviding {
+    func executeInternalCommandAndWait(sessionID: UUID, command: String, timeoutSeconds: TimeInterval) async -> CommandExecutionResult {
+        await executeCommandAndWait(sessionID: sessionID, command: command, timeoutSeconds: timeoutSeconds)
+    }
 }
 
 struct CommandExecutionResult: Sendable {

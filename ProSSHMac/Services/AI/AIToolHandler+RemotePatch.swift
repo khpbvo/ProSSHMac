@@ -160,9 +160,17 @@ extension AIToolHandler {
                 usedSudo: sudoFirst, waitedForCredential: false
             )
         }
-        let first = await provider.executeCommandAndWait(
-            sessionID: sessionID, command: command(sudoFirst), timeoutSeconds: timeoutSeconds
-        )
+        let first: CommandExecutionResult
+        if sudoFirst {
+            // A sudo password prompt must remain visible in the terminal.
+            first = await provider.executeCommandAndWait(
+                sessionID: sessionID, command: command(true), timeoutSeconds: timeoutSeconds
+            )
+        } else {
+            first = await provider.executeInternalCommandAndWait(
+                sessionID: sessionID, command: command(false), timeoutSeconds: timeoutSeconds
+            )
+        }
         guard !Task.isCancelled, !sudoFirst, !first.declinedCredential, !first.timedOut, first.exitCode != 0,
               Self.isPermissionDeniedPatchOutput(Self.trimmedPatchOutput(first.output)) else {
             return RemotePatchStep(result: first, usedSudo: sudoFirst, waitedForCredential: first.waitedForCredential)

@@ -52,6 +52,89 @@ final class SessionAIToolCoordinatorTests: XCTestCase {
         XCTAssertFalse(screenText.contains("PSW"))
     }
 
+    func testInternalCommandCapturesOutputWithoutFeedingItToTerminal() async throws {
+        let (manager, sessionID, spy) = try await makeConnectedSessionWithSpy()
+        let execution = Task {
+            await manager.executeInternalCommandAndWait(
+                sessionID: sessionID, command: "printf secret-data", timeoutSeconds: 3
+            )
+        }
+        try await waitForPayloads(spy, count: 1)
+        let payloads = await spy.sentPayloads
+        let payload = try XCTUnwrap(payloads.first)
+        let token = try token(from: payload)
+        let stream = Array((payload + "\u{1B}]7777;PSB;\(token)\u{07}secret-data\r\n"
+            + "\u{1B}]7777;PSW;\(token);0\u{07}ops@host:~$ ").utf8)
+        let engine = try XCTUnwrap(manager.engines[sessionID])
+        await engine.feed(Data("ops@host:~$ ".utf8))
+        var displayed = Data()
+        for offset in stride(from: 0, to: stream.count, by: 7) {
+            let chunk = Data(stream[offset..<min(offset + 7, stream.count)])
+            let filtered = manager.aiToolCoordinator.filterToolOutput(sessionID: sessionID, chunk: chunk)
+            displayed.append(filtered)
+            await engine.feed(filtered)
+        }
+        let result = await execution.value
+        XCTAssertEqual(result.output, "secret-data")
+        XCTAssertEqual(result.exitCode, 0)
+        let displayText = String(decoding: displayed, as: UTF8.self)
+        XCTAssertFalse(displayText.contains("secret-data"))
+        XCTAssertFalse(displayText.contains("printf secret-data"))
+        XCTAssertTrue(displayText.contains("ops@host:~$ "))
+        let screenText = await engine.visibleText().joined()
+        XCTAssertFalse(screenText.contains("secret-data"))
+        XCTAssertEqual(screenText.components(separatedBy: "ops@host:~$").count - 1, 1,
+                       "Internal output duplicated the prompt")
+    }
+
+    func testLocalZshInternalCommandKeepsRawResultOffScreen() async throws {
+        let manager = SessionManager(
+            transport: MockSSHTransport(),
+            knownHostsStore: CoordinatorTestKnownHostsStore()
+        )
+        let session = try await manager.openLocalSession(shellPath: "/bin/zsh")
+        let result = await manager.executeInternalCommandAndWait(
+            sessionID: session.id,
+            command: "printf 'aGVsbG8KIyBwcm9zc2ggdGVzdAo=\\n'",
+            timeoutSeconds: 8
+        )
+        XCTAssertEqual(result.exitCode, 0)
+        XCTAssertEqual(result.output, "aGVsbG8KIyBwcm9zc2ggdGVzdAo=")
+        let screen = await manager.engines[session.id]?.visibleText().joined(separator: "\n") ?? ""
+        XCTAssertFalse(screen.contains("aGVsbG8KIyBwcm9zc2ggdGVzdAo="))
+        XCTAssertFalse(screen.contains("__ps=$?"))
+        await manager.disconnect(sessionID: session.id)
+    }
+
+    func testTimedOutInternalCommandClearsPromptBeforeLateOutput() async throws {
+        let (manager, sessionID, spy) = try await makeConnectedSessionWithSpy()
+        let engine = try XCTUnwrap(manager.engines[sessionID])
+        await engine.feed(Data("ops@host:~$ ".utf8))
+        let execution = Task {
+            await manager.executeInternalCommandAndWait(
+                sessionID: sessionID, command: "sleep 1; printf late", timeoutSeconds: 0.2
+            )
+        }
+        try await waitForPayloads(spy, count: 1)
+        let payloads = await spy.sentPayloads
+        let token = try token(from: try XCTUnwrap(payloads.first))
+        let hidden = manager.aiToolCoordinator.filterToolOutput(
+            sessionID: sessionID,
+            chunk: Data("\u{1B}]7777;PSB;\(token)\u{07}".utf8)
+        )
+        XCTAssertTrue(hidden.isEmpty)
+        let result = await execution.value
+        XCTAssertTrue(result.timedOut)
+        let late = manager.aiToolCoordinator.filterToolOutput(
+            sessionID: sessionID,
+            chunk: Data("late\r\n\u{1B}]7777;PSW;\(token);0\u{07}ops@host:~$ ".utf8)
+        )
+        await engine.feed(late)
+        let screen = await engine.visibleText().joined()
+        XCTAssertEqual(screen.components(separatedBy: "ops@host:~$").count - 1, 1)
+        XCTAssertTrue(screen.contains("late"))
+    }
+
     func testLocalZshToolCycleLeavesNoWrapperOnScreen() async throws {
         let manager = SessionManager(
             transport: MockSSHTransport(),

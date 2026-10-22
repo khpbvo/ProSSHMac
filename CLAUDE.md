@@ -674,10 +674,11 @@ Build and 6 focused tests passed; live search remains to be checked.
 The older `Docs/bugs.md` register contains stale descriptions; verify current source before
 implementing one. A 2026-10-21 source audit corrected 17 such headings and the summary counts.
 
-**Next independent bug: Bug 92.** Copilot file-tool internals are visible in the terminal.
-`SessionAIToolCoordinator` captures command output from the same stream fed to the parser, which
-also carries OSC completion markers and credential prompts. Design separate capture and display
-handling before hiding any bytes; do not reuse the setup-echo filter for whole command output.
+**Bug 92 is fixed in the Copilot shell path** (2026-10-22): remote file helpers use
+`executeInternalCommandAndWait`. The coordinator captures raw output for the tool while passing
+only the private completion OSC and returning prompt to the parser; hidden timeouts clean the
+old prompt line before late output. Sudo retries stay visible for password prompts. The focused
+tests and Debug build passed; a live SSH helper check remains useful.
 
 **Bug 49 is fixed** (2026-10-22): recording save/load and cast export use a storage actor;
 the Debug build and 31 focused tests passed. A large-recording UI check is still useful.
@@ -710,7 +711,7 @@ check. Bug 86 was fixed subsequently; current register counts are below.
 **Bug 86 is fixed in the renderer** (2026-10-22): atlas entries retain color metadata in
 the packed glyph index; Metal composites premultiplied emoji RGB instead of tinting alpha.
 The focused glyph tests passed 19/19 and Debug build passed; a relaunched-app visual check
-remains. There are 2 open register entries (Bugs 92 and 93). A shared glyph atlas is still
+remains. Bug 93 is the one remaining open register entry. A shared glyph atlas is still
 the largest hidden renderer cost (`Docs/Bug84.md` Open questions).
 
 **Bug 93 (panes overlapped once after switching terminal-only mode) is not reproduced.** The

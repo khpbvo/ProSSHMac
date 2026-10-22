@@ -12,8 +12,8 @@ sequentially, and tagged by severity: **Critical**, **High**, **Medium**, or **L
 | Critical | 1     | 1     | 0    |
 | High     | 20    | 20    | 0    |
 | Medium   | 40    | 40    | 0    |
-| Low      | 35    | 33    | 2    |
-| **Total**| **96**| **94**| **2**|
+| Low      | 35    | 34    | 1    |
+| **Total**| **96**| **95**| **1**|
 
 Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13, Bug 85 fixed and Bugs 86-87 added 2026-10-14, Bug 84 fixed and Bugs 88-90 added 2026-10-15, Bugs 91-93 added 2026-10-18, Bug 94 added 2026-10-20; Bugs 43, 44, 90 and 94 fixed and Bug 95 added 2026-10-20 (43 and 44 were found already fixed in the code); Bugs 87 and 88 fixed 2026-10-21. The `**File:**` paths below predate the
 refactors (`Views/` → `UI/`, `SSH/` → `Services/SSH/`, `Services/Security/` → `Services/`) and some
@@ -1731,7 +1731,7 @@ pane. The action uses the same availability check, so the enabled state and beha
 
 ---
 
-### Bug 92 — Copilot File-Tool Internals Are Visible in the Terminal (Low)
+### Bug 92 — ~~Copilot File-Tool Internals Are Visible in the Terminal~~ [FIXED] (Low)
 
 **Files:** `Services/AI/AIToolHandler+RemoteExecution.swift` (remote helpers, the not-found
 marker), `Services/AI/AIToolHandler+RemotePatch.swift`, `Services/SessionAIToolCoordinator.swift`
@@ -1743,9 +1743,15 @@ through the visible `execute_and_wait` path, so their raw output stays on screen
 also drawn twice (`kevin@testserv-01:~$ kevin@testserv-01:~$`). Harmless, but it clutters the
 user's terminal and the copilot's own screen reads.
 
-**Not yet diagnosed.** Options: keep helper output out of the grid like the wrapper echo
-(filtered between the private start and completion events), or print a one-line summary instead.
-Check the doubled prompt separately; it may be the marker's missing trailing newline.
+**Cause and fix (2026-10-22):** file helpers used the visible `execute_and_wait` path, whose
+captured bytes also fed the terminal parser, history and recorder. They now request an internal
+command path: the coordinator captures raw helper output for the tool while only the matching
+private completion OSC and the following shell prompt enter the parser. It clears the old prompt
+line before the new one, including if a hidden helper times out and its output arrives later.
+The normal `execute_and_wait` path and privileged patch retries remain visible so password prompts
+are usable. Tests cover split completion markers, real local zsh base64 output, one prompt after
+completion, and late output after timeout. Focused suites pass 65/65 and the Debug build passes.
+A live SSH file-tool check remains useful.
 
 ---
 

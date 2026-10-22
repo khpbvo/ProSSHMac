@@ -25,6 +25,8 @@ struct CredentialWait: Equatable, Sendable {
 @MainActor final class SessionAIToolCoordinator {
     weak var manager: SessionManager?
     private var pendingCommands: [UUID: PendingToolCommand] = [:]
+    /// If a hidden helper times out or is replaced, its later output must start on a clean line.
+    private var clearLineBeforeNextOutput: Set<UUID> = []
     private var pendingCLICommands: [UUID: PendingCLICommand] = [:]
     /// At most one entry today: tool calls run one after another.
     private(set) var awaitingCredential: [UUID: CredentialWait] = [:] {
@@ -41,7 +43,8 @@ struct CredentialWait: Equatable, Sendable {
     func executeCommandAndWait(
         sessionID: UUID,
         command: String,
-        timeoutSeconds: TimeInterval = 30
+        timeoutSeconds: TimeInterval = 30,
+        suppressOutput: Bool = false
     ) async -> CommandExecutionResult {
         let markerToken = UUID().uuidString
             .replacingOccurrences(of: "-", with: "")
@@ -59,7 +62,10 @@ struct CredentialWait: Equatable, Sendable {
             return CommandExecutionResult(output: "Session is not connected.", exitCode: nil, timedOut: false, blockID: nil)
         }
 
-        let pending = PendingToolCommand(token: token, command: command, timeoutSeconds: timeoutSeconds)
+        let pending = PendingToolCommand(
+            token: token, command: command, timeoutSeconds: timeoutSeconds,
+            suppressOutput: suppressOutput
+        )
         do {
             await supersedePendingCommands(sessionID: sessionID)
             pendingCommands[sessionID] = pending
@@ -67,13 +73,15 @@ struct CredentialWait: Equatable, Sendable {
             try await shell.send(payload)
             manager.lastActivityBySessionID[sessionID] = .now
             manager.bytesSentBySessionID[sessionID, default: 0] += Int64(payload.utf8.count)
-            manager.recordingCoordinator.recordInput(sessionID: sessionID, text: payload)
-            await manager.terminalHistoryIndex.recordCommandInput(
-                sessionID: sessionID,
-                command: command,
-                at: .now,
-                source: .userInput
-            )
+            if !suppressOutput {
+                manager.recordingCoordinator.recordInput(sessionID: sessionID, text: payload)
+                await manager.terminalHistoryIndex.recordCommandInput(
+                    sessionID: sessionID,
+                    command: command,
+                    at: .now,
+                    source: .userInput
+                )
+            }
         } catch {
             pendingCommands.removeValue(forKey: sessionID)
             return CommandExecutionResult(output: "Error sending command: \(error.localizedDescription)", exitCode: nil, timedOut: false, blockID: nil)
@@ -279,6 +287,7 @@ struct CredentialWait: Equatable, Sendable {
     /// at a password prompt gets Ctrl+C first, so the new command is never typed into the prompt.
     private func supersedePendingCommands(sessionID: UUID) async {
         let previous = pendingCommands.removeValue(forKey: sessionID)
+        if previous?.needsDisplayCleanup == true { clearLineBeforeNextOutput.insert(sessionID) }
         pendingCLICommands.removeValue(forKey: sessionID)
         if awaitingCredential.removeValue(forKey: sessionID) != nil {
             await interruptCredentialPrompt(sessionID: sessionID)
@@ -299,12 +308,17 @@ struct CredentialWait: Equatable, Sendable {
             pending.capture.ingest(chunk)
             pending.lastOutputAt = ContinuousClock().now
         }
-        guard let pending = pendingCommands[sessionID] else { return chunk }
+        guard let pending = pendingCommands[sessionID] else { return withPendingLineCleanup(chunk, sessionID: sessionID) }
         let visible = pending.filter(chunk)
-        if !visible.isEmpty {
-            noteCommandOutput(visible, sessionID: sessionID, pending: pending)
+        if !pending.capturedChunk.isEmpty {
+            noteCommandOutput(pending.capturedChunk, sessionID: sessionID, pending: pending)
         }
-        return visible
+        return withPendingLineCleanup(visible, sessionID: sessionID)
+    }
+
+    private func withPendingLineCleanup(_ output: Data, sessionID: UUID) -> Data {
+        guard !output.isEmpty, clearLineBeforeNextOutput.remove(sessionID) != nil else { return output }
+        return Data("\r\u{1B}[2K".utf8) + output
     }
 
     func completeToolCommand(sessionID: UUID, token: String, exitCode: Int) {
@@ -323,6 +337,7 @@ struct CredentialWait: Equatable, Sendable {
     private func timeoutToolCommand(sessionID: UUID, token: String) {
         guard let pending = pendingCommands[sessionID], pending.token == token else { return }
         pendingCommands.removeValue(forKey: sessionID)
+        if pending.needsDisplayCleanup { clearLineBeforeNextOutput.insert(sessionID) }
         awaitingCredential.removeValue(forKey: sessionID)
         pending.finish(CommandExecutionResult(
             output: pending.commandOutput,
@@ -360,6 +375,7 @@ struct CredentialWait: Equatable, Sendable {
     func declineCredentialPrompt(sessionID: UUID) async {
         guard awaitingCredential.removeValue(forKey: sessionID) != nil else { return }
         let pending = pendingCommands.removeValue(forKey: sessionID)
+        if pending?.needsDisplayCleanup == true { clearLineBeforeNextOutput.insert(sessionID) }
         let cli = pendingCLICommands[sessionID]
         cli?.interruption = .declined
         await interruptCredentialPrompt(sessionID: sessionID)
@@ -401,6 +417,7 @@ struct CredentialWait: Equatable, Sendable {
     func sessionEnded(sessionID: UUID) {
         awaitingCredential.removeValue(forKey: sessionID)
         pendingCLICommands.removeValue(forKey: sessionID)
+        clearLineBeforeNextOutput.remove(sessionID)
         guard let pending = pendingCommands.removeValue(forKey: sessionID) else { return }
         pending.finish(CommandExecutionResult(
             output: "The session ended before the command finished.",
@@ -545,6 +562,7 @@ struct CredentialWait: Equatable, Sendable {
     let token: String
     let command: String
     let timeoutSeconds: TimeInterval
+    private var suppressOutput: Bool
     var timeoutTask: Task<Void, Never>?
     var idleTask: Task<Void, Never>?
     var lastOutputAt = ContinuousClock.now
@@ -554,6 +572,10 @@ struct CredentialWait: Equatable, Sendable {
     private var prelude: [UInt8] = []
     private var started = false
     private var outputBytes: [UInt8] = []
+    private var hiddenTail: [UInt8] = []
+    private var hiddenCompletionPassed = false
+    var needsDisplayCleanup: Bool { suppressOutput && !hiddenCompletionPassed }
+    private(set) var capturedChunk = Data()
     private var resolvedResult: CommandExecutionResult?
     var continuation: CheckedContinuation<CommandExecutionResult, Never>? {
         didSet {
@@ -564,10 +586,11 @@ struct CredentialWait: Equatable, Sendable {
         }
     }
 
-    init(token: String, command: String, timeoutSeconds: TimeInterval) {
+    init(token: String, command: String, timeoutSeconds: TimeInterval, suppressOutput: Bool) {
         self.token = token
         self.command = command
         self.timeoutSeconds = timeoutSeconds
+        self.suppressOutput = suppressOutput
     }
 
     func filter(_ chunk: Data) -> Data {
@@ -583,19 +606,44 @@ struct CredentialWait: Equatable, Sendable {
                 // terminal usable, including its error text, with bounded memory.
                 visible = prelude
                 started = true
+                suppressOutput = false
             } else {
+                capturedChunk = Data()
                 return Data()
             }
             prelude.removeAll(keepingCapacity: false)
         }
 
+        capturedChunk = Data(visible)
         outputBytes.append(contentsOf: visible)
         // Amortize the front trim for large outputs instead of shifting the
         // entire retained window on every parser batch.
         if outputBytes.count > 960_000 {
             outputBytes.removeFirst(outputBytes.count - 480_000)
         }
-        return Data(visible)
+        guard suppressOutput, !hiddenCompletionPassed else { return Data(visible) }
+
+        // File helpers need the raw bytes for their result, but only the matching private
+        // completion event must reach the terminal parser. Keep a short suffix so a marker
+        // split between batches can still be recognized; never buffer the full file output
+        // a second time here.
+        hiddenTail.append(contentsOf: visible)
+        let completionPrefix = Array("\u{1B}]7777;PSW;\(token);".utf8)
+        if let marker = hiddenTail.firstRange(of: completionPrefix),
+           let terminator = hiddenTail[marker.upperBound...].firstIndex(of: 0x07) {
+            hiddenCompletionPassed = true
+            // The command's initial prompt never moved the visible cursor. Replace that
+            // line before the shell paints its next prompt, or two prompts concatenate.
+            let released = Data("\r\u{1B}[2K".utf8)
+                + Data(hiddenTail[marker.lowerBound...terminator])
+                + Data(hiddenTail[(terminator + 1)...])
+            hiddenTail.removeAll(keepingCapacity: false)
+            return released
+        }
+        if hiddenTail.count > 128 {
+            hiddenTail.removeFirst(hiddenTail.count - 128)
+        }
+        return Data()
     }
 
     var commandOutput: String {

@@ -688,6 +688,17 @@ final class SessionManager: ObservableObject {
         await aiToolCoordinator.executeCommandAndWait(sessionID: sessionID, command: command, timeoutSeconds: timeoutSeconds)
     }
 
+    func executeInternalCommandAndWait(
+        sessionID: UUID,
+        command: String,
+        timeoutSeconds: TimeInterval = 30
+    ) async -> CommandExecutionResult {
+        await aiToolCoordinator.executeCommandAndWait(
+            sessionID: sessionID, command: command,
+            timeoutSeconds: timeoutSeconds, suppressOutput: true
+        )
+    }
+
     func executeCLICommand(
         sessionID: UUID,
         command: String,
