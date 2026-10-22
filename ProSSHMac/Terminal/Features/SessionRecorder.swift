@@ -26,7 +26,7 @@ enum SessionRecorderError: LocalizedError {
     }
 }
 
-enum SessionRecordingStream: String, Codable, Sendable {
+nonisolated enum SessionRecordingStream: String, Codable, Sendable {
     case input
     case output
 
@@ -38,7 +38,7 @@ enum SessionRecordingStream: String, Codable, Sendable {
     }
 }
 
-struct SessionRecordingChunk: Codable, Hashable, Sendable {
+nonisolated struct SessionRecordingChunk: Codable, Hashable, Sendable {
     let offsetNanoseconds: UInt64
     let stream: SessionRecordingStream
     let payloadBase64: String
@@ -58,7 +58,7 @@ struct SessionRecordingChunk: Codable, Hashable, Sendable {
     }
 }
 
-struct SessionRecording: Codable, Identifiable, Hashable, Sendable {
+nonisolated struct SessionRecording: Codable, Identifiable, Hashable, Sendable {
     let id: UUID
     let sessionID: UUID
     let hostLabel: String
@@ -70,7 +70,7 @@ struct SessionRecording: Codable, Identifiable, Hashable, Sendable {
     var chunks: [SessionRecordingChunk]
 }
 
-struct SessionPlaybackStep: Sendable {
+nonisolated struct SessionPlaybackStep: Sendable {
     let stream: SessionRecordingStream
     let delayNanoseconds: UInt64
     let relativeSeconds: Double
@@ -82,12 +82,15 @@ final class SessionRecorder {
     private struct ActiveRecording {
         var recording: SessionRecording
         let startUptimeNanoseconds: UInt64
+        let sequence: UInt64
     }
 
-    private let fileManager: FileManager
     private let recordingsDirectoryURL: URL
+    private let storage: SessionRecordingStorage
     private var activeRecordingsBySessionID: [UUID: ActiveRecording] = [:]
     private var latestRecordingURLBySessionID: [UUID: URL] = [:]
+    private var latestSavedSequenceBySessionID: [UUID: UInt64] = [:]
+    private var nextSequence: UInt64 = 0
 
     /// When enabled, output chunks are coalesced into larger buffers before being
     /// committed as recording chunks. Reduces chunk count and I/O overhead during
@@ -98,9 +101,9 @@ final class SessionRecorder {
     private static let coalesceFlushThreshold = 65_536
     private static let coalesceFlushIntervalNanos: UInt64 = 100_000_000  // 100ms
 
-    init(fileManager: FileManager = .default, recordingsDirectoryURL: URL? = nil) {
-        self.fileManager = fileManager
-        self.recordingsDirectoryURL = recordingsDirectoryURL ?? Self.defaultRecordingsDirectory(fileManager: fileManager)
+    init(recordingsDirectoryURL: URL? = nil) {
+        self.recordingsDirectoryURL = recordingsDirectoryURL ?? Self.defaultRecordingsDirectory(fileManager: .default)
+        self.storage = SessionRecordingStorage()
     }
 
     func isRecording(sessionID: UUID) -> Bool {
@@ -132,14 +135,16 @@ final class SessionRecorder {
             endedAt: startDate,
             chunks: []
         )
+        nextSequence &+= 1
         activeRecordingsBySessionID[session.id] = ActiveRecording(
             recording: recording,
-            startUptimeNanoseconds: DispatchTime.now().uptimeNanoseconds
+            startUptimeNanoseconds: DispatchTime.now().uptimeNanoseconds,
+            sequence: nextSequence
         )
     }
 
     @discardableResult
-    func stopRecording(sessionID: UUID) throws -> URL {
+    func stopRecording(sessionID: UUID) async throws -> URL {
         // Flush any pending coalesced data before finalizing.
         flushPendingChunks(sessionID: sessionID)
         lastCoalesceFlush.removeValue(forKey: sessionID)
@@ -150,8 +155,11 @@ final class SessionRecorder {
 
         active.recording.endedAt = Date()
         let fileURL = recordingFileURL(recordingID: active.recording.id)
-        try persistRecording(active.recording, to: fileURL)
-        latestRecordingURLBySessionID[sessionID] = fileURL
+        try await storage.persist(active.recording, to: fileURL)
+        if active.sequence > latestSavedSequenceBySessionID[sessionID, default: 0] {
+            latestSavedSequenceBySessionID[sessionID] = active.sequence
+            latestRecordingURLBySessionID[sessionID] = fileURL
+        }
         return fileURL
     }
 
@@ -168,26 +176,15 @@ final class SessionRecorder {
         appendChunk(sessionID: sessionID, payload: data, stream: .output)
     }
 
-    func loadLatestRecording(sessionID: UUID) throws -> SessionRecording {
+    func loadLatestRecording(sessionID: UUID) async throws -> SessionRecording {
         guard let fileURL = latestRecordingURLBySessionID[sessionID] else {
             throw SessionRecorderError.recordingNotFound
         }
-        return try loadRecording(from: fileURL)
+        return try await loadRecording(from: fileURL)
     }
 
-    func loadRecording(from fileURL: URL) throws -> SessionRecording {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-
-        guard let recording = try EncryptedStorage.loadJSON(
-            SessionRecording.self,
-            from: fileURL,
-            fileManager: fileManager,
-            decoder: decoder
-        ) else {
-            throw SessionRecorderError.recordingNotFound
-        }
-        return recording
+    func loadRecording(from fileURL: URL) async throws -> SessionRecording {
+        try await storage.load(from: fileURL)
     }
 
     func exportLatestRecordingAsCast(
@@ -195,9 +192,9 @@ final class SessionRecorder {
         columns: Int = 80,
         rows: Int = 24,
         destinationURL: URL? = nil
-    ) throws -> URL {
-        let recording = try loadLatestRecording(sessionID: sessionID)
-        return try exportAsciinemaCast(
+    ) async throws -> URL {
+        let recording = try await loadLatestRecording(sessionID: sessionID)
+        return try await exportAsciinemaCast(
             recording: recording,
             columns: columns,
             rows: rows,
@@ -210,34 +207,16 @@ final class SessionRecorder {
         columns: Int = 80,
         rows: Int = 24,
         destinationURL: URL? = nil
-    ) throws -> URL {
+    ) async throws -> URL {
         let outputURL = destinationURL ?? recordingsDirectoryURL
             .appendingPathComponent(recording.id.uuidString)
             .appendingPathExtension("cast")
-
-        var lines: [String] = []
-        let header: [String: Any] = [
-            "version": 2,
-            "width": max(1, columns),
-            "height": max(1, rows),
-            "timestamp": Int(recording.startedAt.timeIntervalSince1970),
-            "env": ["TERM": "xterm-256color", "SHELL": "ssh"]
-        ]
-        lines.append(try serializeJSONLine(header))
-
-        for chunk in recording.chunks.sorted(by: { $0.offsetNanoseconds < $1.offsetNanoseconds }) {
-            let event: [Any] = [
-                Double(chunk.offsetNanoseconds) / 1_000_000_000,
-                chunk.stream.asciinemaCode,
-                chunk.text
-            ]
-            lines.append(try serializeJSONLine(event))
-        }
-
-        let output = lines.joined(separator: "\n") + "\n"
-        try fileManager.createDirectory(at: outputURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try output.write(to: outputURL, atomically: true, encoding: .utf8)
-        return outputURL
+        return try await storage.exportAsciinemaCast(
+            recording: recording,
+            columns: columns,
+            rows: rows,
+            to: outputURL
+        )
     }
 
     func playbackSchedule(recording: SessionRecording, speed: Double = 1.0) throws -> [SessionPlaybackStep] {
@@ -286,7 +265,7 @@ final class SessionRecorder {
         speed: Double = 1.0,
         onStep: @escaping @Sendable (SessionPlaybackStep) async -> Void
     ) async throws {
-        let recording = try loadLatestRecording(sessionID: sessionID)
+        let recording = try await loadLatestRecording(sessionID: sessionID)
         try await play(recording: recording, speed: speed, onStep: onStep)
     }
 
@@ -338,28 +317,10 @@ final class SessionRecorder {
         commitChunk(sessionID: sessionID, payload: data, stream: .output)
     }
 
-    private func persistRecording(_ recording: SessionRecording, to fileURL: URL) throws {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
-
-        try EncryptedStorage.saveJSON(
-            recording,
-            to: fileURL,
-            fileManager: fileManager,
-            encoder: encoder
-        )
-    }
-
     private func recordingFileURL(recordingID: UUID) -> URL {
         recordingsDirectoryURL
             .appendingPathComponent(recordingID.uuidString)
             .appendingPathExtension("psshrec")
-    }
-
-    private func serializeJSONLine(_ value: Any) throws -> String {
-        let data = try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
-        return String(decoding: data, as: UTF8.self)
     }
 
     nonisolated private static func defaultRecordingsDirectory(fileManager: FileManager) -> URL {
@@ -371,5 +332,65 @@ final class SessionRecorder {
         return baseDirectory
             .appendingPathComponent("ProSSHV2", isDirectory: true)
             .appendingPathComponent("SessionRecordings", isDirectory: true)
+    }
+}
+
+/// Performs encryption, disk reads, and cast serialization away from the UI actor.
+private actor SessionRecordingStorage {
+    private let fileManager = FileManager()
+
+    func persist(_ recording: SessionRecording, to fileURL: URL) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        try EncryptedStorage.saveJSON(recording, to: fileURL, fileManager: fileManager, encoder: encoder)
+    }
+
+    func load(from fileURL: URL) throws -> SessionRecording {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let recording = try EncryptedStorage.loadJSON(
+            SessionRecording.self,
+            from: fileURL,
+            fileManager: fileManager,
+            decoder: decoder
+        ) else {
+            throw SessionRecorderError.recordingNotFound
+        }
+        return recording
+    }
+
+    func exportAsciinemaCast(
+        recording: SessionRecording,
+        columns: Int,
+        rows: Int,
+        to outputURL: URL
+    ) throws -> URL {
+        var lines: [String] = []
+        let header: [String: Any] = [
+            "version": 2,
+            "width": max(1, columns),
+            "height": max(1, rows),
+            "timestamp": Int(recording.startedAt.timeIntervalSince1970),
+            "env": ["TERM": "xterm-256color", "SHELL": "ssh"]
+        ]
+        lines.append(try serializeJSONLine(header))
+        for chunk in recording.chunks.sorted(by: { $0.offsetNanoseconds < $1.offsetNanoseconds }) {
+            let event: [Any] = [
+                Double(chunk.offsetNanoseconds) / 1_000_000_000,
+                chunk.stream.asciinemaCode,
+                chunk.text
+            ]
+            lines.append(try serializeJSONLine(event))
+        }
+        let output = lines.joined(separator: "\n") + "\n"
+        try fileManager.createDirectory(at: outputURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try output.write(to: outputURL, atomically: true, encoding: .utf8)
+        return outputURL
+    }
+
+    private func serializeJSONLine(_ value: Any) throws -> String {
+        let data = try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
+        return String(decoding: data, as: UTF8.self)
     }
 }

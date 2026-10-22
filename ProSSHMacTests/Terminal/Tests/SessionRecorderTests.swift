@@ -20,12 +20,12 @@ final class SessionRecorderTests: XCTestCase {
         try await Task.sleep(nanoseconds: 2_000_000)
         recorder.recordOutput(sessionID: session.id, text: "total 64\n")
 
-        let recordingURL = try recorder.stopRecording(sessionID: session.id)
+        let recordingURL = try await recorder.stopRecording(sessionID: session.id)
 
         let raw = try Data(contentsOf: recordingURL)
         XCTAssertTrue(raw.starts(with: Data("PSSHENC1".utf8)))
 
-        let recording = try recorder.loadRecording(from: recordingURL)
+        let recording = try await recorder.loadRecording(from: recordingURL)
         let chunks = recording.chunks
         let firstStream = chunks[0].stream
         let secondStream = chunks[1].stream
@@ -84,7 +84,7 @@ final class SessionRecorderTests: XCTestCase {
             ]
         )
 
-        let castURL = try recorder.exportAsciinemaCast(
+        let castURL = try await recorder.exportAsciinemaCast(
             recording: recording,
             columns: 90,
             rows: 30,

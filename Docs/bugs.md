@@ -10,10 +10,10 @@ sequentially, and tagged by severity: **Critical**, **High**, **Medium**, or **L
 | Severity | Total | Fixed | Open |
 |----------|-------|-------|------|
 | Critical | 1     | 1     | 0    |
-| High     | 20    | 16    | 4    |
+| High     | 20    | 18    | 2    |
 | Medium   | 40    | 38    | 2    |
 | Low      | 35    | 30    | 5    |
-| **Total**| **96**| **85**| **11**|
+| **Total**| **96**| **87**| **9**|
 
 Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13, Bug 85 fixed and Bugs 86-87 added 2026-10-14, Bug 84 fixed and Bugs 88-90 added 2026-10-15, Bugs 91-93 added 2026-10-18, Bug 94 added 2026-10-20; Bugs 43, 44, 90 and 94 fixed and Bug 95 added 2026-10-20 (43 and 44 were found already fixed in the code); Bugs 87 and 88 fixed 2026-10-21. The `**File:**` paths below predate the
 refactors (`Views/` → `UI/`, `SSH/` → `Services/SSH/`, `Services/Security/` → `Services/`) and some
@@ -40,6 +40,12 @@ Bug 46 was confirmed by a new maximize/restore regression test. Bugs 23, 47, and
 old implementations: reconnect has no window capture, `restoreLayout` no longer exists or
 force-unwraps pane lookups, and Matrix character indexing uses wrapping arithmetic before
 modulo. These headings were corrected after source inspection on 2026-10-21.
+
+On 2026-10-22, Bug 2 was found obsolete: the C forward-open path frees the channel on
+open failure, and closes and frees it after wrapper allocation failure; there is no
+later PTY/environment configuration. Bug 49 was
+fixed by moving encrypted save/load and cast export to a storage actor. Bugs 1 and 3
+remain open pending transport lifecycle review.
 
 ---
 
@@ -81,20 +87,15 @@ actor or a serial dispatch queue.
 
 ---
 
-### Bug 2 — LibSSHForwardChannel Leaks Resources on Partial `open()` Failure (High)
+### Bug 2 — ~~LibSSHForwardChannel Leaks Resources on Partial `open()` Failure~~ [FIXED] (High)
 
 **File:** `SSH/Channels/LibSSHForwardChannel.swift`
 
-When `open()` succeeds at the SSH level but subsequent configuration (e.g., setting
-environment variables or requesting a PTY) fails, the code returns the error without
-closing the underlying channel. The SSH channel remains open on the server, consuming
-resources until the entire session is torn down.
-
-**Impact:** Resource leak on the remote server; exhaustion of SSH channel slots in
-long-running sessions.
-
-**Suggested fix:** Add a `defer` or explicit `close()` call on any failure path after
-the channel has been opened.
+The current forward-channel open path has no environment or PTY configuration stage.
+`prossh_forward_channel_open` frees the channel if opening fails and closes and frees it
+if allocation of the wrapper fails after opening. Source inspection on 2026-10-22 found
+the reported partial-open leak absent; no code change was needed. Live forwarding stress
+testing remains separate from this source-level finding.
 
 ---
 
@@ -963,17 +964,16 @@ Dictionary(pairs, uniquingKeysWith: { first, _ in first })
 
 ---
 
-### Bug 49 — SessionRecorder Performs File I/O on Main Thread (High)
+### Bug 49 — ~~SessionRecorder Performs File I/O on Main Thread~~ [FIXED] (High)
 
 **File:** `Terminal/Features/SessionRecorder.swift`
 
-Recording writes (`append` to file) are performed synchronously on the main actor. For
-large sessions or slow storage, this blocks the UI.
-
-**Impact:** UI stutters during session recording, especially on iOS devices with flash
-contention.
-
-**Suggested fix:** Move file I/O to a background actor or dispatch queue.
+The recorder buffers chunks in memory; it did not append to a file per chunk. Saving the
+encrypted recording at stop, loading it for playback, and serializing/writing a `.cast`
+export did run synchronously on the main actor. These operations now run on a dedicated
+storage actor. The main actor still owns active recording state and in-memory chunks.
+The Debug build and 31 focused tests passed on 2026-10-22. A live large-recording UI
+check remains useful.
 
 ---
 

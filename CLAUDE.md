@@ -679,9 +679,15 @@ implementing one. A 2026-10-21 source audit corrected 17 such headings and the s
 also carries OSC completion markers and credential prompts. Design separate capture and display
 handling before hiding any bytes; do not reuse the setup-echo filter for whole command output.
 
-**Remaining high-severity register items:** Bugs 1-3 need transport lifecycle review and live
-stress validation; Bug 49 still performs recording persistence/export I/O on the main actor.
-The register has 11 open entries after the 2026-10-21 sweep; `Docs/bugs.md` holds the exact list.
+**Bug 49 is fixed** (2026-10-22): recording save/load and cast export use a storage actor;
+the Debug build and 31 focused tests passed. A large-recording UI check is still useful.
+**Bug 2 was obsolete**: failed forward opens free the C channel; a later wrapper allocation
+failure closes and frees it.
+
+**Remaining high-severity register items:** Bugs 1 and 3 need transport lifecycle review and
+live stress validation. `LibSSHTransport.disconnect` destroys the C handle without retaining or
+closing its `LibSSHShellChannel` first; the C read/close lock alone does not protect a later
+read from a freed handle. The register has 9 open entries; `Docs/bugs.md` holds the exact list.
 
 **Queued after that:** Bug 95 (isolated PTY confirmed login Bash ignores `BASH_ENV`; a
 `--rcfile` launch lost the login profile, so preserve login behavior in any fix),

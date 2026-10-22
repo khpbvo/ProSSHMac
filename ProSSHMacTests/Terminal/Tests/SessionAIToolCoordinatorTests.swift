@@ -573,7 +573,7 @@ final class SessionAIToolCoordinatorTests: XCTestCase {
         XCTAssertNil(manager.credentialPrompt)
         XCTAssertTrue(spy.sentPayloads.contains(secret + "\r"))
         await manager.stopRecording(sessionID: sessionID)
-        let recording = try recorder.loadLatestRecording(sessionID: sessionID)
+        let recording = try await recorder.loadLatestRecording(sessionID: sessionID)
         XCTAssertFalse(recording.chunks.map(\.text).joined().contains(secret))
         _ = await manager.terminalHistoryIndex.flushActiveCommand(sessionID: sessionID)
         let history = await manager.terminalHistoryIndex.recentCommands(sessionID: sessionID)
@@ -668,7 +668,7 @@ final class SessionAIToolCoordinatorTests: XCTestCase {
         }
 
         await manager.stopRecording(sessionID: sessionID)
-        let recording = try recorder.loadLatestRecording(sessionID: sessionID)
+        let recording = try await recorder.loadLatestRecording(sessionID: sessionID)
         let input = recording.chunks.filter { $0.stream == .input }.map(\.text).joined()
         let output = recording.chunks.filter { $0.stream == .output }.map(\.text).joined()
         let payloads = await spy.sentPayloads

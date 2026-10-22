@@ -36,11 +36,11 @@ import Foundation
 
     func stopRecording(sessionID: UUID) async {
         guard let manager else { return }
+        manager.isRecordingBySessionID[sessionID] = false
         do {
-            let recordingURL = try sessionRecorder.stopRecording(sessionID: sessionID)
-            manager.isRecordingBySessionID[sessionID] = false
+            let recordingURL = try await sessionRecorder.stopRecording(sessionID: sessionID)
             manager.hasRecordingBySessionID[sessionID] = true
-            manager.latestRecordingURLBySessionID[sessionID] = recordingURL
+            manager.latestRecordingURLBySessionID[sessionID] = sessionRecorder.latestRecordingURL(sessionID: sessionID) ?? recordingURL
             await manager.renderingCoordinator.appendShellLine("[Recorder] Saved encrypted recording: \(recordingURL.lastPathComponent)", to: sessionID)
         } catch {
             await manager.renderingCoordinator.appendShellLine("[Recorder] \(error.localizedDescription)", to: sessionID)
@@ -69,7 +69,7 @@ import Foundation
     func exportLastRecordingAsCast(sessionID: UUID, columns: Int = 80, rows: Int = 24) async {
         guard let manager else { return }
         do {
-            let castURL = try sessionRecorder.exportLatestRecordingAsCast(
+            let castURL = try await sessionRecorder.exportLatestRecordingAsCast(
                 sessionID: sessionID,
                 columns: columns,
                 rows: rows
@@ -103,9 +103,9 @@ import Foundation
         Task { @MainActor [weak self] in
             guard let self, let manager = self.manager else { return }
             do {
-                let recordingURL = try self.sessionRecorder.stopRecording(sessionID: sessionID)
+                let recordingURL = try await self.sessionRecorder.stopRecording(sessionID: sessionID)
                 manager.hasRecordingBySessionID[sessionID] = true
-                manager.latestRecordingURLBySessionID[sessionID] = recordingURL
+                manager.latestRecordingURLBySessionID[sessionID] = self.sessionRecorder.latestRecordingURL(sessionID: sessionID) ?? recordingURL
             } catch {
                 // Best-effort finalization when sessions disconnect unexpectedly.
             }
