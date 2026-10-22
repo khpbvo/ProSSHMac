@@ -25,6 +25,7 @@ final class PortForwardingManager: ObservableObject {
     private let auditLogManager: AuditLogManager?
     private var listeners: [UUID: NWListener] = [:]
     private var connectionProxies: [UUID: [ForwardConnectionProxy]] = [:]
+    private var openingConnections: [UUID: Int] = [:]
     private let maxConnectionsPerRule = 32
 
     init(transport: any SSHTransporting, auditLogManager: AuditLogManager? = nil) {
@@ -55,6 +56,7 @@ final class PortForwardingManager: ObservableObject {
                 let listener = try NWListener(using: params, on: nwPort)
                 listeners[forwardID] = listener
                 connectionProxies[forwardID] = []
+                openingConnections[forwardID] = 0
 
                 let capturedForwardID = forwardID
                 let capturedSessionID = sessionID
@@ -110,6 +112,9 @@ final class PortForwardingManager: ObservableObject {
     }
 
     func stopForward(id: UUID) async {
+        // Remove admission state before awaiting proxy shutdown. Any pending open
+        // that completes afterward must close its new SSH channel immediately.
+        openingConnections.removeValue(forKey: id)
         if let listener = listeners.removeValue(forKey: id) {
             listener.cancel()
         }
@@ -123,7 +128,7 @@ final class PortForwardingManager: ObservableObject {
         activeForwards.removeAll(where: { $0.id == id })
     }
 
-    private func handleNewConnection(
+    func handleNewConnection(
         _ connection: NWConnection,
         forwardID: UUID,
         sessionID: UUID,
@@ -131,10 +136,18 @@ final class PortForwardingManager: ObservableObject {
         transport: any SSHTransporting,
         maxConnections: Int
     ) async {
-        let currentCount = connectionProxies[forwardID]?.count ?? 0
-        guard currentCount < maxConnections else {
+        guard let proxies = connectionProxies[forwardID],
+              let openingCount = openingConnections[forwardID],
+              listeners[forwardID] != nil,
+              proxies.count + openingCount < maxConnections else {
             connection.cancel()
             return
+        }
+        openingConnections[forwardID] = openingCount + 1
+        defer {
+            if let pending = openingConnections[forwardID] {
+                openingConnections[forwardID] = max(0, pending - 1)
+            }
         }
 
         do {
@@ -146,8 +159,16 @@ final class PortForwardingManager: ObservableObject {
                 sourcePort: rule.localPort
             )
 
+            guard connectionProxies[forwardID] != nil,
+                  openingConnections[forwardID] != nil,
+                  listeners[forwardID] != nil else {
+                await channel.close()
+                connection.cancel()
+                return
+            }
+
             let proxy = ForwardConnectionProxy(connection: connection, channel: channel)
-            connectionProxies[forwardID, default: []].append(proxy)
+            connectionProxies[forwardID]?.append(proxy)
             updateConnectionCount(forwardID: forwardID)
 
             await proxy.start { [weak self] in
@@ -197,6 +218,11 @@ actor ForwardConnectionProxy {
     }
 
     func start(onComplete: @escaping @Sendable () -> Void) {
+        guard !isStopped else {
+            connection.cancel()
+            onComplete()
+            return
+        }
         connection.start(queue: DispatchQueue(label: "prosshv2.fwdproxy.\(ObjectIdentifier(self))"))
 
         localToRemoteTask = Task { [weak self] in

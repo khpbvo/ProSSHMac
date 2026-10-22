@@ -10,10 +10,10 @@ sequentially, and tagged by severity: **Critical**, **High**, **Medium**, or **L
 | Severity | Total | Fixed | Open |
 |----------|-------|-------|------|
 | Critical | 1     | 1     | 0    |
-| High     | 20    | 18    | 2    |
+| High     | 20    | 19    | 1    |
 | Medium   | 40    | 38    | 2    |
 | Low      | 35    | 30    | 5    |
-| **Total**| **96**| **87**| **9**|
+| **Total**| **96**| **88**| **8**|
 
 Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13, Bug 85 fixed and Bugs 86-87 added 2026-10-14, Bug 84 fixed and Bugs 88-90 added 2026-10-15, Bugs 91-93 added 2026-10-18, Bug 94 added 2026-10-20; Bugs 43, 44, 90 and 94 fixed and Bug 95 added 2026-10-20 (43 and 44 were found already fixed in the code); Bugs 87 and 88 fixed 2026-10-21. The `**File:**` paths below predate the
 refactors (`Views/` → `UI/`, `SSH/` → `Services/SSH/`, `Services/Security/` → `Services/`) and some
@@ -69,21 +69,16 @@ remain open pending transport lifecycle review.
 
 ## 1. SSH Transport & Connection
 
-### Bug 1 — ForwardConnectionProxy Race Between `connect()` and `disconnect()` (High)
+### Bug 1 — ~~ForwardConnectionProxy Race Between `connect()` and `disconnect()`~~ [FIXED] (High)
 
-**File:** `SSH/PortForwarding/ForwardConnectionProxy.swift`
+**File:** `Services/PortForwardingManager.swift`
 
-The `connected` flag and `channel` are read and written across `connect()`,
-`disconnect()`, and `handleData()` without synchronization. If `disconnect()` is called
-from one task while `connect()` is running in another, the channel can be closed while
-`connect()` still holds a reference to it, or `handleData()` may read from a half-torn-down
-channel.
-
-**Impact:** Crash or data corruption during port-forwarding teardown under concurrent
-access.
-
-**Suggested fix:** Protect `connected`, `channel`, and the connection lifecycle with an
-actor or a serial dispatch queue.
+The old proxy fields no longer exist: `ForwardConnectionProxy` is an actor. The remaining
+race was in `PortForwardingManager`: an SSH channel opened after `stopForward` could
+recreate proxy state for a stopped rule. The manager now reserves slots for in-flight
+opens, removes admission state before awaiting shutdown, and closes a channel that arrives
+after stop. A stopped proxy also refuses a late `start`. The Debug build and focused
+delayed-open regression passed on 2026-10-22. Live forwarding stress remains to be checked.
 
 ---
 

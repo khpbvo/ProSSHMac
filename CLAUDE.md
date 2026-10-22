@@ -683,11 +683,13 @@ handling before hiding any bytes; do not reuse the setup-echo filter for whole c
 the Debug build and 31 focused tests passed. A large-recording UI check is still useful.
 **Bug 2 was obsolete**: failed forward opens free the C channel; a later wrapper allocation
 failure closes and frees it.
+**Bug 1 is fixed** (2026-10-22): in-flight forward opens reserve a slot and close a channel
+returned after stop; a stopped proxy refuses late start. Debug build and delayed-open test passed.
 
-**Remaining high-severity register items:** Bugs 1 and 3 need transport lifecycle review and
+**Remaining high-severity register item:** Bug 3 needs transport lifecycle review and
 live stress validation. `LibSSHTransport.disconnect` destroys the C handle without retaining or
 closing its `LibSSHShellChannel` first; the C read/close lock alone does not protect a later
-read from a freed handle. The register has 9 open entries; `Docs/bugs.md` holds the exact list.
+read from a freed handle. The register has 8 open entries; `Docs/bugs.md` holds the exact list.
 
 **Queued after that:** Bug 95 (isolated PTY confirmed login Bash ignores `BASH_ENV`; a
 `--rcfile` launch lost the login profile, so preserve login behavior in any fix),
