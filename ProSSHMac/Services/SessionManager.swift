@@ -151,6 +151,7 @@ final class SessionManager: ObservableObject {
     ) async throws -> Session {
         let resolvedShell = shellPath ?? ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         let shellName = (resolvedShell as NSString).lastPathComponent
+        let localShellIntegration = ShellIntegrationConfig(type: shellName == "bash" ? .bash : .none)
         let user = ProcessInfo.processInfo.environment["USER"] ?? NSUserName()
 
         let sessionID = UUID()
@@ -168,7 +169,7 @@ final class SessionManager: ObservableObject {
         sessions.insert(session, at: 0)
         let engine = TerminalEngine(columns: PTYConfiguration.default.columns, rows: PTYConfiguration.default.rows, maxScrollbackLines: configuredScrollbackLines)
         await engine.setLineFeedMode(true)
-        await configureHistoryTracking(for: session, engine: engine)
+        await configureHistoryTracking(for: session, engine: engine, shellIntegration: localShellIntegration)
         engines[sessionID] = engine
         renderingCoordinator.initializePTY(for: sessionID)
 
@@ -189,7 +190,8 @@ final class SessionManager: ObservableObject {
                 columns: desiredPTY.columns,
                 rows: desiredPTY.rows,
                 shellPath: resolvedShell,
-                workingDirectory: workingDirectory
+                workingDirectory: workingDirectory,
+                shellIntegration: localShellIntegration
             )
             shellChannels[sessionID] = channel
 
@@ -208,6 +210,13 @@ final class SessionManager: ObservableObject {
             replaceSession(session)
 
             shellIOCoordinator.startParserReader(for: sessionID, rawOutput: channel.rawOutput)
+
+            if shellName == "bash", let overlayPath = LocalShellBootstrap.bashPromptOverlayPath() {
+                let coordinator = shellIOCoordinator
+                Task { @MainActor in
+                    await coordinator.injectLocalBashOverlay(sessionID: sessionID, path: overlayPath)
+                }
+            }
 
             if let cwd = workingDirectory ?? ProcessInfo.processInfo.environment["HOME"] {
                 workingDirectoryBySessionID[sessionID] = cwd

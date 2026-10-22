@@ -43,6 +43,16 @@ enum RawShellInputSource: String {
         guard let line = ShellIntegrationScripts.sshInjectionLine(for: type, token: token) else {
             return .skipped(.unsupportedType)
         }
+        return await injectSetupLine(line, token: token, sessionID: sessionID)
+    }
+
+    func injectLocalBashOverlay(sessionID: UUID, path: String) async -> ShellIntegrationInjectionResult {
+        let token = String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(10)).uppercased()
+        let line = ShellIntegrationScripts.bashOverlayInjectionLine(path: path, token: token)
+        return await injectSetupLine(line, token: token, sessionID: sessionID)
+    }
+
+    private func injectSetupLine(_ line: String, token: String, sessionID: UUID) async -> ShellIntegrationInjectionResult {
         let timing = shellIntegrationTiming
         let sentAtStart = manager?.bytesSentBySessionID[sessionID] ?? 0
         let deadline = ContinuousClock.now + timing.readinessTimeout

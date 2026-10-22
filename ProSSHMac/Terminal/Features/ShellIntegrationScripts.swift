@@ -45,11 +45,19 @@ enum ShellIntegrationScripts: Sendable {
     /// Keep it short: a line over 1,024 bytes never reaches a macOS shell (`MAX_INPUT`).
     static nonisolated func sshInjectionLine(for type: ShellIntegrationType, token: String) -> String? {
         guard let script = sshInjectionScript(for: type) else { return nil }
+        return script + "; " + injectionMarkerCommand(for: type, token: token)
+    }
+
+    static nonisolated func bashOverlayInjectionLine(path: String, token: String) -> String {
+        let quotedPath = "'" + path.replacingOccurrences(of: "'", with: #"'"'"'"#) + "'"
+        return " . \(quotedPath); " + injectionMarkerCommand(for: .bash, token: token)
+    }
+
+    private static nonisolated func injectionMarkerCommand(for type: ShellIntegrationType, token: String) -> String {
         // fish's printf takes `\e`; dash's doesn't, so the POSIX family uses `\033`.
-        let marker = type == .fish
+        return type == .fish
             ? #"printf '\e]7777;PSI;%s\e\\\r\e[K' '\#(token)'"#
             : #"printf '\033]7777;PSI;%s\033\\\r\033[K' '\#(token)'"#
-        return script + "; " + marker
     }
 
     /// The bytes the end marker of `sshInjectionLine(for:token:)` prints.

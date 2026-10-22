@@ -75,6 +75,17 @@ final class ShellIntegrationTests: XCTestCase {
         XCTAssertTrue(script!.contains("__PROSSH_SHELL_INTEGRATION"))
     }
 
+    func testBashOverlayInjectionQuotesPathAndEndsWithPrivateMarker() {
+        let line = ShellIntegrationScripts.bashOverlayInjectionLine(
+            path: "/tmp/user's prompt/.bash_prompt",
+            token: "ABC123DEF0"
+        )
+        XCTAssertTrue(line.contains(". '/tmp/user'\"'\"'s prompt/.bash_prompt';"))
+        XCTAssertTrue(line.contains("7777;PSI;%s"))
+        XCTAssertTrue(line.contains("ABC123DEF0"))
+        XCTAssertLessThan(line.utf8.count, 1_024)
+    }
+
     func testFishScriptContainsRequiredElements() {
         let script = ShellIntegrationScripts.script(for: .fish)
         XCTAssertNotNil(script)

@@ -157,7 +157,36 @@ final class ShellIntegrationEchoFilterTests: XCTestCase {
     // MARK: - Real shells
 
     func testRealBashShowsNoSetupLine() async throws {
-        try await assertRealShellShowsNoSetupLine(shellPath: "/bin/bash", type: .bash)
+        let manager = SessionManager(transport: MockSSHTransport(), knownHostsStore: EchoFilterTestKnownHostsStore())
+        manager.shellIOCoordinator.shellIntegrationTiming.releaseTimeout = .seconds(30)
+        let session = try await manager.openLocalSession(shellPath: "/bin/bash")
+        defer { Task { await manager.disconnect(sessionID: session.id) } }
+
+        let deadline = ContinuousClock.now + .seconds(8)
+        while manager.bytesSentBySessionID[session.id, default: 0] == 0 {
+            guard ContinuousClock.now < deadline else { return XCTFail("Local Bash overlay was never sent") }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        while manager.shellIOCoordinator.isHoldingShellIntegrationEcho(sessionID: session.id) {
+            guard ContinuousClock.now < deadline else { return XCTFail("Local Bash overlay marker was never received") }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        try await Task.sleep(for: .milliseconds(300))
+        let screen = await screenText(manager, session.id)
+        XCTAssertFalse(screen.contains("__PROSSH"), screen)
+        XCTAssertFalse(screen.contains("PSI"), screen)
+        let commands = await manager.terminalHistoryIndex.recentCommands(sessionID: session.id)
+        XCTAssertTrue(commands.isEmpty, "The overlay line is not a user command")
+
+        let probe = await manager.executeCommandAndWait(
+            sessionID: session.id,
+            command: "shopt -q login_shell && echo LOGIN_OK; [[ \"$PS1\" == *prossh_prompt_path* ]] && echo PROMPT_OK; [[ \"${__PROSSH_SHELL_INTEGRATION-}\" == 1 ]] && echo INTEGRATION_OK; [[ -z \"${BASH_ENV-}\" ]] && echo NO_BASH_ENV",
+            timeoutSeconds: 8
+        )
+        XCTAssertEqual(probe.exitCode, 0)
+        for expected in ["LOGIN_OK", "PROMPT_OK", "INTEGRATION_OK", "NO_BASH_ENV"] {
+            XCTAssertTrue(probe.output.contains(expected), probe.output)
+        }
     }
 
     func testRealZshShowsNoSetupLine() async throws {

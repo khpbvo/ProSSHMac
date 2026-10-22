@@ -690,16 +690,19 @@ returned after stop; a stopped proxy refuses late start. Debug build and delayed
 channel, then destroys the C handle; connection generations reject superseded opens.
 The forward-stop path also drains late opens before transport teardown. Five normal and
 five concurrent cycles against temporary loopback `sshd` passed, along with 25 focused
-tests and the Debug build. Remote-server stress remains useful. The register has 5 open
-entries; `Docs/bugs.md` holds the exact list.
+tests and the Debug build. Remote-server stress remains useful; `Docs/bugs.md` holds the
+remaining register entries.
 
 **Bugs 62 and 72 are closed** (2026-10-22): the scanner effect has no angular sweep;
 the dormant safety terminal renderer with unstable line IDs was removed. Debug build and
 18 focused terminal tests passed.
 
-**Queued after that:** Bug 95 (isolated PTY confirmed login Bash ignores `BASH_ENV`; a
-`--rcfile` launch lost the login profile, so preserve login behavior in any fix),
-Bug 89 (brightness flicker on every tab switch with CRT/bloom on; first check whether it goes away
+**Bug 95 is fixed** (2026-10-22): local login Bash sources a prompt-only overlay after
+readiness through the hidden setup-line filter; no `BASH_ENV` or double `.bashrc` source.
+The real Bash PTY check, 75 focused tests, and Debug build passed. Live UI check remains.
+The register has 4 open entries.
+
+**Queued after that:** Bug 89 (brightness flicker on every tab switch with CRT/bloom on; first check whether it goes away
 with CRT and bloom off and whether `240b260~1` shows it),
 Bug 86 (colour emoji render as silhouettes; not diagnosed). Optional:
 a shared glyph atlas, now the largest hidden renderer cost (`Docs/Bug84.md` Open questions).

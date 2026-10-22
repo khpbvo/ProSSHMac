@@ -2,7 +2,7 @@
 // ProSSHMac
 //
 // Builds the minimal child environment for a local PTY shell session.
-// No custom ZDOTDIR, no overlay files — the user's real shell config loads as normal.
+// Preserve the user's login configuration while applying the app's prompt overlay.
 
 import Foundation
 import Darwin
@@ -28,7 +28,8 @@ enum LocalShellBootstrap {
 
     /// Builds a clean environment for the child shell process.
     /// Inherits locale, PATH, and TMPDIR from the parent, sets standard terminal vars.
-    /// Injects custom prompt overlay via ZDOTDIR (zsh) or BASH_ENV (bash).
+    /// Injects the zsh overlay via ZDOTDIR. Interactive bash receives its prompt
+    /// overlay after its login profile has loaded; BASH_ENV is ignored by login bash.
     static func buildEnvironment(shellPath: String, shellIntegration: ShellIntegrationConfig = .init()) -> [String: String] {
         let parentEnv = ProcessInfo.processInfo.environment
         let info = resolveUserInfo()
@@ -69,9 +70,6 @@ enum LocalShellBootstrap {
             let shellName = (shellPath as NSString).lastPathComponent
             if shellName == "zsh" {
                 env["ZDOTDIR"] = promptDir
-            } else if shellName == "bash" || shellName == "sh" {
-                let rcPath = (promptDir as NSString).appendingPathComponent(".bashrc")
-                env["BASH_ENV"] = rcPath
             }
         }
 
@@ -148,17 +146,15 @@ enum LocalShellBootstrap {
             return overlayDir
         } else {
             // bash
-            let rcPath = (overlayDir as NSString).appendingPathComponent(".bashrc")
-            let userRC = (home as NSString).appendingPathComponent(".bashrc")
+            let rcPath = (overlayDir as NSString).appendingPathComponent(".bash_prompt")
 
             let promptStr = promptConfig.bashPrompt(user: user)
             let pathFunction = promptConfig.bashPathFunction()
 
             var bashrc = """
-            # ProSSH shell overlay -- sources real .bashrc then sets custom prompt.
-            \(safeBashSourceLine(path: userRC))
+            # ProSSH prompt overlay -- sourced after the login profile has loaded.
             \(pathFunction)
-            PS1='\(promptStr)'
+            PS1=\(shellSingleQuoted(promptStr))
             """
 
             if shellIntegration.type == .bash,
@@ -178,9 +174,20 @@ enum LocalShellBootstrap {
         return "if [[ -r \"\(escaped)\" ]]; then ZDOTDIR=\"$HOME\" source \"\(escaped)\" 2>/dev/null; fi"
     }
 
-    static func safeBashSourceLine(path: String) -> String {
-        let escaped = path.replacingOccurrences(of: "\"", with: "\\\"")
-        return "if [[ -r \"\(escaped)\" ]]; then source \"\(escaped)\" 2>/dev/null; fi"
+    static func bashPromptOverlayPath() -> String? {
+        guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            return nil
+        }
+        let path = appSupport
+            .appendingPathComponent("ProSSH", isDirectory: true)
+            .appendingPathComponent("shell-overlay", isDirectory: true)
+            .appendingPathComponent(".bash_prompt")
+            .path
+        return FileManager.default.isReadableFile(atPath: path) ? path : nil
+    }
+
+    private static func shellSingleQuoted(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: #"'"'"'"#) + "'"
     }
 
     static var zshCompletionFallback: String {

@@ -12,8 +12,8 @@ sequentially, and tagged by severity: **Critical**, **High**, **Medium**, or **L
 | Critical | 1     | 1     | 0    |
 | High     | 20    | 20    | 0    |
 | Medium   | 40    | 39    | 1    |
-| Low      | 35    | 31    | 4    |
-| **Total**| **96**| **91**| **5**|
+| Low      | 35    | 32    | 3    |
+| **Total**| **96**| **92**| **4**|
 
 Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13, Bug 85 fixed and Bugs 86-87 added 2026-10-14, Bug 84 fixed and Bugs 88-90 added 2026-10-15, Bugs 91-93 added 2026-10-18, Bug 94 added 2026-10-20; Bugs 43, 44, 90 and 94 fixed and Bug 95 added 2026-10-20 (43 and 44 were found already fixed in the code); Bugs 87 and 88 fixed 2026-10-21. The `**File:**` paths below predate the
 refactors (`Views/` → `UI/`, `SSH/` → `Services/SSH/`, `Services/Security/` → `Services/`) and some
@@ -50,6 +50,7 @@ On 2026-10-22, Bugs 62 and 72 were closed: the scanner shader has no angular swe
 and the hardcoded-off safety terminal renderer with unstable line IDs was removed.
 Bug 3 was then fixed by making `LibSSHTransport` await shell opening and closing before
 destroying its C session handle; Bug 1's forward-stop path now drains pending opens too.
+Bug 95 was fixed with post-login Bash prompt injection and a real local PTY regression.
 
 ---
 
@@ -1793,7 +1794,7 @@ the mouse comes up. The panel pauses while the button is held. Test:
 
 ---
 
-### Bug 95 — Local Bash Sessions Get No Shell Integration or Prompt Overlay (Low)
+### Bug 95 — ~~Local Bash Sessions Get No Shell Integration or Prompt Overlay~~ [FIXED] (Low)
 
 **Files:** `Services/LocalShellBootstrap.swift` (`BASH_ENV`)
 
@@ -1805,6 +1806,14 @@ local bash would get neither the prompt overlay nor the OSC 133 integration.
 ignored the `BASH_ENV` overlay. Launching with `--rcfile` and `-i` loaded the overlay only when
 Bash was not a login shell; that variant stopped loading the login profile. A fix must preserve
 normal login-profile behavior. The app's own local Bash UI was not exercised.
+
+**Fixed 2026-10-22:** Local Bash still starts as a login shell. After its prompt is ready,
+the app sources a prompt-only overlay through the existing hidden setup-line filter. That
+overlay defines the prompt and OSC 133 hooks without sourcing the user's `.bashrc` again.
+`BASH_ENV` is no longer set for child scripts. A real local Bash PTY test confirmed login
+mode, the configured prompt function, integration, no `BASH_ENV`, and no setup line on
+screen or in app command history. The Debug build and 75 focused tests passed. A relaunched
+app UI check remains useful.
 
 ---
 
