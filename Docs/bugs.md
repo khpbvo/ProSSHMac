@@ -12,10 +12,10 @@ sequentially, and tagged by severity: **Critical**, **High**, **Medium**, or **L
 | Critical | 1     | 1     | 0    |
 | High     | 21    | 20    | 1    |
 | Medium   | 48    | 40    | 8    |
-| Low      | 38    | 35    | 3    |
-| **Total**| **108**| **96**| **12**|
+| Low      | 38    | 36    | 2    |
+| **Total**| **108**| **97**| **11**|
 
-Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13, Bug 85 fixed and Bugs 86-87 added 2026-10-14, Bug 84 fixed and Bugs 88-90 added 2026-10-15, Bugs 91-93 added 2026-10-18, Bug 94 added 2026-10-20; Bugs 43, 44, 90 and 94 fixed and Bug 95 added 2026-10-20 (43 and 44 were found already fixed in the code); Bugs 87 and 88 fixed 2026-10-21; Bugs 97-108 added 2026-10-23 from the code cross-check in `Docs/The big picture(October 2026).md` (all open, found by reading the source, none reproduced yet). The `**File:**` paths below predate the
+Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13, Bug 85 fixed and Bugs 86-87 added 2026-10-14, Bug 84 fixed and Bugs 88-90 added 2026-10-15, Bugs 91-93 added 2026-10-18, Bug 94 added 2026-10-20; Bugs 43, 44, 90 and 94 fixed and Bug 95 added 2026-10-20 (43 and 44 were found already fixed in the code); Bugs 87 and 88 fixed 2026-10-21; Bugs 97-108 added 2026-10-23 from the code cross-check in `Docs/The big picture(October 2026).md` (all open, found by reading the source, none reproduced yet); Bug 108 fixed 2026-10-23. The `**File:**` paths below predate the
 refactors (`Views/` → `UI/`, `SSH/` → `Services/SSH/`, `Services/Security/` → `Services/`) and some
 files no longer exist — resolve by basename.
 
@@ -2049,7 +2049,7 @@ and is fine.
 
 ---
 
-### Bug 108 — README Claims Features the Code Doesn't Have (Low)
+### Bug 108 — ~~README Claims Features the Code Doesn't Have~~ [FIXED] (Low)
 
 **File:** `README.md`
 
@@ -2071,6 +2071,11 @@ Severity is Low by the guide below (documentation, not behaviour). The credibili
 network engineers is higher.
 
 **Fix direction:** a README truth pass (F0).
+
+**Fixed 2026-10-23:** README rewritten against the code (two read-only verification passes): every
+claim above corrected or removed, the competitor table replaced by highlights, a Known limitations
+section added, and the CI badge dropped until Bug 105 is fixed. CONTRIBUTING.md and SECURITY.md
+got the same pass.
 
 ---
 

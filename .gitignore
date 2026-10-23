@@ -51,3 +51,6 @@ WARNINGS_BASELINE.txt
 # Claude Code session data
 .claude/
 Docs/debuglogs/debugoutput*.txt
+
+# Built app bundles (releases ship the .dmg)
+DMG/

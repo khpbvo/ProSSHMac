@@ -3,10 +3,10 @@
 #
 # Alternatively, a repo admin can apply the description manually with:
 #   gh repo edit khpbvo/ProSSHMac \
-#     --description "A native macOS SSH client with GPU-accelerated terminal rendering, AI terminal assistant, multi-pane sessions, SFTP file browser, and SSH key management — built with SwiftUI and Metal"
+#     --description "Native macOS SSH client and terminal: Metal rendering, split panes, SFTP, SSH keys and a certificate authority, plus an AI copilot whose changes you approve as diffs."
 
 repository:
-  description: "A native macOS SSH client with GPU-accelerated terminal rendering, AI terminal assistant, multi-pane sessions, SFTP file browser, and SSH key management — built with SwiftUI and Metal"
+  description: "Native macOS SSH client and terminal: Metal rendering, split panes, SFTP, SSH keys and a certificate authority, plus an AI copilot whose changes you approve as diffs."
 
   topics:
     - ssh
@@ -17,3 +17,6 @@ repository:
     - metal
     - ai
     - sftp
+    - ssh-client
+    - terminal-emulator
+    - network-automation

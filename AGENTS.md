@@ -1,1 +1,1 @@
-Read the CLAUDE.md for instructions use it instead of AGENTS.md
+This project's agent instructions live in [CLAUDE.md](CLAUDE.md). Read it before making changes.

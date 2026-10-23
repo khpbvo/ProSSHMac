@@ -28,3 +28,4 @@
 - [ ] I have added tests that prove my fix is effective or my feature works
 - [ ] New and existing tests pass locally
 - [ ] No sensitive data (keys, passwords, credentials) is logged or exposed
+- [ ] `CLAUDE.md` and `Docs/featurelist.md` are updated where needed (see [CONTRIBUTING.md](../CONTRIBUTING.md#pull-requests))

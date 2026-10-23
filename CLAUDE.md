@@ -166,7 +166,7 @@ xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform
   recording any rendered number.**
 - **Target: match or beat Terminal.app end-to-end** (30.8-34.8 MB/s in R3c, 26.5 in September; iTerm2 ~1.4 MB/s on the same
   machine, 6 MB with rendering). The old 89 MB/s target was a pipe baseline with no terminal
-  emulation — ignore it where older docs cite it. See `docs/Optimization.md`.
+  emulation — ignore it where older docs cite it. See `Docs/Optimization.md`.
 - **Perf instrumentation:** `TerminalPerf` (`Terminal/Diagnostics/TerminalPerf.swift`) gates five
   signposts and **19 in-process stage timers** behind `--perf-signposts` / `PROSSH_PERF_SIGNPOSTS=1`
   / `terminal.perf.signposts`. Pass `--perf-signposts` to `benchmark-throughput.sh` to print a stage
@@ -601,9 +601,10 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 - **`Docs/bugs.md` file paths predate the refactors** (`Views/` → `UI/`, `SSH/` → `Services/SSH/`,
   `Services/Security/` → `Services/`; some files no longer exist). Resolve by basename before
   trusting an entry. Open/fixed counts are in its Summary table.
-- **Docs directory case**: git tracks 28 files under `Docs/` and 4 under `docs/`
-  (`FutureFeatures.md`, `Optimization.md`, `RefactorTheFinalRun.md`, `screenshots/`). This only works
-  because macOS is case-insensitive — a case-sensitive checkout splits them. Resolve by basename.
+- **All docs live in `Docs/` (capital D).** Older specs still cite `docs/...` paths; they resolve
+  on macOS only because it is case-insensitive. Never create a lowercase `docs/`.
+- **`DMG/` is git-ignored** (a built app was once committed there). Release DMGs come from
+  `scripts/create-dmg.sh`, which writes to `build/`.
 
 ---
 
@@ -626,8 +627,8 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 | `Docs/PhaseB.md` | Local Input V2 Phase B checklist (make byte-first local input the only path) — open |
 | `Docs/AIAgentOptimization.md` | AI audit/optimization plan and verification; links to the core, tool, execution and prompt/skill reports and reproducible function inventory |
 | `Docs/AIArchitecture.md` | Current AI assistant architecture for both providers (OpenRouter, Anthropic): settings, transcript, replay rules, logging, verification |
-| `docs/FutureFeatures.md` | Older roadmap (Feb 2026; its AI priority is done) — superseded by the big picture doc |
-| `docs/Optimization.md` | Performance bottleneck analysis, benchmark commands, current numbers |
+| `Docs/FutureFeatures.md` | Older roadmap (Feb 2026; its AI priority is done) — superseded by the big picture doc |
+| `Docs/Optimization.md` | Performance bottleneck analysis, benchmark commands, current numbers |
 | `Docs/FasterThenYouWillEverLiveToBe.md` | Throughput gap profiling — Phases 0,1,2,3,5 done. **Phase 4 is abandoned, not optional**: `parse + grid` was never the constraint |
 | `Docs/optimizationspart2.md` | Throughput recovery playbook (Part 2) |
 | `Docs/OptimizeP2.md` / `Docs/OptimizeP3.md` | P2 / P3 optimization phased checklists — **COMPLETE** |
@@ -642,8 +643,8 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 | `Docs/TextGlow.md` | Bloom / Text Glow — **COMPLETE** (Phases 0–7) |
 | `Docs/SmoothScroll.md` | Smooth Scrolling — **COMPLETE** (Phases 0–6) |
 | `Docs/RefactorMetalTerminalRenderer.md` | Renderer split into 8 extensions — **COMPLETE** |
-| `docs/RefactorTheFinalRun.md` | 4 god files decomposed — **COMPLETE** (Phases 0–19) |
-| `RefactorTerminalView.md` / `RefactorTerminalGrid.md` (repo root) | `UI/Terminal/` split and 11 `TerminalGrid+*` extensions — **COMPLETE** |
+| `Docs/RefactorTheFinalRun.md` | 4 god files decomposed — **COMPLETE** (Phases 0–19) |
+| `Docs/RefactorTerminalView.md` / `Docs/RefactorTerminalGrid.md` | `UI/Terminal/` split and 11 `TerminalGrid+*` extensions — **COMPLETE** |
 | `Docs/multiprovider-architecture.md` | Superseded historical multi-provider design |
 
 The strict-concurrency refactor (RefactorTheActor, which produced `Services/SSH/`, `Services/AI/`
@@ -659,7 +660,8 @@ ranked list. Next step: write the first spec from it, `Docs/ReleaseReadiness.md`
 - Bug 97 (loopback-only forwards);
 - Bug 105 (CI);
 - a 0.10.0 release with Sparkle;
-- a README truth pass (Bugs 107/108).
+- Bug 107 (stale Settings text). The README truth pass (Bug 108) is done; keep README claims
+  verified against the code.
 
 Bugs 97–108 are open and were found by reading only, so reproduce before fixing (Bug 97: `lsof`;
 Bug 98: `ssh-add -l` on the remote). The doc's "Open decisions" (AI gate default, redaction
@@ -765,7 +767,7 @@ of Metal view overlap because each split surface demanded at least 220 points of
 Split surfaces now fit their pane, with a geometry regression through terminal-only restore.
 The original four-session SSH setup was not rerun live. The debug-only branch
 `debug/terminal-jump` (`251e010`) remains unmerged; never merge it. The bug register now has
-108 entries: 96 fixed, 12 open (Bugs 97–108, above).
+108 entries: 97 fixed, 11 open (Bugs 97–107, above).
 
 **RenderCost R2b is validated and closed** (2026-10-23): 1.09-1.12x in every interleaved pair,
 windowless, active app. The "bimodality" was App Nap on inactive processes (~3.6x) plus CPU
@@ -811,5 +813,5 @@ returns, capture the call stack before changing anything.
 - OpenRouter: tool-wrapper hiding, table rendering and paragraph spacing in the running app;
   compare GLM 5.3 Flash against a stronger model once a test key is available.
 
-Unrelated open work: `Docs/bugs.md`, `Docs/PhaseB.md`, the `Docs/` vs `docs/` case split, and a
+Unrelated open work: `Docs/bugs.md`, `Docs/PhaseB.md`, and a
 first full-suite baseline on Xcode 27.

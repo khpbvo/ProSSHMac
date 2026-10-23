@@ -41,5 +41,5 @@ ProSSHMac employs several layers of defense:
 | **Hardware Key Protection** | Secure Enclave P-256 keys via `SecureEnclaveKeyManager` for certificate signing |
 | **Host Verification** | Trust-on-first-use (TOFU) model with persistent known-hosts store (`FileKnownHostsStore`) |
 | **Algorithm Policy** | Modern-first negotiation (curve25519, chacha20-poly1305, ed25519) with opt-in legacy fallback |
-| **Audit Logging** | All connection, authentication, and transfer events recorded via `AuditLogManager` |
-| **Biometric Gating** | Optional Touch ID / password gating for stored credentials via `BiometricPasswordStore` |
+| **Audit Logging** | Connection, authentication, host verification, security and port-forwarding events recorded via `AuditLogManager` |
+| **Biometric Gating** | Optional Touch ID-protected cache for passwords and key passphrases via `BiometricPasswordStore` |

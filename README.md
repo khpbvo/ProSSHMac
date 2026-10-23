@@ -1,24 +1,25 @@
 # ProSSHMac
 
-A native macOS SSH client built with SwiftUI and Metal, featuring GPU-accelerated terminal rendering, an AI Terminal Copilot that can read, act, and configure anything it's connected to, multi-pane sessions, a built-in SFTP browser, SSH key management, and a certificate authority.
+A native macOS SSH client and terminal, built with SwiftUI and Metal. It combines a GPU-rendered terminal, split panes and tabs, an SFTP browser, SSH key and certificate management, and an AI copilot that works inside your sessions. Every file change it proposes is shown as a diff and waits for your approval.
 
 ![Version](https://img.shields.io/badge/version-0.9.0-blue)
 ![macOS](https://img.shields.io/badge/macOS-26.0%2B-blue)
-![Swift](https://img.shields.io/badge/Swift-6.0-orange)
+![Swift](https://img.shields.io/badge/Swift-6-orange)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Build](https://github.com/khpbvo/ProSSHMac/actions/workflows/ci.yml/badge.svg)
 
-![ProSSHMac Split Panes](Screenshots/Splitscreen2.png)
+![ProSSHMac with split panes](Screenshots/Splitscreen2.png)
+
+> **Status: 0.9.0, pre-release.** The core is in daily use, and the [known limitations](#known-limitations) are listed openly. Contributions are very welcome. See [Contributing](#contributing).
 
 ---
 
-## What Makes This Different
+## Highlights
 
-Most SSH clients let you connect and type. ProSSHMac lets you connect and talk. The AI Terminal Copilot isn't a chatbot bolted on the side — it's a full agent that can read the current screen, run commands, navigate the filesystem, and push configuration changes, then wait for you to approve each change before it takes effect.
-
-That last part matters. The AI can SSH into a MikroTik router, inspect the current firewall rules, and generate a precise patch to apply — but it shows you a diff and waits for your click before touching anything. The same approval flow works for local files. You stay in control.
-
-**Who needs CCNA when you've got ProSSH?**
+- **An AI copilot that acts, with you in control.** It reads the screen, runs commands, and searches and reads files, locally or over SSH. It can work across all your open sessions at once. File edits arrive as a diff card and only apply after you click Approve.
+- **Password prompts stay yours.** When a command the copilot runs stops at a `sudo`, `su` or SSH password prompt, the run pauses and a card appears. You type the password in the terminal, so the model never sees it, and nothing is recorded.
+- **Network device CLIs.** On routers and switches, the copilot presses through pagers and waits for the prompt to come back. It also pauses at `enable` password prompts.
+- **A built-in SSH certificate authority.** CA keys are generated in the Secure Enclave and signing happens there. Revocation is handled with KRLs.
+- **A fast native terminal.** Metal rendering with a glyph atlas draws at the display's refresh rate and only when something changes. A table-driven VT/xterm parser feeds it.
 
 ---
 
@@ -26,290 +27,211 @@ That last part matters. The AI can SSH into a MikroTik router, inspect the curre
 
 ### Terminal
 
-- **GPU-Accelerated Rendering** — Metal-based rendering pipeline with glyph atlas caching for smooth, high-performance terminal output at up to 120fps
-- **Multi-Pane Sessions** — Split your terminal into multiple panes with flexible tree-based layouts and draggable dividers
-- **Local Terminal** — Full PTY-backed local shell sessions alongside SSH connections
-- **External Terminal Windows** — Detach sessions into standalone windows
-- **VT100/xterm Emulation** — Comprehensive state-machine parser handling CSI, SGR, OSC (including OSC 133 semantic prompts), ESC, and DCS escape sequences
-- **Terminal Search** — Search through terminal buffer content
-- **Session Recording** — Record terminal sessions with encrypted persistence and asciinema-compatible export
-- **Link Detection** — Clickable URL detection in terminal output
+- **Metal rendering**: glyph atlas and cache, demand-driven frames, smooth scrolling, cursor animation
+- **VT100/xterm emulation**: table-driven parser for CSI, SGR, OSC (including OSC 133 prompt marks), ESC and DCS (DECRQSS)
+- **Tabs, split panes and external windows**: tree-based splits with draggable dividers and saved layouts. Detach a session into its own window, or maximize a pane with `Cmd+Shift+Return`.
+- **Broadcast input**: type into every pane, or a selected group of panes (`Cmd+Shift+B`)
+- **Local shells**: PTY-backed zsh/bash sessions next to your SSH sessions
+- **Keyboard protocols**: kitty keyboard disambiguation and xterm `modifyOtherKeys`, so Shift+Enter works in TUIs. At a plain zsh prompt it inserts a newline.
+- **Shell integration**: command blocks and history from OSC 133 marks, with a heuristic fallback. It is automatic for local shells and opt-in per host for SSH.
+- **Search** (`Cmd+F`) with regex and case-sensitive matching
+- **Session recording**: encrypted on disk, exportable as asciinema `.cast`
 
 ### AI Terminal Copilot
 
-The AI sidebar (`Cmd+Option+I`) runs a multi-step agent loop through OpenRouter Chat Completions. Choose a tool-capable text model in Settings. It works in both local shell sessions and remote SSH sessions.
-
-**Context tools** — read what's on screen, retrieve command history, search past output:
+Open the sidebar with `Cmd+Option+I`. It works with **OpenRouter** (any tool-capable model from its catalog) or directly with **Anthropic** (Claude). You pick the provider and model in Settings. Each chat keeps its own memory across turns and model switches. Stop cancels the run and keeps the conversation; Clear starts a new one.
 
 | Tool | What it does |
 |---|---|
-| `get_current_screen` | Read the current visible terminal contents |
-| `get_recent_commands` | List recent commands with exit codes and output previews |
-| `get_command_output` | Retrieve full output of any past command by ID |
-| `search_terminal_history` | Search commands and output across the session |
-| `get_session_info` | Get hostname, OS, working directory, connection type |
+| `get_current_screen` | Read the visible terminal contents |
+| `get_recent_commands` / `get_command_output` | Recent commands with exit codes, and the full output of any of them |
+| `execute_and_wait` | Run a command and return its output and exit code |
+| `execute_command` | Start an interactive or long-running program |
+| `send_input` | Type into a running program: answer prompts, send Ctrl+C, drive REPLs |
+| `run_cli_command` | Run a command at a router or switch prompt, paging through output |
+| `search_filesystem` / `search_file_contents` | Find files by name or content |
+| `read_files` | Read up to 10 files in one call |
+| `apply_patch` | Edit local or remote files with a V4A diff, applied only after you approve |
+| `list_sessions` | List open sessions. Every tool takes a `target_session`, so one chat can work on several hosts. |
+| `load_skill` | Load one of your own Markdown skill files (see [Docs/Skills.md](Docs/Skills.md)) |
 
-**Execution tools** — run commands and interact with running processes:
+A request runs up to 200 tool iterations. Prompts that start with `run `, `execute ` or `cd ` use a smaller tool set and stop after 15.
 
-| Tool | What it does |
-|---|---|
-| `execute_and_wait` | Run a command and return output + exit code in one step |
-| `execute_command` | Fire-and-forget for interactive or long-running programs |
-| `send_input` | Write directly to a running process — answer prompts, send Ctrl+C, navigate REPLs, tab-complete |
-
-**Filesystem tools** — browse and read files without leaving the AI conversation:
-
-| Tool | What it does |
-|---|---|
-| `search_filesystem` | Find files by name pattern |
-| `search_file_contents` | Search for text across files |
-| `read_file_chunk` | Read a file in bounded 200-line windows |
-| `read_files` | Batch read up to 10 files in one call |
-
-**Editing tool** — make changes with human approval:
-
-| Tool | What it does |
-|---|---|
-| `apply_patch` | Apply a V4A unified diff to local or remote files. Shows a diff preview card inline — the change only lands after you click Approve. |
-
-The agent runs up to 200 iterations per request and maintains a per-session conversation, including tool calls and results. Changing the selected model takes effect on the next turn and keeps the conversation. Direct action prompts (starting with "run" or "execute") use a restricted tool set with a 15-iteration cap.
-
-**Device support:** The copilot understands Linux, macOS, and MikroTik RouterOS prompts and command patterns. Cisco IOS, Juniper JunOS, Arista EOS, and other SSH-accessible network devices are possibly supported just not yet tested.
+**Device prompts.** Hosts can be tagged with a shell or device type. Prompt patterns ship for zsh, bash, fish, POSIX sh, Cisco IOS/IOS-XE, Juniper JunOS, Arista EOS, MikroTik RouterOS, Palo Alto PAN-OS, HP/Aruba ProCurve, Fortinet FortiOS and Nokia SR OS, or you can supply your own regex. Most device patterns have not yet been tested on real hardware. If you have the gear, that is one of the most useful ways to help.
 
 ### SSH and Security
 
-- **SSH Key Management (KeyForge)** — Generate, import, export, and inspect SSH keys including Ed25519, ECDSA, and RSA
-- **Certificate Authority** — Built-in CA for signing SSH certificates with Secure Enclave support
-- **Port Forwarding** — Local and remote port forwarding with an intuitive rule editor and NWListener-based proxying
-- **Biometric Authentication** — Touch ID and password gating for stored credentials
-- **Secure Credential Storage** — AES-256-GCM encryption with Keychain-managed master keys and Secure Enclave key management
-- **Known Hosts Verification** — Trust-on-first-use (TOFU) model with persistent host key storage
-- **Audit Logging** — All connections, authentication events, port forwards, and transfers are logged
+- **Authentication**: password, public key, certificate and keyboard-interactive, plus single-hop jump hosts. TOTP codes can be generated per host.
+- **KeyForge**: generate RSA, ECDSA and Ed25519 keys (or Secure Enclave P-256), import and inspect keys, convert between OpenSSH, PEM and PKCS#8, copy public keys, and run `ssh-copy-id`
+- **Certificate authority**: sign user and host certificates with a Secure Enclave CA key; KRL revocation
+- **Local port forwarding** with a rule editor
+- **Host key verification**: trust on first use, with a persistent known-hosts store and a prompt when a key changes
+- **Algorithm policy**: modern algorithms first, with legacy algorithms as an opt-in per host
+- **Encrypted storage**: AES-256-GCM with a Keychain-held master key; optional Touch ID-protected password and passphrase cache
+- **Audit log**: connections, authentication, host verification, security events and port forwards
+- **`~/.ssh/config`**: import with a preview, and export, both through the clipboard
 
-### File Management
+### Files
 
-- **SFTP Transfers** — File transfers with progress tracking via the Transfers tab
-- **File Browser Sidebar** — Lazy-loading tree-based file browser (`Cmd+B`); uses SFTP for remote sessions and FileManager for local sessions
-- **File Actions** — Open files in `nano`, `vim`, or `less`, cat to terminal, download via SFTP directly from the browser
+- **File browser sidebar** (`Cmd+B`): a lazy-loading tree, over SFTP for remote sessions and the local filesystem otherwise. Open a file in `nano`, `vim` or `less`, `cat` it, or download it.
+- **Transfers** tab with per-transfer progress
 
-### Customization and Visual Effects
+### Productivity and appearance
 
-- **CRT Effect** — Retro scanline overlay with barrel distortion and phosphor persistence
-- **Matrix Screensaver** — Configurable idle-activated Matrix-style falling character animation
-- **Custom Prompt Appearance** — Configurable prompt colors for local terminal sessions
-- **Gradient Backgrounds** — Custom terminal background gradients
-- **Scanner Effect** — Animated scanning line effect
-
-### Productivity
-
-- **Quick Commands** — Reusable command snippets with variable substitution, host/global scoping, and JSON import/export
-- **Spotlight Integration** — Find your hosts via macOS Spotlight search
-- **Siri Shortcuts** — Automate SSH connections via AppIntents
-- **Keyboard Shortcuts** — File browser (`Cmd+B`), AI sidebar (`Cmd+Option+I`), standard terminal shortcuts
+- **Quick Commands** (`Cmd+Shift+P`): snippets with variables, global or per host, JSON import and export
+- **Spotlight** search for hosts, and **Shortcuts** actions to open a section or connect to a host
+- **Effects**: CRT (scanlines, barrel distortion, phosphor persistence), bloom and text glow, gradient backgrounds, scanner, transparency, bell, and a Matrix idle screensaver
+- **Prompt colours** for local shells
 
 ---
 
-## What ProSSHMac Has That Competitors Don't
+## Known limitations
 
-| Feature | ProSSHMac | Closest competitor |
-|---|---|---|
-| AI agent with file patching + approval flow | Yes | Nothing comparable in SSH clients |
-| AI that understands network device CLIs | Yes (MikroTik RouterOS) | No shipping SSH client has this |
-| Built-in Certificate Authority | Yes | No competitor ships a CA |
-| Secure Enclave SSH key generation | Yes | Prompt 3 (storage only, not generation) |
-| Metal GPU rendering + SSH + SFTP + CA | Yes (all four) | No competitor combines all four |
-| Audit logging | Yes | SecureCRT (limited) |
-| Spotlight search for hosts | Yes | Nothing comparable |
-| Siri Shortcuts for SSH | Yes | Prompt 3 (partial) |
+These are tracked in [Docs/bugs.md](Docs/bugs.md), and each is a good place to contribute.
 
----
-
-## What's Being Built Next
-
-These are the open priorities. If any of these excite you, read the [contribution guide](CONTRIBUTING.md) and pick one up.
-
-**High impact, open now:**
-
-- [ ] **Inline image protocol** — Kitty graphics protocol support. Metal textures composited into the cell grid during the render pass. Ghostty and Kitty set the bar; ProSSHMac's existing glyph atlas pipeline is the blueprint.
-- [ ] **More network device support** — Cisco IOS/IOS-XE, Juniper JunOS, Arista EOS, Ubiquiti EdgeOS, Palo Alto PAN-OS. You don't need to write Swift — if you can document the CLI patterns and prompt formats, that alone is valuable.
-- [ ] **Multi-session AI orchestration** — The AI currently operates on one session. The next milestone is letting it reason across multiple connected devices and coordinate changes. ProSSHMac already supports 4 simultaneous sessions.
-- [ ] **iCloud sync** — Host configurations, key metadata, settings, and quick commands synced via CloudKit private database. Free, native, no subscription.
-- [ ] **Command palette + snippets** — `Cmd+Shift+P` searchable snippet library with per-host scoping, variable interpolation, and multi-exec (broadcast a command to multiple sessions simultaneously).
-
-Performance bottlenecks and feature ideas are tracked in [`docs/FutureFeatures.md`](docs/FutureFeatures.md) and [`docs/bugs.md`](docs/bugs.md).
+- Port forwarding is **local only**: no remote (`-R`) or dynamic/SOCKS (`-D`) forwards yet.
+- **Agent forwarding** sends the request, but nothing answers the remote agent channel yet (Bug 98).
+- **Secure Enclave user keys** can be generated but **can't be used to log in** yet; that needs an in-app agent (Bug 99).
+- Keyboard-interactive auth answers prompts with the stored secret rather than asking you, so password + OTP servers can fail (Bug 100).
+- URLs are **not clickable** in the Metal renderer, and OSC 8 hyperlinks are dropped (Bug 102).
+- `~/.ssh/config` import reads from the clipboard only, and doesn't follow `Include` (Bug 106).
+- Jump hosts support a single hop.
 
 ---
 
 ## Requirements
 
 - **macOS 26.0** (Tahoe) or later
-- **Xcode 26.0** or later
-- No additional package managers needed — all dependencies are vendored
+- To build: **Xcode 27** with the **Metal Toolchain** component installed (`xcodebuild -showComponent metalToolchain`)
+- No package manager needed. libssh and OpenSSL are vendored.
+- For the AI copilot: an OpenRouter or Anthropic API key
 
 ---
 
 ## Getting Started
 
-### Clone the Repository
+### Install
+
+Download the latest `.dmg` from [Releases](https://github.com/khpbvo/ProSSHMac/releases), open it, and drag **ProSSHMac** into **Applications**.
+
+### Build from source
 
 ```bash
 git clone https://github.com/khpbvo/ProSSHMac.git
 cd ProSSHMac
+open ProSSHMac.xcodeproj   # then select the ProSSHMac scheme and press Cmd+R
 ```
 
-### Build and Run
-
-1. Open `ProSSHMac.xcodeproj` in Xcode
-2. Select the **ProSSHMac** scheme and your target Mac
-3. Press **Cmd+R** to build and run
-
-From the command line:
+Or from the command line:
 
 ```bash
-xcodebuild -project ProSSHMac.xcodeproj \
-  -scheme ProSSHMac \
-  -destination 'platform=macOS' \
-  build
+xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform=macOS' build
 ```
 
-### Run Tests
+### Run tests
 
 ```bash
-xcodebuild -project ProSSHMac.xcodeproj \
-  -scheme ProSSHMac \
-  -destination 'platform=macOS' \
-  test
+# One suite (the usual way while working)
+xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform=macOS' \
+  test -only-testing:ProSSHMacTests/<TestClassName>
+
+# Everything (~900 tests; some need the host app)
+xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform=macOS' test
 ```
 
-### AI Assistant Setup
+### Set up the AI copilot
 
-The AI Terminal Copilot requires an OpenRouter API key and an explicit model choice:
+1. Open **Settings → AI Assistant** and choose a provider: **OpenRouter** or **Anthropic**.
+2. Save your API key. It is stored in the macOS Keychain.
+3. Choose a model. The OpenRouter list shows only models that support tool calling, with context size and prices.
 
-1. Open **Settings** in ProSSHMac and find **AI Assistant**.
-2. Save your OpenRouter API key.
-3. Choose a model from the searchable catalog. The list includes text models that advertise tool calling, with context size and published input/output prices.
+Optional: **Open Skills Folder** in the same section to add your own Markdown skills.
 
-The key is stored in the macOS Keychain. You can refresh the catalog from Settings. If a model disappears from a successful refresh, choose another before the next request.
-
----
-
-## Installation
-
-> **Current version: 0.9.0** — first public release. The core (SSH, AI copilot, Metal renderer, security features) is stable. `1.0.0` will ship once known critical bugs are cleared. See the [roadmap](#whats-being-built-next).
-
-Download the latest `.dmg` from the [Releases](https://github.com/khpbvo/ProSSHMac/releases) page, open it, and drag **ProSSHMac** into your **Applications** folder.
-
-### Building a DMG Yourself
+### Build a DMG
 
 ```bash
-# Unsigned (development / testing)
-./scripts/create-dmg.sh
-
-# Signed + notarized (release distribution)
-export DEVELOPER_ID_APP="Developer ID Application: Your Name (TEAMID)"
-export APPLE_ID="you@example.com"
-export APPLE_TEAM_ID="YOURTEAMID"
-export APPLE_APP_PASSWORD="xxxx-xxxx-xxxx-xxxx"
-./scripts/create-dmg.sh --sign
+./scripts/create-dmg.sh          # unsigned, for testing
+./scripts/create-dmg.sh --sign   # signed and notarized; needs DEVELOPER_ID_APP, APPLE_ID,
+                                 # APPLE_TEAM_ID and APPLE_APP_PASSWORD in the environment
 ```
 
-The DMG will be written to `build/ProSSHMac-<version>.dmg`.
+The DMG is written to `build/ProSSHMac-<version>.dmg`.
 
 ---
 
 ## Architecture
 
-ProSSHMac follows **MVVM** with dependency injection via `AppDependencies`. Concurrency uses Swift 6 strict actor isolation throughout.
+SwiftUI with MVVM, dependency injection through `AppDependencies`, and Swift 6 strict concurrency. The app target defaults to `MainActor` isolation. `SessionManager` delegates to seven focused coordinators (shell I/O, rendering, SFTP, AI tools, reconnect, keepalive, recording).
 
 ```
 ProSSHMac/
-├── App/                    # Entry point, dependency injection, navigation
-├── Models/                 # Host, Session, SSHKey, SSHCertificate, Transfer, AuditLogEntry
-├── ViewModels/             # HostListViewModel, KeyForgeViewModel, TerminalAIAssistantViewModel, ...
-├── UI/                     # SwiftUI views organized by feature
-│   ├── Terminal/           # TerminalView, AI pane, pane splitting, patch approval card
-│   ├── Hosts/              # Host management and connection UI
-│   ├── KeyForge/           # SSH key management UI
-│   ├── Certificates/       # Certificate authority UI
-│   ├── Transfers/          # SFTP transfer UI
-│   └── Settings/           # AI, effects, and prompt settings
-├── Services/               # Business logic
-│   ├── SSH/                # LibSSHTransport, SSHCredentialResolver, RemotePath
-│   └── AI/                 # AIToolHandler, AIAgentRunner, AIToolDefinitions,
-│                           # ApplyPatchTool, UnifiedDiffPatcher, AIConversationContext
-├── Terminal/               # Full terminal emulator subsystem
-│   ├── Renderer/           # Metal GPU pipeline (MetalTerminalRenderer + 8 extensions)
-│   ├── Parser/             # VT100/xterm state-machine parser
-│   ├── Grid/               # Terminal cell grid + scrollback (TerminalGrid + 11 extensions)
-│   ├── Input/              # Keyboard and mouse encoding
-│   ├── Features/           # Pane manager, session recording, quick commands, search
-│   └── Effects/            # CRT, Matrix screensaver, gradients, link detection
-├── CLibSSH/                # C bridge layer for libssh
-├── AppIntents/             # Siri Shortcuts
-└── Platform/               # macOS/iOS compatibility shims
+├── App/            Entry point, dependency injection, navigation, benchmark runners
+├── Models/         Host, Session, SSHKey, SSHCertificate, Transfer, AuditLogEntry, TOTP
+├── ViewModels/     Host list, KeyForge, certificates, AI settings, AI assistant
+├── UI/             SwiftUI views: Terminal, Hosts, KeyForge, Certificates, Transfers, Settings
+├── Services/       Session lifecycle and coordinators, storage, keys, CA, forwarding, PTY
+│   ├── SSH/        libssh transport, channels, algorithm policy, credential resolution
+│   └── AI/         Agent loop, tools, OpenRouter and Anthropic clients, apply_patch, skills
+├── Terminal/
+│   ├── Parser/     VT state machine and CSI/OSC/SGR/ESC/DCS handlers
+│   ├── Grid/       Cell grid, scrollback, reflow, snapshots
+│   ├── Renderer/   Metal pipeline, glyph atlas, shaders, smooth scrolling
+│   ├── Input/      Key and mouse encoding, paste, selection
+│   ├── Features/   Panes, tabs, search, recording, quick commands, history index
+│   ├── Effects/    CRT, bloom, gradients, scanner, screensaver, link detection
+│   └── Diagnostics/ Opt-in signposts and stage timers for performance work
+├── CLibSSH/        C wrapper around libssh
+├── AppIntents/     Shortcuts actions
+└── Platform/       Platform shims
 ```
 
-### Key Subsystems
-
-| Subsystem | Description |
-|---|---|
-| **Terminal Renderer** | Metal-based GPU rendering with glyph atlas caching, cursor and selection rendering, post-process effects |
-| **VT Parser** | State-machine parser (array-indexed, O(1) per byte) handling CSI, SGR, OSC 133, ESC, DCS |
-| **SSH Transport** | Full SSH via libssh — password, public key, certificate, and keyboard-interactive auth |
-| **Local Shell** | PTY-backed local terminal using `forkpty` with nonblocking I/O and data coalescing |
-| **AI Agent** | OpenRouter Chat Completions tool loop — up to 200 iterations, per-session structured transcript |
-| **Apply Patch** | V4A unified diff parser and applicator with inline approval card — local and remote targets |
-| **Command History** | Ring-buffer command block index with OSC 133 semantic boundary detection and heuristic fallback |
-| **Pane Manager** | Tree-based split-node layout engine with persistent layout storage |
-| **Secure Storage** | AES-256-GCM + Keychain + Secure Enclave + biometric gating |
-
-### Vendored Dependencies
-
-| Library | License | Purpose |
+| Vendored library | Version | License |
 |---|---|---|
-| [libssh](https://www.libssh.org/) | LGPL-2.1 | SSH protocol implementation |
-| [OpenSSL](https://www.openssl.org/) | Apache 2.0 | Cryptographic primitives |
+| [libssh](https://www.libssh.org/) | 0.12.0 | LGPL-2.1 |
+| [OpenSSL](https://www.openssl.org/) | 3.4.1 | Apache 2.0 |
 
-Both are provided as universal (arm64 + x86_64) xcframeworks in `Vendor/`.
+Both are universal (arm64 + x86_64) xcframeworks in `Vendor/`.
+
+---
+
+## Roadmap
+
+The full ranked plan, with sizes and dependencies, is [Docs/The big picture(October 2026).md](<Docs/The big picture(October 2026).md>). The near term:
+
+1. **Release readiness**: updated libssh/OpenSSL with a reproducible vendor build, working CI, signed releases with auto-update
+2. **SSH agent**: agent forwarding, and Secure Enclave keys that can log in
+3. **Keyboard-interactive prompts and MFA** shown to the user
+4. **Broadcast completeness**: paste, Quick Commands and drops follow broadcast mode
+5. **Clickable links** in the Metal renderer, plus OSC 8
+6. **Network workflow**: plain-text session logs, host inventory at scale, vendor profiles as data, serial console, and remote/SOCKS forwarding
+
+Later: AI trust controls (redaction, per-host policy), triggers and highlighting, colour schemes, VoiceOver, iCloud sync, FIDO2 keys, and tmux control mode.
 
 ---
 
 ## Contributing
 
-Contributions are welcome — from sysadmins who know Cisco IOS cold, to Swift developers who want to build inline image rendering, to people who just want to add a network device's CLI patterns to the AI context.
+Contributions are welcome. That includes Swift and Metal work, and also testing on network gear, reproducing bugs and improving docs. Start with [CONTRIBUTING.md](CONTRIBUTING.md). It explains the plan-first workflow, how to build and test, and what a PR needs.
 
-**The workflow here is AI-first.** Every feature starts with reading `CLAUDE.md` and `docs/featurelist.md`, exploring the codebase, and writing an extensive phased checklist in `docs/YourFeature.md` before any code is written. That plan goes up as a draft PR for review. Only after approval does implementation begin.
-
-This means:
-- You always know exactly what you're building before you build it
-- The maintainer can catch design mistakes before they become code debt
-- AI coding assistants (Claude Code, Cursor, Codex) can follow the same process unassisted — the instructions are written for them too
-
-Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening anything. It covers the full process, PR requirements, AI tool conventions, and what "done" looks like.
+Good entry points: the [Known limitations](#known-limitations) above, open entries in [Docs/bugs.md](Docs/bugs.md), and issues labelled [`good first issue`](https://github.com/khpbvo/ProSSHMac/labels/good%20first%20issue).
 
 ### Scripts
 
 | Script | Purpose |
 |---|---|
-| `scripts/create-dmg.sh` | Build a DMG for distribution (supports signing and notarization) |
-| `scripts/benchmark-ssh.sh` | Measure raw SSH transport throughput to a remote host |
-| `scripts/benchmark-throughput.sh` | Benchmark terminal rendering throughput |
-| `scripts/take-screenshots.sh` | Capture app screenshots for documentation |
+| `scripts/create-dmg.sh` | Build a DMG (optionally signed and notarized) |
+| `scripts/benchmark-throughput.sh` | Terminal throughput: parser only, real PTY, or the full app path with rendering |
+| `scripts/benchmark-peer-emulator.sh` | The same workload in Terminal.app and iTerm2 for comparison |
+| `scripts/benchmark-ssh.sh` | Raw SSH transport throughput to a host |
+| `scripts/take-screenshots.sh` | Launch the app with sample data and capture screenshots |
+| `scripts/inventory-ai-functions.py` | Print a Markdown inventory of the AI copilot's Swift declarations |
 
 ---
 
 ## Security
 
-For reporting security vulnerabilities, please see [SECURITY.md](SECURITY.md). Do **not** open public issues for security reports.
-
----
+Please report vulnerabilities privately; see [SECURITY.md](SECURITY.md). Don't open public issues for security reports.
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
-
-Vendored dependencies are licensed under their own terms (LGPL-2.1 for libssh, Apache 2.0 for OpenSSL).
-
----
-
-*ProSSHMac is built by someone who'd rather talk to a MikroTik than a human. If you're the same kind of person, you'll fit right in.*
+[MIT](LICENSE). Vendored libraries keep their own licenses (LGPL-2.1 for libssh, Apache 2.0 for OpenSSL).
