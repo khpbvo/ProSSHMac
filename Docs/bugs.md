@@ -10,12 +10,12 @@ sequentially, and tagged by severity: **Critical**, **High**, **Medium**, or **L
 | Severity | Total | Fixed | Open |
 |----------|-------|-------|------|
 | Critical | 1     | 1     | 0    |
-| High     | 22    | 21    | 1    |
+| High     | 22    | 22    | 0    |
 | Medium   | 48    | 40    | 8    |
 | Low      | 38    | 37    | 1    |
-| **Total**| **109**| **99**| **10**|
+| **Total**| **109**| **100**| **9**|
 
-Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13, Bug 85 fixed and Bugs 86-87 added 2026-10-14, Bug 84 fixed and Bugs 88-90 added 2026-10-15, Bugs 91-93 added 2026-10-18, Bug 94 added 2026-10-20; Bugs 43, 44, 90 and 94 fixed and Bug 95 added 2026-10-20 (43 and 44 were found already fixed in the code); Bugs 87 and 88 fixed 2026-10-21; Bugs 97-108 added 2026-10-23 from the code cross-check in `Docs/The big picture(October 2026).md` (all open, found by reading the source, none reproduced yet); Bug 108 fixed 2026-10-23; Bugs 97 and 107 fixed and Bug 109 added 2026-10-24. The `**File:**` paths below predate the
+Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13, Bug 85 fixed and Bugs 86-87 added 2026-10-14, Bug 84 fixed and Bugs 88-90 added 2026-10-15, Bugs 91-93 added 2026-10-18, Bug 94 added 2026-10-20; Bugs 43, 44, 90 and 94 fixed and Bug 95 added 2026-10-20 (43 and 44 were found already fixed in the code); Bugs 87 and 88 fixed 2026-10-21; Bugs 97-108 added 2026-10-23 from the code cross-check in `Docs/The big picture(October 2026).md` (all open, found by reading the source, none reproduced yet); Bug 108 fixed 2026-10-23; Bugs 97 and 107 fixed and Bug 109 added and fixed 2026-10-24. The `**File:**` paths below predate the
 refactors (`Views/` → `UI/`, `SSH/` → `Services/SSH/`, `Services/Security/` → `Services/`) and some
 files no longer exist — resolve by basename.
 
@@ -2097,7 +2097,7 @@ got the same pass.
 
 ---
 
-### Bug 109 — Local Port Forwards Never Carry Data (High)
+### Bug 109 — ~~Local Port Forwards Never Carry Data~~ [FIXED] (High)
 
 **Files:** `CLibSSH/ProSSHLibSSHWrapper.c` (`prossh_forward_channel_*`),
 `Services/SSH/LibSSHForwardChannel.swift`, `Services/SSH/LibSSHTransport.swift`
@@ -2123,6 +2123,28 @@ while the shell path does (`prossh_lock_handle`). libssh is not thread-safe per 
 released between attempts, with a deadline), lock every forward-channel libssh call, and a
 loopback `sshd` regression test that moves data through a forward with a shell open. F0
 Phase 1b.
+
+**Fixed 2026-10-24 (F0 Phase 1b).** Reading libssh's source for the fix found two more defects
+on the same path, fixed with it:
+
+- **Partial writes dropped:** in a non-blocking session `ssh_channel_write` stops at a full
+  remote window and returns the count written; the wrapper returned 0 regardless.
+- **Last chunk dropped:** `LibSSHForwardChannel.read` returned EOF before the bytes of the read
+  that drained the buffer.
+
+The fix: `prossh_forward_channel_new` allocates the channel, and `prossh_forward_channel_open`
+makes one non-blocking attempt under the handle lock (1 open, 0 waiting, -1 failed). A session
+still blocking is switched for that call only. `LibSSHForwardChannel.open` retries every 10 ms
+with the lock released, up to 30 s. Every forward C call takes the handle lock. Writes loop
+until all bytes are taken, and reads deliver data before EOF. `LibSSHTransport` registers each
+forward channel before its first suspension and closes them all before it destroys the handle
+(in `disconnect` and on reconnect).
+
+Test: `LibSSHPortForwardingTests` (loopback `sshd`, shell opened first, real manager). It covers
+three connections in a row over 127.0.0.1 and ::1, two at once, 4 MB echoed byte for byte and
+a target that closes first. It failed on the old wrapper at every connection. Reverting only
+the write loop lost 425,984 of 4,194,304 bytes; reverting only the read order lost the last
+5,088 of 300,000 bytes in each of three runs.
 
 ---
 

@@ -159,7 +159,16 @@ actor LibSSHTransport: SSHTransporting {
     private var openingShellTasks: [UUID: Task<LibSSHShellChannel, Error>] = [:]
     private var connectionGeneration: [UUID: UInt64] = [:]
     private var nextConnectionGeneration: UInt64 = 0
+    private var forwardChannels: [UUID: [WeakForwardChannel]] = [:]
     private let credentialResolver: any SSHCredentialResolving
+
+    /// A server can take long to reach an unreachable target; the local client has usually
+    /// given up by then.
+    private static let forwardOpenTimeout: Duration = .seconds(30)
+
+    private struct WeakForwardChannel {
+        weak var channel: LibSSHForwardChannel?
+    }
 
     init(credentialResolver: any SSHCredentialResolving = DefaultSSHCredentialResolver()) {
         self.credentialResolver = credentialResolver
@@ -172,9 +181,11 @@ actor LibSSHTransport: SSHTransporting {
         let oldHandle = handles.removeValue(forKey: sessionID)
         let oldShell = shellChannels.removeValue(forKey: sessionID)
         let oldOpeningShell = openingShellTasks.removeValue(forKey: sessionID)
+        let oldForwards = forwardChannels.removeValue(forKey: sessionID) ?? []
         if let oldOpeningShell,
            let channel = try? await oldOpeningShell.value { await channel.close() }
         if let oldShell { await oldShell.close() }
+        for forward in oldForwards { await forward.channel?.close() }
         if let oldHandle { prossh_libssh_destroy(oldHandle) }
         guard connectionGeneration[sessionID] == generation else { throw CancellationError() }
 
@@ -557,31 +568,31 @@ actor LibSSHTransport: SSHTransporting {
     }
 
     func openForwardChannel(sessionID: UUID, remoteHost: String, remotePort: UInt16, sourceHost: String, sourcePort: UInt16) async throws -> any SSHForwardChannel {
+        // Creating the actor is this call's only suspension before registration, so it comes
+        // first: from the handle lookup on, a disconnect can't free the session unseen.
+        let channel = await LibSSHForwardChannel()
         guard let handle = handles[sessionID] else {
             throw SSHTransportError.sessionNotFound
         }
 
         var errorBuffer = [CChar](repeating: 0, count: 512)
-        let fwdPtr: OpaquePointer? = remoteHost.withCString { remoteHostPtr in
-            sourceHost.withCString { sourceHostPtr in
-                prossh_forward_channel_open(
-                    handle,
-                    remoteHostPtr,
-                    remotePort,
-                    sourceHostPtr,
-                    sourcePort,
-                    &errorBuffer,
-                    errorBuffer.count
-                )
-            }
-        }
-
-        guard let fwdPtr else {
+        guard let fwdPtr = prossh_forward_channel_new(handle, &errorBuffer, errorBuffer.count) else {
             let message = errorBuffer.asString
             throw SSHTransportError.transportFailure(message: message.isEmpty ? "Failed to open forward channel." : message)
         }
+        channel.adopt(UncheckedOpaquePointer(raw: fwdPtr))
+        var registered = forwardChannels[sessionID, default: []].filter { $0.channel != nil }
+        registered.append(WeakForwardChannel(channel: channel))
+        forwardChannels[sessionID] = registered
 
-        return await LibSSHForwardChannel(pointer: UncheckedOpaquePointer(raw: fwdPtr))
+        try await channel.open(
+            remoteHost: remoteHost,
+            remotePort: remotePort,
+            sourceHost: sourceHost,
+            sourcePort: sourcePort,
+            timeout: Self.forwardOpenTimeout
+        )
+        return channel
     }
 
     func sendKeepalive(sessionID: UUID) async -> Bool {
@@ -597,9 +608,11 @@ actor LibSSHTransport: SSHTransporting {
         let handle = handles.removeValue(forKey: sessionID)
         let shell = shellChannels.removeValue(forKey: sessionID)
         let openingShell = openingShellTasks.removeValue(forKey: sessionID)
+        let forwards = forwardChannels.removeValue(forKey: sessionID) ?? []
         if let openingShell,
            let channel = try? await openingShell.value { await channel.close() }
         if let shell { await shell.close() }
+        for forward in forwards { await forward.channel?.close() }
         if let handle { prossh_libssh_destroy(handle) }
     }
 

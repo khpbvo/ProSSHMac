@@ -24,6 +24,7 @@ struct ProSSHLibSSHHandle {
 };
 
 struct ProSSHForwardChannel {
+    ProSSHLibSSHHandle *handle;
     ssh_channel channel;
 };
 
@@ -3607,8 +3608,39 @@ cleanup:
     return status;
 }
 
-ProSSHForwardChannel *prossh_forward_channel_open(
+ProSSHForwardChannel *prossh_forward_channel_new(
     ProSSHLibSSHHandle *handle,
+    char *error_buffer,
+    size_t error_buffer_len
+) {
+    if (handle == NULL) {
+        prossh_copy_string(error_buffer, error_buffer_len, "SSH session is not connected.");
+        return NULL;
+    }
+
+    ProSSHForwardChannel *fwd = (ProSSHForwardChannel *)calloc(1, sizeof(ProSSHForwardChannel));
+    if (fwd == NULL) {
+        prossh_copy_string(error_buffer, error_buffer_len, "Failed to allocate forward channel struct.");
+        return NULL;
+    }
+
+    prossh_lock_handle(handle);
+    if (handle->session != NULL) {
+        fwd->channel = ssh_channel_new(handle->session);
+    }
+    prossh_unlock_handle(handle);
+
+    if (fwd->channel == NULL) {
+        prossh_copy_string(error_buffer, error_buffer_len, "Failed to create forward channel.");
+        free(fwd);
+        return NULL;
+    }
+    fwd->handle = handle;
+    return fwd;
+}
+
+int prossh_forward_channel_open(
+    ProSSHForwardChannel *fwd,
     const char *remote_host,
     uint16_t remote_port,
     const char *source_host,
@@ -3616,42 +3648,46 @@ ProSSHForwardChannel *prossh_forward_channel_open(
     char *error_buffer,
     size_t error_buffer_len
 ) {
-    if (handle == NULL || handle->session == NULL) {
+    if (fwd == NULL || fwd->channel == NULL || remote_host == NULL || source_host == NULL) {
+        prossh_copy_string(error_buffer, error_buffer_len, "Invalid forward channel open parameters.");
+        return -1;
+    }
+
+    prossh_lock_handle(fwd->handle);
+    if (fwd->handle->session == NULL) {
+        prossh_unlock_handle(fwd->handle);
         prossh_copy_string(error_buffer, error_buffer_len, "SSH session is not connected.");
-        return NULL;
+        return -1;
     }
 
-    ssh_channel channel = ssh_channel_new(handle->session);
-    if (channel == NULL) {
-        prossh_copy_string(error_buffer, error_buffer_len, "Failed to create forward channel.");
-        return NULL;
+    // One attempt that never waits: the shell shares this session, and the server may take a
+    // long time to reach the target. ssh_channel_set_blocking would change the whole session,
+    // so only a blocking session (no shell yet) is switched, and only for this call.
+    ssh_session session = fwd->handle->session;
+    int was_blocking = ssh_is_blocking(session);
+    if (was_blocking != 0) {
+        ssh_set_blocking(session, 0);
     }
-
     int rc = ssh_channel_open_forward(
-        channel,
+        fwd->channel,
         remote_host,
         (int)remote_port,
         source_host,
         (int)source_port
     );
-
-    if (rc != SSH_OK) {
-        prossh_set_error(handle, "Failed to open forward channel.", error_buffer, error_buffer_len);
-        ssh_channel_free(channel);
-        return NULL;
+    if (was_blocking != 0) {
+        ssh_set_blocking(session, 1);
     }
 
-    ProSSHForwardChannel *fwd = (ProSSHForwardChannel *)calloc(1, sizeof(ProSSHForwardChannel));
-    if (fwd == NULL) {
-        prossh_copy_string(error_buffer, error_buffer_len, "Failed to allocate forward channel struct.");
-        ssh_channel_close(channel);
-        ssh_channel_free(channel);
-        return NULL;
+    int status = 1;
+    if (rc == SSH_AGAIN) {
+        status = 0;
+    } else if (rc != SSH_OK) {
+        prossh_set_error(fwd->handle, "Failed to open forward channel.", error_buffer, error_buffer_len);
+        status = -1;
     }
-
-    fwd->channel = channel;
-    ssh_channel_set_blocking(channel, 0);
-    return fwd;
+    prossh_unlock_handle(fwd->handle);
+    return status;
 }
 
 int prossh_forward_channel_read(
@@ -3671,15 +3707,16 @@ int prossh_forward_channel_read(
         return -1;
     }
 
+    prossh_lock_handle(fwd->handle);
     int nbytes = ssh_channel_read_nonblocking(fwd->channel, buffer, (uint32_t)buffer_len, 0);
+    if (nbytes != SSH_ERROR && is_eof != NULL) {
+        *is_eof = ssh_channel_is_eof(fwd->channel) != 0;
+    }
+    prossh_unlock_handle(fwd->handle);
 
     if (nbytes == SSH_ERROR) {
         prossh_copy_string(error_buffer, error_buffer_len, "Failed reading from forward channel.");
         return -1;
-    }
-
-    if (is_eof != NULL) {
-        *is_eof = ssh_channel_is_eof(fwd->channel) != 0;
     }
 
     return nbytes < 0 ? 0 : nbytes;
@@ -3697,26 +3734,28 @@ int prossh_forward_channel_write(
         return -1;
     }
 
+    // In a non-blocking session libssh writes only what the remote window allows and returns
+    // that count; the caller sends the rest once the window grows.
+    prossh_lock_handle(fwd->handle);
     int written = ssh_channel_write(fwd->channel, data, (uint32_t)data_len);
+    prossh_unlock_handle(fwd->handle);
+
     if (written == SSH_ERROR) {
         prossh_copy_string(error_buffer, error_buffer_len, "Failed writing to forward channel.");
         return -1;
     }
 
-    return 0;
+    return written;
 }
 
 int prossh_forward_channel_is_open(ProSSHForwardChannel *fwd) {
     if (fwd == NULL || fwd->channel == NULL) {
         return 0;
     }
-    if (ssh_channel_is_eof(fwd->channel) != 0) {
-        return 0;
-    }
-    if (ssh_channel_is_open(fwd->channel) == 0) {
-        return 0;
-    }
-    return 1;
+    prossh_lock_handle(fwd->handle);
+    int is_open = ssh_channel_is_eof(fwd->channel) == 0 && ssh_channel_is_open(fwd->channel) != 0;
+    prossh_unlock_handle(fwd->handle);
+    return is_open ? 1 : 0;
 }
 
 void prossh_forward_channel_close(ProSSHForwardChannel *fwd) {
@@ -3725,10 +3764,12 @@ void prossh_forward_channel_close(ProSSHForwardChannel *fwd) {
     }
 
     if (fwd->channel != NULL) {
+        prossh_lock_handle(fwd->handle);
         ssh_channel_send_eof(fwd->channel);
         ssh_channel_close(fwd->channel);
         ssh_channel_free(fwd->channel);
         fwd->channel = NULL;
+        prossh_unlock_handle(fwd->handle);
     }
 
     free(fwd);

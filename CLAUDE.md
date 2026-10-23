@@ -137,7 +137,7 @@ xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform
 - **Toolchain: Xcode 27.1 (27A9275), Swift 6.4.** The Metal Toolchain component must be installed
   (`xcodebuild -showComponent metalToolchain`). Never exclude `TerminalShaders.metal` from a build;
   if the shader fails to compile, check the component first.
-- Test bundle: `ProSSHMacTests` — 5 files at the bundle root plus 60 in `ProSSHMacTests/Terminal/Tests/`,
+- Test bundle: `ProSSHMacTests` — 5 files at the bundle root plus 67 in `ProSSHMacTests/Terminal/Tests/`,
   ~920 test methods. No test sources live under `ProSSHMac/`.
 - Some tests require the host app process (UI/AppKit-backed suites).
 - **No full-suite baseline exists on Xcode 27.** Every suite touched since has been run targeted and
@@ -276,7 +276,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 | `UI/Terminal/CredentialPromptCardView.swift` | The password-prompt card above the composer: host, command, Enter password, Decline, reveal note |
 | `UI/Terminal/TerminalAIAssistantPane.swift` | AI copilot sidebar, composer, message rendering, pipe tables, credential card slot, Stop (1,039L) |
 | `Terminal/Parser/TerminalEngine.swift` | VT parser hot path, merged parse/apply loop, `feedAndCollectOutcome`, `primaryBufferVisibleText` (843L) |
-| `Services/SSH/LibSSHTransport.swift` | LibSSH transport actor (822L); channels in `LibSSHShellChannel`/`LibSSHForwardChannel` |
+| `Services/SSH/LibSSHTransport.swift` | LibSSH transport actor (885L); channels in `LibSSHShellChannel`/`LibSSHForwardChannel`. Tracks each session's forward channels and closes them before destroying the handle |
 | `Terminal/Renderer/MetalTerminalRenderer.swift` + 8 extensions | Metal renderer (510L): glyph resolution, snapshot update, font management, draw loop, view config, selection, post-processing, diagnostics |
 | `Terminal/Renderer/SmoothScrollEngine.swift` | CPU scroll physics, rubber-band, jumpTo, frame-rate independence |
 | `Terminal/Grid/TerminalGrid.swift` + 11 extensions | Grid state (461L): modes (incl. per-screen keyboard-mode stacks), OSC, tabs, cursor, scroll, erase, line ops, screen buffer, lifecycle, printing, snapshot |
@@ -564,6 +564,20 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
   `PortForwardingManagerTests` (Bug 97).
 - **This Mac's firewall is in stealth mode:** a connection to a non-loopback address that nothing
   accepts is dropped, not refused. Connect checks need a timeout, never a wait for `ECONNREFUSED`.
+- **`ssh_channel_set_blocking` sets the whole session's mode**, not the channel's (libssh
+  documents it). The shell leaves the session non-blocking, so every other libssh call on it
+  must handle `SSH_AGAIN` and partial counts. Forward opens retry from Swift with the lock
+  released; `ssh_channel_write` may take only part of the data while the remote window is full,
+  so `LibSSHForwardChannel.write` loops. Never hold the handle lock across a wait for the
+  server. Bug 109 broke every forward this way.
+- **Every libssh call on a session takes `prossh_lock_handle`**, forward channels included
+  (`fwd->handle`). libssh is not thread-safe per session; the shell reader runs concurrently.
+- **`LibSSHTransport` closes a session's forward channels before `prossh_libssh_destroy`** (in
+  `disconnect` and on reconnect): `ssh_free` frees their channels. A new forward channel is
+  registered before `openForwardChannel` next suspends, which is why the actor is created
+  before the handle lookup (an actor's synchronous init here is MainActor and can't be marked
+  `nonisolated`). Tests: `LibSSHPortForwardingTests` (real `sshd`, shell open, 4 MB echo,
+  close-first target), with shared setup in `LoopbackTestSupport.swift`.
 
 ### UI
 - **Four files are over 1,000 lines**: `TerminalRenderingCoordinator.swift` (1,066L),
@@ -628,7 +642,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 |-----|---------|
 | `Docs/featurelist.md` | **Long-term memory** — dated work log, phase progress, loop-log entries |
 | `Docs/The big picture(October 2026).md` | **Planning input.** Code-verified ranked feature list (F0–F20: build order, value, size, spec name), competitor gap analysis re-checked 2026-10-23, source of Bugs 97–108. Start a new feature spec from its entry |
-| `Docs/ReleaseReadiness.md` | **F0, active.** Loopback-only forwards (Bug 97), forwards that carry data (Bug 109), a CI that can fail (Bug 105), `scripts/build-vendor.sh` for OpenSSL 3.5 LTS + libssh 0.12.2, Sparkle 2, a notarized 0.10.0. Phase 1 done; **Phase 1b next**, then 2–6. Its "Rules for every phase" cover outward-facing steps and secrets |
+| `Docs/ReleaseReadiness.md` | **F0, active.** Loopback-only forwards (Bug 97), forwards that carry data (Bug 109), a CI that can fail (Bug 105), `scripts/build-vendor.sh` for OpenSSL 3.5 LTS + libssh 0.12.2, Sparkle 2, a notarized 0.10.0. Phases 1 and 1b done; **Phase 2 next**. Its "Rules for every phase" cover outward-facing steps and secrets |
 | `Docs/RenderCost.md` | What rendering actually costs — R0–R2b, R3a–R3c and R4 **COMPLETE**. R4b isolates output-rate nonce, scroll and shell text in `SessionLiveState`; **R3d next**. Read its "Measurement caveats" sections before any perf measurement |
 | `Docs/R3cBenchmarkResults.md` | R3c evidence: windowed baseline tables, Time Profiler breakdowns, stage budgets, commands |
 | `Docs/R4aBenchmarkResults.md` | R4a evidence: interleaved windowed A/B, Time Profiler shares, stage budgets, the settle timeout, commands |
@@ -670,13 +684,15 @@ and the session coordinators) has no spec file left; see `Docs/featurelist.md`.
 
 ## Next Session Plan
 
-**Next: `Docs/ReleaseReadiness.md` (F0) Phase 1b — Bug 109, forwards never carry data.**
-Phase 1 (Bugs 97 and 107) is done: forwards listen on `127.0.0.1` and `::1` only. Its
-end-to-end check found every forwarded connection closed at once: `ssh_channel_set_blocking` is
-session-wide in libssh, the shell leaves the session non-blocking, and
-`prossh_forward_channel_open` treats `SSH_AGAIN` as failure. Cause, evidence and fix direction
-are in `Docs/bugs.md` Bug 109 and the spec's Phase 1b. The spec's "Today" table holds the
-verified starting facts for the later phases.
+**Next: `Docs/ReleaseReadiness.md` (F0) Phase 2 — a CI job that can fail (Bug 105).**
+Phases 1 and 1b are done (2026-10-24). Forwards listen on `127.0.0.1` and `::1` only (Bug 97),
+and they carry data at all (Bug 109: forwards had never worked with a shell open). Two
+forwarding results are still open: a live check in the relaunched app (`curl` through a real
+host's forward, `lsof`), and throughput of about 0.65 MB/s each way, limited by the read
+loop's 10 ms idle poll. The user decides whether to schedule the throughput work; see the
+spec's "Phase 1b results". For Phase 2's test list: `LibSSHPortForwardingTests` and
+`LibSSHShellLifecycleTests` start a loopback `/usr/sbin/sshd`, so try them on the runner before
+adding them. The spec's "Today" table holds the verified starting facts for the later phases.
 User decisions (2026-10-24): 0.10.0 ships Developer ID-signed and notarized (no Developer ID
 identity is in this Mac's keychain yet; the user gets one before Phase 6); the vendor build
 leaves FIDO2 and GSSAPI off; CI runs on GitHub's hosted `xcode-27` preview image (Xcode 27.1
@@ -789,7 +805,7 @@ of Metal view overlap because each split surface demanded at least 220 points of
 Split surfaces now fit their pane, with a geometry regression through terminal-only restore.
 The original four-session SSH setup was not rerun live. The debug-only branch
 `debug/terminal-jump` (`251e010`) remains unmerged; never merge it. The bug register now has
-109 entries: 99 fixed, 10 open (Bugs 98–106 and 109).
+109 entries: 100 fixed, 9 open (Bugs 98–106).
 
 **RenderCost R2b is validated and closed** (2026-10-23): 1.09-1.12x in every interleaved pair,
 windowless, active app. The "bimodality" was App Nap on inactive processes (~3.6x) plus CPU

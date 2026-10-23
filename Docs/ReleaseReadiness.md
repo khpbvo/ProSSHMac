@@ -18,7 +18,7 @@ later feature ships through this pipeline, so it comes first.
 | libssh | **0.12.0**, static, universal (arm64 + x86_64), minos 13.0. OpenSSL backend, zlib, SFTP and PCAP on; server, GSSAPI and FIDO2 off | `Vendor/libssh/.../Headers/libssh/libssh_version.h:30-32`; `nm` (no `ssh_bind_new`, no `gss_*`/`fido_*` imports) |
 | OpenSSL | **3.4.1** (11 Feb 2025), static, universal, minos 26.0, built against the 26.2 SDK | `opensslv.h:77`; `strings libcrypto.a` |
 | Vendor build | **No script in this repo.** The binaries were built in the sibling `~/Desktop/ProSSHV2` checkout by `scripts/build-openssl-ios.sh` and `scripts/build-libssh-ios.sh` from pre-downloaded sources, with no version pins or checksums. Only the macOS slice directories were copied here (no xcframework `Info.plist`); the project links them through `HEADER_SEARCH_PATHS`/`LIBRARY_SEARCH_PATHS` and `-lssh -lcrypto -lssl -lz` | `project.pbxproj:342-363`; ProSSHV2 scripts |
-| Port forwards | `NWListener(using: .tcp, on: port)` with no local endpoint or interface: listens on all interfaces (Bug 97, not yet reproduced). **Phase 1 fixed it**; Phase 1 also found that forwards never carry data (Bug 109) | `Services/PortForwardingManager.swift:49-57` |
+| Port forwards | `NWListener(using: .tcp, on: port)` with no local endpoint or interface: listens on all interfaces (Bug 97, not yet reproduced). **Phase 1 fixed it**; Phase 1 also found that forwards never carry data (Bug 109, **fixed in Phase 1b**) | `Services/PortForwardingManager.swift:49-57` |
 | CI | `macos-15`, Xcode 26.2, both steps end in `\| xcpretty --color \|\| true` (Bug 105) | `.github/workflows/ci.yml` |
 | Signing | Hardened runtime on, sandbox off, team `KPHHFS89HZ`. Entitlements: `keychain-access-groups`, user-selected files. **No "Developer ID Application" identity in this Mac's keychain**, only Apple Development | `project.pbxproj:331-338`; `security find-identity -v -p codesigning` |
 | Releases | One: v0.9.0, pre-release, 2026-02-26. Its DMG is **unsigned and not notarized** (`codesign -dv`: not signed; `spctl`: rejected; no stapled ticket) | `gh release view v0.9.0` |
@@ -92,9 +92,9 @@ new `Vendor/VERSIONS.md`, `ProSSHMac.xcodeproj/project.pbxproj` (Sparkle package
   - Verify: Debug build, `PortForwardingManagerTests`, live `lsof` after the fix. Mark Bugs 97 and
     107 fixed in `Docs/bugs.md` and its Summary table.
 
-- [ ] **Phase 1b: Forwards that carry data (Bug 109).** Added 2026-10-24 when Phase 1's end-to-end
+- [x] **Phase 1b: Forwards that carry data (Bug 109).** Added 2026-10-24 when Phase 1's end-to-end
   check found every forwarded connection closed at once. Cause and evidence: `Docs/bugs.md`
-  Bug 109.
+  Bug 109. Done 2026-10-24; results under "Phase 1b results" below.
   - `prossh_forward_channel_open` must not need a blocking session: take the handle lock per
     attempt, retry `ssh_channel_open_forward` on `SSH_AGAIN` with the lock released between
     attempts (the shell keeps running), and give up after a deadline. Never hold the lock through
@@ -242,6 +242,30 @@ nobody accepts are dropped, not refused.
 - `PortForwardingManagerTests` 3/3 (the new loopback test failed on the old code on the LAN
   connect), Debug build passed. A live check in the relaunched app is still open; it needs a
   user at the keyboard.
+
+## Phase 1b results (2026-10-24)
+
+- libssh 0.12.0's own source (`channels.c` in the ProSSHV2 checkout) confirms the cause:
+  `ssh_channel_set_blocking` calls `ssh_set_blocking(channel->session, …)`, documented as putting
+  "the whole session in non-blocking mode". Reading it also showed partial writes
+  (`channel_write_common` returns `origlen - len` when the window is 0) and EOF reported with the
+  final read. Both were fixed too; see Bug 109.
+- `LibSSHPortForwardingTests`: a shell opened first, then three connections in a row (127.0.0.1,
+  ::1, 127.0.0.1), two at once (100 KB each), 4 MB echoed byte for byte, and three reads from
+  a target that sends 300 KB and closes. Results:
+  - **Old wrapper:** every connection returned nothing.
+  - **Only the write loop reverted:** 3,768,320 of 4,194,304 bytes came back.
+  - **Only the read order reverted:** 294,912 of 300,000 bytes, in all three reads.
+- Forwarding suites (`LibSSHPortForwardingTests`, `LibSSHShellLifecycleTests`,
+  `PortForwardingManagerTests`) 5/5, twice. Debug build passed with no new warnings in the
+  changed files. The loopback `sshd` setup moved to `LoopbackTestSupport.swift`, shared by both
+  libssh suites.
+- **Open: throughput.** The 4 MB echo takes about 6.1 s (Debug, loopback): about 0.65 MB/s each
+  way. With the read loop's idle sleep at 1 ms instead of 10 ms it took 1.6 s, so the forward's
+  polling design is the limit, not the fix. Left as it was; a forwarding-performance item for
+  the user to schedule (F10 or its own phase).
+- A live check in the relaunched app (`curl` or a browser through a real host's forward) is
+  still open; it needs a user at the keyboard.
 
 ## Release procedure
 

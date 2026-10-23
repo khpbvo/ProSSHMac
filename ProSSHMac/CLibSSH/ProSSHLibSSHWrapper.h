@@ -265,8 +265,17 @@ void prossh_libssh_disconnect(ProSSHLibSSHHandle *handle);
 
 typedef struct ProSSHForwardChannel ProSSHForwardChannel;
 
-ProSSHForwardChannel *prossh_forward_channel_open(
+/// Allocates a forward channel on the session. No network I/O. The handle must outlive it.
+ProSSHForwardChannel *prossh_forward_channel_new(
     ProSSHLibSSHHandle *handle,
+    char *error_buffer,
+    size_t error_buffer_len
+);
+
+/// Sends the direct-tcpip open request, or checks on one already sent. Never waits.
+/// Returns 1 when open, 0 while the server hasn't answered (call again), -1 on failure.
+int prossh_forward_channel_open(
+    ProSSHForwardChannel *fwd,
     const char *remote_host,
     uint16_t remote_port,
     const char *source_host,
@@ -284,6 +293,8 @@ int prossh_forward_channel_read(
     size_t error_buffer_len
 );
 
+/// Returns the bytes written, which may be fewer than `data_len` (or 0) while the remote
+/// window is full, or -1 on failure.
 int prossh_forward_channel_write(
     ProSSHForwardChannel *fwd,
     const char *data,
