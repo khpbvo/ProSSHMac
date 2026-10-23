@@ -10,12 +10,12 @@ sequentially, and tagged by severity: **Critical**, **High**, **Medium**, or **L
 | Severity | Total | Fixed | Open |
 |----------|-------|-------|------|
 | Critical | 1     | 1     | 0    |
-| High     | 20    | 20    | 0    |
-| Medium   | 40    | 40    | 0    |
-| Low      | 35    | 35    | 0    |
-| **Total**| **96**| **96**| **0**|
+| High     | 21    | 20    | 1    |
+| Medium   | 48    | 40    | 8    |
+| Low      | 38    | 35    | 3    |
+| **Total**| **108**| **96**| **12**|
 
-Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13, Bug 85 fixed and Bugs 86-87 added 2026-10-14, Bug 84 fixed and Bugs 88-90 added 2026-10-15, Bugs 91-93 added 2026-10-18, Bug 94 added 2026-10-20; Bugs 43, 44, 90 and 94 fixed and Bug 95 added 2026-10-20 (43 and 44 were found already fixed in the code); Bugs 87 and 88 fixed 2026-10-21. The `**File:**` paths below predate the
+Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13, Bug 85 fixed and Bugs 86-87 added 2026-10-14, Bug 84 fixed and Bugs 88-90 added 2026-10-15, Bugs 91-93 added 2026-10-18, Bug 94 added 2026-10-20; Bugs 43, 44, 90 and 94 fixed and Bug 95 added 2026-10-20 (43 and 44 were found already fixed in the code); Bugs 87 and 88 fixed 2026-10-21; Bugs 97-108 added 2026-10-23 from the code cross-check in `Docs/The big picture(October 2026).md` (all open, found by reading the source, none reproduced yet). The `**File:**` paths below predate the
 refactors (`Views/` → `UI/`, `SSH/` → `Services/SSH/`, `Services/Security/` → `Services/`) and some
 files no longer exist — resolve by basename.
 
@@ -1851,6 +1851,226 @@ clear `isListing` while a newer request was in progress.
 current request for the current session may update results, errors, or the loading state. A
 controlled test completes the older request last and confirms the newer session's results remain.
 Debug build and `SessionManagerSFTPSidebarTests` passed (4/4).
+
+---
+
+Bugs 97–108 were found on 2026-10-23 while cross-checking `Docs/The big picture(October 2026).md`
+against the source at `0ebe8e4`. Each was traced by reading the code; none has been reproduced or
+measured yet. Paths are current. "F*n*" points to the feature in that document that would fix it.
+
+### Bug 97 — Local Port Forwards Listen on All Network Interfaces (High)
+
+**File:** `Services/PortForwardingManager.swift` (`activateRules`)
+
+`activateRules` creates `NWListener(using: NWParameters.tcp, on: port)` (lines 49–57) with no
+local endpoint and no interface restriction. The listener therefore accepts connections on every
+interface, not just loopback. Any machine on the same network can connect to the forwarded port
+and reach the remote service through the user's SSH session. OpenSSH binds `-L` forwards to
+localhost unless `GatewayPorts` or an explicit bind address says otherwise.
+
+**To confirm:** start a forward, then run `lsof -nP -iTCP:<port> -sTCP:LISTEN`. The bug shows as
+`*:<port>`.
+
+**Fix direction:** restrict the listener to loopback (`requiredInterfaceType = .loopback`, or a
+`requiredLocalEndpoint`) and add a regression test. A per-rule LAN opt-in belongs to the
+forwarding work (F10). Planned in F0.
+
+---
+
+### Bug 98 — "Forward SSH Agent" Requests Forwarding but Nothing Answers (Medium)
+
+**Files:** `CLibSSH/ProSSHLibSSHWrapper.c` (shell open), `UI/Hosts/HostFormView.swift`
+
+With the toggle on, the shell channel sends an agent-forwarding request
+(`ssh_channel_request_auth_agent`, lines 1986–1992). When the server later opens an
+`auth-agent@openssh.com` channel back to the client, libssh needs a
+`channel_open_request_auth_agent_function` callback to accept it. The wrapper registers no session
+callbacks at all (there is no `ssh_set_callbacks`), so the channel is refused. The app also has
+no local agent to bridge such a channel to.
+
+The result: the remote `SSH_AUTH_SOCK` exists but every use fails (`ssh-add -l` on the remote
+shows this). Meanwhile the UI shows "Agent Fwd" badges and the audit log records "SSH agent
+forwarding enabled".
+
+**Fix direction:** agent support with a callback that bridges the channel to the selected agent
+socket (F1, phase 2).
+
+---
+
+### Bug 99 — Secure Enclave User Keys Can Be Chosen for a Host but Can't Log In (Medium)
+
+**Files:** `Services/KeyForgeService.swift` (`generateSecureEnclaveP256Key`),
+`Services/SSH/DefaultSSHCredentialResolver.swift`, `UI/Hosts/HostFormView.swift`
+
+KeyForge stores Secure Enclave keys with an empty `privateKey` (lines 716–760), but the host
+form's SSH Key picker lists every key (68–70). At connect, `privateKey(for:)` throws "Referenced
+SSH key does not contain private key material." (11–16). libssh can only use a non-exportable
+key through an agent. ssh-copy-id already refuses these keys (`KeyForgeViewModel`).
+
+**Fix direction:** an in-app agent served to libssh through `ssh_set_agent_socket` (F1, phase 3).
+Until then, hide or label Secure Enclave keys in the host picker.
+
+---
+
+### Bug 100 — Keyboard-Interactive Auth Answers Every Round With One Stored Secret (Medium)
+
+**Files:** `CLibSSH/ProSSHLibSSHWrapper.c` (`prossh_authenticate`), `Services/SessionManager.swift`
+(`connect`)
+
+While `ssh_userauth_kbdint` returns `SSH_AUTH_INFO`, `prossh_authenticate` answers each round's
+first prompt with the stored password and every other prompt with `""` (lines 277–286). No
+prompt is ever shown to the user. When the host has TOTP configured, `SessionManager` replaces
+the password with the TOTP code (364–369). Consequences:
+
+- Password + OTP servers (Google Authenticator PAM: "Password:", then "Verification code:") get
+  the same answer twice and fail.
+- Duo menus ("Passcode or option") receive the password.
+- Password-change prompts can't be answered.
+
+Only single-prompt password setups and OTP-only setups work.
+
+**Fix direction:** a per-round prompt callback and UI, with TOTP filling only the OTP prompt
+(F2).
+
+---
+
+### Bug 101 — Broadcast Sends Keystrokes to Every Pane but Paste, Quick Commands and Drops to One (Medium)
+
+**Files:** `UI/Terminal/TerminalView.swift`, `UI/Terminal/TerminalSurfaceView.swift`
+
+In broadcast and group modes, hardware key input fans out to `inputTargetSessionIDs()`
+(`directTerminalInputOverlay`). Three other input paths ignore the mode:
+
+- `pasteClipboardToSession` sends to one session (923–929).
+- The Quick Commands panel sends to `selectedSession` (191–196).
+- A file drop types its path into the drop target (`TerminalSurfaceView.swift:157`).
+
+So with "Broadcasting" on screen, pasting a config block reaches one device.
+
+**Fix direction:** route all three through the same target set, keeping the
+`isEnteringCredential` narrowing (F3).
+
+---
+
+### Bug 102 — Links Aren't Clickable in the Metal Renderer; OSC 8 Hyperlinks Are Dropped (Medium)
+
+**Files:** `UI/Terminal/TerminalSurfaceView.swift`, `Terminal/Parser/OSCHandler.swift`,
+`Terminal/Grid/TerminalGrid+OSCHandlers.swift`
+
+`LinkDetector` is created only in `TerminalSurfaceView` (line 40) and used only by `terminalLineView`
+(399). That view belongs to the text fallback, which is shown only when Metal is off or
+unavailable. The Metal surface (`MetalTerminalSessionSurface`, `TerminalMetalView`,
+`TerminalPointerSelection`) has no link handling.
+
+OSC 8 is parsed (`handleHyperlink`, 297–316) into `grid.currentHyperlink`, which no cell
+carries, so those links are lost. The README advertises "Clickable URL detection". Detection
+itself works; Bugs 54 and 55 covered that.
+
+**Fix direction:** link hit-testing on the Metal surface, plus a per-cell link ID (F4).
+
+---
+
+### Bug 103 — Session Recording Copies Its Whole Chunk Array on Every Append (Medium)
+
+**File:** `Terminal/Features/SessionRecorder.swift` (`commitChunk`)
+
+`commitChunk` takes a copy (`guard var active = activeRecordingsBySessionID[sessionID]`),
+appends to `active.recording.chunks`, then stores it back (lines 297–307). While the dictionary
+still holds the old value, the array buffer is not uniquely referenced. Every append therefore
+copies the array and retains every `Data` payload in it: O(n) per chunk, O(n²) per recording.
+
+- Output is coalesced into chunks of up to 100 ms or 64 KB, but input is recorded per keystroke.
+- The recording stays in memory until Stop.
+- It is finalized when a session ends, but nothing finalizes it at app quit: there is no
+  termination hook. Unverified whether quitting loses it.
+- This is the same pattern CLAUDE.md forbids in `TerminalHistoryIndex`. Not measured.
+
+**Fix direction:** mutate in place
+(`activeRecordingsBySessionID[sessionID]?.recording.chunks.append(...)`) or stream chunks to disk
+(F5).
+
+---
+
+### Bug 104 — A Slow Connect or Login Blocks Every Session's Transport Calls (Medium)
+
+**File:** `Services/SSH/LibSSHTransport.swift`
+
+`LibSSHTransport` is one actor that holds every session's libssh handle. Both `connect`
+(`connectDirect`/`connectViaJumpHost` → `connectWithPolicy`, lines 645–683) and `authenticate`
+(316–349) call blocking C functions synchronously on that actor. The connect timeout is 10 s, and
+a legacy-algorithm fallback can connect a second time.
+
+While one host connects or logs in, `sendKeepalive`, `openShell`, `openForwardChannel` and
+`disconnect` for every other session wait behind it. Connecting to N hosts is serial, and an
+unreachable host can hold up new port-forward connections on healthy sessions for the whole
+timeout. SFTP listing already moves its C call to `Task.detached`. Not measured.
+
+**Fix direction:** move the blocking calls off the actor, keeping the connection-generation
+checks from Bug 3. This is a prerequisite for multi-device work (F8).
+
+---
+
+### Bug 105 — CI Can Never Fail (Medium)
+
+**File:** `.github/workflows/ci.yml`
+
+Both the build step and the test step end in `| xcpretty --color || true` (lines 33 and 42).
+With that ending, compile errors and test failures still report success. The job also runs on
+`macos-15` with Xcode 26.2 (lines 16 and 24). That runner cannot run tests for a macOS 26.0
+deployment target, and the project now builds with Xcode 27. So the README's CI badge is always
+green.
+
+**Fix direction:** `set -o pipefail`, no `|| true`, and a runner that can execute macOS 26
+binaries (F0).
+
+---
+
+### Bug 106 — ssh_config Import Reads Only the Clipboard (Low)
+
+**Files:** `UI/Hosts/HostsView.swift`, `Services/SSHConfigImportService.swift`
+
+The Hosts actions offer only "Import SSH Config From Clipboard" and "Copy SSH Config Export"
+(`HostsView.swift:50–67`). `readDefaultConfig()` (`~/.ssh/config`) and `readConfig(at:)` exist
+(`SSHConfigImportService.swift:78–95`) but nothing calls them. `Include` directives are not
+followed.
+
+**Fix direction:** import from the file with `Include`, and export to a file (F6).
+
+---
+
+### Bug 107 — Stale Settings Text on macOS (Low)
+
+**File:** `UI/Settings/SettingsView.swift`
+
+The Appearance footnote says "System follows iOS." (line 41). The Security section says "Secure
+Enclave integration coming in KeyForge/CertAuthority phases." (347), although both KeyForge and
+the CA have used the Secure Enclave for months. The iPad multitasking text is hidden on the Mac
+and is fine.
+
+---
+
+### Bug 108 — README Claims Features the Code Doesn't Have (Low)
+
+**File:** `README.md`
+
+The README claims or states:
+
+- "Local and remote port forwarding": only local exists (no `ssh_channel_listen_forward`).
+- "Clickable URL detection": see Bug 102.
+- The AI section and setup describe OpenRouter only; direct Anthropic exists.
+- The tool table lists internal names (`read_file_chunk`, `get_session_info`) and misses
+  `run_cli_command`, `list_sessions` and `load_skill`.
+- The roadmap says the AI "currently operates on one session" and that the app "supports 4
+  simultaneous sessions". 4 is the split depth; tabs are uncapped.
+- Requirements say "Xcode 26.0" and the badge says Swift 6.0; the toolchain is Xcode 27,
+  Swift 6.4.
+- The "What ProSSHMac Has That Competitors Don't" table has rows that are false or unverified as
+  of 2026-10-23. Verdicts per row are in the big picture document.
+
+Severity is Low by the guide below (documentation, not behaviour). The credibility cost with
+network engineers is higher.
+
+**Fix direction:** a README truth pass (F0).
 
 ---
 

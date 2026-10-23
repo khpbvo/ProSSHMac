@@ -581,6 +581,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 | Doc | Purpose |
 |-----|---------|
 | `Docs/featurelist.md` | **Long-term memory** — dated work log, phase progress, loop-log entries |
+| `Docs/The big picture(October 2026).md` | **Planning input.** Code-verified ranked feature list (F0–F20: build order, value, size, spec name), competitor gap analysis re-checked 2026-10-23, source of Bugs 97–108. Start a new feature spec from its entry |
 | `Docs/RenderCost.md` | **Active spec.** What rendering actually costs — R0/R1/R2a done, **R2b open** (code merged, performance unvalidated). Read its "Measurement caveats" before any perf measurement |
 | `Docs/R2bBenchmarkResults.md` | R2b A/B evidence: exact commands and all raw reports for the six baseline/candidate pairs |
 | `Docs/CredentialPrompt.md` | Password prompts (sudo, su, ssh, passphrase, device `enable`) pause the awaited tool call with a card in the chat; the user types in the terminal, nothing is recorded, Decline Ctrl+Cs and tells the model. Replaced the prompt's SUDO rules and the `apply_patch` sudo dance — **COMPLETE** (Phases 0–4, validated live 2026-10-18; a device `enable` password not yet seen live) |
@@ -592,7 +593,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 | `Docs/PhaseB.md` | Local Input V2 Phase B checklist (make byte-first local input the only path) — open |
 | `Docs/AIAgentOptimization.md` | AI audit/optimization plan and verification; links to the core, tool, execution and prompt/skill reports and reproducible function inventory |
 | `Docs/AIArchitecture.md` | Current AI assistant architecture for both providers (OpenRouter, Anthropic): settings, transcript, replay rules, logging, verification |
-| `docs/FutureFeatures.md` | Prioritized feature roadmap (competitive analysis) |
+| `docs/FutureFeatures.md` | Older roadmap (Feb 2026; its AI priority is done) — superseded by the big picture doc |
 | `docs/Optimization.md` | Performance bottleneck analysis, benchmark commands, current numbers |
 | `Docs/FasterThenYouWillEverLiveToBe.md` | Throughput gap profiling — Phases 0,1,2,3,5 done. **Phase 4 is abandoned, not optional**: `parse + grid` was never the constraint |
 | `Docs/optimizationspart2.md` | Throughput recovery playbook (Part 2) |
@@ -618,6 +619,18 @@ and the session coordinators) has no spec file left; see `Docs/featurelist.md`.
 ---
 
 ## Next Session Plan
+
+**Feature planning (2026-10-23): `Docs/The big picture(October 2026).md`** is the code-verified
+ranked list. Next step: write the first spec from it, `Docs/ReleaseReadiness.md` (F0):
+- libssh 0.12.2 and OpenSSL 3.5 LTS, with a reproducible vendor build script;
+- Bug 97 (loopback-only forwards);
+- Bug 105 (CI);
+- a 0.10.0 release with Sparkle;
+- a README truth pass (Bugs 107/108).
+
+Bugs 97–108 are open and were found by reading only, so reproduce before fixing (Bug 97: `lsof`;
+Bug 98: `ssh-add -l` on the remote). The doc's "Open decisions" (AI gate default, redaction
+default, App Store, vendor build options) need the user.
 
 **AI audit and optimization complete: `Docs/AIAgentOptimization.md`.** Primary plus three
 subagents traced 501 declarations in 48 files; 314 targeted tests and the Debug build pass.
@@ -718,8 +731,8 @@ the largest hidden renderer cost (`Docs/Bug84.md` Open questions).
 of Metal view overlap because each split surface demanded at least 220 points of height.
 Split surfaces now fit their pane, with a geometry regression through terminal-only restore.
 The original four-session SSH setup was not rerun live. The debug-only branch
-`debug/terminal-jump` (`251e010`) remains unmerged; never merge it. The bug register has
-96 fixed entries and none open.
+`debug/terminal-jump` (`251e010`) remains unmerged; never merge it. The bug register now has
+108 entries: 96 fixed, 12 open (Bugs 97–108, above).
 
 **Paused: `Docs/RenderCost.md` R2b — explain or bound the throughput variability.**
 R2b (fewer engine actor calls per batch and per publish) is merged on `master` but unvalidated:
