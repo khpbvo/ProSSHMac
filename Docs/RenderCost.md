@@ -10,7 +10,9 @@ detached against ~20 windowless). **R3c (2026-10-23) found why:** with a window,
 view-graph updates take ~79% of a saturated main thread, because every output batch and publish
 writes `@Published` state on `SessionManager`; Metal drawing is 2.2%. Windowed baseline at
 1280x800: detached 1.75-2.08, render 0.14-0.16 MB/s, independent of window size; Terminal.app
-30.8-34.8. **R4 (stop high-frequency state from invalidating views) is next**; R3d follows.
+30.8-34.8. **R4a (2026-10-23) stopped the per-batch and unchanged `@Published` writes:** windowed
+detached 1.74-2.11 → 15.94-18.92 MB/s, render 0.15-0.17 → 4.21-7.76 to sentinel. Render is still
+SwiftUI-bound on the per-publish nonce. **R4b is next**; R3d follows.
 
 `FasterThenYouWillEverLiveToBe` ended by retargeting throughput at Terminal.app's **26.5 MB/s**.
 That peer figure was measured **with rendering**; ProSSHMac's **17.97 MB/s** was measured **without**
@@ -49,6 +51,8 @@ None of that was measured by any existing benchmark.
 | `Services/SessionShellIOCoordinator.swift` | Benchmark-gated sentinel tap |
 | `App/AppDependencies.swift` | Launches the rendered benchmark once the UI is up |
 | `scripts/benchmark-throughput.sh` | `--render`, `--render-detached` |
+| `Services/SessionManager.swift` | R4a: plain byte counters with a coalesced publish, `setIfChanged` |
+| `Services/TerminalRenderingCoordinator.swift` | R4a: input modes, scroll state, title and cwd written only on change |
 
 ---
 
@@ -411,7 +415,28 @@ None of that was measured by any existing benchmark.
   windowed `--render-detached` close to the windowless ~20 MB/s, and `--render` limited by
   snapshot and draw cost, not SwiftUI.
 
-  - **R4a: stop needless and per-batch publishes (small, measurable on its own).**
+  - [x] **R4a: stop needless and per-batch publishes (small, measurable on its own).**
+
+    **Done 2026-10-23.** Evidence: `Docs/R4aBenchmarkResults.md`. The byte counters are plain
+    storage with one trailing `objectWillChange` per 250 ms (`SessionManager.scheduleTrafficPublish`).
+    Input modes, scroll state, title and cwd go through `SessionManager.setIfChanged`, so a
+    batch with unchanged modes writes no `@Published` state at all. Release, 1280x800, 8 MiB x 3,
+    interleaved against `697e6f1`:
+
+    | Path | Baseline | R4a |
+    |---|---|---|
+    | `--render-detached` (3 pairs) | 1.74-2.11 | **15.94-18.92** |
+    | `--render` to sentinel (2 pairs) | 0.15-0.17 | **4.21-7.76** |
+
+    - Time Profiler, main thread: detached ~91% busy (58.4% SwiftUI transaction, 19.2% the hosts
+      `List`) → ~37% busy (13.3%, 4.4%). Render ~97% (65.8%) → ~52% busy (53.3%).
+    - `chunk record` 4177 → 141 ms and `history index` 2048 → 91 ms: they were MainActor wait.
+      Detached, the parser (`feed call`) is now the largest stage.
+    - **Render is still SwiftUI-bound** on what's left: one transaction per publish (nonce, and
+      scroll state while scrollback grows). That's R4b.
+    - Render "to settled" is a settle-wait timeout; see Gotchas.
+
+    The plan was:
     1. `bytesReceivedBySessionID` / `bytesSentBySessionID`: move the counters to plain storage
        and publish a coalesced copy at most every ~250 ms (or only where a view reads it:
        `SessionManager+Queries` traffic summary → metadata view). Check every reader first,
@@ -557,6 +582,11 @@ window.
 - **Whether there is a window dominates; its size does not.** R3c measured no size effect
   from 640x400 to 1480x893 in either mode, while a window at all costs ~10x. Record both the
   frame and `window: count=`. `--benchmark-window WxH` forces the frame (clamped to the screen).
+- **`--render` "to settled" is currently a timeout.** The renderer keeps drawing at ~30 fps after
+  output and publishing stop, so `waitForRendererSettled` hits its cap and "settled" is the
+  sentinel time plus ~10.5 s, in baseline and R4a alike (R4a). Report the sentinel figure.
+  The cause is unknown (scanner and gradient were off); if a real session does this too, it
+  wastes energy after every burst of output.
 - **`chunk record` and `history index` include MainActor wait.** They are timed around awaits
   from the detached parser task, so when the main thread is busy they grow without any extra
   work (R3c). Profile the main thread before optimizing either.

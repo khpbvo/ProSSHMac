@@ -153,15 +153,17 @@ xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform
   | Parser/grid, 2 MB (`--benchmark-base64`) | **36.4-37.3** | 2026-09-04 |
   | PTY -> `engine.feed` (`--pty-local`) | **19.20** | 2026-09-03 |
   | Real app path, 8 MB (`--render-detached`, **no window**, active app) | **20.07-20.91** | 2026-10-23, HEAD `d790452` |
-  | Real app path, 8 MB (`--render-detached`, **1280x800 window**, App Nap held) | **1.75-2.08** | 2026-10-23, HEAD `6b6de2a` (R3c) |
-  | Real app path, 8 MB (`--render`, **1280x800 window**, ~90 fps, App Nap held) | **0.14-0.16** | 2026-10-23, HEAD `6b6de2a` (R3c) |
+  | Real app path, 8 MB (`--render-detached`, **1280x800 window**, App Nap held) | **15.94-18.92** | 2026-10-23, R4a (1.74-2.11 before it) |
+  | Real app path, 8 MB (`--render`, **1280x800 window**, App Nap held), to sentinel | **4.21-7.76** | 2026-10-23, R4a (0.15-0.17 before it) |
   | Terminal.app (peer, with rendering, 8 MB) | **30.8-34.8** | 2026-10-23 (26.5 on 2026-09-03) |
 
-  **The windowless figure is not the shipping path.** With a window, SwiftUI view updates take
-  ~79% of a saturated main thread (every batch and publish writes `@Published` state on
-  `SessionManager`), and Metal drawing only 2.2% (R3c; fix is RenderCost R4). Window size
-  (640x400 to 1480x893) makes no difference. **Read `Docs/RenderCost.md` "Measurement caveats"
-  before trusting or recording any rendered number.**
+  **The windowless figure is not the shipping path.** With a window, SwiftUI view updates
+  limit throughput, and Metal drawing costs only 2-5% of the main thread (R3c, R4a). R4a removed
+  the per-batch writes; `--render` is still SwiftUI-bound (~53% of the main thread) on the
+  per-publish nonce, which is RenderCost R4b. Window size (640x400 to 1480x893) makes no
+  difference. Record `--render` **to sentinel**: "to settled" is currently a settle-wait timeout
+  (see Benchmarks). **Read `Docs/RenderCost.md` "Measurement caveats" before trusting or
+  recording any rendered number.**
 - **Target: match or beat Terminal.app end-to-end** (30.8-34.8 MB/s in R3c, 26.5 in September; iTerm2 ~1.4 MB/s on the same
   machine, 6 MB with rendering). The old 89 MB/s target was a pipe baseline with no terminal
   emulation — ignore it where older docs cite it. See `docs/Optimization.md`.
@@ -475,10 +477,14 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
   `var state = sessionStates[id]` copy on that path; the length must stay O(1), the trim amortized,
   and the character cap applied at read time. (As a capped `String` it measured 89% of wall.)
 - **Every `@Published` write on `SessionManager` re-runs every view observing it** — about 11
-  views use `@EnvironmentObject`, and `@Published` fires even for an equal value. Per-batch and
-  per-publish writes (`bytesReceivedBySessionID`, snapshot nonce, scroll/input-mode state,
-  title/cwd) are what limit the windowed app to ~2 MB/s (R3c). Don't add per-batch or
-  per-publish `@Published` state there; RenderCost R4 moves the existing state out.
+  views use `@EnvironmentObject`, and `@Published` fires even for an equal value. Per-batch writes
+  held the windowed app at ~2 MB/s; removing them gave ~9x (R4a). Rules:
+  - **Nothing per batch.** The byte counters are plain storage with one trailing
+    `objectWillChange` per 250 ms (`scheduleTrafficPublish`); count other per-batch state the same way.
+  - **Per-publish state goes through `setIfChanged`** (input modes, scroll state, title, cwd).
+  - The snapshot nonce still fires once per publish and keeps `--render` SwiftUI-bound; R4b
+    moves it out. Don't add new `@Published` state there that changes while output streams.
+  Tests: the R4a cases in `SessionManagerRenderingPathTests`.
 - **`recordParsedChunk` runs once per 4 ms batch, not per raw chunk.** It is `@MainActor`; per-chunk
   it cost ~1290 hops per MB. Do not move it back into the accumulator loop.
 - **`TerminalGrid` partial-region `scrollUp`** rotates the row map in place (fast paths for ±1 line,
@@ -561,6 +567,9 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
   process start time with the binary's build time before judging a fix from a screenshot.
 
 ### Benchmarks
+- **`--render` "to settled" is a timeout right now.** The renderer keeps drawing at ~30 fps after
+  output stops (scanner and gradient off; cause unknown), so `waitForRendererSettled` hits its
+  ~10.5 s cap. Report "to sentinel" for render mode. See `Docs/R4aBenchmarkResults.md`.
 - **Check `window: count=` in every render report.** R2a, R2b and R3a got zero windows; since
   R3b every launch gets one, sandboxed or not (R3c refuted the sandbox lead; the old cause is
   unknown). A windowless run measures ~10x faster than a windowed one and is not comparable to
@@ -604,8 +613,9 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 |-----|---------|
 | `Docs/featurelist.md` | **Long-term memory** — dated work log, phase progress, loop-log entries |
 | `Docs/The big picture(October 2026).md` | **Planning input.** Code-verified ranked feature list (F0–F20: build order, value, size, spec name), competitor gap analysis re-checked 2026-10-23, source of Bugs 97–108. Start a new feature spec from its entry |
-| `Docs/RenderCost.md` | What rendering actually costs — R0–R2b, R3a–R3c **COMPLETE** (R2b validated 1.09-1.12x windowless; R3c: the windowed app is SwiftUI-bound, ~79% of the main thread, Metal 2.2%). **R4 next** (high-frequency state stops invalidating views), then R3d. Read its "Measurement caveats" sections before any perf measurement |
+| `Docs/RenderCost.md` | What rendering actually costs — R0–R2b, R3a–R3c **COMPLETE** (R2b validated 1.09-1.12x windowless; R3c: the windowed app is SwiftUI-bound, ~79% of the main thread, Metal 2.2%). **R4a COMPLETE** (~9x windowed). **R4b next** (per-session live state out of `SessionManager`), then R3d. Read its "Measurement caveats" sections before any perf measurement |
 | `Docs/R3cBenchmarkResults.md` | R3c evidence: windowed baseline tables, Time Profiler breakdowns, stage budgets, commands |
+| `Docs/R4aBenchmarkResults.md` | R4a evidence: interleaved windowed A/B, Time Profiler shares, stage budgets, the settle timeout, commands |
 | `Docs/R2bBenchmarkResults.md` | R2b A/B evidence: exact commands and all raw reports for the six baseline/candidate pairs |
 | `Docs/CredentialPrompt.md` | Password prompts (sudo, su, ssh, passphrase, device `enable`) pause the awaited tool call with a card in the chat; the user types in the terminal, nothing is recorded, Decline Ctrl+Cs and tells the model. Replaced the prompt's SUDO rules and the `apply_patch` sudo dance — **COMPLETE** (Phases 0–4, validated live 2026-10-18; a device `enable` password not yet seen live) |
 | `Docs/NetworkCopilot.md` | **Active.** Copilot reaches every open session, one memory per chat, a router/switch command path, and user skills (`load_skill`). Phases 1–6 done; Phase 7 (live validation) in progress, with its with/without-skills results. Read its "Design rules" before adding any rule to the developer prompt |
@@ -761,20 +771,27 @@ The original four-session SSH setup was not rerun live. The debug-only branch
 windowless, active app. The "bimodality" was App Nap on inactive processes (~3.6x) plus CPU
 oversubscription, not the publish cadence. Leave the cadence alone and don't revert R2b.
 
-**Next: `Docs/RenderCost.md` Phase R4a — stop needless and per-batch publishes.**
-R3c (2026-10-23) measured the windowed baseline and found the cause: with a window, SwiftUI
-view-graph updates take ~79% of a 100%-busy main thread and Metal only 2.2%. Every ~4 KB batch
-writes `@Published bytesReceivedBySessionID`. Every publish writes the nonce plus scroll state,
-input-mode snapshot and title/cwd unconditionally. All of these fire `SessionManager.objectWillChange`.
-Windowed 1280x800: detached 1.75-2.08, render 0.14-0.16 MB/s (no window-size effect);
-Terminal.app 30.8-34.8. R4a: coalesce the byte counters, write housekeeping state only on
-change, then an interleaved windowed A/B (HEAD vs candidate) with a Time Profiler capture each.
-R4b (per-session live state out of `SessionManager`) follows. Read R4's "Don't" list. Plan mode
-first; it's a code phase. The sandbox lead is refuted. A locked screen makes every launch
-inactive, which doesn't matter while the App Nap activity is held.
-`scripts/benchmark-throughput.sh` runs `pkill -9 -x ProSSHMac` before every benchmark, which
-kills the user's own app and sessions. Avoid it while the user has sessions open; launch
-the bundle by hand as in `Docs/R2bBenchmarkResults.md`.
+**RenderCost R4a is done** (2026-10-23, `Docs/R4aBenchmarkResults.md`): no per-batch
+`@Published` writes, per-publish state written only on change. Windowed 1280x800: detached
+1.74-2.11 → 15.94-18.92 MB/s, render 0.15-0.17 → 4.21-7.76 to sentinel.
+
+**Next: `Docs/RenderCost.md` Phase R4b — per-session live state out of `SessionManager`.**
+Render mode is still SwiftUI-bound: the main thread is ~52% busy, 53% of it SwiftUI
+transactions, from one transaction per publish (snapshot nonce, plus scroll state while
+scrollback grows) re-running every `@EnvironmentObject SessionManager` view. Give the nonce,
+scroll state and `shellBuffers` a per-session observable (`MetalTerminalSurfaceModel` or a
+`SessionLiveState`), keep the nonce → `.onChange` → `updateSnapshot()` contract and the Bug 84
+surface-model rules, and audit what each observing view reads. Read R4's "Don't" list. Plan
+mode first; it's a code phase. Measure the same way as R4a: interleaved windowed A/B with a
+Time Profiler capture each (the scratch `run.sh`/`prof.sh` are described in its Commands).
+`scripts/benchmark-throughput.sh` runs `pkill -9 -x ProSSHMac` first, which kills the user's own
+app and sessions; launch the bundle by hand.
+
+**Open finding from R4a:** after output stops, the renderer keeps drawing at ~30 fps for at
+least ~10 s (scanner and gradient off), so `--render` "to settled" is a timeout. Before
+fixing anything, check whether a real session does the same (Time Profiler or frame count
+after a `cat` of a large file), find which `requiresContinuousFrames` source or re-dirty path
+keeps it running, and explain the cause to the user.
 
 **Watch for:** SwiftUI's "Publishing changes from within view updates" warning at
 `AIProviderSelection.select` (seen once, unconfirmed cause; see `Docs/Anthropic.md` Phase 6). If it

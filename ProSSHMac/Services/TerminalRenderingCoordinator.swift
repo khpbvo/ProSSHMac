@@ -413,7 +413,8 @@ import os.signpost
         engine: TerminalEngine
     ) async {
         guard let manager else { return }
-        manager.inputModeSnapshotsBySessionID[sessionID] = await engine.inputModeSnapshot()
+        let snapshot = await engine.inputModeSnapshot()
+        manager.setIfChanged(\.inputModeSnapshotsBySessionID, sessionID, snapshot)
     }
 
     func handleFeedOutcome(
@@ -421,7 +422,7 @@ import os.signpost
         engine: TerminalEngine,
         outcome: TerminalEngine.FeedOutcome
     ) async {
-        manager?.inputModeSnapshotsBySessionID[sessionID] = outcome.inputModeSnapshot
+        manager?.setIfChanged(\.inputModeSnapshotsBySessionID, sessionID, outcome.inputModeSnapshot)
         if !outcome.syncExitSnapshots.isEmpty {
             await publishSyncExitSnapshots(
                 sessionID: sessionID, engine: engine,
@@ -678,16 +679,16 @@ import os.signpost
             }
         }
 
-        manager.inputModeSnapshotsBySessionID[sessionID] = state.inputModeSnapshot
+        manager.setIfChanged(\.inputModeSnapshotsBySessionID, sessionID, state.inputModeSnapshot)
 
         let title = state.windowTitle
         if !title.isEmpty {
-            manager.windowTitleBySessionID[sessionID] = title
+            manager.setIfChanged(\.windowTitleBySessionID, sessionID, title)
         }
 
         let cwd = state.workingDirectory
         if !cwd.isEmpty {
-            manager.workingDirectoryBySessionID[sessionID] = cwd
+            manager.setIfChanged(\.workingDirectoryBySessionID, sessionID, cwd)
         }
 
         // Apply captured metadata before history observation suspends MainActor,
@@ -716,11 +717,11 @@ import os.signpost
     private func publishScrollState(sessionID: UUID, scrollOffset: Int, scrollbackCount: Int) {
         guard let manager else { return }
         let visibleRows = desiredPTYBySessionID[sessionID]?.rows ?? PTYConfiguration.default.rows
-        manager.scrollStateBySessionID[sessionID] = TerminalScrollState(
+        manager.setIfChanged(\.scrollStateBySessionID, sessionID, TerminalScrollState(
             scrollOffset: scrollOffset,
             scrollbackCount: scrollbackCount,
             visibleRows: visibleRows
-        )
+        ))
     }
 
     // MARK: - Private helpers

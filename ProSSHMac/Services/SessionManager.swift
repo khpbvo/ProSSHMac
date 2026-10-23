@@ -38,8 +38,11 @@ final class SessionManager: ObservableObject {
     @Published var isPlaybackRunningBySessionID: [UUID: Bool] = [:]
     @Published var latestRecordingURLBySessionID: [UUID: URL] = [:]
     @Published var workingDirectoryBySessionID: [UUID: String] = [:]
-    @Published var bytesReceivedBySessionID: [UUID: Int64] = [:]
-    @Published var bytesSentBySessionID: [UUID: Int64] = [:]
+    /// Not `@Published`: output updates these once per batch, and every `@Published` write
+    /// re-runs every observing view (RenderCost R4a). Views see them via a coalesced
+    /// `objectWillChange` at most every `trafficPublishInterval`.
+    var bytesReceivedBySessionID: [UUID: Int64] = [:] { didSet { scheduleTrafficPublish() } }
+    var bytesSentBySessionID: [UUID: Int64] = [:] { didSet { scheduleTrafficPublish() } }
     @Published var latestCompletedCommandBlockBySessionID: [UUID: CommandBlock] = [:]
     @Published var commandCompletionNonceBySessionID: [UUID: Int] = [:]
     @Published var scrollStateBySessionID: [UUID: TerminalScrollState] = [:]
@@ -80,6 +83,32 @@ final class SessionManager: ObservableObject {
     var configuredScrollbackLines: Int {
         let stored = UserDefaults.standard.integer(forKey: "terminal.scrollback.maxLines")
         return stored > 0 ? stored : TerminalDefaults.maxScrollbackLines
+    }
+
+    static let trafficPublishInterval: Duration = .milliseconds(250)
+    private var trafficPublishPending = false
+
+    /// One trailing `objectWillChange` per window, so the latest counts always become visible.
+    private func scheduleTrafficPublish() {
+        guard !trafficPublishPending else { return }
+        trafficPublishPending = true
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: Self.trafficPublishInterval)
+            guard let self else { return }
+            self.trafficPublishPending = false
+            self.objectWillChange.send()
+        }
+    }
+
+    /// Writes a per-session `@Published` value only when it differs. `@Published` fires
+    /// `objectWillChange` for an equal value too, so per-publish state must go through this.
+    func setIfChanged<Value: Equatable>(
+        _ keyPath: ReferenceWritableKeyPath<SessionManager, [UUID: Value]>,
+        _ sessionID: UUID,
+        _ value: Value
+    ) {
+        guard self[keyPath: keyPath][sessionID] != value else { return }
+        self[keyPath: keyPath][sessionID] = value
     }
 
     init(

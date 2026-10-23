@@ -4,6 +4,7 @@
 // Targeted regression tests for nonce-driven snapshot publishing.
 
 #if canImport(XCTest)
+import Combine
 import XCTest
 @testable import ProSSHMac
 
@@ -1002,6 +1003,104 @@ final class SessionManagerRenderingPathTests: XCTestCase {
             manager.renderingCoordinator.testingHasPublishInFlight(sessionID: session.id),
             "publishInFlightSessionIDs should be cleared after publishLatestGridState completes."
         )
+    }
+
+    // MARK: - RenderCost R4a: unchanged state must not invalidate views
+
+    @MainActor
+    func testParsedBatchWithUnchangedInputModesEmitsNoObjectWillChange() async {
+        let manager = SessionManager(
+            transport: MockSSHTransport(),
+            knownHostsStore: InMemoryKnownHostsStore()
+        )
+        await manager.injectScreenshotSessions()
+
+        guard let session = manager.sessions.first,
+              let engine = manager.engines[session.id] else {
+            XCTFail("Expected an injected session with an engine")
+            return
+        }
+        // Let setup's coalesced traffic publish fire before counting.
+        try? await Task.sleep(for: SessionManager.trafficPublishInterval + .milliseconds(150))
+
+        var emissions = 0
+        let subscription = manager.objectWillChange.sink { emissions += 1 }
+        defer { subscription.cancel() }
+
+        let outcome = await engine.feedAndCollectOutcome(Data("plain output\r\n".utf8))
+        await manager.renderingCoordinator.handleFeedOutcome(sessionID: session.id, engine: engine, outcome: outcome)
+        XCTAssertEqual(emissions, 0, "A batch that changes no input mode must not invalidate views.")
+
+        let modeChange = await engine.feedAndCollectOutcome(Data("\u{1B}[?2004h".utf8))
+        await manager.renderingCoordinator.handleFeedOutcome(sessionID: session.id, engine: engine, outcome: modeChange)
+        XCTAssertGreaterThanOrEqual(emissions, 1)
+        XCTAssertEqual(manager.inputModeSnapshotsBySessionID[session.id]?.bracketedPasteMode, true)
+    }
+
+    @MainActor
+    func testUnchangedHousekeepingWritesNoPublishedStateButTheNonce() async {
+        let manager = SessionManager(
+            transport: MockSSHTransport(),
+            knownHostsStore: InMemoryKnownHostsStore()
+        )
+        await manager.injectScreenshotSessions()
+
+        guard let session = manager.sessions.first,
+              let engine = manager.engines[session.id] else {
+            XCTFail("Expected an injected session with an engine")
+            return
+        }
+        let coordinator = manager.renderingCoordinator
+
+        _ = await engine.feed(Data("\u{1B}]0;R4A_TITLE\u{07}\u{1B}]7;file://localhost/tmp/r4a\u{07}line\r\n".utf8))
+        await coordinator.publishGridState(for: session.id, engine: engine)
+        XCTAssertEqual(manager.windowTitleBySessionID[session.id], "R4A_TITLE")
+        XCTAssertNotNil(manager.workingDirectoryBySessionID[session.id])
+
+        var emissions: [String: Int] = [:]
+        let subscriptions = [
+            manager.$inputModeSnapshotsBySessionID.dropFirst().sink { _ in emissions["inputModes", default: 0] += 1 },
+            manager.$scrollStateBySessionID.dropFirst().sink { _ in emissions["scrollState", default: 0] += 1 },
+            manager.$windowTitleBySessionID.dropFirst().sink { _ in emissions["title", default: 0] += 1 },
+            manager.$workingDirectoryBySessionID.dropFirst().sink { _ in emissions["cwd", default: 0] += 1 },
+        ]
+        defer { subscriptions.forEach { $0.cancel() } }
+
+        let nonceBefore = manager.gridSnapshotNonceBySessionID[session.id, default: -1]
+        await coordinator.publishGridState(for: session.id, engine: engine)
+        XCTAssertGreaterThan(manager.gridSnapshotNonceBySessionID[session.id, default: -1], nonceBefore)
+        XCTAssertEqual(emissions, [:], "A publish with unchanged housekeeping state must only bump the nonce.")
+
+        _ = await engine.feed(Data("\u{1B}]0;R4A_TITLE_2\u{07}".utf8))
+        await coordinator.publishGridState(for: session.id, engine: engine)
+        XCTAssertEqual(emissions, ["title": 1])
+        XCTAssertEqual(manager.windowTitleBySessionID[session.id], "R4A_TITLE_2")
+    }
+
+    @MainActor
+    func testByteCountersCoalesceIntoOneTrailingObjectWillChange() async {
+        let manager = SessionManager(
+            transport: MockSSHTransport(),
+            knownHostsStore: InMemoryKnownHostsStore()
+        )
+        // Let init's known-hosts refresh publish before counting.
+        try? await Task.sleep(for: .milliseconds(100))
+        let sessionID = UUID()
+
+        var emissions = 0
+        let subscription = manager.objectWillChange.sink { emissions += 1 }
+        defer { subscription.cancel() }
+
+        for _ in 0..<100 {
+            manager.bytesReceivedBySessionID[sessionID, default: 0] += 4096
+            manager.bytesSentBySessionID[sessionID, default: 0] += 1
+        }
+        XCTAssertEqual(emissions, 0, "Per-batch byte counts must not publish synchronously.")
+        XCTAssertEqual(manager.totalTraffic(for: sessionID).received, 409_600)
+        XCTAssertEqual(manager.totalTraffic(for: sessionID).sent, 100)
+
+        try? await Task.sleep(for: SessionManager.trafficPublishInterval + .milliseconds(150))
+        XCTAssertEqual(emissions, 1, "Byte counts publish once per window, after the last change.")
     }
 
     @MainActor
