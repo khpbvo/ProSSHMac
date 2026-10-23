@@ -12,9 +12,9 @@ struct MetalTerminalSessionSurface: View {
     /// Owned by the window's `TerminalSurfaceModelStore`, not by this view, so that layout
     /// changes which rebuild this view keep the session's renderer (Bug 84).
     @ObservedObject var model: MetalTerminalSurfaceModel
+    @ObservedObject var liveState: SessionLiveState
     let sessionID: UUID
     let snapshotProvider: () -> GridSnapshot?
-    let snapshotNonce: Int
     let fontSize: Double
     let fontFamily: String
     let backgroundOpacityPercent: Double
@@ -77,7 +77,7 @@ struct MetalTerminalSessionSurface: View {
                 .onDisappear {
                     model.detach(surface: surfaceToken)
                 }
-                .onChange(of: snapshotNonce) { _, _ in
+                .onChange(of: liveState.snapshotNonce) { _, _ in
                     let snapshot = snapshotProvider()
                     // Skip scroll engine sync during alternate buffer — TUI apps
                     // have no scrollback and the engine should stay at row 0.

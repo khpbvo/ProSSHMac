@@ -1,5 +1,6 @@
 // Extracted from TerminalView.swift
 import SwiftUI
+import Combine
 import Metal
 import UniformTypeIdentifiers
 
@@ -9,6 +10,7 @@ struct TerminalSurfaceView: View {
     let paneID: UUID?
     /// The session's model from the window's `TerminalSurfaceModelStore` (Bug 84).
     let surfaceModel: MetalTerminalSurfaceModel
+    let liveState: SessionLiveState
 
     @ObservedObject var bellEffect: BellEffectController
     @ObservedObject var resizeEffect: ResizeEffectController
@@ -36,6 +38,7 @@ struct TerminalSurfaceView: View {
     @State private var terminalContentHeight: CGFloat = 0
     @State private var terminalContentOffset: CGFloat = 0
     @State private var terminalViewportSize: CGSize = .zero
+    @State private var classicBufferNonce = 0
 
     private let linkDetector = LinkDetector()
 
@@ -45,6 +48,9 @@ struct TerminalSurfaceView: View {
                 metalTerminalBuffer(for: session, isFocused: isFocused, paneID: paneID)
             } else {
                 terminalBuffer(for: session)
+                    .onReceive(liveState.$shellBuffer.dropFirst()) { _ in
+                        classicBufferNonce &+= 1
+                    }
             }
         }
         .contentShape(Rectangle())
@@ -91,13 +97,11 @@ struct TerminalSurfaceView: View {
 
     @ViewBuilder
     private func metalTerminalBuffer(for session: Session, isFocused: Bool = true, paneID: UUID? = nil) -> some View {
-        let snapshotNonce = sessionManager.gridSnapshotNonceBySessionID[session.id, default: 0]
-
         MetalTerminalSessionSurface(
             model: surfaceModel,
+            liveState: liveState,
             sessionID: session.id,
             snapshotProvider: { sessionManager.gridSnapshot(for: session.id) },
-            snapshotNonce: snapshotNonce,
             fontSize: terminalUIFontSize,
             fontFamily: terminalUIFontFamily,
             backgroundOpacityPercent: terminalBackgroundOpacityPercent,
@@ -125,7 +129,7 @@ struct TerminalSurfaceView: View {
                 sessionManager.cachedScrollbackCount(for: session.id)
             },
             scrollOffsetProvider: {
-                sessionManager.scrollStateBySessionID[session.id]?.scrollOffset ?? 0
+                liveState.scrollState.scrollOffset
             }
         )
         .id(session.id)
@@ -145,7 +149,8 @@ struct TerminalSurfaceView: View {
         .overlay(alignment: .trailing) {
             TerminalScrollbarView(
                 sessionID: session.id,
-                sessionManager: sessionManager
+                sessionManager: sessionManager,
+                liveState: liveState
             )
         }
         .overlay {
@@ -245,7 +250,7 @@ struct TerminalSurfaceView: View {
 
     @ViewBuilder
     private func terminalBuffer(for session: Session) -> some View {
-        let lines = sessionManager.shellBuffers[session.id] ?? []
+        let lines = liveState.shellBuffer
         let scrollSpaceName = "terminal-scroll-\(session.id.uuidString)"
 
         ScrollViewReader { proxy in

@@ -386,6 +386,7 @@ struct TerminalView: View {
             if includeSearch, !terminalOnly, terminalSearch.isPresented {
                 TerminalSearchBarView(
                     terminalSearch: terminalSearch,
+                    liveState: sessionManager.liveState(for: session.id),
                     focusFieldNonce: searchFocusNonce,
                     onHide: { hideSearchBar() },
                     onFocusChanged: { v in isSearchBarFocused = v }
@@ -399,6 +400,7 @@ struct TerminalView: View {
                     isFocused: isFocused,
                     paneID: paneID,
                     surfaceModel: model,
+                    liveState: sessionManager.liveState(for: session.id),
                     bellEffect: bellEffect,
                     resizeEffect: resizeEffect,
                     terminalSearch: terminalSearch,

@@ -220,7 +220,7 @@ import os.signpost
                 await engine.resize(newColumns: finalColumns, newRows: finalRows)
                 let snapshot = await engine.snapshot()
                 self.gridSnapshotsBySessionID[sessionID] = snapshot
-                manager.gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
+                manager.incrementSnapshotNonce(for: sessionID)
                 self.cachedScrollbackCountBySessionID[sessionID] = await engine.scrollbackCount
                 if wasUsingAlternateBuffer {
                     self.scrollOffsetBySessionID[sessionID] = 0
@@ -251,8 +251,8 @@ import os.signpost
             await engine.moveCursorTo(row: 0, col: 0)
             let snapshot = await engine.snapshot()
             self.gridSnapshotsBySessionID[sessionID] = snapshot
-            manager.gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
-            manager.shellBuffers[sessionID] = await engine.visibleText()
+            manager.incrementSnapshotNonce(for: sessionID)
+            manager.setShellBuffer(await engine.visibleText(), for: sessionID)
         }
     }
 
@@ -288,7 +288,7 @@ import os.signpost
             }
             let snapshot = await engine.snapshot(scrollOffset: newOffset)
             self.gridSnapshotsBySessionID[sessionID] = snapshot
-            manager.gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
+            manager.incrementSnapshotNonce(for: sessionID)
             self.publishScrollState(sessionID: sessionID, scrollOffset: newOffset, scrollbackCount: maxOffset)
         }
     }
@@ -317,7 +317,7 @@ import os.signpost
             }
             let snapshot = await engine.snapshot(scrollOffset: clampedRow)
             self.gridSnapshotsBySessionID[sessionID] = snapshot
-            manager.gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
+            manager.incrementSnapshotNonce(for: sessionID)
             self.publishScrollState(sessionID: sessionID, scrollOffset: clampedRow, scrollbackCount: maxOffset)
         }
     }
@@ -330,7 +330,7 @@ import os.signpost
             guard let self, let manager = self.manager else { return }
             let snapshot = await engine.snapshot()
             self.gridSnapshotsBySessionID[sessionID] = snapshot
-            manager.gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
+            manager.incrementSnapshotNonce(for: sessionID)
             let scrollbackCount = await engine.scrollbackCount
             self.cachedScrollbackCountBySessionID[sessionID] = scrollbackCount
             self.publishScrollState(sessionID: sessionID, scrollOffset: 0, scrollbackCount: scrollbackCount)
@@ -356,8 +356,8 @@ import os.signpost
         if didProcess {
             let snapshot = await engine.snapshot()
             gridSnapshotsBySessionID[sessionID] = snapshot
-            manager.gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
-            manager.shellBuffers[sessionID] = await engine.visibleText()
+            manager.incrementSnapshotNonce(for: sessionID)
+            manager.setShellBuffer(await engine.visibleText(), for: sessionID)
         }
     }
 
@@ -372,8 +372,8 @@ import os.signpost
         if didProcess {
             let snapshot = await engine.snapshot()
             gridSnapshotsBySessionID[sessionID] = snapshot
-            manager.gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
-            manager.shellBuffers[sessionID] = await engine.visibleText()
+            manager.incrementSnapshotNonce(for: sessionID)
+            manager.setShellBuffer(await engine.visibleText(), for: sessionID)
         }
     }
 
@@ -649,7 +649,7 @@ import os.signpost
         let housekeepingStart = TerminalPerf.now()
         defer { TerminalPerf.record(.publishHousekeeping, since: housekeepingStart) }
 
-        manager.gridSnapshotNonceBySessionID[sessionID, default: 0] += 1
+        manager.incrementSnapshotNonce(for: sessionID)
 
         publishScrollState(
             sessionID: sessionID,
@@ -701,7 +701,7 @@ import os.signpost
     private func applyVisibleLines(_ visibleLines: [String], for sessionID: UUID) async {
         guard let manager else { return }
         let visibleTextStart = TerminalPerf.now()
-        manager.shellBuffers[sessionID] = visibleLines
+        manager.setShellBuffer(visibleLines, for: sessionID)
         if let completedBlock = await manager.terminalHistoryIndex.observeVisibleLines(
             sessionID: sessionID,
             lines: visibleLines,
@@ -717,11 +717,11 @@ import os.signpost
     private func publishScrollState(sessionID: UUID, scrollOffset: Int, scrollbackCount: Int) {
         guard let manager else { return }
         let visibleRows = desiredPTYBySessionID[sessionID]?.rows ?? PTYConfiguration.default.rows
-        manager.setIfChanged(\.scrollStateBySessionID, sessionID, TerminalScrollState(
+        manager.setScrollState(TerminalScrollState(
             scrollOffset: scrollOffset,
             scrollbackCount: scrollbackCount,
             visibleRows: visibleRows
-        ))
+        ), for: sessionID)
     }
 
     // MARK: - Private helpers

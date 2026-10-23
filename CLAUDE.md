@@ -134,7 +134,7 @@ xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform
 ./scripts/benchmark-ssh.sh --host <hostname> --user <username>
 ```
 
-- **Toolchain: Xcode 27.0 (27A266a), Swift 6.4.** The Metal Toolchain component must be installed
+- **Toolchain: Xcode 27.1 (27A9275), Swift 6.4.** The Metal Toolchain component must be installed
   (`xcodebuild -showComponent metalToolchain`). Never exclude `TerminalShaders.metal` from a build;
   if the shader fails to compile, check the component first.
 - Test bundle: `ProSSHMacTests` — 5 files at the bundle root plus 60 in `ProSSHMacTests/Terminal/Tests/`,
@@ -153,14 +153,14 @@ xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform
   | Parser/grid, 2 MB (`--benchmark-base64`) | **36.4-37.3** | 2026-09-04 |
   | PTY -> `engine.feed` (`--pty-local`) | **19.20** | 2026-09-03 |
   | Real app path, 8 MB (`--render-detached`, **no window**, active app) | **20.07-20.91** | 2026-10-23, HEAD `d790452` |
-  | Real app path, 8 MB (`--render-detached`, **1280x800 window**, App Nap held) | **15.94-18.92** | 2026-10-23, R4a (1.74-2.11 before it) |
-  | Real app path, 8 MB (`--render`, **1280x800 window**, App Nap held), to sentinel | **4.21-7.76** | 2026-10-23, R4a (0.15-0.17 before it) |
+  | Real app path, 8 MB (`--render-detached`, **1280x800 window**, App Nap held) | **19.71-20.48** | 2026-10-23, R4b (16.50-18.15 before it) |
+  | Real app path, 8 MB (`--render`, **1280x800 window**, App Nap held), to sentinel | **12.30-13.89** | 2026-10-23, R4b (2.50-3.35 before it) |
   | Terminal.app (peer, with rendering, 8 MB) | **30.8-34.8** | 2026-10-23 (26.5 on 2026-09-03) |
 
   **The windowless figure is not the shipping path.** With a window, SwiftUI view updates
-  limit throughput, and Metal drawing costs only 2-5% of the main thread (R3c, R4a). R4a removed
-  the per-batch writes; `--render` is still SwiftUI-bound (~53% of the main thread) on the
-  per-publish nonce, which is RenderCost R4b. Window size (640x400 to 1480x893) makes no
+  limit throughput, and Metal drawing costs only 2-7% of the main thread (R3c–R4b). R4a removed
+  the per-batch writes; R4b moved the per-publish nonce, scroll and shell text to per-session
+  state. Window size (640x400 to 1480x893) makes no
   difference. Record `--render` **to sentinel**: "to settled" is currently a settle-wait timeout
   (see Benchmarks). **Read `Docs/RenderCost.md` "Measurement caveats" before trusting or
   recording any rendered number.**
@@ -202,6 +202,7 @@ ProSSHMac/
 ├── Services/             # SessionManager (+Queries, +CredentialPrompt) + 7 coordinators, TransferManager,
 │   │                     #   EncryptedStorage, PersistentStore, PortForwardingManager,
 │   │                     #   LocalPTYProcess, LocalShellBootstrap, LocalShellChannel,
+│   │                     #   SessionLiveState (per-session nonce, scroll and shell text),
 │   │                     #   ZshStartupWarningFilter, ShellIntegrationEchoFilter, SSHBinaryReader,
 │   │                     #   KeyForgeService, KeyStore, KnownHostsStore, CertificateStore,
 │   │                     #   CertificateAuthorityService (+3 ext) / Store, AuditLogManager/Store,
@@ -270,6 +271,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 | `Services/TerminalRenderingCoordinator.swift` | Snapshot publishing, scroll state, resize debounce, alt-buffer policy, shell-buffer throttle (1,066L). An ordinary publish is two engine calls (`publishViewportState`, then `publishSnapshot` carrying housekeeping) with MainActor scroll-anchor policy between them |
 | `UI/Terminal/TerminalView.swift` | Main terminal UI, sidebar layout, focus, input capture (1,060L). `sessionPanel` is the only place a session's terminal surface is built |
 | `Services/SessionManager.swift` + Queries | Session lifecycle, shell I/O, SFTP, grid snapshots (1,032L) |
+| `Services/SessionLiveState.swift` | Per-session observable snapshot nonce, scroll state and shell lines; output updates no longer notify every `SessionManager` observer |
 | `Services/SessionManager+CredentialPrompt.swift` | `CredentialPromptRequest`, `CredentialPromptHandling`; publishes `credentialPrompt` from the coordinator's wait, decline, `cancelCredentialPrompts` |
 | `UI/Terminal/CredentialPromptCardView.swift` | The password-prompt card above the composer: host, command, Enter password, Decline, reveal note |
 | `UI/Terminal/TerminalAIAssistantPane.swift` | AI copilot sidebar, composer, message rendering, pipe tables, credential card slot, Stop (1,039L) |
@@ -318,7 +320,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 - **Metal rendering**: demand-driven `MTKView` (`enableSetNeedsDisplay = true`, `isPaused = true`).
   `requiresContinuousFrames()` aggregates cursor lerp, smooth scroll, scanner, gradient animation;
   all redraw triggers go through `requestFrame()`. Dirty flag skips redundant draws.
-- **Grid snapshot flow**: `TerminalGrid.snapshot()` → `SessionManager` nonce++ → SwiftUI `.onChange` →
+- **Grid snapshot flow**: `TerminalGrid.snapshot()` → per-session `SessionLiveState` nonce++ → SwiftUI `.onChange` →
   `MetalTerminalRenderer.updateSnapshot()` → `isDirty = true`.
 - **Publish cadence** (`TerminalRenderingCoordinator`): snapshots every 8 ms normally, 16 ms in burst
   mode / alt buffer, 24 ms for prompt redraws, 40 ms during synchronized output. Burst mode turns on
@@ -481,9 +483,10 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
   held the windowed app at ~2 MB/s; removing them gave ~9x (R4a). Rules:
   - **Nothing per batch.** The byte counters are plain storage with one trailing
     `objectWillChange` per 250 ms (`scheduleTrafficPublish`); count other per-batch state the same way.
-  - **Per-publish state goes through `setIfChanged`** (input modes, scroll state, title, cwd).
-  - The snapshot nonce still fires once per publish and keeps `--render` SwiftUI-bound; R4b
-    moves it out. Don't add new `@Published` state there that changes while output streams.
+  - **Low-frequency metadata goes through `setIfChanged`** (input modes, title, cwd).
+    Scroll state goes through `setScrollState` to notify only that session's live state.
+  - The snapshot nonce fires once per publish on `SessionLiveState`, without notifying
+    `SessionManager` observers. Don't add `@Published` manager state that changes while output streams.
   Tests: the R4a cases in `SessionManagerRenderingPathTests`.
 - **`recordParsedChunk` runs once per 4 ms batch, not per raw chunk.** It is `@MainActor`; per-chunk
   it cost ~1290 hops per MB. Do not move it back into the accumulator loop.
@@ -570,10 +573,11 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 - **`--render` "to settled" is a timeout right now.** The renderer keeps drawing at ~30 fps after
   output stops (scanner and gradient off; cause unknown), so `waitForRendererSettled` hits its
   ~10.5 s cap. Report "to sentinel" for render mode. See `Docs/R4aBenchmarkResults.md`.
-- **Check `window: count=` in every render report.** R2a, R2b and R3a got zero windows; since
-  R3b every launch gets one, sandboxed or not (R3c refuted the sandbox lead; the old cause is
-  unknown). A windowless run measures ~10x faster than a windowed one and is not comparable to
-  it; the runner warns. There is no way to launch windowless now without a code change.
+- **Check `window: count=` in every render report.** R2a, R2b and R3a got zero windows;
+  R3b/R3c got one, but R4b again got zero from direct shell launches and occasionally two from
+  desktop launches. The cause is unknown. A windowless run measures about 10x faster than a
+  windowed one, and runs with different window counts are not comparable; the runner warns for
+  zero windows. Record the count with every number.
 - **A locked screen makes every launch inactive** (`lsappinfo front` reports `loginwindow`).
   Check it before a render benchmark. With the App Nap activity held, an inactive launch
   measures what an active one does (R3c), so record activation rather than discarding runs.
@@ -614,9 +618,10 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 |-----|---------|
 | `Docs/featurelist.md` | **Long-term memory** — dated work log, phase progress, loop-log entries |
 | `Docs/The big picture(October 2026).md` | **Planning input.** Code-verified ranked feature list (F0–F20: build order, value, size, spec name), competitor gap analysis re-checked 2026-10-23, source of Bugs 97–108. Start a new feature spec from its entry |
-| `Docs/RenderCost.md` | What rendering actually costs — R0–R2b, R3a–R3c **COMPLETE** (R2b validated 1.09-1.12x windowless; R3c: the windowed app is SwiftUI-bound, ~79% of the main thread, Metal 2.2%). **R4a COMPLETE** (~9x windowed). **R4b next** (per-session live state out of `SessionManager`), then R3d. Read its "Measurement caveats" sections before any perf measurement |
+| `Docs/RenderCost.md` | What rendering actually costs — R0–R2b, R3a–R3c and R4 **COMPLETE**. R4b isolates output-rate nonce, scroll and shell text in `SessionLiveState`; **R3d next**. Read its "Measurement caveats" sections before any perf measurement |
 | `Docs/R3cBenchmarkResults.md` | R3c evidence: windowed baseline tables, Time Profiler breakdowns, stage budgets, commands |
 | `Docs/R4aBenchmarkResults.md` | R4a evidence: interleaved windowed A/B, Time Profiler shares, stage budgets, the settle timeout, commands |
+| `Docs/R4bBenchmarkResults.md` | R4b evidence: valid one-window Release A/B, matching Time Profiler captures, reader audit and launch caveats |
 | `Docs/R2bBenchmarkResults.md` | R2b A/B evidence: exact commands and all raw reports for the six baseline/candidate pairs |
 | `Docs/CredentialPrompt.md` | Password prompts (sudo, su, ssh, passphrase, device `enable`) pause the awaited tool call with a card in the chat; the user types in the terminal, nothing is recorded, Decline Ctrl+Cs and tells the model. Replaced the prompt's SUDO rules and the `apply_patch` sudo dance — **COMPLETE** (Phases 0–4, validated live 2026-10-18; a device `enable` password not yet seen live) |
 | `Docs/NetworkCopilot.md` | **Active.** Copilot reaches every open session, one memory per chat, a router/switch command path, and user skills (`load_skill`). Phases 1–6 done; Phase 7 (live validation) in progress, with its with/without-skills results. Read its "Design rules" before adding any rule to the developer prompt |
@@ -777,17 +782,15 @@ oversubscription, not the publish cadence. Leave the cadence alone and don't rev
 `@Published` writes, per-publish state written only on change. Windowed 1280x800: detached
 1.74-2.11 → 15.94-18.92 MB/s, render 0.15-0.17 → 4.21-7.76 to sentinel.
 
-**Next: `Docs/RenderCost.md` Phase R4b — per-session live state out of `SessionManager`.**
-Render mode is still SwiftUI-bound: the main thread is ~52% busy, 53% of it SwiftUI
-transactions, from one transaction per publish (snapshot nonce, plus scroll state while
-scrollback grows) re-running every `@EnvironmentObject SessionManager` view. Give the nonce,
-scroll state and `shellBuffers` a per-session observable (`MetalTerminalSurfaceModel` or a
-`SessionLiveState`), keep the nonce → `.onChange` → `updateSnapshot()` contract and the Bug 84
-surface-model rules, and audit what each observing view reads. Read R4's "Don't" list. Plan
-mode first; it's a code phase. Measure the same way as R4a: interleaved windowed A/B with a
-Time Profiler capture each (the scratch `run.sh`/`prof.sh` are described in its Commands).
-`scripts/benchmark-throughput.sh` runs `pkill -9 -x ProSSHMac` first, which kills the user's own
-app and sessions; launch the bundle by hand.
+**RenderCost R4b is done** (2026-10-23, `Docs/R4bBenchmarkResults.md`): output-rate nonce,
+scroll state and shell lines live in a manager-owned `SessionLiveState` per session. The Metal
+surface retains its nonce-driven snapshot update; scrollbar and search observe their own live
+values. Valid one-window Release pairs at 1280×800: detached 16.50–18.15 → 19.71–20.48 MB/s,
+rendered 2.50–3.35 → 12.30–13.89 MB/s to sentinel. Matching one-window Time Profiler captures
+show main-thread busy time 73.3% → 44.5%. A second rendered pair had two candidate windows and
+was excluded. **Next performance phase: R3d**, measuring App Nap on a real hidden window.
+`scripts/benchmark-throughput.sh` runs `pkill -9 -x ProSSHMac`, which kills the user's own app
+and sessions; launch the bundle by hand.
 
 **Open finding from R4a:** after output stops, the renderer keeps drawing at ~30 fps for at
 least ~10 s (scanner and gradient off), so `--render` "to settled" is a timeout. Before

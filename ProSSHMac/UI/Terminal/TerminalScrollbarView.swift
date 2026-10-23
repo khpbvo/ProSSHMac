@@ -9,7 +9,8 @@ import SwiftUI
 
 struct TerminalScrollbarView: View {
     let sessionID: UUID
-    @ObservedObject var sessionManager: SessionManager
+    let sessionManager: SessionManager
+    let liveState: SessionLiveState
 
     /// Track height for thumb position calculations.
     private let trackInset: CGFloat = 4
@@ -22,9 +23,10 @@ struct TerminalScrollbarView: View {
     @State private var thumbOpacity: Double = 0
     @State private var hideTask: Task<Void, Never>?
     @State private var isDragging: Bool = false
+    @State private var observedScrollState = TerminalScrollState()
 
     private var scrollState: TerminalScrollState {
-        sessionManager.scrollStateBySessionID[sessionID] ?? TerminalScrollState()
+        observedScrollState
     }
 
     private var totalRows: Int {
@@ -86,6 +88,11 @@ struct TerminalScrollbarView: View {
                 return
             }
             revealTemporarily()
+        }
+        .onReceive(liveState.$scrollState) { newState in
+            if observedScrollState != newState {
+                observedScrollState = newState
+            }
         }
     }
 

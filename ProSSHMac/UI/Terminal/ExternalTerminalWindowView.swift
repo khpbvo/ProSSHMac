@@ -102,14 +102,14 @@ struct ExternalTerminalWindowView: View {
 
     @ViewBuilder
     private func terminalSurface(for session: Session) -> some View {
-        let snapshotNonce = sessionManager.gridSnapshotNonceBySessionID[session.id, default: 0]
+        let liveState = sessionManager.liveState(for: session.id)
 
         if useMetalRenderer, MTLCreateSystemDefaultDevice() != nil {
             MetalTerminalSessionSurface(
                 model: surfaceModels.model(for: session.id),
+                liveState: liveState,
                 sessionID: session.id,
                 snapshotProvider: { sessionManager.gridSnapshot(for: session.id) },
-                snapshotNonce: snapshotNonce,
                 fontSize: terminalUIFontSize,
                 fontFamily: terminalUIFontFamily,
                 backgroundOpacityPercent: terminalBackgroundOpacityPercent,
@@ -137,7 +137,7 @@ struct ExternalTerminalWindowView: View {
                     sessionManager.cachedScrollbackCount(for: session.id)
                 },
                 scrollOffsetProvider: {
-                    sessionManager.scrollStateBySessionID[session.id]?.scrollOffset ?? 0
+                    liveState.scrollState.scrollOffset
                 }
             )
             .id(session.id)
@@ -149,7 +149,8 @@ struct ExternalTerminalWindowView: View {
             .overlay(alignment: .trailing) {
                 TerminalScrollbarView(
                     sessionID: session.id,
-                    sessionManager: sessionManager
+                    sessionManager: sessionManager,
+                    liveState: liveState
                 )
             }
             .overlay {

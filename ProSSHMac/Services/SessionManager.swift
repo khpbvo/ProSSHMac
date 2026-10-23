@@ -27,10 +27,10 @@ enum SessionConnectionError: LocalizedError {
 @MainActor
 final class SessionManager: ObservableObject {
     @Published private(set) var sessions: [Session] = []
-    @Published var shellBuffers: [UUID: [String]] = [:]
+    var shellBuffers: [UUID: [String]] = [:]
     @Published var bellEventNonceBySessionID: [UUID: Int] = [:]
     @Published var inputModeSnapshotsBySessionID: [UUID: InputModeSnapshot] = [:]
-    @Published var gridSnapshotNonceBySessionID: [UUID: Int] = [:]
+    var gridSnapshotNonceBySessionID: [UUID: Int] = [:]
     @Published var windowTitleBySessionID: [UUID: String] = [:]
     @Published private(set) var knownHosts: [KnownHostEntry] = []
     @Published var isRecordingBySessionID: [UUID: Bool] = [:]
@@ -45,7 +45,8 @@ final class SessionManager: ObservableObject {
     var bytesSentBySessionID: [UUID: Int64] = [:] { didSet { scheduleTrafficPublish() } }
     @Published var latestCompletedCommandBlockBySessionID: [UUID: CommandBlock] = [:]
     @Published var commandCompletionNonceBySessionID: [UUID: Int] = [:]
-    @Published var scrollStateBySessionID: [UUID: TerminalScrollState] = [:]
+    var scrollStateBySessionID: [UUID: TerminalScrollState] = [:]
+    private var liveStatesBySessionID: [UUID: SessionLiveState] = [:]
     /// The copilot command waiting at a password prompt, if any. See SessionManager+CredentialPrompt.
     @Published var credentialPrompt: CredentialPromptRequest?
 
@@ -109,6 +110,39 @@ final class SessionManager: ObservableObject {
     ) {
         guard self[keyPath: keyPath][sessionID] != value else { return }
         self[keyPath: keyPath][sessionID] = value
+    }
+
+    func liveState(for sessionID: UUID) -> SessionLiveState {
+        if let state = liveStatesBySessionID[sessionID] { return state }
+        let state = SessionLiveState(
+            snapshotNonce: gridSnapshotNonceBySessionID[sessionID] ?? 0,
+            scrollState: scrollStateBySessionID[sessionID] ?? TerminalScrollState(),
+            shellBuffer: shellBuffers[sessionID] ?? []
+        )
+        liveStatesBySessionID[sessionID] = state
+        return state
+    }
+
+    func incrementSnapshotNonce(for sessionID: UUID) {
+        let next = (gridSnapshotNonceBySessionID[sessionID] ?? 0) + 1
+        gridSnapshotNonceBySessionID[sessionID] = next
+        liveState(for: sessionID).setSnapshotNonce(next)
+    }
+
+    func setSnapshotNonce(_ value: Int, for sessionID: UUID) {
+        gridSnapshotNonceBySessionID[sessionID] = value
+        liveState(for: sessionID).setSnapshotNonce(value)
+    }
+
+    func setScrollState(_ value: TerminalScrollState, for sessionID: UUID) {
+        guard scrollStateBySessionID[sessionID] != value else { return }
+        scrollStateBySessionID[sessionID] = value
+        liveState(for: sessionID).setScrollState(value)
+    }
+
+    func setShellBuffer(_ value: [String], for sessionID: UUID) {
+        shellBuffers[sessionID] = value
+        liveState(for: sessionID).setShellBuffer(value)
     }
 
     init(
@@ -203,8 +237,8 @@ final class SessionManager: ObservableObject {
         renderingCoordinator.initializePTY(for: sessionID)
 
         renderingCoordinator.gridSnapshotsBySessionID[sessionID] = await engine.snapshot()
-        gridSnapshotNonceBySessionID[sessionID] = 0
-        shellBuffers[sessionID] = []
+        setSnapshotNonce(0, for: sessionID)
+        setShellBuffer([], for: sessionID)
         bellEventNonceBySessionID[sessionID] = 0
         inputModeSnapshotsBySessionID[sessionID] = await engine.inputModeSnapshot()
         isRecordingBySessionID[sessionID] = false
@@ -354,8 +388,8 @@ final class SessionManager: ObservableObject {
         renderingCoordinator.initializePTY(for: sessionID)
 
         renderingCoordinator.gridSnapshotsBySessionID[sessionID] = await engine.snapshot()
-        gridSnapshotNonceBySessionID[sessionID] = 0
-        shellBuffers[sessionID] = []
+        setSnapshotNonce(0, for: sessionID)
+        setShellBuffer([], for: sessionID)
         bellEventNonceBySessionID[sessionID] = 0
         inputModeSnapshotsBySessionID[sessionID] = await engine.inputModeSnapshot()
         isRecordingBySessionID[sessionID] = false
@@ -938,6 +972,7 @@ final class SessionManager: ObservableObject {
         shellChannels.removeValue(forKey: sessionID)
         engines.removeValue(forKey: sessionID)
         shellBuffers.removeValue(forKey: sessionID)
+        liveStatesBySessionID.removeValue(forKey: sessionID)
         bellEventNonceBySessionID.removeValue(forKey: sessionID)
         inputModeSnapshotsBySessionID.removeValue(forKey: sessionID)
         gridSnapshotNonceBySessionID.removeValue(forKey: sessionID)
@@ -1054,7 +1089,7 @@ final class SessionManager: ObservableObject {
             engines[session.id] = engine
 
             renderingCoordinator.initializePTY(for: session.id)
-            shellBuffers[session.id] = []
+            setShellBuffer([], for: session.id)
             bellEventNonceBySessionID[session.id] = 0
             isRecordingBySessionID[session.id] = false
             hasRecordingBySessionID[session.id] = false
@@ -1073,9 +1108,9 @@ final class SessionManager: ObservableObject {
 
             let snapshot = await engine.snapshot()
             renderingCoordinator.gridSnapshotsBySessionID[session.id] = snapshot
-            gridSnapshotNonceBySessionID[session.id] = 1
+            setSnapshotNonce(1, for: session.id)
             inputModeSnapshotsBySessionID[session.id] = await engine.inputModeSnapshot()
-            shellBuffers[session.id] = await engine.visibleText()
+            setShellBuffer(await engine.visibleText(), for: session.id)
         }
     }
 }

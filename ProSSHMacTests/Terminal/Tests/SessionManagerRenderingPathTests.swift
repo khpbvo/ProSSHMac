@@ -1058,9 +1058,10 @@ final class SessionManagerRenderingPathTests: XCTestCase {
         XCTAssertNotNil(manager.workingDirectoryBySessionID[session.id])
 
         var emissions: [String: Int] = [:]
+        let liveState = manager.liveState(for: session.id)
         let subscriptions = [
             manager.$inputModeSnapshotsBySessionID.dropFirst().sink { _ in emissions["inputModes", default: 0] += 1 },
-            manager.$scrollStateBySessionID.dropFirst().sink { _ in emissions["scrollState", default: 0] += 1 },
+            liveState.$scrollState.dropFirst().sink { _ in emissions["scrollState", default: 0] += 1 },
             manager.$windowTitleBySessionID.dropFirst().sink { _ in emissions["title", default: 0] += 1 },
             manager.$workingDirectoryBySessionID.dropFirst().sink { _ in emissions["cwd", default: 0] += 1 },
         ]
@@ -1075,6 +1076,43 @@ final class SessionManagerRenderingPathTests: XCTestCase {
         await coordinator.publishGridState(for: session.id, engine: engine)
         XCTAssertEqual(emissions, ["title": 1])
         XCTAssertEqual(manager.windowTitleBySessionID[session.id], "R4A_TITLE_2")
+    }
+
+    @MainActor
+    func testLiveOutputOnlyPublishesToItsSession() {
+        let manager = SessionManager(
+            transport: MockSSHTransport(),
+            knownHostsStore: InMemoryKnownHostsStore()
+        )
+        let first = UUID()
+        let second = UUID()
+        let firstState = manager.liveState(for: first)
+        let secondState = manager.liveState(for: second)
+        var managerEmissions = 0
+        var firstEmissions = 0
+        var secondEmissions = 0
+        let subscriptions = [
+            manager.objectWillChange.sink { managerEmissions += 1 },
+            firstState.objectWillChange.sink { firstEmissions += 1 },
+            secondState.objectWillChange.sink { secondEmissions += 1 },
+        ]
+        defer { subscriptions.forEach { $0.cancel() } }
+
+        manager.incrementSnapshotNonce(for: first)
+        manager.setScrollState(TerminalScrollState(scrollOffset: 1), for: first)
+        manager.setShellBuffer(["first"], for: first)
+
+        XCTAssertEqual(managerEmissions, 0)
+        XCTAssertEqual(firstEmissions, 3)
+        XCTAssertEqual(secondEmissions, 0)
+        XCTAssertEqual(firstState.snapshotNonce, 1)
+        XCTAssertEqual(firstState.scrollState.scrollOffset, 1)
+        XCTAssertEqual(firstState.shellBuffer, ["first"])
+        XCTAssertEqual(secondState.snapshotNonce, 0)
+
+        manager.setScrollState(TerminalScrollState(scrollOffset: 1), for: first)
+        manager.setShellBuffer(["first"], for: first)
+        XCTAssertEqual(firstEmissions, 3, "Unchanged state must not emit a redundant view update")
     }
 
     @MainActor

@@ -4,15 +4,18 @@
 in every interleaved pair (instrumentation off, active app, no window). The "bimodal"
 variability was App Nap on inactive benchmark processes plus CPU oversubscription. See
 "Measurement caveats found in R2b". R3a (render benchmarks prevent App Nap) is done. R3b
-(2026-10-23) found that window acquisition works from an unsandboxed shell, and that **a
+(2026-10-23) found that window acquisition worked from its shell, and that **a
 window makes the real app path about 10x slower even when nothing is drawn** (~2 MB/s
 detached against ~20 windowless). **R3c (2026-10-23) found why:** with a window, SwiftUI
 view-graph updates take ~79% of a saturated main thread, because every output batch and publish
 writes `@Published` state on `SessionManager`; Metal drawing is 2.2%. Windowed baseline at
 1280x800: detached 1.75-2.08, render 0.14-0.16 MB/s, independent of window size; Terminal.app
 30.8-34.8. **R4a (2026-10-23) stopped the per-batch and unchanged `@Published` writes:** windowed
-detached 1.74-2.11 → 15.94-18.92 MB/s, render 0.15-0.17 → 4.21-7.76 to sentinel. Render is still
-SwiftUI-bound on the per-publish nonce. **R4b is next**; R3d follows.
+detached 1.74-2.11 → 15.94-18.92 MB/s, render 0.15-0.17 → 4.21-7.76 to sentinel.
+**R4b** moved the per-publish nonce and other live terminal state to a per-session observable.
+Its shell launches again reported zero windows; desktop launches produced one or sometimes two,
+so every R4b comparison checked `window: count=`. **R3d is next.** See
+`Docs/R4bBenchmarkResults.md` for the valid one-window A/B and profile evidence.
 
 `FasterThenYouWillEverLiveToBe` ended by retargeting throughput at Terminal.app's **26.5 MB/s**.
 That peer figure was measured **with rendering**; ProSSHMac's **17.97 MB/s** was measured **without**
@@ -51,8 +54,10 @@ None of that was measured by any existing benchmark.
 | `Services/SessionShellIOCoordinator.swift` | Benchmark-gated sentinel tap |
 | `App/AppDependencies.swift` | Launches the rendered benchmark once the UI is up |
 | `scripts/benchmark-throughput.sh` | `--render`, `--render-detached` |
-| `Services/SessionManager.swift` | R4a: plain byte counters with a coalesced publish, `setIfChanged` |
-| `Services/TerminalRenderingCoordinator.swift` | R4a: input modes, scroll state, title and cwd written only on change |
+| `Services/SessionManager.swift` | R4a: plain byte counters with a coalesced publish; R4b: manager-owned per-session live states |
+| `Services/SessionLiveState.swift` | R4b: observable nonce, scroll state and shell lines scoped to one session |
+| `Services/TerminalRenderingCoordinator.swift` | R4a: input modes, scroll state, title and cwd written only on change; R4b: nonce, scroll and shell lines sent to the live state |
+| `UI/Terminal/` surface, scrollbar and search views | R4b: observe only the session's live state and retain the nonce-driven snapshot path |
 
 ---
 
@@ -391,7 +396,7 @@ None of that was measured by any existing benchmark.
   - **Activation makes no difference while the App Nap activity is held**: inactive launches
     measured what active ones did. The user worked in other apps for most of 1b and 2.
   - **The sandbox lead from R3b is refuted**: a launch from Claude Code's sandboxed shell got a
-    window as well. No windowless launch exists without a code change.
+    window as well. R4b later reproduced zero-window launches from its shell; check each report.
   - **Attribution (Time Profiler, both windowed modes):** the main thread is 100% busy, and about
     78-79% of it is SwiftUI view-graph updates (`NSHostingView.beginTransaction` →
     `GraphHost.flushTransactions`). That covers view bodies (36% detached, 29% render), a
@@ -408,7 +413,7 @@ None of that was measured by any existing benchmark.
     (~21x, 2.0 s) are timed around awaits that include **waiting for the main thread**, not
     work. Ground parse stayed at 99.4% CPU/elapsed.
 
-- [ ] **Phase R4: High-frequency terminal state stops invalidating SwiftUI views**
+- [x] **Phase R4: High-frequency terminal state stops invalidating SwiftUI views**
   (proposed by R3c; split R4a/R4b, one session each)
 
   **Goal.** Output streaming must not re-run views that don't show the changed value. Target:
@@ -446,13 +451,17 @@ None of that was measured by any existing benchmark.
        (add `Equatable` where a type lacks it).
     3. Measure: interleaved windowed A/B (HEAD vs candidate, 1280x800, detached and render) plus
        one Time Profiler capture each. Report the main thread's SwiftUI share, not just MB/s.
-  - **R4b: per-session live state out of `SessionManager.objectWillChange` (structural).**
-    The snapshot nonce, scroll state and `shellBuffers` change at publish cadence. Give them a
-    per-session observable (the surface model `MetalTerminalSurfaceModel`, or a small
-    `SessionLiveState`), so only the surface, scrollbar and search views observe them. The
-    nonce feeds `.onChange` → `MetalTerminalRenderer.updateSnapshot()` today, so keep that
-    contract and the Bug 84 surface-model rules. Audit each `@EnvironmentObject`
-    `SessionManager` view for what it actually reads.
+  - [x] **R4b: per-session live state out of `SessionManager.objectWillChange` (structural).**
+    Done 2026-10-23. `SessionLiveState` holds the snapshot nonce, scroll state and shell text
+    for each session. The surface, scrollbar and open search bar subscribe to the values they
+    use; manager observers no longer update at snapshot cadence. The nonce still drives the
+    Metal surface's `.onChange` → snapshot application path, and Bug 84's per-window renderer
+    ownership is unchanged. Readers and lifecycle are audited in `Docs/R4bBenchmarkResults.md`.
+    In valid 1280×800 one-window Release pairs, detached rose from 16.50–18.15 to
+    19.71–20.48 MB/s; rendered rose from 2.50–3.35 to 12.30–13.89 MB/s to sentinel.
+    A pair with two candidate windows was excluded. Matching one-window Time Profiler captures
+    showed main-thread busy time 73.3% → 44.5%, with transaction samples taking 26.1% → 9.0%
+    of wall time. The terminal's persistent ~30 fps after output remains open.
   - **Don't:** lengthen the publish cadence or batch window to hide this (R2b's lesson), or
     move the history-index/chunk work off the MainActor before the SwiftUI cost is gone. The
     profile says that work is under 2% of the main thread.

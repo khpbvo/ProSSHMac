@@ -1,8 +1,10 @@
 // Extracted from TerminalView.swift
 import SwiftUI
+import Combine
 
 struct TerminalSearchBarView: View {
     @ObservedObject var terminalSearch: TerminalSearch
+    let liveState: SessionLiveState
     let focusFieldNonce: Int
     var onHide: () -> Void
     var onFocusChanged: (Bool) -> Void
@@ -82,6 +84,7 @@ struct TerminalSearchBarView: View {
         )
         .onChange(of: focusFieldNonce) { _, _ in isFieldFocused = true }
         .onChange(of: isFieldFocused) { _, v in onFocusChanged(v) }
+        .onReceive(liveState.$shellBuffer.dropFirst()) { lines in terminalSearch.updateLines(lines) }
     }
 
     private var searchQueryBinding: Binding<String> {
