@@ -13,8 +13,11 @@
 //   --benchmark-render            terminal visible, Metal surface attached
 //   --benchmark-render-detached   same path, parked on .hosts so nothing renders
 //   --benchmark-window WxH        force the window frame (results scale with it)
+//   --benchmark-allow-app-nap     measure the napped regime on purpose
 //
-// The delta between the two is the cost of rendering.
+// The delta between the two is the cost of rendering. Both modes prevent App Nap
+// by default: an inactive windowless process is napped and measures ~4x slower
+// at ~3x the CPU per byte, with nothing in the numbers to say so.
 
 import AppKit
 import Foundation
@@ -37,6 +40,16 @@ extension ThroughputBenchmarkRunner {
     static var isRenderDetached: Bool {
         ProcessInfo.processInfo.arguments.contains("--benchmark-render-detached")
     }
+
+    /// False only with `--benchmark-allow-app-nap`. A direct binary launch is never
+    /// the active app, and an `open -n` launch stops being one when the user
+    /// switches apps; either way App Nap would apply.
+    static func preventsAppNap(arguments: [String] = ProcessInfo.processInfo.arguments) -> Bool {
+        !arguments.contains("--benchmark-allow-app-nap")
+    }
+
+    /// Held until the process exits. A user-initiated activity disables App Nap.
+    private static var renderActivity: NSObjectProtocol?
 
     // MARK: - Sentinel tap
 
@@ -96,10 +109,18 @@ extension ThroughputBenchmarkRunner {
         let config = renderConfigurationFromArgs()
         let detached = isRenderDetached
         let label = detached ? "render-detached" : "render"
+        let napPrevented = preventsAppNap()
+        if napPrevented {
+            renderActivity = ProcessInfo.processInfo.beginActivity(
+                options: .userInitiated,
+                reason: "ProSSHMac throughput benchmark"
+            )
+        }
 
         emit("==> ProSSHMac Rendered End-to-End Benchmark")
         emit("    mode=\(label) kilobytes=\(config.kilobytes) runs=\(config.runs)")
         emit("    signposts/stage-timers: \(TerminalPerf.isEnabled ? "ENABLED" : "off")")
+        emit("    app nap: \(napPrevented ? "prevented (activity held)" : "ALLOWED (--benchmark-allow-app-nap)")")
         emit("")
 
         // The window must be key and large enough to hold a real grid:
@@ -221,8 +242,9 @@ extension ThroughputBenchmarkRunner {
 
         let bytesBefore = sessionManager.bytesReceivedBySessionID[sessionID] ?? 0
         TerminalPerf.reset()
-        if TerminalSchedulingDiagnostics.isEnabled {
-            emit("  process before: active=\(NSApp.isActive) thermal=\(ProcessInfo.processInfo.thermalState.rawValue) lowPower=\(ProcessInfo.processInfo.isLowPowerModeEnabled)")
+        emit("  process before: active=\(NSApp.isActive) thermal=\(ProcessInfo.processInfo.thermalState.rawValue) lowPower=\(ProcessInfo.processInfo.isLowPowerModeEnabled)")
+        if !NSApp.isActive && !preventsAppNap() {
+            emit("  WARNING: inactive with App Nap allowed — this run measures the napped regime.")
         }
         let start = CFAbsoluteTimeGetCurrent()
 
@@ -243,9 +265,7 @@ extension ThroughputBenchmarkRunner {
         let bytesAfter = sessionManager.bytesReceivedBySessionID[sessionID] ?? 0
         let totalBytes = max(0, bytesAfter - bytesBefore)
 
-        if TerminalSchedulingDiagnostics.isEnabled {
-            emit("  process after: active=\(NSApp.isActive) thermal=\(ProcessInfo.processInfo.thermalState.rawValue) lowPower=\(ProcessInfo.processInfo.isLowPowerModeEnabled)")
-        }
+        emit("  process after: active=\(NSApp.isActive) thermal=\(ProcessInfo.processInfo.thermalState.rawValue) lowPower=\(ProcessInfo.processInfo.isLowPowerModeEnabled)")
         let budget = TerminalPerf.report(title: detached ? "render-detached" : "render",
                                          wallSeconds: settledElapsed)
 

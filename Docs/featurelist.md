@@ -232,6 +232,11 @@ Current AI architecture (2026-09-25): the assistant uses OpenRouter Chat Complet
 
 ## Loop Log
 
+- 2026-10-23: **RenderCost R3a: render benchmarks prevent App Nap** (`App/ThroughputBenchmarkRunner+Render.swift`, `ProSSHMacTests/ThroughputBenchmarkRunnerTests.swift`, `scripts/benchmark-throughput.sh`, `Docs/RenderCost.md`). Added phases R3a–R3d to the spec.
+  - Both render modes hold a user-initiated `ProcessInfo` activity, and `--benchmark-allow-app-nap` opts out. The header prints `app nap:`, every run prints `process before/after: active=` (no longer gated on `--perf-scheduling`), and an inactive run with App Nap allowed gets a WARNING.
+  - Release, windowless, two alternating rounds: direct launch (inactive) 20.02-21.34 MB/s with ground CPU 217.7-226.3 ms; opt-out 2.20-5.81 MB/s; `open -n` 20.40-20.88.
+  - Parser and PTY-local modes measured the same with App Nap on and off (35.0-35.6 / 18.1-18.5 MB/s), so they're unchanged.
+  - Debug build and `ThroughputBenchmarkRunnerTests` 8/8 (2 new) passed. Next: R3b, window acquisition.
 - 2026-10-23: **RenderCost R2b validated and closed; the throughput "bimodality" was App Nap plus CPU oversubscription** (`Docs/RenderCost.md`, `Docs/R2bBenchmarkResults.md` "2026-10-23 follow-up"). These were the first `--perf-scheduling` runs. Release builds of `af933f4`, `c685d73` (R2b) and HEAD `d790452` on an M1 Max with macOS 26.6.2, all windowless.
   - **Quiet machine:** 18 HEAD runs over six launches all at 20.07-20.91 MB/s, ground-text CPU/elapsed 99.4%.
   - **R2b A/B** (four interleaved pairs, instrumentation off): **1.09-1.12x** in every pair, with non-overlapping ranges (18.11-18.69 vs 19.88-20.76 MB/s). HEAD vs `af933f4`: 1.07-1.13x.

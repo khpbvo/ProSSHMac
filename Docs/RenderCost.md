@@ -3,8 +3,8 @@
 **Status:** R0, R1, R2a and R2b complete. R2b was validated on 2026-10-23: **1.09-1.12x**
 in every interleaved pair (instrumentation off, active app, no window). The "bimodal"
 variability was App Nap on inactive benchmark processes plus CPU oversubscription. See
-"Measurement caveats found in R2b". Window acquisition is still broken, so there is still
-no rendered figure.
+"Measurement caveats found in R2b". R3a (render benchmarks prevent App Nap) is done; R3b
+(window acquisition), R3c and R3d are open, so there is still no rendered figure.
 
 `FasterThenYouWillEverLiveToBe` ended by retargeting throughput at Terminal.app's **26.5 MB/s**.
 That peer figure was measured **with rendering**; ProSSHMac's **17.97 MB/s** was measured **without**
@@ -309,6 +309,50 @@ None of that was measured by any existing benchmark.
   eliminating it. Targeted suites: `SessionManagerRenderingPathTests`, `TerminalPerfTests`,
   `TerminalHistoryIndexTests`, `ThroughputBenchmarkRunnerTests`.
 
+- [x] **Phase R3a: Render benchmarks are immune to App Nap and always report activation**
+
+  **Done 2026-10-23.** Release, windowless, 8 MiB, 3 runs per launch, load 2.2-2.9,
+  alternating launches over two rounds:
+
+  | Launch | active | MB/s to sentinel |
+  |---|---|---|
+  | Direct binary, default (activity held) | false | 20.02-21.34 |
+  | Direct binary, `--benchmark-allow-app-nap` | false | 2.20-5.81, WARNING on every run |
+  | `open -n`, default | true | 20.40-20.88 |
+
+  A default direct launch with `--perf-scheduling` used 217.7-226.3 ms of ground CPU
+  (98.6-98.8% of elapsed), the same as an active app. `.userInitiated` was enough, so
+  `.latencyCritical` was not needed. `ThroughputBenchmarkRunnerTests` 8/8.
+
+  An inactive windowless render run is napped and measures ~5 MB/s instead of ~20, with no
+  sign in the report unless `--perf-scheduling` is on. The parser (`--benchmark-base64`) and
+  PTY-local modes are **not** affected: measured with App Nap on and off on 2026-10-23, they
+  gave 35.0-35.6 / 18.1-18.5 MB/s either way, since they exit before the UI starts.
+  `ThroughputBenchmarkRunner+Render` holds a `ProcessInfo` activity for the whole benchmark
+  (opt out with `--benchmark-allow-app-nap` to measure the napped regime on purpose). It
+  prints the activity state in the header and `active=` on every run, whatever the
+  instrumentation. Verify: a direct binary launch (always inactive) measures what an
+  `open -n` launch does, and the opt-out reproduces ~5 MB/s.
+
+- [ ] **Phase R3b: Root-cause and fix window acquisition under `open -n --args`**
+
+  `open -n App.app` restores a window; `open -n App.app --args <anything>` yields
+  `NSApp.windows.count == 0`. Find out why before changing anything (state restoration,
+  `WindowGroup` launch handling, the `-NS*` argument domain). Then make `--benchmark-render`
+  get a real 1280x800 key window.
+
+- [ ] **Phase R3c: First windowed baseline** (needs R3b)
+
+  Interleaved, active, App Nap held: `--render` vs `--render-detached` (the rendering delta),
+  window-size scaling (at least 800x500 / 1280x800 / 2560x1440), and the Terminal.app peer
+  comparison via `benchmark-peer-emulator.sh`. Update the CLAUDE.md baseline table.
+
+- [ ] **Phase R3d: Does App Nap slow a real hidden window?** (needs R3b)
+
+  Measure a windowed session streaming output while the window is visible, occluded,
+  minimized and hidden, active and inactive. Only if a hidden session's output falls behind,
+  propose holding an activity while output streams (the user decides; it costs energy).
+
 ---
 
 ## Results (Release, 2026-09-03, 1 MB payload, `/bin/sh`)
@@ -397,9 +441,11 @@ The figure measures how fast the app drains that backlog.
 **App Nap decides the regime for windowless runs.** An inactive process with no visible
 window is napped and digests output about 3.6x slower: ~5 MB/s against ~20, with about 3x
 the CPU time for the same ground-text work. A direct binary launch is always inactive. An
-`open -n` launch is active until the user switches apps. Run with `--perf-scheduling` and
-check `process before/after: active=` in the report. To measure inactive on purpose, or to
-rule App Nap out, pass `-NSAppSleepDisabled YES`. Never compare across regimes.
+`open -n` launch is active until the user switches apps. **Since R3a, both render modes
+prevent App Nap by default.** The report prints `app nap:` in its header and
+`process before/after: active=` on every run. To measure the napped regime on purpose, pass
+`--benchmark-allow-app-nap`. Runs before R3a that recorded no activation state may be napped;
+never compare across regimes.
 
 **Oversubscription preempts the parser mid-work.** With more runnable threads than cores,
 the CPU/elapsed ratio around synchronous ground-text work falls (4.5% at load 14) and a run

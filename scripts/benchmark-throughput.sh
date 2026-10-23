@@ -23,6 +23,10 @@
 # Always record the window size and the signpost state alongside any rendered
 # number — see docs/RenderCost.md.
 #
+# Render modes prevent App Nap (an inactive process measures ~4x slower). To
+# measure the napped regime on purpose:
+#   --benchmark-allow-app-nap     (forwarded to the app; render modes only)
+#
 # The build configuration defaults to Debug so that historical numbers in
 # docs/Optimization.md stay reproducible. Every recorded measurement must state
 # which configuration it came from — see docs/FasterThenYouWillEverLiveToBe.md.

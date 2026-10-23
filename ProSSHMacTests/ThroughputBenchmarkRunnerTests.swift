@@ -51,6 +51,22 @@ final class ThroughputBenchmarkRunnerTests: XCTestCase {
         XCTAssertFalse(ThroughputBenchmarkRunner.isEnabled)
     }
 
+    /// An inactive windowless render run is napped and measures ~4x slower, so
+    /// the benchmark prevents App Nap unless told otherwise.
+    @MainActor
+    func testRenderBenchmarkPreventsAppNapByDefault() {
+        XCTAssertTrue(ThroughputBenchmarkRunner.preventsAppNap(
+            arguments: ["ProSSHMac", "--benchmark-render-detached"]
+        ))
+    }
+
+    @MainActor
+    func testAllowAppNapFlagOptsOut() {
+        XCTAssertFalse(ThroughputBenchmarkRunner.preventsAppNap(
+            arguments: ["ProSSHMac", "--benchmark-render-detached", "--benchmark-allow-app-nap"]
+        ))
+    }
+
     /// The sentinel tap sits on the real reader path, so it runs for every PTY
     /// chunk in a normal session. Unarmed it must do nothing at all.
     @MainActor
