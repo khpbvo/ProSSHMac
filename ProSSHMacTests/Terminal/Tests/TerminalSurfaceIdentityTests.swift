@@ -33,6 +33,29 @@ final class TerminalSurfaceIdentityTests: XCTestCase {
     }
 
     @MainActor
+    func testShortHorizontalSplitKeepsMetalViewsInsideTheirPanes() async throws {
+        let harness = try await SurfaceHarness.make()
+        defer { harness.close() }
+        let (a, b) = (harness.sessionIDs[0], harness.sessionIDs[1])
+
+        try await harness.select(a)
+        harness.paneManager.splitPane(harness.paneManager.focusedPaneId, direction: .horizontal)
+        harness.paneManager.assignSession(b, to: harness.paneManager.focusedPaneId)
+        harness.window.setContentSize(NSSize(width: 900, height: 360))
+        try await harness.settle()
+
+        harness.navigationCoordinator.isTerminalMaximized = true
+        try await harness.settle()
+        harness.navigationCoordinator.isTerminalMaximized = false
+        try await harness.settle()
+
+        let surfaces = try await harness.surfaces(count: 2)
+        let frames = surfaces.map { $0.convert($0.bounds, to: nil) }.sorted { $0.midY < $1.midY }
+        XCTAssertLessThanOrEqual(frames[0].maxY, frames[1].minY + 1,
+                                 "A short split drew one Metal terminal over the other")
+    }
+
+    @MainActor
     func testTabSwitchKeepsEachSessionsRenderer() async throws {
         let harness = try await SurfaceHarness.make()
         defer { harness.close() }
@@ -495,6 +518,18 @@ private final class SurfaceHarness {
         }
         let found = containers(in: (searchWindow ?? window).contentView).count
         XCTFail("Expected \(count) terminal surfaces in the window, found \(found)")
+        throw CancellationError()
+    }
+
+    func surfaces(count: Int) async throws -> [TerminalMetalContainerView] {
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline {
+            window.contentView?.layoutSubtreeIfNeeded()
+            let found = containers(in: window.contentView)
+            if found.count == count { return found }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTFail("Expected \(count) Metal terminal surfaces")
         throw CancellationError()
     }
 

@@ -129,7 +129,7 @@ struct TerminalSurfaceView: View {
             }
         )
         .id(session.id)
-        .frame(minHeight: 220, maxHeight: .infinity)
+        .frame(minHeight: paneID == nil ? 220 : nil, maxHeight: .infinity)
         .scaleEffect(resizeEffect.contentScale)
         .opacity(resizeEffect.contentOpacity)
         .background(terminalSurfaceColor, in: RoundedRectangle(cornerRadius: 10))
@@ -371,7 +371,7 @@ struct TerminalSurfaceView: View {
                     }
                 }
             }
-            .frame(minHeight: 220, maxHeight: .infinity)
+            .frame(minHeight: paneID == nil ? 220 : nil, maxHeight: .infinity)
             .scaleEffect(resizeEffect.contentScale)
             .opacity(resizeEffect.contentOpacity)
             .background(terminalSurfaceColor, in: RoundedRectangle(cornerRadius: 10))

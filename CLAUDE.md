@@ -711,13 +711,15 @@ check. Bug 86 was fixed subsequently; current register counts are below.
 **Bug 86 is fixed in the renderer** (2026-10-22): atlas entries retain color metadata in
 the packed glyph index; Metal composites premultiplied emoji RGB instead of tinting alpha.
 The focused glyph tests passed 19/19 and Debug build passed; a relaunched-app visual check
-remains. Bug 93 is the one remaining open register entry. A shared glyph atlas is still
+remains. A shared glyph atlas is still
 the largest hidden renderer cost (`Docs/Bug84.md` Open questions).
 
-**Bug 93 (panes overlapped once after switching terminal-only mode) is not reproduced.** The
-unmerged branch `debug/terminal-jump` (`251e010`) logs layout state, pane SwiftUI frames, Metal
-view frames and terminal resizes to `/tmp/prossh-jump.log`. If the user sees it again, run that
-branch and compare `swiftui.pane` with `appkit.metal` frames at that moment. Never merge it.
+**Bug 93 is fixed** (2026-10-23): a short hosted horizontal split reproduced about 57 points
+of Metal view overlap because each split surface demanded at least 220 points of height.
+Split surfaces now fit their pane, with a geometry regression through terminal-only restore.
+The original four-session SSH setup was not rerun live. The debug-only branch
+`debug/terminal-jump` (`251e010`) remains unmerged; never merge it. The bug register has
+96 fixed entries and none open.
 
 **Paused: `Docs/RenderCost.md` R2b — explain or bound the throughput variability.**
 R2b (fewer engine actor calls per batch and per publish) is merged on `master` but unvalidated:

@@ -12,8 +12,8 @@ sequentially, and tagged by severity: **Critical**, **High**, **Medium**, or **L
 | Critical | 1     | 1     | 0    |
 | High     | 20    | 20    | 0    |
 | Medium   | 40    | 40    | 0    |
-| Low      | 35    | 34    | 1    |
-| **Total**| **96**| **95**| **1**|
+| Low      | 35    | 35    | 0    |
+| **Total**| **96**| **96**| **0**|
 
 Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13, Bug 85 fixed and Bugs 86-87 added 2026-10-14, Bug 84 fixed and Bugs 88-90 added 2026-10-15, Bugs 91-93 added 2026-10-18, Bug 94 added 2026-10-20; Bugs 43, 44, 90 and 94 fixed and Bug 95 added 2026-10-20 (43 and 44 were found already fixed in the code); Bugs 87 and 88 fixed 2026-10-21. The `**File:**` paths below predate the
 refactors (`Views/` → `UI/`, `SSH/` → `Services/SSH/`, `Services/Security/` → `Services/`) and some
@@ -53,6 +53,8 @@ destroying its C session handle; Bug 1's forward-stop path now drains pending op
 Bug 95 was fixed with post-login Bash prompt injection and a real local PTY regression.
 Bug 89's first post-reattach CRT frame was seeded from the current scene so it no longer
 switches from zero phosphor blend to a brighter history blend on the next frame.
+Bug 93 was reproduced in a short horizontal split and fixed by letting split terminal surfaces
+shrink to their allocated pane height; the register now has no open entries.
 
 ---
 
@@ -1755,24 +1757,30 @@ A live SSH file-tool check remains useful.
 
 ---
 
-### Bug 93 — Split Panes Overlapped Once After Switching Terminal-Only Mode (Low)
+### Bug 93 — ~~Split Panes Overlapped Once After Switching Terminal-Only Mode~~ [FIXED] (Low)
 
-**Files:** `UI/RootTabView.swift` (`columnVisibility` animation),
-`UI/Terminal/TerminalView.swift` (`macOSBody`), `Terminal/Renderer/TerminalMetalView.swift`
+**Files:** `ProSSHMac/UI/Terminal/TerminalSurfaceView.swift`,
+`ProSSHMacTests/Terminal/Tests/TerminalSurfaceIdentityTests.swift`
 
 Seen once, 2026-10-18 01:34, during CredentialPrompt Phase 4 with four SSH sessions in a 2×2
 split, broadcast on: the app sidebar and pane header bars came back (terminal-only mode was off)
 and the four terminals were drawn overlapping each other. The user described it as "the terminals
 jumped".
 
-**Not reproduced.** A Debug build with layout and geometry logging (branch
-`debug/terminal-jump`, commit `251e010`, writes `/tmp/prossh-jump.log`) showed that the password
+The original 2×2 event was not captured while it was settled. A Debug build with layout and
+geometry logging (branch `debug/terminal-jump`, commit `251e010`, writes
+`/tmp/prossh-jump.log`) showed that the password
 flow causes no layout, focus-mode or size change at all, and that terminal-only mode is switched
 only by the toolbar button, Cmd+Shift+F or leaving the Terminal section. Four switches in that
 run animated all four terminals through per-frame resizes and settled with Metal frames matching
-the SwiftUI pane frames. Most likely the screenshot caught that animation, or a rare bad settle.
-If it recurs, run that branch and compare the `swiftui.pane` and `appkit.metal` frames at the
-moment it happens.
+the SwiftUI pane frames. Those larger-window switches settled correctly, leaving the cause
+unresolved until the short-split regression reproduced it.
+
+**Fixed 2026-10-23:** A hosted, short horizontal split reproduced an overlap of about 57 points
+between the two Metal views. Each terminal surface required at least 220 points of height, even
+when its split pane had less space after the bars appeared. Split surfaces now accept the pane's
+allocated height; the 220-point minimum remains for a standalone terminal. The geometry test
+passes after a terminal-only on/off cycle. The original four-session SSH setup was not rerun live.
 
 ---
 
