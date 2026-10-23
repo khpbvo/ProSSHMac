@@ -232,6 +232,11 @@ Current AI architecture (2026-09-25): the assistant uses OpenRouter Chat Complet
 
 ## Loop Log
 
+- 2026-10-23: **RenderCost R3b closed: the missing window does not reproduce, and a window costs ~10x** (`Docs/RenderCost.md`, `App/ThroughputBenchmarkRunner+Render.swift` and `scripts/benchmark-throughput.sh` comments only, `CLAUDE.md`).
+  - From an unsandboxed shell, every launch got one active key window (`count=1`): Debug and Release, `open -n` with no arguments / an unused `--foo` / the benchmark flags, both render modes, with and without `--benchmark-window` and `--perf-signposts`, a direct binary launch, and with a second instance running. No Saved Application State folder exists for the bundle.
+  - R2a/R2b/R3a's zero windows came from how those sessions launched the app. Unconfirmed lead: Claude Code's Bash sandbox. A write-only `sandbox-exec` profile still produced a window, so if it's the sandbox, it's another restriction.
+  - First windowed look (Release, 8 MiB x 3, `--render-detached`, 1280x800, App Nap held, load 2.0-2.6): 1.53 / 2.08 / 2.01 MB/s, against 20.07-21.34 windowless. `--render`, 1 MiB: 0.12-0.15 MB/s. Not interleaved, so not a baseline. The ~20 MB/s real-app figure is windowless only.
+  - No behaviour change. Debug build passed. Next: R3c (windowed baseline, attribute the detached ~10x).
 - 2026-10-23: **RenderCost R3a: render benchmarks prevent App Nap** (`App/ThroughputBenchmarkRunner+Render.swift`, `ProSSHMacTests/ThroughputBenchmarkRunnerTests.swift`, `scripts/benchmark-throughput.sh`, `Docs/RenderCost.md`). Added phases R3a–R3d to the spec.
   - Both render modes hold a user-initiated `ProcessInfo` activity, and `--benchmark-allow-app-nap` opts out. The header prints `app nap:`, every run prints `process before/after: active=` (no longer gated on `--perf-scheduling`), and an inactive run with App Nap allowed gets a WARNING.
   - Release, windowless, two alternating rounds: direct launch (inactive) 20.02-21.34 MB/s with ground CPU 217.7-226.3 ms; opt-out 2.20-5.81 MB/s; `open -n` 20.40-20.88.

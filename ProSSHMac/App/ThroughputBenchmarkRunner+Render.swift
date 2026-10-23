@@ -71,11 +71,12 @@ extension ThroughputBenchmarkRunner {
 
     // MARK: - Output
 
-    // A rendered run must be launched through LaunchServices (`open -n`) to get a
-    // real window — launching the binary directly from a shell yields a process
-    // with zero windows. That detaches stdout, so everything is also written to
+    // A rendered run is launched through LaunchServices (`open -n`) so it starts
+    // as an active GUI app. That detaches stdout, so everything is also written to
     // `--benchmark-out`, which the script polls. Same approach as
     // benchmark-peer-emulator.sh, which cannot capture a GUI app's stdout either.
+    // From an unsandboxed shell a direct launch gets a window too (R3b); earlier
+    // sessions got none either way, cause unconfirmed, hence the warning below.
 
     private static var renderOutputLines: [String] = []
 
@@ -133,10 +134,9 @@ extension ThroughputBenchmarkRunner {
         }
         // A windowless run is not the detached path either: the grid keeps its
         // default geometry, so nothing scales with cell count and the result is not
-        // comparable to any run that had a window. Launching through LaunchServices
-        // *with arguments* can produce exactly this — `open -n App.app` restores a
-        // window, `open -n App.app --args anything` may not — so say so loudly
-        // rather than reporting a number that looks like the others.
+        // comparable to any run that had a window (about 10x faster, R3b). Every
+        // R2a/R2b/R3a run came up like this, cause unconfirmed (see RenderCost.md
+        // R3b), so say so loudly rather than report a number that looks like the others.
         if NSApp.windows.isEmpty {
             emit("  WARNING: this process has no windows at all. The grid is at its default")
             emit("           geometry and nothing renders, so this number is NOT comparable")

@@ -143,10 +143,10 @@ sleep 1
 MODE_FLAG="${MODE_FLAG:---benchmark-base64}"
 
 if [[ "$MODE_FLAG" == --benchmark-render* ]]; then
-    # Rendered runs need a real window, and launching the binary straight from a
-    # shell produces a process with zero windows — SwiftUI's WindowGroup never
-    # materializes. LaunchServices (`open -n`) gives a proper GUI app, but
-    # detaches stdout, so the app writes its report to a file we poll for.
+    # Rendered runs need a real window and an active app. LaunchServices
+    # (`open -n`) gives a proper GUI app, but detaches stdout, so the app writes
+    # its report to a file we poll for. Check the report's `window: count=`:
+    # some earlier sessions got no window at all (Docs/RenderCost.md R3b).
     RESULT_FILE="$(mktemp -t prossh-render-bench)"
     rm -f "$RESULT_FILE"
     trap 'rm -f "$RESULT_FILE"' EXIT

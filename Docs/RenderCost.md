@@ -3,8 +3,10 @@
 **Status:** R0, R1, R2a and R2b complete. R2b was validated on 2026-10-23: **1.09-1.12x**
 in every interleaved pair (instrumentation off, active app, no window). The "bimodal"
 variability was App Nap on inactive benchmark processes plus CPU oversubscription. See
-"Measurement caveats found in R2b". R3a (render benchmarks prevent App Nap) is done; R3b
-(window acquisition), R3c and R3d are open, so there is still no rendered figure.
+"Measurement caveats found in R2b". R3a (render benchmarks prevent App Nap) is done. R3b
+(2026-10-23) found that window acquisition works from an unsandboxed shell, and that **a
+window makes the real app path about 10x slower even when nothing is drawn** (~2 MB/s
+detached against ~20 windowless). R3c (first windowed baseline) and R3d are open.
 
 `FasterThenYouWillEverLiveToBe` ended by retargeting throughput at Terminal.app's **26.5 MB/s**.
 That peer figure was measured **with rendering**; ProSSHMac's **17.97 MB/s** was measured **without**
@@ -334,20 +336,51 @@ None of that was measured by any existing benchmark.
   instrumentation. Verify: a direct binary launch (always inactive) measures what an
   `open -n` launch does, and the opt-out reproduces ~5 MB/s.
 
-- [ ] **Phase R3b: Root-cause and fix window acquisition under `open -n --args`**
+- [x] **Phase R3b: Root-cause and fix window acquisition under `open -n --args`**
 
-  `open -n App.app` restores a window; `open -n App.app --args <anything>` yields
-  `NSApp.windows.count == 0`. Find out why before changing anything (state restoration,
-  `WindowGroup` launch handling, the `-NS*` argument domain). Then make `--benchmark-render`
-  get a real 1280x800 key window.
+  **Closed 2026-10-23: not reproducible, no code fix needed.** From an unsandboxed Claude Code
+  shell, every launch got one active key window (`window: active=true count=1`): Debug and
+  Release; `open -n` with no arguments, an unused `--foo`, and the real benchmark flags;
+  `--benchmark-render` and `--benchmark-render-detached`; with and without
+  `--benchmark-window` and `--perf-signposts`; a direct binary launch (which R3a recorded as
+  always inactive and windowless); and with a second ProSSHMac instance already running. The
+  bundle has no Saved Application State folder. `--benchmark-window 1280x800` was applied
+  (`frame=1280x800@120,120 (forced)`).
 
-- [ ] **Phase R3c: First windowed baseline** (needs R3b)
+  So R2a, R2b and R3a got zero windows because of how those sessions launched the app, not
+  because of the arguments or the code. **Unconfirmed lead:** those sessions ran inside Claude
+  Code's Bash sandbox (R2b's notes record sandboxed signing failing). A `sandbox-exec` profile
+  that only denies file writes outside the temp folders still produced a window on a direct
+  launch, so if the sandbox is the cause it is another of its restrictions (Mach lookups are
+  the likely one). Confirming needs a run with the sandbox on. **Rule:** run render
+  benchmarks from an unsandboxed shell and check `window: count=` in every report. The
+  runner's windowless WARNING stays.
 
-  Interleaved, active, App Nap held: `--render` vs `--render-detached` (the rendering delta),
-  window-size scaling (at least 800x500 / 1280x800 / 2560x1440), and the Terminal.app peer
-  comparison via `benchmark-peer-emulator.sh`. Update the CLAUDE.md baseline table.
+  **What a window costs (first look, not a baseline).** Release, 8 MiB, 3 runs,
+  `--render-detached` (parked on Hosts), 1280x800, App Nap held, load 2.0-2.6:
+  **1.53 / 2.08 / 2.01 MB/s**, against 20.07-21.34 windowless in R2b/R3a. `--render`, 1 MiB,
+  one run: 0.12-0.15 MB/s (the 1100x750 restored-frame run drew 436 frames at ~32 fps and
+  warned of an unfocused surface). Not interleaved; the process went inactive during run 1
+  of the 8 MiB launch. The September R1 figures (0.14 detached, 0.03-0.05 rendered, 1100x750)
+  were the right order of magnitude after all; R2a-R3a never measured the windowed path.
 
-- [ ] **Phase R3d: Does App Nap slow a real hidden window?** (needs R3b)
+- [ ] **Phase R3c: First windowed baseline, and what a window costs when nothing draws**
+
+  1. **Baseline.** Interleaved launches of one Release bundle, active, App Nap held, 8 MiB x 3,
+     load and top consumers recorded: `--render` vs `--render-detached` at 1280x800 (the
+     rendering delta), then window scaling (at least 800x500 / 1280x800 / 2560x1440), then
+     the Terminal.app peer via `benchmark-peer-emulator.sh`. Confirm `window: count=1` and
+     `active=true` in every report before using it. Update the CLAUDE.md baseline table.
+  2. **Attribute the ~10x of `--render-detached`.** Detached parks on Hosts, so no terminal
+     surface draws, yet the window makes it ~10x slower. Use `--perf-signposts` and
+     `--perf-scheduling` on a windowed and a windowless detached run and compare the stage
+     budgets: which stages grow, and is the MainActor busy (SwiftUI updates for the Hosts
+     view, `objectWillChange` on `SessionManager` per publish) or blocked? Suspects to check,
+     not conclusions: SwiftUI re-evaluating views that observe `SessionManager`, the
+     `shellBuffers` refresh, the 8/16 ms publish cadence driving view updates. Do not change
+     code in this phase; propose the fix as R4 with its evidence.
+
+- [ ] **Phase R3d: Does App Nap slow a real hidden window?** (after R3c)
 
   Measure a windowed session streaming output while the window is visible, occluded,
   minimized and hidden, active and inactive. Only if a hidden session's output falls behind,
@@ -406,7 +439,8 @@ waiting, not working. That gap is itself the R2 target.
 **The rendered benchmark could not obtain a window at all on this machine.** Every R2a figure was
 measured in a process with **zero windows** (`NSApp.windows.count == 0`), so the grid kept its
 default geometry and nothing rendered — `--benchmark-render` degraded to `--benchmark-render-detached`
-and said so. The cause is LaunchServices, not the app: `open -n ProSSHMac.app` restores a window,
+and said so. (R3b could not reproduce this from an unsandboxed shell; the explanation that
+follows did not hold up. See R3b.) At the time: `open -n ProSSHMac.app` restored a window,
 while `open -n ProSSHMac.app --args <anything at all>` produces a process that never materializes
 one. A harmless unused flag reproduces it. `applicationShouldHandleReopen` does not recover it.
 The runner now emits an explicit warning when a run has no windows, since a windowless number looks

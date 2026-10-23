@@ -153,10 +153,13 @@ xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform
   | Parser/grid, 2 MB (`--benchmark-base64`) | **36.4-37.3** | 2026-09-04 |
   | PTY -> `engine.feed` (`--pty-local`) | **19.20** | 2026-09-03 |
   | Real app path, 8 MB (`--render-detached`, **no window**, active app) | **20.07-20.91** | 2026-10-23, HEAD `d790452` |
+  | Real app path, 8 MB (`--render-detached`, **1280x800 window**, App Nap held) | **~1.5-2.1** (first look) | 2026-10-23, HEAD `b338121` |
   | Terminal.app (peer, with rendering) | 26.5 | 2026-09-03 |
 
-  No windowed real-app figure is currently reproducible. **Read `Docs/RenderCost.md`
-  "Measurement caveats" before trusting or recording any rendered number.**
+  **The windowless figure is not the shipping path:** with a real window the same detached
+  run is ~10x slower although no terminal draws. There is no interleaved windowed baseline
+  yet (RenderCost R3c). **Read `Docs/RenderCost.md` "Measurement caveats" before trusting or
+  recording any rendered number.**
 - **Target: match or beat Terminal.app end-to-end** (26.5 MB/s; iTerm2 ~1.4 MB/s on the same
   machine, 6 MB with rendering). The old 89 MB/s target was a pipe baseline with no terminal
   emulation — ignore it where older docs cite it. See `docs/Optimization.md`.
@@ -551,11 +554,10 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
   process start time with the binary's build time before judging a fix from a screenshot.
 
 ### Benchmarks
-- **The rendered benchmark gets no window when launched with arguments.** `open -n App.app --args
-  <anything>` yields `NSApp.windows.count == 0` (`applicationShouldHandleReopen` does not recover it),
-  so `--benchmark-render` silently measures the detached path. The runner warns loudly; a warned run
-  is not comparable to any windowed run. Fixing window acquisition unblocks the window-scaling test
-  and the render-vs-detached delta, both still unmeasured.
+- **Check `window: count=` in every render report.** R2a, R2b and R3a got zero windows; from
+  an unsandboxed shell every launch gets one, arguments or not (R3b). The likeliest cause is
+  Claude Code's Bash sandbox (unconfirmed), so run render benchmarks unsandboxed. A windowless
+  run measures ~10x faster than a windowed one and is not comparable to it; the runner warns.
 - **App Nap slows an inactive windowless benchmark about 3.6x** (~5 MB/s instead of ~20, with ~3x
   the CPU per byte). The render modes therefore hold a user-initiated `ProcessInfo` activity
   (R3a). Their report prints `app nap:` and `active=` on every run; `--benchmark-allow-app-nap`
@@ -589,7 +591,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 |-----|---------|
 | `Docs/featurelist.md` | **Long-term memory** — dated work log, phase progress, loop-log entries |
 | `Docs/The big picture(October 2026).md` | **Planning input.** Code-verified ranked feature list (F0–F20: build order, value, size, spec name), competitor gap analysis re-checked 2026-10-23, source of Bugs 97–108. Start a new feature spec from its entry |
-| `Docs/RenderCost.md` | What rendering actually costs — R0–R2b and R3a **COMPLETE** (R2b validated 1.09-1.12x, 2026-10-23); **R3b open** (window acquisition), so there is no rendered figure yet. Read its "Measurement caveats" sections before any perf measurement |
+| `Docs/RenderCost.md` | What rendering actually costs — R0–R2b, R3a and R3b **COMPLETE** (R2b validated 1.09-1.12x windowless; R3b: windows work unsandboxed, and a window costs ~10x even detached). **R3c open** (windowed baseline, attribute the window cost). Read its "Measurement caveats" sections before any perf measurement |
 | `Docs/R2bBenchmarkResults.md` | R2b A/B evidence: exact commands and all raw reports for the six baseline/candidate pairs |
 | `Docs/CredentialPrompt.md` | Password prompts (sudo, su, ssh, passphrase, device `enable`) pause the awaited tool call with a card in the chat; the user types in the terminal, nothing is recorded, Decline Ctrl+Cs and tells the model. Replaced the prompt's SUDO rules and the `apply_patch` sudo dance — **COMPLETE** (Phases 0–4, validated live 2026-10-18; a device `enable` password not yet seen live) |
 | `Docs/NetworkCopilot.md` | **Active.** Copilot reaches every open session, one memory per chat, a router/switch command path, and user skills (`load_skill`). Phases 1–6 done; Phase 7 (live validation) in progress, with its with/without-skills results. Read its "Design rules" before adding any rule to the developer prompt |
@@ -745,14 +747,15 @@ The original four-session SSH setup was not rerun live. The debug-only branch
 windowless, active app. The "bimodality" was App Nap on inactive processes (~3.6x) plus CPU
 oversubscription, not the publish cadence. Leave the cadence alone and don't revert R2b.
 
-**Next: `Docs/RenderCost.md` Phase R3b — root-cause window acquisition.** R3a is done: render
-benchmarks prevent App Nap and report `active=` per run, so a direct binary launch now
-measures like an active app (~20 MB/s windowless). R3b: `open -n App.app` restores a window,
-but `open -n App.app --args <anything>` gives `NSApp.windows.count == 0`. Find out why
-(state restoration, `WindowGroup` launch handling, the `-NS*` argument domain) before changing
-anything, then make `--benchmark-render` get a real 1280x800 key window. R3c (first windowed
-baseline, the rendering delta, window scaling, Terminal.app) and R3d (does App Nap slow a
-real hidden window?) depend on it.
+**Next: `Docs/RenderCost.md` Phase R3c — first windowed baseline, and what a window costs.**
+R3b (2026-10-23) could not reproduce the missing window: from an unsandboxed shell every
+launch, with or without arguments, gets an active 1280x800 window. Earlier sessions' zero
+windows likely came from Claude Code's Bash sandbox (unconfirmed). With a window,
+`--render-detached` measured ~1.5-2.1 MB/s against ~20 windowless, although no terminal draws.
+R3c: an interleaved windowed baseline (render vs detached, window scaling, Terminal.app), then
+attribute the detached ~10x with `--perf-signposts`/`--perf-scheduling`, windowed vs
+windowless. No code changes in R3c; the fix becomes R4. Confirm `window: count=1` and
+`active=true` in every report. R3d (App Nap and a hidden window) follows.
 `scripts/benchmark-throughput.sh` runs `pkill -9 -x ProSSHMac` before every benchmark, which
 kills the user's own app and sessions. Avoid it while the user has sessions open; launch
 the bundle by hand as in `Docs/R2bBenchmarkResults.md`.
