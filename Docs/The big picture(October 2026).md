@@ -558,7 +558,9 @@ logs and the "fast terminal" claim more than for interactive device work.
 3. **Mac App Store, ever?** A sandboxed build would lose agent sockets, direct `~/.ssh` reads and
    ProxyCommand, as Core Shell's App Store build did [6], and would need the serial entitlement. If
    the answer is "never", say so in the README; it is a selling point.
-4. **The vendor build in F0:** include libfido2 (F18) and GSSAPI (F19) now, or rebuild later?
+4. ~~**The vendor build in F0:** include libfido2 (F18) and GSSAPI (F19) now, or rebuild later?~~
+   **Decided 2026-10-24: both off.** F18/F19 add their dependency builds to
+   `scripts/build-vendor.sh` later (`Docs/ReleaseReadiness.md`).
 5. **Serial before Change Sets?** Serial is smaller, independent and now table stakes; Change Sets
    is the differentiator. Revision 1 put Change Sets first, and this list keeps that order.
 

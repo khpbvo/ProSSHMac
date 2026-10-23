@@ -618,6 +618,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 |-----|---------|
 | `Docs/featurelist.md` | **Long-term memory** — dated work log, phase progress, loop-log entries |
 | `Docs/The big picture(October 2026).md` | **Planning input.** Code-verified ranked feature list (F0–F20: build order, value, size, spec name), competitor gap analysis re-checked 2026-10-23, source of Bugs 97–108. Start a new feature spec from its entry |
+| `Docs/ReleaseReadiness.md` | **F0, next.** Loopback-only forwards (Bug 97), a CI that can fail (Bug 105), `scripts/build-vendor.sh` for OpenSSL 3.5 LTS + libssh 0.12.2, Sparkle 2, a notarized 0.10.0. Phases 1–6, none started. Its "Rules for every phase" cover outward-facing steps and secrets |
 | `Docs/RenderCost.md` | What rendering actually costs — R0–R2b, R3a–R3c and R4 **COMPLETE**. R4b isolates output-rate nonce, scroll and shell text in `SessionLiveState`; **R3d next**. Read its "Measurement caveats" sections before any perf measurement |
 | `Docs/R3cBenchmarkResults.md` | R3c evidence: windowed baseline tables, Time Profiler breakdowns, stage budgets, commands |
 | `Docs/R4aBenchmarkResults.md` | R4a evidence: interleaved windowed A/B, Time Profiler shares, stage budgets, the settle timeout, commands |
@@ -659,18 +660,21 @@ and the session coordinators) has no spec file left; see `Docs/featurelist.md`.
 
 ## Next Session Plan
 
-**Feature planning (2026-10-23): `Docs/The big picture(October 2026).md`** is the code-verified
-ranked list. Next step: write the first spec from it, `Docs/ReleaseReadiness.md` (F0):
-- libssh 0.12.2 and OpenSSL 3.5 LTS, with a reproducible vendor build script;
-- Bug 97 (loopback-only forwards);
-- Bug 105 (CI);
-- a 0.10.0 release with Sparkle;
-- Bug 107 (stale Settings text). The README truth pass (Bug 108) is done; keep README claims
-  verified against the code.
+**Next: `Docs/ReleaseReadiness.md` (F0) Phase 1** — reproduce Bug 97 with `lsof` against a
+temporary loopback `sshd`, bind forwards to loopback (IPv4 and IPv6) with a regression test, and
+fix the Bug 107 Settings strings. The spec was written 2026-10-24 from
+`Docs/The big picture(October 2026).md`; its "Today" table holds the verified starting facts.
+User decisions (2026-10-24): 0.10.0 ships Developer ID-signed and notarized (no Developer ID
+identity is in this Mac's keychain yet; the user gets one before Phase 6); the vendor build
+leaves FIDO2 and GSSAPI off; CI runs on GitHub's hosted `xcode-27` preview image (Xcode 27.1
+default), and if that image proves unusable, ask before going self-hosted. The 0.9.0 DMG on
+GitHub is unsigned. The vendored binaries were built from `~/Desktop/ProSSHV2/scripts/build-*-ios.sh`,
+which Phase 3 ports. The feed URL and whether 0.10.0 is a full release are decided at Phase 5.
+Nothing outward-facing (tag, release, appcast, repo settings) without the user's go-ahead.
 
-Bugs 97–108 are open and were found by reading only, so reproduce before fixing (Bug 97: `lsof`;
-Bug 98: `ssh-add -l` on the remote). The doc's "Open decisions" (AI gate default, redaction
-default, App Store, vendor build options) need the user.
+Bugs 97–107 are open and were found by reading only, so reproduce before fixing (Bug 97:
+`lsof`; Bug 98: `ssh-add -l` on the remote). The big picture doc's remaining "Open decisions" (AI gate default,
+redaction default, App Store) need the user.
 
 **AI audit and optimization complete: `Docs/AIAgentOptimization.md`.** Primary plus three
 subagents traced 501 declarations in 48 files; 314 targeted tests and the Debug build pass.
