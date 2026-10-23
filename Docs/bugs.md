@@ -10,12 +10,12 @@ sequentially, and tagged by severity: **Critical**, **High**, **Medium**, or **L
 | Severity | Total | Fixed | Open |
 |----------|-------|-------|------|
 | Critical | 1     | 1     | 0    |
-| High     | 21    | 20    | 1    |
+| High     | 22    | 21    | 1    |
 | Medium   | 48    | 40    | 8    |
-| Low      | 38    | 36    | 2    |
-| **Total**| **108**| **97**| **11**|
+| Low      | 38    | 37    | 1    |
+| **Total**| **109**| **99**| **10**|
 
-Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13, Bug 85 fixed and Bugs 86-87 added 2026-10-14, Bug 84 fixed and Bugs 88-90 added 2026-10-15, Bugs 91-93 added 2026-10-18, Bug 94 added 2026-10-20; Bugs 43, 44, 90 and 94 fixed and Bug 95 added 2026-10-20 (43 and 44 were found already fixed in the code); Bugs 87 and 88 fixed 2026-10-21; Bugs 97-108 added 2026-10-23 from the code cross-check in `Docs/The big picture(October 2026).md` (all open, found by reading the source, none reproduced yet); Bug 108 fixed 2026-10-23. The `**File:**` paths below predate the
+Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13, Bug 85 fixed and Bugs 86-87 added 2026-10-14, Bug 84 fixed and Bugs 88-90 added 2026-10-15, Bugs 91-93 added 2026-10-18, Bug 94 added 2026-10-20; Bugs 43, 44, 90 and 94 fixed and Bug 95 added 2026-10-20 (43 and 44 were found already fixed in the code); Bugs 87 and 88 fixed 2026-10-21; Bugs 97-108 added 2026-10-23 from the code cross-check in `Docs/The big picture(October 2026).md` (all open, found by reading the source, none reproduced yet); Bug 108 fixed 2026-10-23; Bugs 97 and 107 fixed and Bug 109 added 2026-10-24. The `**File:**` paths below predate the
 refactors (`Views/` → `UI/`, `SSH/` → `Services/SSH/`, `Services/Security/` → `Services/`) and some
 files no longer exist — resolve by basename.
 
@@ -1858,7 +1858,7 @@ Bugs 97–108 were found on 2026-10-23 while cross-checking `Docs/The big pictur
 against the source at `0ebe8e4`. Each was traced by reading the code; none has been reproduced or
 measured yet. Paths are current. "F*n*" points to the feature in that document that would fix it.
 
-### Bug 97 — Local Port Forwards Listen on All Network Interfaces (High)
+### Bug 97 — ~~Local Port Forwards Listen on All Network Interfaces~~ [FIXED] (High)
 
 **File:** `Services/PortForwardingManager.swift` (`activateRules`)
 
@@ -1874,6 +1874,19 @@ localhost unless `GatewayPorts` or an explicit bind address says otherwise.
 **Fix direction:** restrict the listener to loopback (`requiredInterfaceType = .loopback`, or a
 `requiredLocalEndpoint`) and add a regression test. A per-rule LAN opt-in belongs to the
 forwarding work (F10). Planned in F0.
+
+**Fixed 2026-10-24 (F0 Phase 1):** reproduced first with a loopback `sshd`, the real
+`LibSSHTransport` and `PortForwardingManager`: `lsof` showed `TCP *:47008 (LISTEN)`, and
+connections from the LAN address 192.168.2.8 and a global IPv6 address were accepted. Each rule
+now has two listeners, `127.0.0.1:<port>` and `[::1]:<port>` (`requiredLocalEndpoint`), as
+OpenSSH binds `-L` to localhost. They need `allowLocalEndpointReuse`, because Network.framework
+refuses a second listener on the same port even in the other family; a port already in use
+still fails, which was probed against another forward, plain, `SO_REUSEPORT` and wildcard
+sockets. Either listener failing fails the rule and closes the other. After the fix, `lsof`
+shows exactly the two loopback addresses and LAN connections go unanswered.
+`interfaceType = .loopback` was rejected: it also blocks the LAN, but `lsof` still shows
+`*:<port>`. Local port 0 is now refused. Tests: `testForwardAcceptsLoopbackOnly` (fails on the
+old code), `testPortInUseOnOneFamilyFailsTheRule`. The same run found Bug 109.
 
 ---
 
@@ -1908,7 +1921,8 @@ SSH key does not contain private key material." (11–16). libssh can only use a
 key through an agent. ssh-copy-id already refuses these keys (`KeyForgeViewModel`).
 
 **Fix direction:** an in-app agent served to libssh through `ssh_set_agent_socket` (F1, phase 3).
-Until then, hide or label Secure Enclave keys in the host picker.
+Until then, hide or label Secure Enclave keys in the host picker. When this is fixed, update the
+Settings Security label (`SettingsView.swift`), which says Secure Enclave keys can't log in yet.
 
 ---
 
@@ -2038,7 +2052,7 @@ followed.
 
 ---
 
-### Bug 107 — Stale Settings Text on macOS (Low)
+### Bug 107 — ~~Stale Settings Text on macOS~~ [FIXED] (Low)
 
 **File:** `UI/Settings/SettingsView.swift`
 
@@ -2046,6 +2060,10 @@ The Appearance footnote says "System follows iOS." (line 41). The Security secti
 Enclave integration coming in KeyForge/CertAuthority phases." (347), although both KeyForge and
 the CA have used the Secure Enclave for months. The iPad multitasking text is hidden on the Mac
 and is fine.
+
+**Fixed 2026-10-24 (F0 Phase 1):** "System follows macOS.", and the Security label now says what
+exists: KeyForge creates non-exportable P-256 keys in the Secure Enclave, the certificate
+authority signs with one, and Secure Enclave keys can't log in yet (Bug 99).
 
 ---
 
@@ -2076,6 +2094,35 @@ network engineers is higher.
 claim above corrected or removed, the competitor table replaced by highlights, a Known limitations
 section added, and the CI badge dropped until Bug 105 is fixed. CONTRIBUTING.md and SECURITY.md
 got the same pass.
+
+---
+
+### Bug 109 — Local Port Forwards Never Carry Data (High)
+
+**Files:** `CLibSSH/ProSSHLibSSHWrapper.c` (`prossh_forward_channel_*`),
+`Services/SSH/LibSSHForwardChannel.swift`, `Services/SSH/LibSSHTransport.swift`
+
+Found 2026-10-24 while verifying Bug 97. In libssh, `ssh_channel_set_blocking` sets the blocking
+mode of the whole session (the 0.12.0 disassembly loads `channel->session` and calls the session
+setter). Opening the shell leaves the session non-blocking (`ssh_channel_set_blocking` after
+`ssh_channel_request_shell`), and `SessionManager` opens the shell before it activates forwards.
+`prossh_forward_channel_open` then calls `ssh_channel_open_forward` on a non-blocking session,
+gets `SSH_AGAIN` ("sent, call again"), treats it as failure and frees the channel. The server's
+late confirmation makes the next open fail with "Server specified invalid channel N". Every
+connection to a forward is accepted and closed at once.
+
+Reproduced against a loopback `sshd` with the real transport and manager. With a shell open, as
+the app does, all three connections were closed: "Failed to open forward channel.", then
+"invalid channel 44" and "invalid channel 45". Without a shell, the first connection read the
+sshd banner, and that open set the session non-blocking for the rest.
+
+Separately, the forward channel's read, write, is-open and close calls take no session lock,
+while the shell path does (`prossh_lock_handle`). libssh is not thread-safe per session.
+
+**Fix direction:** open without blocking the session (retry on `SSH_AGAIN` under the handle lock,
+released between attempts, with a deadline), lock every forward-channel libssh call, and a
+loopback `sshd` regression test that moves data through a forward with a shell open. F0
+Phase 1b.
 
 ---
 

@@ -18,14 +18,14 @@ later feature ships through this pipeline, so it comes first.
 | libssh | **0.12.0**, static, universal (arm64 + x86_64), minos 13.0. OpenSSL backend, zlib, SFTP and PCAP on; server, GSSAPI and FIDO2 off | `Vendor/libssh/.../Headers/libssh/libssh_version.h:30-32`; `nm` (no `ssh_bind_new`, no `gss_*`/`fido_*` imports) |
 | OpenSSL | **3.4.1** (11 Feb 2025), static, universal, minos 26.0, built against the 26.2 SDK | `opensslv.h:77`; `strings libcrypto.a` |
 | Vendor build | **No script in this repo.** The binaries were built in the sibling `~/Desktop/ProSSHV2` checkout by `scripts/build-openssl-ios.sh` and `scripts/build-libssh-ios.sh` from pre-downloaded sources, with no version pins or checksums. Only the macOS slice directories were copied here (no xcframework `Info.plist`); the project links them through `HEADER_SEARCH_PATHS`/`LIBRARY_SEARCH_PATHS` and `-lssh -lcrypto -lssl -lz` | `project.pbxproj:342-363`; ProSSHV2 scripts |
-| Port forwards | `NWListener(using: .tcp, on: port)` with no local endpoint or interface: listens on all interfaces (Bug 97, not yet reproduced) | `Services/PortForwardingManager.swift:49-57` |
+| Port forwards | `NWListener(using: .tcp, on: port)` with no local endpoint or interface: listens on all interfaces (Bug 97, not yet reproduced). **Phase 1 fixed it**; Phase 1 also found that forwards never carry data (Bug 109) | `Services/PortForwardingManager.swift:49-57` |
 | CI | `macos-15`, Xcode 26.2, both steps end in `\| xcpretty --color \|\| true` (Bug 105) | `.github/workflows/ci.yml` |
 | Signing | Hardened runtime on, sandbox off, team `KPHHFS89HZ`. Entitlements: `keychain-access-groups`, user-selected files. **No "Developer ID Application" identity in this Mac's keychain**, only Apple Development | `project.pbxproj:331-338`; `security find-identity -v -p codesigning` |
 | Releases | One: v0.9.0, pre-release, 2026-02-26. Its DMG is **unsigned and not notarized** (`codesign -dv`: not signed; `spctl`: rejected; no stapled ticket) | `gh release view v0.9.0` |
 | Packaging | `scripts/create-dmg.sh` archives, and with `--sign` exports Developer ID, notarizes (`notarytool`), staples and signs the DMG. The signed path has never produced a release | `scripts/create-dmg.sh` |
 | Version | `MARKETING_VERSION = 0.9.0`, `CURRENT_PROJECT_VERSION = 1`, generated Info.plist | `project.pbxproj:334-356` |
 | Auto-update | None. No Swift packages at all | `project.pbxproj` (no `XCRemoteSwiftPackageReference`) |
-| Settings text | "System follows iOS." and "Secure Enclave integration coming in KeyForge/CertAuthority phases." (Bug 107) | `UI/Settings/SettingsView.swift:41, 347` |
+| Settings text | "System follows iOS." and "Secure Enclave integration coming in KeyForge/CertAuthority phases." (Bug 107, **fixed in Phase 1**) | `UI/Settings/SettingsView.swift:41, 347` |
 
 **Upstream, checked 2026-10-24 (re-check at the phase that uses it):**
 
@@ -74,7 +74,8 @@ new `Vendor/VERSIONS.md`, `ProSSHMac.xcodeproj/project.pbxproj` (Sparkle package
 
 ## Phases
 
-- [ ] **Phase 1: Loopback-only forwards (Bug 97) and the stale Settings text (Bug 107).**
+- [x] **Phase 1: Loopback-only forwards (Bug 97) and the stale Settings text (Bug 107).**
+  Done 2026-10-24; results under "Phase 1 results" below.
   - Reproduce first: a temporary loopback `sshd` (the Bug 3 method in `Docs/featurelist.md`), a
     host with one forward rule, then `lsof -nP -iTCP:<port> -sTCP:LISTEN`. Record the output.
     Expect `*:<port>`.
@@ -90,6 +91,22 @@ new `Vendor/VERSIONS.md`, `ProSSHMac.xcodeproj/project.pbxproj` (Sparkle package
     what Secure Enclave support exists today), or remove the Security label.
   - Verify: Debug build, `PortForwardingManagerTests`, live `lsof` after the fix. Mark Bugs 97 and
     107 fixed in `Docs/bugs.md` and its Summary table.
+
+- [ ] **Phase 1b: Forwards that carry data (Bug 109).** Added 2026-10-24 when Phase 1's end-to-end
+  check found every forwarded connection closed at once. Cause and evidence: `Docs/bugs.md`
+  Bug 109.
+  - `prossh_forward_channel_open` must not need a blocking session: take the handle lock per
+    attempt, retry `ssh_channel_open_forward` on `SSH_AGAIN` with the lock released between
+    attempts (the shell keeps running), and give up after a deadline. Never hold the lock through
+    a blocking open: the server may spend a long time connecting to an unreachable target.
+  - The forward channel keeps its handle and takes the handle lock around every libssh call
+    (read, write, is-open, close). Check the lifetime: forwards must stop before
+    `prossh_libssh_destroy` (Bug 1/3 ordering).
+  - Regression test: a loopback `sshd` with a shell open, as the app does; a forward moves data
+    over 127.0.0.1 and ::1, several connections in a row and two at once. It must fail on the
+    old wrapper.
+  - Verify: Debug build, `PortForwardingManagerTests`, the new test, `LibSSHShellLifecycleTests`.
+    Mark Bug 109 fixed.
 
 - [ ] **Phase 2: A CI job that can fail (Bug 105).**
   - `runs-on: xcode-27`; select `/Applications/Xcode_27.1.app` explicitly and print
@@ -198,6 +215,33 @@ new `Vendor/VERSIONS.md`, `ProSSHMac.xcodeproj/project.pbxproj` (Sparkle package
     numbered below 0.10.0, pointed at the real feed, is offered the update.
   - README install section: notarized DMG, updates through "Check for Updates…". Record the
     procedure below.
+
+## Phase 1 results (2026-10-24)
+
+A scratch probe (same Network.framework calls, outside the app) and a temporary harness test
+(loopback `sshd`, real `LibSSHTransport` and `PortForwardingManager`) on this Mac. LAN address
+192.168.2.8 plus a global IPv6 address on en0. The firewall is in stealth mode, so connections
+nobody accepts are dropped, not refused.
+
+| Listener setup | `lsof` LISTEN | 127.0.0.1 | ::1 | LAN v4/v6 |
+|---|---|---|---|---|
+| Before: `NWListener(using: .tcp, on: port)` | `*:p` | accepted | accepted | **accepted** |
+| `requiredInterfaceType = .loopback` | `*:p` | accepted | accepted | dropped |
+| Two listeners, `requiredLocalEndpoint` 127.0.0.1 and ::1 | `127.0.0.1:p` only | accepted | refused (second listener EADDRINUSE) | dropped |
+| **Chosen:** the same plus `allowLocalEndpointReuse` | `127.0.0.1:p`, `[::1]:p` | accepted | accepted | dropped |
+
+- Network.framework refuses a second listener on the same port even in the other family,
+  whichever binds first. The kernel allows the pair (raw `bind` succeeds), and reuse lifts it.
+- With reuse, the pair still fails with "Address already in use" when the port is held by
+  another forward, a plain socket on 127.0.0.1, a `SO_REUSEPORT` socket, a wildcard `*:p` socket
+  or `0.0.0.0:p`. Reuse never shadows another listener.
+- Harness `lsof`, before: `ProSSHMac … IPv6 … TCP *:47008 (LISTEN)`. After:
+  `ProSSHMac … IPv4 … TCP 127.0.0.1:49087 (LISTEN)` and `ProSSHMac … IPv6 … TCP [::1]:49087 (LISTEN)`.
+- The first loopback connection read `SSH-2.0-OpenSSH_10.3` through the forward; later ones
+  were closed at once, before and after the fix. That is Bug 109 (Phase 1b), not binding.
+- `PortForwardingManagerTests` 3/3 (the new loopback test failed on the old code on the LAN
+  connect), Debug build passed. A live check in the relaunched app is still open; it needs a
+  user at the keyboard.
 
 ## Release procedure
 

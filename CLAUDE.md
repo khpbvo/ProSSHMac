@@ -555,6 +555,16 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
   Regression tests: `TerminalSurfaceIdentityTests` (hosts the real `TerminalView` with injected
   managers; assert renderer identity) and `TerminalSurfaceModelStoreTests`.
 
+### SSH and port forwarding
+- **Forward listeners are loopback-only, two per rule:** `127.0.0.1` and `::1` through
+  `requiredLocalEndpoint`, with `allowLocalEndpointReuse`. Without reuse, Network.framework
+  refuses the second listener on the same port even in the other family; a port in use still
+  fails with reuse. Either one failing fails the rule and closes the other. Don't switch to
+  `requiredInterfaceType = .loopback`: `lsof` still shows `*:<port>`. Tests:
+  `PortForwardingManagerTests` (Bug 97).
+- **This Mac's firewall is in stealth mode:** a connection to a non-loopback address that nothing
+  accepts is dropped, not refused. Connect checks need a timeout, never a wait for `ECONNREFUSED`.
+
 ### UI
 - **Four files are over 1,000 lines**: `TerminalRenderingCoordinator.swift` (1,066L),
   `TerminalView.swift` (1,060L), `TerminalAIAssistantPane.swift` (1,039L),
@@ -618,7 +628,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 |-----|---------|
 | `Docs/featurelist.md` | **Long-term memory** — dated work log, phase progress, loop-log entries |
 | `Docs/The big picture(October 2026).md` | **Planning input.** Code-verified ranked feature list (F0–F20: build order, value, size, spec name), competitor gap analysis re-checked 2026-10-23, source of Bugs 97–108. Start a new feature spec from its entry |
-| `Docs/ReleaseReadiness.md` | **F0, next.** Loopback-only forwards (Bug 97), a CI that can fail (Bug 105), `scripts/build-vendor.sh` for OpenSSL 3.5 LTS + libssh 0.12.2, Sparkle 2, a notarized 0.10.0. Phases 1–6, none started. Its "Rules for every phase" cover outward-facing steps and secrets |
+| `Docs/ReleaseReadiness.md` | **F0, active.** Loopback-only forwards (Bug 97), forwards that carry data (Bug 109), a CI that can fail (Bug 105), `scripts/build-vendor.sh` for OpenSSL 3.5 LTS + libssh 0.12.2, Sparkle 2, a notarized 0.10.0. Phase 1 done; **Phase 1b next**, then 2–6. Its "Rules for every phase" cover outward-facing steps and secrets |
 | `Docs/RenderCost.md` | What rendering actually costs — R0–R2b, R3a–R3c and R4 **COMPLETE**. R4b isolates output-rate nonce, scroll and shell text in `SessionLiveState`; **R3d next**. Read its "Measurement caveats" sections before any perf measurement |
 | `Docs/R3cBenchmarkResults.md` | R3c evidence: windowed baseline tables, Time Profiler breakdowns, stage budgets, commands |
 | `Docs/R4aBenchmarkResults.md` | R4a evidence: interleaved windowed A/B, Time Profiler shares, stage budgets, the settle timeout, commands |
@@ -660,10 +670,13 @@ and the session coordinators) has no spec file left; see `Docs/featurelist.md`.
 
 ## Next Session Plan
 
-**Next: `Docs/ReleaseReadiness.md` (F0) Phase 1** — reproduce Bug 97 with `lsof` against a
-temporary loopback `sshd`, bind forwards to loopback (IPv4 and IPv6) with a regression test, and
-fix the Bug 107 Settings strings. The spec was written 2026-10-24 from
-`Docs/The big picture(October 2026).md`; its "Today" table holds the verified starting facts.
+**Next: `Docs/ReleaseReadiness.md` (F0) Phase 1b — Bug 109, forwards never carry data.**
+Phase 1 (Bugs 97 and 107) is done: forwards listen on `127.0.0.1` and `::1` only. Its
+end-to-end check found every forwarded connection closed at once: `ssh_channel_set_blocking` is
+session-wide in libssh, the shell leaves the session non-blocking, and
+`prossh_forward_channel_open` treats `SSH_AGAIN` as failure. Cause, evidence and fix direction
+are in `Docs/bugs.md` Bug 109 and the spec's Phase 1b. The spec's "Today" table holds the
+verified starting facts for the later phases.
 User decisions (2026-10-24): 0.10.0 ships Developer ID-signed and notarized (no Developer ID
 identity is in this Mac's keychain yet; the user gets one before Phase 6); the vendor build
 leaves FIDO2 and GSSAPI off; CI runs on GitHub's hosted `xcode-27` preview image (Xcode 27.1
@@ -672,8 +685,8 @@ GitHub is unsigned. The vendored binaries were built from `~/Desktop/ProSSHV2/sc
 which Phase 3 ports. The feed URL and whether 0.10.0 is a full release are decided at Phase 5.
 Nothing outward-facing (tag, release, appcast, repo settings) without the user's go-ahead.
 
-Bugs 97–107 are open and were found by reading only, so reproduce before fixing (Bug 97:
-`lsof`; Bug 98: `ssh-add -l` on the remote). The big picture doc's remaining "Open decisions" (AI gate default,
+Bugs 98–106 are open and were found by reading only, so reproduce before fixing (Bug 98:
+`ssh-add -l` on the remote). The big picture doc's remaining "Open decisions" (AI gate default,
 redaction default, App Store) need the user.
 
 **AI audit and optimization complete: `Docs/AIAgentOptimization.md`.** Primary plus three
@@ -776,7 +789,7 @@ of Metal view overlap because each split surface demanded at least 220 points of
 Split surfaces now fit their pane, with a geometry regression through terminal-only restore.
 The original four-session SSH setup was not rerun live. The debug-only branch
 `debug/terminal-jump` (`251e010`) remains unmerged; never merge it. The bug register now has
-108 entries: 97 fixed, 11 open (Bugs 97–107, above).
+109 entries: 99 fixed, 10 open (Bugs 98–106 and 109).
 
 **RenderCost R2b is validated and closed** (2026-10-23): 1.09-1.12x in every interleaved pair,
 windowless, active app. The "bimodality" was App Nap on inactive processes (~3.6x) plus CPU

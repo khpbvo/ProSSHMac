@@ -38,7 +38,7 @@ struct SettingsView: View {
                     }
                     .pickerStyle(.segmented)
 
-                    Text("System follows iOS. Use Dark for always-on low-light operation.")
+                    Text("System follows macOS. Use Dark for always-on low-light operation.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -344,7 +344,7 @@ struct SettingsView: View {
                 }
 
                 Section("Security") {
-                    Label("Secure Enclave integration coming in KeyForge/CertAuthority phases.", systemImage: "lock.shield")
+                    Label("KeyForge can create non-exportable P-256 keys in the Secure Enclave, and the certificate authority signs with one. Secure Enclave keys can't log in yet.", systemImage: "lock.shield")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }

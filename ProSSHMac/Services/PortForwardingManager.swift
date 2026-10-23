@@ -23,11 +23,12 @@ final class PortForwardingManager: ObservableObject {
 
     private let transport: any SSHTransporting
     private let auditLogManager: AuditLogManager?
-    private var listeners: [UUID: NWListener] = [:]
+    private var listeners: [UUID: [NWListener]] = [:]
     private var connectionProxies: [UUID: [ForwardConnectionProxy]] = [:]
     private var openingConnections: [UUID: Int] = [:]
     private var openingDrainWaiters: [UUID: [CheckedContinuation<Void, Never>]] = [:]
     private let maxConnectionsPerRule = 32
+    private static let loopbackHosts: [NWEndpoint.Host] = [.ipv4(.loopback), .ipv6(.loopback)]
 
     init(transport: any SSHTransporting, auditLogManager: AuditLogManager? = nil) {
         self.transport = transport
@@ -46,16 +47,24 @@ final class PortForwardingManager: ObservableObject {
             )
 
             do {
-                let params = NWParameters.tcp
-                guard let nwPort = NWEndpoint.Port(rawValue: rule.localPort) else {
+                // Port 0 would give each loopback listener a different ephemeral port.
+                guard rule.localPort != 0, let nwPort = NWEndpoint.Port(rawValue: rule.localPort) else {
                     forward.state = .error
                     forward.errorMessage = "Invalid local port \(rule.localPort)."
                     activeForwards.append(forward)
                     continue
                 }
 
-                let listener = try NWListener(using: params, on: nwPort)
-                listeners[forwardID] = listener
+                // Loopback only, IPv4 and IPv6, as OpenSSH binds `-L` to localhost (Bug 97).
+                // Network.framework refuses a second listener on the same port even in the
+                // other family unless reuse is allowed; a port already in use still fails.
+                let forwardListeners = try Self.loopbackHosts.map { host in
+                    let params = NWParameters.tcp
+                    params.allowLocalEndpointReuse = true
+                    params.requiredLocalEndpoint = .hostPort(host: host, port: nwPort)
+                    return try NWListener(using: params)
+                }
+                listeners[forwardID] = forwardListeners
                 connectionProxies[forwardID] = []
                 openingConnections[forwardID] = 0
 
@@ -64,36 +73,39 @@ final class PortForwardingManager: ObservableObject {
                 let capturedRule = rule
                 let capturedTransport = transport
                 let capturedMaxConnections = maxConnectionsPerRule
+                let queue = DispatchQueue(label: "prosshv2.portforward.\(forwardID.uuidString)")
 
-                listener.newConnectionHandler = { [weak self] connection in
-                    Task { @MainActor [weak self] in
-                        guard let self else { return }
-                        await self.handleNewConnection(
-                            connection,
-                            forwardID: capturedForwardID,
-                            sessionID: capturedSessionID,
-                            rule: capturedRule,
-                            transport: capturedTransport,
-                            maxConnections: capturedMaxConnections
-                        )
-                    }
-                }
-
-                listener.stateUpdateHandler = { [weak self] state in
-                    Task { @MainActor [weak self] in
-                        guard let self else { return }
-                        switch state {
-                        case .failed(let error):
-                            self.updateForwardState(id: capturedForwardID, state: .error, errorMessage: error.localizedDescription)
-                        case .cancelled:
-                            self.updateForwardState(id: capturedForwardID, state: .stopped)
-                        default:
-                            break
+                for listener in forwardListeners {
+                    listener.newConnectionHandler = { [weak self] connection in
+                        Task { @MainActor [weak self] in
+                            guard let self else { return }
+                            await self.handleNewConnection(
+                                connection,
+                                forwardID: capturedForwardID,
+                                sessionID: capturedSessionID,
+                                rule: capturedRule,
+                                transport: capturedTransport,
+                                maxConnections: capturedMaxConnections
+                            )
                         }
                     }
-                }
 
-                listener.start(queue: DispatchQueue(label: "prosshv2.portforward.\(forwardID.uuidString)"))
+                    listener.stateUpdateHandler = { [weak self] state in
+                        Task { @MainActor [weak self] in
+                            guard let self else { return }
+                            switch state {
+                            case .failed(let error):
+                                self.failForward(id: capturedForwardID, errorMessage: error.localizedDescription)
+                            case .cancelled:
+                                self.markForwardStopped(id: capturedForwardID)
+                            default:
+                                break
+                            }
+                        }
+                    }
+
+                    listener.start(queue: queue)
+                }
                 activeForwards.append(forward)
 
             } catch {
@@ -115,7 +127,7 @@ final class PortForwardingManager: ObservableObject {
     func stopForward(id: UUID) async {
         // Stop admitting connections before awaiting proxy shutdown. Pending opens
         // close their channels and drain before the owning SSH session is destroyed.
-        if let listener = listeners.removeValue(forKey: id) {
+        for listener in listeners.removeValue(forKey: id) ?? [] {
             listener.cancel()
         }
 
@@ -214,6 +226,20 @@ final class PortForwardingManager: ObservableObject {
         guard let index = activeForwards.firstIndex(where: { $0.id == id }) else { return }
         activeForwards[index].state = state
         activeForwards[index].errorMessage = errorMessage
+    }
+
+    /// One family failing fails the rule: the other listener is closed, not left half-working.
+    private func failForward(id: UUID, errorMessage: String) {
+        updateForwardState(id: id, state: .error, errorMessage: errorMessage)
+        for listener in listeners.removeValue(forKey: id) ?? [] {
+            listener.cancel()
+        }
+    }
+
+    /// Cancelling a failed rule's listeners must not replace its error.
+    private func markForwardStopped(id: UUID) {
+        guard activeForwards.first(where: { $0.id == id })?.state != .error else { return }
+        updateForwardState(id: id, state: .stopped)
     }
 }
 
