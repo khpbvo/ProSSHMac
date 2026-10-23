@@ -232,6 +232,12 @@ Current AI architecture (2026-09-25): the assistant uses OpenRouter Chat Complet
 
 ## Loop Log
 
+- 2026-10-23: **RenderCost R3c closed: the windowed app is SwiftUI-bound** (`Docs/RenderCost.md`, new `Docs/R3cBenchmarkResults.md`, `CLAUDE.md`). Measurement only; no code changed, so no build or test run was needed beyond the Release benchmark build of `6b6de2a`.
+  - Windowed baseline, Release, 8 MiB x 3, App Nap held: `--render-detached` 1280x800 **1.75-2.08 MB/s**, `--render` **0.14-0.16** (~90 fps, Metal 0.5-1.3 ms CPU / 1.2-2.0 ms GPU per frame), Terminal.app **30.8-34.8**. No window-size effect from 640x400 to 1480x893 in either mode (2560x1440 doesn't fit the screen).
+  - Time Profiler on both windowed modes: main thread 100% busy, ~78-79% SwiftUI view-graph updates (bodies, a `List`'s `OutlineListCoordinator`, layout, CA commit); `MetalTerminalRenderer.draw` 2.2%; the app's own MainActor bookkeeping <2%. Cause: per-batch `@Published bytesReceivedBySessionID` and per-publish nonce/scroll/input-mode/title/cwd writes on `SessionManager` re-run ~11 observing views. `chunk record`/`history index` (21-26x vs windowless) are MainActor wait, not work.
+  - A sandboxed launch got a window, which refutes R3b's sandbox lead. With the activity held, activation made no difference. The first launch ran on a locked screen (`loginwindow` front) and was discarded; the user worked in other apps during most of 1b/2, so those runs are inactive and recorded as such.
+  - Proposed R4 (R4a: coalesce byte counters, write housekeeping state only on change; R4b: per-session live state out of `SessionManager.objectWillChange`).
+
 - 2026-10-23: **RenderCost R3b closed: the missing window does not reproduce, and a window costs ~10x** (`Docs/RenderCost.md`, `App/ThroughputBenchmarkRunner+Render.swift` and `scripts/benchmark-throughput.sh` comments only, `CLAUDE.md`).
   - From an unsandboxed shell, every launch got one active key window (`count=1`): Debug and Release, `open -n` with no arguments / an unused `--foo` / the benchmark flags, both render modes, with and without `--benchmark-window` and `--perf-signposts`, a direct binary launch, and with a second instance running. No Saved Application State folder exists for the bundle.
   - R2a/R2b/R3a's zero windows came from how those sessions launched the app. Unconfirmed lead: Claude Code's Bash sandbox. A write-only `sandbox-exec` profile still produced a window, so if it's the sandbox, it's another restriction.

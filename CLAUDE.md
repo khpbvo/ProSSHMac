@@ -127,7 +127,7 @@ xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform
 # Real PTY -> engine.feed, but not the app's reader path
 ./scripts/benchmark-throughput.sh --configuration Release --no-build --pty-local --benchmark-bytes 2097152 --benchmark-runs 4
 # The real app path. --render draws; --render-detached parks on .hosts so nothing draws.
-# ALWAYS pin the window and record it — results scale with cell count by >10x.
+# ALWAYS record the frame and `window: count=` — a window at all costs ~10x; its size doesn't (R3c).
 ./scripts/benchmark-throughput.sh --configuration Release --no-build --render-detached \
     --benchmark-window 1280x800 --benchmark-bytes 8388608 --benchmark-runs 3 [--perf-signposts]
 ./scripts/benchmark-peer-emulator.sh          # Terminal.app / iTerm2 comparison
@@ -153,14 +153,16 @@ xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform
   | Parser/grid, 2 MB (`--benchmark-base64`) | **36.4-37.3** | 2026-09-04 |
   | PTY -> `engine.feed` (`--pty-local`) | **19.20** | 2026-09-03 |
   | Real app path, 8 MB (`--render-detached`, **no window**, active app) | **20.07-20.91** | 2026-10-23, HEAD `d790452` |
-  | Real app path, 8 MB (`--render-detached`, **1280x800 window**, App Nap held) | **~1.5-2.1** (first look) | 2026-10-23, HEAD `b338121` |
-  | Terminal.app (peer, with rendering) | 26.5 | 2026-09-03 |
+  | Real app path, 8 MB (`--render-detached`, **1280x800 window**, App Nap held) | **1.75-2.08** | 2026-10-23, HEAD `6b6de2a` (R3c) |
+  | Real app path, 8 MB (`--render`, **1280x800 window**, ~90 fps, App Nap held) | **0.14-0.16** | 2026-10-23, HEAD `6b6de2a` (R3c) |
+  | Terminal.app (peer, with rendering, 8 MB) | **30.8-34.8** | 2026-10-23 (26.5 on 2026-09-03) |
 
-  **The windowless figure is not the shipping path:** with a real window the same detached
-  run is ~10x slower although no terminal draws. There is no interleaved windowed baseline
-  yet (RenderCost R3c). **Read `Docs/RenderCost.md` "Measurement caveats" before trusting or
-  recording any rendered number.**
-- **Target: match or beat Terminal.app end-to-end** (26.5 MB/s; iTerm2 ~1.4 MB/s on the same
+  **The windowless figure is not the shipping path.** With a window, SwiftUI view updates take
+  ~79% of a saturated main thread (every batch and publish writes `@Published` state on
+  `SessionManager`), and Metal drawing only 2.2% (R3c; fix is RenderCost R4). Window size
+  (640x400 to 1480x893) makes no difference. **Read `Docs/RenderCost.md` "Measurement caveats"
+  before trusting or recording any rendered number.**
+- **Target: match or beat Terminal.app end-to-end** (30.8-34.8 MB/s in R3c, 26.5 in September; iTerm2 ~1.4 MB/s on the same
   machine, 6 MB with rendering). The old 89 MB/s target was a pipe baseline with no terminal
   emulation — ignore it where older docs cite it. See `docs/Optimization.md`.
 - **Perf instrumentation:** `TerminalPerf` (`Terminal/Diagnostics/TerminalPerf.swift`) gates five
@@ -472,6 +474,11 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
   batch and read once per command completion. Do not reintroduce `String.count`, `removeFirst`, or a
   `var state = sessionStates[id]` copy on that path; the length must stay O(1), the trim amortized,
   and the character cap applied at read time. (As a capped `String` it measured 89% of wall.)
+- **Every `@Published` write on `SessionManager` re-runs every view observing it** — about 11
+  views use `@EnvironmentObject`, and `@Published` fires even for an equal value. Per-batch and
+  per-publish writes (`bytesReceivedBySessionID`, snapshot nonce, scroll/input-mode state,
+  title/cwd) are what limit the windowed app to ~2 MB/s (R3c). Don't add per-batch or
+  per-publish `@Published` state there; RenderCost R4 moves the existing state out.
 - **`recordParsedChunk` runs once per 4 ms batch, not per raw chunk.** It is `@MainActor`; per-chunk
   it cost ~1290 hops per MB. Do not move it back into the accumulator loop.
 - **`TerminalGrid` partial-region `scrollUp`** rotates the row map in place (fast paths for ±1 line,
@@ -554,10 +561,16 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
   process start time with the binary's build time before judging a fix from a screenshot.
 
 ### Benchmarks
-- **Check `window: count=` in every render report.** R2a, R2b and R3a got zero windows; from
-  an unsandboxed shell every launch gets one, arguments or not (R3b). The likeliest cause is
-  Claude Code's Bash sandbox (unconfirmed), so run render benchmarks unsandboxed. A windowless
-  run measures ~10x faster than a windowed one and is not comparable to it; the runner warns.
+- **Check `window: count=` in every render report.** R2a, R2b and R3a got zero windows; since
+  R3b every launch gets one, sandboxed or not (R3c refuted the sandbox lead; the old cause is
+  unknown). A windowless run measures ~10x faster than a windowed one and is not comparable to
+  it; the runner warns. There is no way to launch windowless now without a code change.
+- **A locked screen makes every launch inactive** (`lsappinfo front` reports `loginwindow`).
+  Check it before a render benchmark. With the App Nap activity held, an inactive launch
+  measures what an active one does (R3c), so record activation rather than discarding runs.
+- **`chunk record`/`history index` stage times include MainActor wait**, since they're timed
+  around awaits from the detached parser task. With a window they grew 21-26x with no extra work.
+  Take a Time Profiler capture (`xctrace record --attach`) before optimizing either.
 - **App Nap slows an inactive windowless benchmark about 3.6x** (~5 MB/s instead of ~20, with ~3x
   the CPU per byte). The render modes therefore hold a user-initiated `ProcessInfo` activity
   (R3a). Their report prints `app nap:` and `active=` on every run; `--benchmark-allow-app-nap`
@@ -591,7 +604,8 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 |-----|---------|
 | `Docs/featurelist.md` | **Long-term memory** — dated work log, phase progress, loop-log entries |
 | `Docs/The big picture(October 2026).md` | **Planning input.** Code-verified ranked feature list (F0–F20: build order, value, size, spec name), competitor gap analysis re-checked 2026-10-23, source of Bugs 97–108. Start a new feature spec from its entry |
-| `Docs/RenderCost.md` | What rendering actually costs — R0–R2b, R3a and R3b **COMPLETE** (R2b validated 1.09-1.12x windowless; R3b: windows work unsandboxed, and a window costs ~10x even detached). **R3c open** (windowed baseline, attribute the window cost). Read its "Measurement caveats" sections before any perf measurement |
+| `Docs/RenderCost.md` | What rendering actually costs — R0–R2b, R3a–R3c **COMPLETE** (R2b validated 1.09-1.12x windowless; R3c: the windowed app is SwiftUI-bound, ~79% of the main thread, Metal 2.2%). **R4 next** (high-frequency state stops invalidating views), then R3d. Read its "Measurement caveats" sections before any perf measurement |
+| `Docs/R3cBenchmarkResults.md` | R3c evidence: windowed baseline tables, Time Profiler breakdowns, stage budgets, commands |
 | `Docs/R2bBenchmarkResults.md` | R2b A/B evidence: exact commands and all raw reports for the six baseline/candidate pairs |
 | `Docs/CredentialPrompt.md` | Password prompts (sudo, su, ssh, passphrase, device `enable`) pause the awaited tool call with a card in the chat; the user types in the terminal, nothing is recorded, Decline Ctrl+Cs and tells the model. Replaced the prompt's SUDO rules and the `apply_patch` sudo dance — **COMPLETE** (Phases 0–4, validated live 2026-10-18; a device `enable` password not yet seen live) |
 | `Docs/NetworkCopilot.md` | **Active.** Copilot reaches every open session, one memory per chat, a router/switch command path, and user skills (`load_skill`). Phases 1–6 done; Phase 7 (live validation) in progress, with its with/without-skills results. Read its "Design rules" before adding any rule to the developer prompt |
@@ -747,15 +761,17 @@ The original four-session SSH setup was not rerun live. The debug-only branch
 windowless, active app. The "bimodality" was App Nap on inactive processes (~3.6x) plus CPU
 oversubscription, not the publish cadence. Leave the cadence alone and don't revert R2b.
 
-**Next: `Docs/RenderCost.md` Phase R3c — first windowed baseline, and what a window costs.**
-R3b (2026-10-23) could not reproduce the missing window: from an unsandboxed shell every
-launch, with or without arguments, gets an active 1280x800 window. Earlier sessions' zero
-windows likely came from Claude Code's Bash sandbox (unconfirmed). With a window,
-`--render-detached` measured ~1.5-2.1 MB/s against ~20 windowless, although no terminal draws.
-R3c: an interleaved windowed baseline (render vs detached, window scaling, Terminal.app), then
-attribute the detached ~10x with `--perf-signposts`/`--perf-scheduling`, windowed vs
-windowless. No code changes in R3c; the fix becomes R4. Confirm `window: count=1` and
-`active=true` in every report. R3d (App Nap and a hidden window) follows.
+**Next: `Docs/RenderCost.md` Phase R4a — stop needless and per-batch publishes.**
+R3c (2026-10-23) measured the windowed baseline and found the cause: with a window, SwiftUI
+view-graph updates take ~79% of a 100%-busy main thread and Metal only 2.2%. Every ~4 KB batch
+writes `@Published bytesReceivedBySessionID`. Every publish writes the nonce plus scroll state,
+input-mode snapshot and title/cwd unconditionally. All of these fire `SessionManager.objectWillChange`.
+Windowed 1280x800: detached 1.75-2.08, render 0.14-0.16 MB/s (no window-size effect);
+Terminal.app 30.8-34.8. R4a: coalesce the byte counters, write housekeeping state only on
+change, then an interleaved windowed A/B (HEAD vs candidate) with a Time Profiler capture each.
+R4b (per-session live state out of `SessionManager`) follows. Read R4's "Don't" list. Plan mode
+first; it's a code phase. The sandbox lead is refuted. A locked screen makes every launch
+inactive, which doesn't matter while the App Nap activity is held.
 `scripts/benchmark-throughput.sh` runs `pkill -9 -x ProSSHMac` before every benchmark, which
 kills the user's own app and sessions. Avoid it while the user has sessions open; launch
 the bundle by hand as in `Docs/R2bBenchmarkResults.md`.
