@@ -232,6 +232,12 @@ Current AI architecture (2026-09-25): the assistant uses OpenRouter Chat Complet
 
 ## Loop Log
 
+- 2026-10-23: **RenderCost R2b validated and closed; the throughput "bimodality" was App Nap plus CPU oversubscription** (`Docs/RenderCost.md`, `Docs/R2bBenchmarkResults.md` "2026-10-23 follow-up"). These were the first `--perf-scheduling` runs. Release builds of `af933f4`, `c685d73` (R2b) and HEAD `d790452` on an M1 Max with macOS 26.6.2, all windowless.
+  - **Quiet machine:** 18 HEAD runs over six launches all at 20.07-20.91 MB/s, ground-text CPU/elapsed 99.4%.
+  - **R2b A/B** (four interleaved pairs, instrumentation off): **1.09-1.12x** in every pair, with non-overlapping ranges (18.11-18.69 vs 19.88-20.76 MB/s). HEAD vs `af933f4`: 1.07-1.13x.
+  - **App Nap:** an inactive, windowless process (direct launch, or the user switching apps) runs at ~5 MB/s with ~3x the CPU per byte. `-NSAppSleepDisabled YES` restores ~20 MB/s while the process stays inactive. September's direct-launch control was in this regime and recorded no activation state.
+  - **Oversubscription:** 16 busy loops on 10 cores gave one 0.65 MB/s run at 4.5% CPU/elapsed (preempted mid-work). Burst transitions and large batches are downstream symptoms, so the publish cadence is left alone.
+  - No code changed. Window acquisition is still broken, so no rendered claim is made. Whether App Nap slows a real hidden window is unmeasured.
 - 2026-10-23: **"The big picture" cross-checked against the code and turned into a ranked feature list** (`Docs/The big picture(October 2026).md`, revision 2). Revision 1 was written from the README alone. Every claim was checked against the source at `0ebe8e4`, and a Sonnet research agent re-checked competitor facts on the web.
   - **Corrections:** single-hop ProxyJump and ssh_config import/export already exist (clipboard-only); keystroke broadcast exists; the copilot reaches every session. Remote port forwarding does not exist despite the README. The vendored libssh is 0.12.0 (0.12.1/0.12.2 fix about a dozen CVEs), and OpenSSL 3.4.1's branch left support on 2026-10-22.
   - **New competitor facts:** Termius made host chains, agent forwarding and serial free (Sept 2026); iTerm2 3.7 added orchestration chats; Transit, an early open-source network-engineer client, has a policy-gated read-only AI with redaction; Core Shell serial is 5.x; MobaXterm is Windows-only.

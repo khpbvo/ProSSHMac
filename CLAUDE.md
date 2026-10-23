@@ -152,7 +152,7 @@ xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform
   |---|---|---|
   | Parser/grid, 2 MB (`--benchmark-base64`) | **36.4-37.3** | 2026-09-04 |
   | PTY -> `engine.feed` (`--pty-local`) | **19.20** | 2026-09-03 |
-  | Real app path, 8 MB (`--render-detached`, **no window**) | **3.80-5.01** | 2026-09-04, pre-R2b |
+  | Real app path, 8 MB (`--render-detached`, **no window**, active app) | **20.07-20.91** | 2026-10-23, HEAD `d790452` |
   | Terminal.app (peer, with rendering) | 26.5 | 2026-09-03 |
 
   No windowed real-app figure is currently reproducible. **Read `Docs/RenderCost.md`
@@ -175,7 +175,8 @@ xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform
   are never read across an `await`: a suspension can resume on another thread. **It also switches
   on `TerminalPerf`** (`TerminalPerf.swift:32`), so its runs are only comparable with
   signpost-on runs. `benchmark-throughput.sh` forwards unknown flags, so append `--perf-scheduling`;
-  the report prints after the stage budget. It has never been run; no results exist yet.
+  the report prints after the stage budget. It also prints `process before/after: active=`;
+  check it with every windowless result (see the App Nap gotcha under Benchmarks).
 
 ---
 
@@ -555,6 +556,12 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
   so `--benchmark-render` silently measures the detached path. The runner warns loudly; a warned run
   is not comparable to any windowed run. Fixing window acquisition unblocks the window-scaling test
   and the render-vs-detached delta, both still unmeasured.
+- **App Nap slows an inactive windowless benchmark about 3.6x** (~5 MB/s instead of ~20, with ~3x
+  the CPU per byte). A direct binary launch is always inactive; an `open -n` launch becomes
+  inactive if the user switches apps. Check `active=` (`--perf-scheduling`), and pass
+  `-NSAppSleepDisabled YES` to rule App Nap out. CPU oversubscription (more busy threads than
+  cores) separately preempts the parser mid-work. Neither is a code effect; see
+  `Docs/RenderCost.md` "Measurement caveats found in R2b".
 - **Benchmark numbers drift across a session; only interleaved A/B is trustworthy.** The same binary
   has varied 3x over hours and 7x under a `mediaanalysisd` pass. Build both binaries, alternate
   launches, compare within a pair, and record `sysctl -n vm.loadavg` plus the top CPU consumers
@@ -582,7 +589,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 |-----|---------|
 | `Docs/featurelist.md` | **Long-term memory** — dated work log, phase progress, loop-log entries |
 | `Docs/The big picture(October 2026).md` | **Planning input.** Code-verified ranked feature list (F0–F20: build order, value, size, spec name), competitor gap analysis re-checked 2026-10-23, source of Bugs 97–108. Start a new feature spec from its entry |
-| `Docs/RenderCost.md` | **Active spec.** What rendering actually costs — R0/R1/R2a done, **R2b open** (code merged, performance unvalidated). Read its "Measurement caveats" before any perf measurement |
+| `Docs/RenderCost.md` | What rendering actually costs — R0–R2b **COMPLETE** (R2b validated 1.09-1.12x, 2026-10-23); no rendered figure until window acquisition works. Read its "Measurement caveats" sections before any perf measurement |
 | `Docs/R2bBenchmarkResults.md` | R2b A/B evidence: exact commands and all raw reports for the six baseline/candidate pairs |
 | `Docs/CredentialPrompt.md` | Password prompts (sudo, su, ssh, passphrase, device `enable`) pause the awaited tool call with a card in the chat; the user types in the terminal, nothing is recorded, Decline Ctrl+Cs and tells the model. Replaced the prompt's SUDO rules and the `apply_patch` sudo dance — **COMPLETE** (Phases 0–4, validated live 2026-10-18; a device `enable` password not yet seen live) |
 | `Docs/NetworkCopilot.md` | **Active.** Copilot reaches every open session, one memory per chat, a router/switch command path, and user skills (`load_skill`). Phases 1–6 done; Phase 7 (live validation) in progress, with its with/without-skills results. Read its "Design rules" before adding any rule to the developer prompt |
@@ -734,22 +741,16 @@ The original four-session SSH setup was not rerun live. The debug-only branch
 `debug/terminal-jump` (`251e010`) remains unmerged; never merge it. The bug register now has
 108 entries: 96 fixed, 12 open (Bugs 97–108, above).
 
-**Paused: `Docs/RenderCost.md` R2b — explain or bound the throughput variability.**
-R2b (fewer engine actor calls per batch and per publish) is merged on `master` but unvalidated:
-both it and baseline `af933f4` are bimodal, and every instrumentation-off A/B pair median favored
-the baseline (0.88x, 0.29x, 0.87x), so a regression is possible. Don't reimplement it — the change
-list is in `Docs/RenderCost.md` and the raw reports in `Docs/R2bBenchmarkResults.md`.
-
-1. Run `--render-detached --perf-scheduling` on a Release build, several launches, recording
-   `sysctl -n vm.loadavg` and top CPU consumers. In slow runs, does ground-text CPU stay flat while
-   wall grows (scheduling/placement) or does CPU itself grow (real work)? Correlate with burst
-   transitions and batch-size distribution.
-2. Only with that evidence, choose between tuning the publish intervals / burst thresholds (see
-   Publish cadence above) and reverting R2b. Leave visible-text extraction alone (<0.4%).
-3. Repeat interleaved Release A/B against `af933f4` under identical launch/window/instrumentation
-   conditions. Restore genuine window acquisition before any rendered or peer-comparable claim.
-4. Close R2b when the variability is explained or bounded; update `Docs/featurelist.md`,
-   `Docs/RenderCost.md` and this plan.
+**RenderCost R2b is validated and closed** (2026-10-23): 1.09-1.12x in every interleaved pair,
+windowless, active app. The "bimodality" was App Nap on inactive processes (~3.6x) plus CPU
+oversubscription, not the publish cadence. Leave the cadence alone and don't revert R2b.
+Open optimization follow-ups, all awaiting the user's decision:
+- **Window acquisition** for `--benchmark-render` (still zero windows under `open -n --args`).
+  Nothing rendered or peer-comparable can be claimed until it works.
+- **App Nap in the product:** does a hidden or occluded window streaming output get napped?
+  Measure with a real window before considering a `ProcessInfo.beginActivity` hold.
+- **Benchmark hygiene:** have the runner hold an activity (or warn when `active=false`), so an
+  inactive run can't pass silently.
 
 **Watch for:** SwiftUI's "Publishing changes from within view updates" warning at
 `AIProviderSelection.select` (seen once, unconfirmed cause; see `Docs/Anthropic.md` Phase 6). If it

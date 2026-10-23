@@ -1,7 +1,10 @@
 # RenderCost — measuring what rendering actually costs
 
-**Status:** R0, R1 and R2a complete. R2b implementation and focused tests complete
-(2026-09-06/07); performance validation and variability investigation remain open.
+**Status:** R0, R1, R2a and R2b complete. R2b was validated on 2026-10-23: **1.09-1.12x**
+in every interleaved pair (instrumentation off, active app, no window). The "bimodal"
+variability was App Nap on inactive benchmark processes plus CPU oversubscription. See
+"Measurement caveats found in R2b". Window acquisition is still broken, so there is still
+no rendered figure.
 
 `FasterThenYouWillEverLiveToBe` ended by retargeting throughput at Terminal.app's **26.5 MB/s**.
 That peer figure was measured **with rendering**; ProSSHMac's **17.97 MB/s** was measured **without**
@@ -189,15 +192,33 @@ None of that was measured by any existing benchmark.
 
   **The real bottleneck is cross-actor round-trip count, not the work at either end.** That is R2b.
 
-- [ ] **Phase R2b: Coalesce the per-batch and per-publish engine round-trips**
+- [x] **Phase R2b: Coalesce the per-batch and per-publish engine round-trips**
 
-  **Implementation update (2026-09-06/07; candidate awaiting performance validation):**
+  **Implementation update (2026-09-06/07; validated 2026-10-23):**
 
   - [x] Coalesce parser follow-up reads and MainActor handoff.
   - [x] Coalesce publish reads, preserving MainActor scroll policy and drain semantics.
   - [x] Re-examine visible-text work: still small; no further optimization warranted.
   - [x] Debug/Release builds and focused regressions.
-  - [ ] Explain or bound variability and establish a repeatable performance result.
+  - [x] Explain or bound variability and establish a repeatable performance result.
+
+  **Validation (2026-10-23).** `af933f4` vs `c685d73` (the R2b commit), four interleaved
+  pairs, Release, instrumentation off, active app, no window: median ratios **1.11x, 1.11x,
+  1.09x, 1.12x**, with no overlap between the ranges (18.11-18.69 vs 19.88-20.76 MB/s). Under
+  App Nap, R2b still wins 1.24x / 1.23x. On a quiet machine, 18 instrumented HEAD runs across
+  six launches fell within 20.07-20.91 MB/s. The September evidence below mixed two causes of
+  slowness and recorded neither:
+
+  - **App Nap.** A windowless, inactive process (any direct binary launch, or an `open -n`
+    launch after the user switches apps) runs at ~5 MB/s. Same QoS and still mostly running,
+    but about 3x the CPU time per byte. `-NSAppSleepDisabled YES` alone restores ~20 MB/s.
+  - **Oversubscription.** With 16 busy loops on 10 cores, one run fell to 0.65 MB/s at 4.5%
+    CPU/elapsed: the thread was preempted mid-work. Burst transitions and large batches
+    follow from that; they don't cause it, and the publish cadence needs no tuning.
+
+  Full tables: [R2bBenchmarkResults.md](R2bBenchmarkResults.md), "2026-10-23 follow-up".
+
+  The September record follows unchanged.
 
   Three interleaved Release pairs with timers on gave median to-sentinel ratios
   **5.01x, 0.33x, 1.02x**. Three direct-launch pairs with timers off gave **0.88x,
@@ -267,7 +288,8 @@ None of that was measured by any existing benchmark.
 
   **3. Then re-examine `visibleTextScan`** (1.9%, 19 calls, throttled to 30/s) — likely fine.
 
-  **4. Open question: throughput is bimodal under load.** One A/B run reached 18.94 MB/s while its
+  **4. ~~Open question: throughput is bimodal under load.~~** Answered 2026-10-23: App Nap and
+  CPU oversubscription, not the debounce logic (see Validation above). One A/B run reached 18.94 MB/s while its
   neighbours in the same launch managed 0.20 — a 90x spread, no code change. The burst-mode and
   debounce logic in `scheduleCoalescedGridPublish` (8/16/24/40 ms intervals, `burstThreshold` 3 in a
   16 ms window, 200 ms revert) is the obvious candidate for a feedback loop. Investigate after the
@@ -367,6 +389,26 @@ runs of two binaries over comparing numbers taken minutes apart.
 **Rendered MB/s is a digest rate, not an I/O rate.** `pty read` spans ~100-400 ms of a multi-second
 run: the payload is read off the PTY almost immediately and buffered in an unbounded `AsyncStream`.
 The figure measures how fast the app drains that backlog.
+
+---
+
+## Measurement caveats found in R2b (2026-10-23)
+
+**App Nap decides the regime for windowless runs.** An inactive process with no visible
+window is napped and digests output about 3.6x slower: ~5 MB/s against ~20, with about 3x
+the CPU time for the same ground-text work. A direct binary launch is always inactive. An
+`open -n` launch is active until the user switches apps. Run with `--perf-scheduling` and
+check `process before/after: active=` in the report. To measure inactive on purpose, or to
+rule App Nap out, pass `-NSAppSleepDisabled YES`. Never compare across regimes.
+
+**Oversubscription preempts the parser mid-work.** With more runnable threads than cores,
+the CPU/elapsed ratio around synchronous ground-text work falls (4.5% at load 14) and a run
+can drop 30x. Burst-mode transitions and batch sizes are downstream symptoms. A load
+average of 3-5 from ordinary background activity did not reproduce this.
+
+This may matter for the product as well as the benchmark. A ProSSHMac window that is hidden
+or occluded while output streams is also eligible for App Nap. Not yet measured with a real
+window.
 
 ---
 

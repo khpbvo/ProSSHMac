@@ -19,6 +19,89 @@ but these data do not establish a repeatable end-to-end speedup. All three direc
 pair medians favor the baseline, so a performance regression cannot be ruled out.
 Treat this as a local candidate awaiting performance validation, not a proven optimization.
 
+**Superseded by the 2026-10-23 follow-up below**, which explains the variability and
+validates R2b. The September conclusions above are kept as they were written.
+
+## 2026-10-23 follow-up: variability explained, R2b validated
+
+Host: MacBook Pro M1 Max (`MacBookPro18,2`, 8 performance + 2 efficiency cores), macOS
+26.6.2, Xcode 27.0. Binaries, all Release, `ONLY_ACTIVE_ARCH=YES`, each in its own
+DerivedData: baseline `af933f4`, R2b `c685d73` (the commit that merged R2b and the
+scheduling diagnostic), and HEAD `d790452`. Every launch had **zero windows** (the
+windowless warning fired every time), 8 MiB requested (10.67 MiB received), three runs per
+launch. No builds ran during measurements. No runs were removed.
+
+### Cause 1: App Nap (inactive process) — ~3.6x
+
+`--perf-scheduling` now prints `process before/after: active=…`. A windowless process
+that is **not the active app** is eligible for App Nap, and App Nap was the slow regime.
+September recorded no activation state. Its "direct-off" control launched the binary
+directly, which never makes the process active, and four of its six launches were slow.
+
+| Launch (R2b binary unless noted) | active | MB/s to sentinel | Ground CPU | CPU/elapsed |
+|---|---|---|---|---|
+| `open -n` (app becomes active) | true | 20.07-20.91 (18 runs, HEAD) | 218.6-226.0 ms | 99.4-99.5% |
+| Direct binary launch | false | 5.38-5.71 | 713.0-757.1 ms | 95.0-96.6% |
+| `open -n`, Finder activated 2 s in | false | 4.96-5.33 | 564.0-595.6 ms | 61.8-71.6% |
+| Direct launch, `-NSAppSleepDisabled YES` | false | 20.07-20.46 | 222.3-229.2 ms | 99.1-99.2% |
+
+The thread keeps its requested QoS (25) and is mostly running, but the same bytes cost
+about 3x the CPU time: the signature of lower clocks or efficiency-core placement.
+Disabling App Nap alone restores full speed with the process still inactive, which rules
+out the launch method and the activation state as such.
+
+### Cause 2: CPU oversubscription — descheduling, not extra work
+
+HEAD, `open -n` (active), `--perf-scheduling`, `yes > /dev/null` busy loops started 3 s
+before launch:
+
+| Busy loops | Load (1 min) | MB/s to sentinel | Worst run: ground CPU / elapsed |
+|---|---|---|---|
+| 0 | ~2 | 20.07-20.91 (18 runs) | 226.0 / 227.3 ms (99.4%) |
+| 8 | 2.75 | 18.43, 19.06, 18.48 | 218.1 / 229.6 ms (95.0%) |
+| 10 | 5.87 | 17.17, 19.80, 18.48 | 217.9 / 224.5 ms (97.1%) |
+| 16 | 13.96 | **0.65**, 15.62, 7.19 | **365.9 / 8057.2 ms (4.5%)** |
+
+In the 0.65 MB/s run, synchronous ground-text work took 8 s of wall time for 366 ms of CPU:
+the thread was preempted mid-work. That run had 211 batches averaging 53 KB (max 815 KB),
+against ~2,710 batches of ~4.1 KB normally, and 11 burst enter/revert pairs against 1. Burst
+transitions and batch sizes are consequences of the parser falling behind, not a feedback
+loop that drives it. The publish cadence constants need no tuning.
+
+### R2b A/B, quiet machine, instrumentation off
+
+`open -n` (active), alternating `af933f4` and `c685d73`, 5 s between launches:
+
+| Pair | Baseline load | R2b load | Baseline runs | R2b runs | Median ratio |
+|---|---|---|---|---|---|
+| 1 | { 2.71 6.01 4.36 } | { 2.23 5.42 4.23 } | 18.30, 18.46, 18.55 | 20.43, 20.59, 20.55 | **1.11x** |
+| 2 | { 1.61 4.85 4.08 } | { 2.24 4.57 4.01 } | 18.27, 18.55, 18.67 | 20.65, 19.88, 20.56 | **1.11x** |
+| 3 | { 4.53 4.90 4.16 } | { 2.94 4.44 4.02 } | 18.11, 18.69, 18.64 | 20.58, 20.17, 20.33 | **1.09x** |
+| 4 | { 3.10 4.25 3.97 } | { 2.28 3.87 3.84 } | 18.25, 18.61, 18.54 | 20.43, 20.72, 20.76 | **1.12x** |
+
+The ranges do not overlap: baseline 18.11-18.69, R2b 19.88-20.76 MB/s. To-settled figures
+(which include the fixed 200 ms drain) are 13.37-13.77 vs 14.46-14.87.
+
+Under App Nap (direct launch, inactive), R2b still wins every pair: baseline medians
+4.59 / 4.57 against R2b 5.69 / 5.61 MB/s, i.e. **1.24x / 1.23x**.
+
+`af933f4` vs HEAD `d790452` (89 commits, including R2b), same protocol, three pairs:
+baseline medians 18.49 / 18.23 / 18.50, HEAD 19.73 / 20.66 / 20.85, i.e. **1.07x / 1.13x /
+1.13x**. One HEAD run measured 8.77 MB/s (pair 1, run 1, load 2.43); activation state is not
+printed without `--perf-scheduling`, so its cause is unrecorded. No other HEAD run in 27 fell
+below 19.7.
+
+### Commands
+
+```sh
+# Active (the app is frontmost); add --perf-scheduling for CPU/elapsed and active=
+open -n "$APP" --args --benchmark-render-detached --benchmark-out "$REPORT" \
+  --benchmark-window 1280x800 --benchmark-bytes 8388608 --benchmark-runs 3
+# Inactive (App Nap applies); append -NSAppSleepDisabled YES to switch it off
+"$APP/Contents/MacOS/ProSSHMac" --benchmark-render-detached --benchmark-out "$REPORT" \
+  --benchmark-window 1280x800 --benchmark-bytes 8388608 --benchmark-runs 3
+```
+
 ## Verification
 
 - Debug and Release builds succeeded with normal project signing. Sandboxed signing
