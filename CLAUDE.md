@@ -684,7 +684,10 @@ and the session coordinators) has no spec file left; see `Docs/featurelist.md`.
 
 ## Next Session Plan
 
-**Next: `Docs/ReleaseReadiness.md` (F0) Phase 2 — a CI job that can fail (Bug 105).**
+**CONTINUE HERE: `Docs/ReleaseReadiness.md` (F0) Phase 2 — a CI job that can fail (Bug 105).**
+Start in plan mode: read the spec's Phase 2 checklist and its "Today" table, then
+`.github/workflows/ci.yml` (the job that can't fail today). Proving CI goes red means pushing a
+throwaway branch and opening a PR: both are outward-facing, so ask the user before each push.
 Phases 1 and 1b are done (2026-10-24). Forwards listen on `127.0.0.1` and `::1` only (Bug 97),
 and they carry data at all (Bug 109: forwards had never worked with a shell open). Two
 forwarding results are still open: a live check in the relaunched app (`curl` through a real
