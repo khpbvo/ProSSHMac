@@ -43,3 +43,6 @@ private struct ContentViewPreview: View {
             .environmentObject(dependencies.terminalAIAssistantViewModel)
     }
 }
+
+// CI proof (throwaway branch): this must fail the Build step.
+private let ciProofBuildBreak: Int = "not an Int"
