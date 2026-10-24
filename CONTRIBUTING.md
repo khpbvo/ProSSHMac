@@ -21,6 +21,8 @@ cd ProSSHMac
 open ProSSHMac.xcodeproj   # ProSSHMac scheme, Cmd+R
 ```
 
+You only need more to rebuild the vendored libraries: `scripts/build-vendor.sh` builds them from pinned, checksummed sources and needs CMake 3.23 or newer (Ninja is optional). It writes to `build/vendor/stage/` and never touches `Vendor/`.
+
 Build and test from the command line:
 
 ```bash

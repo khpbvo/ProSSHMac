@@ -17,7 +17,7 @@ later feature ships through this pipeline, so it comes first.
 |---|---|---|
 | libssh | **0.12.0**, static, universal (arm64 + x86_64), minos 13.0. OpenSSL backend, zlib, SFTP and PCAP on; server, GSSAPI and FIDO2 off | `Vendor/libssh/.../Headers/libssh/libssh_version.h:30-32`; `nm` (no `ssh_bind_new`, no `gss_*`/`fido_*` imports) |
 | OpenSSL | **3.4.1** (11 Feb 2025), static, universal, minos 26.0, built against the 26.2 SDK | `opensslv.h:77`; `strings libcrypto.a` |
-| Vendor build | **No script in this repo.** The binaries were built in the sibling `~/Desktop/ProSSHV2` checkout by `scripts/build-openssl-ios.sh` and `scripts/build-libssh-ios.sh` from pre-downloaded sources, with no version pins or checksums. Only the macOS slice directories were copied here (no xcframework `Info.plist`); the project links them through `HEADER_SEARCH_PATHS`/`LIBRARY_SEARCH_PATHS` and `-lssh -lcrypto -lssl -lz` | `project.pbxproj:342-363`; ProSSHV2 scripts |
+| Vendor build | **No script in this repo.** The binaries were built in the sibling `~/Desktop/ProSSHV2` checkout by `scripts/build-openssl-ios.sh` and `scripts/build-libssh-ios.sh` from pre-downloaded sources, with no version pins or checksums. Only the macOS slice directories were copied here (no xcframework `Info.plist`); the project links them through `HEADER_SEARCH_PATHS`/`LIBRARY_SEARCH_PATHS` and `-lssh -lcrypto -lssl -lz`. **Phase 3 added `scripts/build-vendor.sh`**; Phase 3 also found today's libcrypto C code unoptimized and carrying ProSSHV2 paths | `project.pbxproj:342-363`; ProSSHV2 scripts |
 | Port forwards | `NWListener(using: .tcp, on: port)` with no local endpoint or interface: listens on all interfaces (Bug 97, not yet reproduced). **Phase 1 fixed it**; Phase 1 also found that forwards never carry data (Bug 109, **fixed in Phase 1b**) | `Services/PortForwardingManager.swift:49-57` |
 | CI | `macos-15`, Xcode 26.2, both steps end in `\| xcpretty --color \|\| true` (Bug 105, **fixed in Phase 2**: `xcode-27`, Xcode 27.1, pipefail, unsigned build, 42 targeted suites) | `.github/workflows/ci.yml` |
 | Signing | Hardened runtime on, sandbox off, team `KPHHFS89HZ`. Entitlements: `keychain-access-groups`, user-selected files. **No "Developer ID Application" identity in this Mac's keychain**, only Apple Development | `project.pbxproj:331-338`; `security find-identity -v -p codesigning` |
@@ -34,6 +34,8 @@ later feature ships through this pipeline, so it comes first.
   planning doc lists the client-relevant 0.12.1/0.12.2 fixes.
 - OpenSSL **3.5 LTS**, supported until 2030-04-08. The newest patch found is **3.5.8**
   (2026-08-25). OpenSSL 4 exists, but 3.5 is the LTS line and the planning doc's choice.
+  **Phase 3 correction:** 3.5.9 (2026-09-29, a security release, most severe High) is newer,
+  and is the one pinned.
 - Sparkle **2.10.0** (2026-09-13) is current.
 - GitHub's hosted **`xcode-27`** image (preview) runs macOS 27.0.1 with **Xcode 27.1
   (27A9275) as default**, our exact toolchain, plus 27.0 and a 27.2 release candidate. It ships
@@ -131,8 +133,9 @@ new `Vendor/VERSIONS.md`, `ProSSHMac.xcodeproj/project.pbxproj` (Sparkle package
     build and one that breaks a test. Both runs must go red. Then delete the branch.
   - Restore the README CI badge. Mark Bug 105 fixed.
 
-- [ ] **Phase 3: `scripts/build-vendor.sh` — OpenSSL 3.5 LTS and libssh 0.12.2 from pinned
+- [x] **Phase 3: `scripts/build-vendor.sh` — OpenSSL 3.5 LTS and libssh 0.12.2 from pinned
   sources.** Builds only; the app still links the old binaries at the end of this phase.
+  Done 2026-10-24 with OpenSSL 3.5.9; results under "Phase 3 results" below.
   - Port the ProSSHV2 scripts (macOS only) into one script in this repo. Pin `OPENSSL_VERSION`
     (the newest 3.5.x at the time; 3.5.8 as of 2026-08-25) and `LIBSSH_VERSION=0.12.2`, with the
     SHA-256 of each tarball. Download from the projects' own release sites and refuse to build on
@@ -154,9 +157,13 @@ new `Vendor/VERSIONS.md`, `ProSSHMac.xcodeproj/project.pbxproj` (Sparkle package
     and symbol lists. Record its wall time.
 
 - [ ] **Phase 4: Swap in the new libraries and verify SSH end to end.**
-  - Copy the staged binaries and headers into `Vendor/`. Review the header diff for API changes
-    that `CLibSSH/ProSSHLibSSHWrapper.c` uses. The build must add no new deprecation warnings
-    without a note.
+  - Run `scripts/build-vendor.sh`, then replace `Vendor/OpenSSL` and `Vendor/libssh` with
+    `build/vendor/stage/Vendor/*`, `VERSIONS.md` included. Replace the directories rather than
+    copying over them, so `asn1_mac.h` (removed in 3.5) goes too. Review the header diff for API
+    changes that `CLibSSH/ProSSHLibSSHWrapper.c` uses (Phase 3 results lists them). The build must
+    add no new deprecation warnings without a note.
+  - The libraries now need macOS 26.0 (libssh was 13.0) and were built against SDK 27.0, which
+    matches the app's deployment target. A linker warning about either is a finding.
   - Debug and Release builds. Targeted suites for the SSH stack: `PortForwardingManagerTests`
     and the transport, known-hosts, algorithm-policy, credential-resolver, KeyForge and
     certificate suites. Find their exact names with `grep -l` at the phase.
@@ -316,6 +323,111 @@ nobody accepts are dropped, not refused.
 - The proof branch was cut from local `master`, which was 12 commits ahead of `origin`, so
   PR #30 published those commits (R2b through the Phase 2 marker) ahead of the master push. A
   scan of that range found nothing sensitive.
+
+## Phase 3 results (2026-10-24)
+
+- **Pins:** OpenSSL **3.5.9** (newer than the 3.5.8 in the checklist) and libssh **0.12.2**,
+  still the newest 0.12.x.
+  - Both signatures were verified in a throwaway keyring. OpenSSL's key is primary
+    `B146 647E 45A7 B339 47AB 226B 2A2C 87D1 6169 2D40`, listed in OpenSSL's
+    `doc/fingerprints.txt` and on openssl-library.org. libssh's is
+    `88A2 28D8 9B07 C2C7 7D0C 7809 03D5 DF8C FDD3 E8E7`, the key libssh.org's download page names.
+  - OpenSSL's published `.sha256` matched. libssh publishes no checksum, so its pin is the SHA-256
+    of the verified tarball.
+  - Sources: OpenSSL from the GitHub release that openssl-library.org links to, libssh from
+    libssh.org/files.
+- **Tools:**
+  - CMake 4.4.4 and Ninja 1.13.2 from Homebrew (the user's choice). The script needs CMake 3.23
+    or newer (for `CMAKE_IGNORE_PREFIX_PATH`) and falls back to Make without Ninja.
+  - Xcode 27.1 (27A9275), macOS SDK **27.0** (today's binaries used 26.2), Apple clang 21.0.0.
+- **Wall time:** two runs from an empty `build/vendor/`, both downloading, took **84.7 s and
+  83.0 s** on 10 cores. Load was 21.7 at the start of the second.
+  - OpenSSL per arch: 7 s configure, 15–19 s build, 3–4 s install. libssh per arch: 12–14 s
+    configure, 1 s build.
+  - Both runs produced identical reports: `lipo`, minos/sdk, exported symbols, imports and header
+    hashes. `VERSIONS.md` differed only in the build time.
+- **Found in today's binaries:**
+  - **libcrypto's C code is unoptimized.** Its embedded compiler line is
+    `clang -fPIC -arch arm64 -arch arm64 -isysroot … -DL_ENDIAN …` with no `-O3`. The ProSSHV2
+    script set `CFLAGS` in the environment, which replaces the target's `-O3 -Wall` (the darwin
+    targets' `CFLAGS` picker in `Configurations/10-main.conf`). The assembly paths are unaffected.
+    The new script passes `-mmacosx-version-min` as a Configure argument and fails unless the
+    configured `CFLAGS` contain `-O3`; they read `-O3 -Wall -mmacosx-version-min=26.0`.
+  - **libcrypto bakes in ProSSHV2's install paths** as OPENSSLDIR, ENGINESDIR and MODULESDIR:
+    22 strings with `/Users/kevinvanosch`. libssh.a holds two more, the source path of
+    `bignum.c`, because `OPENSSL_free` passes `__FILE__`.
+  - **It loads a config file on its own.** A test program that calls
+    `EVP_MD_fetch(NULL, "SHA256", NULL)` fails against today's libcrypto when `OPENSSL_CONF` points
+    at a config with a broken provider section and `config_diagnostics = 1`. It succeeds without
+    the variable.
+- **Decision (the user, this session):** OpenSSL is built with `no-autoload-config` and the fixed
+  prefix `/opt/prosshmac-openssl`. The install goes through `DESTDIR`, so that directory is never
+  created. The same test program against the staged libcrypto succeeds under the broken config,
+  on arm64 and on x86_64 (Rosetta).
+  - The staged binaries contain no build-machine path, and the script fails if they do.
+  - libssh needed `-ffile-prefix-map`, because CMake compiles by absolute path.
+- **Today → staged:**
+
+  | | Today | Staged |
+  |---|---|---|
+  | Architectures | arm64, x86_64 | same |
+  | minos | libcrypto/libssl 26.0, **libssh 13.0** | all 26.0 |
+  | SDK | 26.2 | 27.0 |
+  | libcrypto `T` exports (arm64 / x86_64) | 7,706 / 7,729 | 8,076 / 8,115 |
+  | libssl `T` exports | 1,810 | 1,922 |
+  | libssh `T` exports | 836 | 834 |
+  | Imports none of the three defines (arm64 / x86_64) | 222 / 220 | 220 / 218, all in libSystem or zlib |
+  | Build-machine paths | 24 | 0 |
+
+  - **Removed exports are all internal, and nothing in `ProSSHMac/` references them.**
+    - libcrypto: `ecp_nistz256_precomputed` (arm64 only), `ossl_provider_add_parameter` and
+      `ossl_provider_prov_ctx`.
+    - libssl: 14 internal `ossl_*` QUIC, JSON and error-string helpers, plus
+      `ssl_undefined_const_function`.
+    - libssh: the four `libcrux_ml_kem_mlkem768_portable_*` functions (see the ML-KEM item below).
+    - libssh gained `sftp_get_new_id` and `ssh_session_kex_is_gss`.
+  - **Import changes:** imports gone: `___strcpy_chk` (16 objects) and `isdigit`, `isspace` and
+    `tolower`, all from today's `-O0` libcrypto, plus `select`. New imports: `strcpy`, `strcat`
+    and `lstat` (`bio_sock.o`, `by_dir.o` and the old `__strcpy_chk` callers).
+    - At `-O3`, clang inlines the ctype functions and lowers a fortify call whose object size is
+      unknown to plain `strcpy`.
+    - `bio_sock.o` uses `poll` instead of `select` in 3.5.9.
+  - **Headers:**
+    - OpenSSL went from 141 to 142 files, 138 of them changed. `asn1_mac.h` is gone (in 3.4.1 it
+      held only `#error "This file is obsolete"`), and `byteorder.h` and `ml_kem.h` are new.
+    - In libssh, 4 of 7 files changed: the version micro is 2, there are new GSSAPI key-exchange
+      declarations (`ssh_userauth_gssapi_keyex`, `ssh_session_kex_is_gss`) and comment
+      changes, and `struct sftp_session_struct` gains `outstanding_ids` at the end. The wrapper
+      reads no `sftp_session` field directly, and Phase 4 recompiles it against the new headers.
+  - **libssh `config.h`:** only `HAVE_OPENSSL_MLKEM` and `HAVE_MLKEM1024` are newly defined; the
+    version and the build paths libssh's own tests use also differ.
+    - With OpenSSL 3.5, libssh takes ML-KEM from OpenSSL instead of its bundled libcrux copy, and
+      adds `mlkem1024nistp384-sha384` to its default key exchanges.
+    - **This doesn't change what the app negotiates.** `SSHAlgorithmPolicy` passes an explicit list
+      (`curve25519-sha256`, `ecdh-sha2-nistp256`, `diffie-hellman-group14-sha256`), so no
+      post-quantum key exchange is offered before or after. Offering `mlkem768x25519-sha256`
+      (OpenSSH 10's default) is a separate decision.
+  - **CMake option cache:** identical, apart from two entries:
+    - `WITH_NACL` is now OFF. It was ON, but today's build found no libnacl, so it was already
+      effectively off.
+    - The nonexistent `WITH_TESTING` was dropped; `UNIT_TESTING` and `CLIENT_TESTING` are set
+      instead.
+- **Differences from the checklist:**
+  - OpenSSL is 3.5.9.
+  - `make build_libs` + `install_dev` instead of `install_sw`: the `openssl` CLI isn't needed.
+  - `VERSIONS.md` is generated in the staging tree and reaches `Vendor/` with the binaries in
+    Phase 4, because `Vendor/` still holds 3.4.1 and 0.12.0.
+  - `no-autoload-config` and the fixed prefix (the user's decision), plus `-ffile-prefix-map` for
+    libssh.
+  - `CMAKE_SYSTEM_NAME` is no longer set. The old build set `Darwin`, which made CMake treat a
+    native build as a cross-compile.
+- **Checked:**
+  - A corrupted cached tarball stops the run before anything builds ("Checksum mismatch … Nothing
+    was built").
+  - A failing step stops the run and prints the tail of its log.
+  - A failing command in the middle of a step stops it too, because steps run as background jobs:
+    bash ignores `set -e` inside a function called from `||`.
+  - The app's Debug build passes with `Vendor/` unchanged.
 
 ## Release procedure
 

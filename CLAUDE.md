@@ -137,6 +137,12 @@ xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform
 - **Toolchain: Xcode 27.1 (27A9275), Swift 6.4.** The Metal Toolchain component must be installed
   (`xcodebuild -showComponent metalToolchain`). Never exclude `TerminalShaders.metal` from a build;
   if the shader fails to compile, check the component first.
+- **Vendored libraries:** `scripts/build-vendor.sh` builds OpenSSL and libssh from pinned,
+  checksummed tarballs (needs CMake 3.23+, Ninja optional; about 85 s). It writes to
+  `build/vendor/stage/Vendor/` (today's layout, plus `VERSIONS.md` and a symbol/import report)
+  and never touches `Vendor/`. The app links `Vendor/`, which holds OpenSSL 3.4.1 and libssh
+  0.12.0 until F0 Phase 4. `--report Vendor <out>` reports on the linked binaries. Change a pin
+  only with the SHA-256 of a tarball whose signature you verified.
 - Test bundle: `ProSSHMacTests` — 5 files at the bundle root plus 67 in `ProSSHMacTests/Terminal/Tests/`,
   ~920 test methods. No test sources live under `ProSSHMac/`.
 - Some tests require the host app process (UI/AppKit-backed suites).
@@ -640,6 +646,10 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
   on macOS only because it is case-insensitive. Never create a lowercase `docs/`.
 - **`DMG/` is git-ignored** (a built app was once committed there). Release DMGs come from
   `scripts/create-dmg.sh`, which writes to `build/`.
+- **Never pass OpenSSL compiler flags through `CFLAGS`.** OpenSSL's Configure lets a `CFLAGS`
+  environment variable replace its `-O3 -Wall`, which is how the ProSSHV2 build left today's
+  libcrypto at `-O0`. Pass flags as Configure arguments, as `scripts/build-vendor.sh` does; it
+  fails if the configured flags lack `-O3`.
 
 ---
 
@@ -649,7 +659,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 |-----|---------|
 | `Docs/featurelist.md` | **Long-term memory** — dated work log, phase progress, loop-log entries |
 | `Docs/The big picture(October 2026).md` | **Planning input.** Code-verified ranked feature list (F0–F20: build order, value, size, spec name), competitor gap analysis re-checked 2026-10-23, source of Bugs 97–108. Start a new feature spec from its entry |
-| `Docs/ReleaseReadiness.md` | **F0, active.** Loopback-only forwards (Bug 97), forwards that carry data (Bug 109), a CI that can fail (Bug 105), `scripts/build-vendor.sh` for OpenSSL 3.5 LTS + libssh 0.12.2, Sparkle 2, a notarized 0.10.0. Phases 1, 1b and 2 done; **Phase 3 next**. Its "Rules for every phase" cover outward-facing steps and secrets |
+| `Docs/ReleaseReadiness.md` | **F0, active.** Loopback-only forwards (Bug 97), forwards that carry data (Bug 109), a CI that can fail (Bug 105), `scripts/build-vendor.sh` for OpenSSL 3.5 LTS + libssh 0.12.2, Sparkle 2, a notarized 0.10.0. Phases 1, 1b, 2 and 3 done; **Phase 4 next**. Its "Rules for every phase" cover outward-facing steps and secrets |
 | `Docs/RenderCost.md` | What rendering actually costs — R0–R2b, R3a–R3c and R4 **COMPLETE**. R4b isolates output-rate nonce, scroll and shell text in `SessionLiveState`; **R3d next**. Read its "Measurement caveats" sections before any perf measurement |
 | `Docs/R3cBenchmarkResults.md` | R3c evidence: windowed baseline tables, Time Profiler breakdowns, stage budgets, commands |
 | `Docs/R4aBenchmarkResults.md` | R4a evidence: interleaved windowed A/B, Time Profiler shares, stage budgets, the settle timeout, commands |
@@ -691,32 +701,40 @@ and the session coordinators) has no spec file left; see `Docs/featurelist.md`.
 
 ## Next Session Plan
 
-**CONTINUE HERE: `Docs/ReleaseReadiness.md` (F0) Phase 3 — `scripts/build-vendor.sh`
-(OpenSSL 3.5 LTS + libssh 0.12.2 from pinned sources; builds only, the app keeps today's
-binaries).** Start in plan mode: read the spec's Phase 3 checklist, its "Today" table and
-`~/Desktop/ProSSHV2/scripts/build-{openssl,libssh}-ios.sh`. Re-check the newest OpenSSL 3.5.x
-and libssh release and take SHA-256s from the projects' own sites. Downloading tarballs is fine;
-nothing in this phase is outward-facing.
-**Phase 2 is done (2026-10-24):** CI runs on `xcode-27`, unsigned, 42 targeted suites, proved red
-at Build and at Test on throwaway PR #30 (closed). If `git status -sb` shows `master` ahead of
-`origin`, the Phase 2 commit isn't pushed yet: ask the user before pushing, then check that the
-push run is green. CI must stay green through Phases 3–4; a suite added to `ci.yml` must pass on
-the runner first.
-Phases 1 and 1b are done (2026-10-24). Forwards listen on `127.0.0.1` and `::1` only (Bug 97),
-and they carry data at all (Bug 109: forwards had never worked with a shell open). Two
-forwarding results are still open: a live check in the relaunched app (`curl` through a real
-host's forward, `lsof`), and throughput of about 0.65 MB/s each way, limited by the read
-loop's 10 ms idle poll. The user decides whether to schedule the throughput work; see the
-spec's "Phase 1b results". For Phase 2's test list: `LibSSHPortForwardingTests` and
-`LibSSHShellLifecycleTests` start a loopback `/usr/sbin/sshd`, so try them on the runner before
-adding them. The spec's "Today" table holds the verified starting facts for the later phases.
-User decisions (2026-10-24): 0.10.0 ships Developer ID-signed and notarized (no Developer ID
-identity is in this Mac's keychain yet; the user gets one before Phase 6); the vendor build
-leaves FIDO2 and GSSAPI off; CI runs on GitHub's hosted `xcode-27` preview image (Xcode 27.1
-default), and if that image proves unusable, ask before going self-hosted. The 0.9.0 DMG on
-GitHub is unsigned. The vendored binaries were built from `~/Desktop/ProSSHV2/scripts/build-*-ios.sh`,
-which Phase 3 ports. The feed URL and whether 0.10.0 is a full release are decided at Phase 5.
-Nothing outward-facing (tag, release, appcast, repo settings) without the user's go-ahead.
+**CONTINUE HERE: `Docs/ReleaseReadiness.md` (F0) Phase 4 — swap in OpenSSL 3.5.9 and libssh
+0.12.2 and verify SSH end to end.** Start in plan mode: read the spec's Phase 4 checklist and
+"Phase 3 results" (header changes, removed internal exports, the ML-KEM note). Run
+`scripts/build-vendor.sh` (CMake and Ninja are installed from Homebrew), then replace
+`Vendor/OpenSSL` and `Vendor/libssh` with `build/vendor/stage/Vendor/*`, including `VERSIONS.md`.
+Replace the directories rather than copying over them, so `asn1_mac.h` goes.
+The live checks run against a temporary loopback `sshd` (the Bug 3 method). The four Ubuntu VMs
+need the user at the keyboard. Update README's vendored-library table.
+**Phase 3 is done (2026-10-24):** the script pins OpenSSL **3.5.9** (newer than the
+spec's 3.5.8) and libssh 0.12.2, with signature-verified SHA-256s. It found today's libcrypto C
+code built at `-O0`, carrying ProSSHV2 paths, and honouring `OPENSSL_CONF`. The user chose
+`no-autoload-config` with a fixed `/opt/prosshmac-openssl` prefix. Phase 4 therefore also changes
+crypto speed (`-O3`); a handshake or throughput difference is expected, not a regression.
+`SSHAlgorithmPolicy` lists KEX explicitly, so ML-KEM stays unoffered. Offering
+`mlkem768x25519-sha256` is a separate user decision.
+If `git status -sb` shows `master` ahead of `origin`, ask the user before pushing, then check that
+the push run is green. CI must stay green through Phase 4. A suite added to `ci.yml` must pass on
+the runner first. `LibSSHPortForwardingTests` and `LibSSHShellLifecycleTests` start a loopback
+`/usr/sbin/sshd`, so try them on the runner before adding them.
+Phases 1 and 1b are done (2026-10-24). Forwards listen on `127.0.0.1` and `::1` only (Bug 97), and
+they carry data (Bug 109). Two forwarding results are still open: a live check in the relaunched
+app (`curl` through a real host's forward, `lsof`), and throughput of about 0.65 MB/s each way,
+limited by the read loop's 10 ms idle poll. The user decides whether to schedule the throughput
+work; see the spec's "Phase 1b results".
+User decisions (2026-10-24):
+- 0.10.0 ships Developer ID-signed and notarized. No Developer ID identity is in this Mac's
+  keychain yet; the user gets one before Phase 6.
+- The vendor build leaves FIDO2 and GSSAPI off.
+- CI runs on GitHub's hosted `xcode-27` preview image. If that image proves unusable, ask before
+  going self-hosted.
+
+The 0.9.0 DMG on GitHub is unsigned. The feed URL, and whether 0.10.0 is a full release, are
+decided at Phase 5. Nothing outward-facing (tag, release, appcast, repo settings) without the
+user's go-ahead.
 
 Bugs 98–104 and 106 are open and were found by reading only, so reproduce before fixing (Bug 98:
 `ssh-add -l` on the remote). Bug 110 (open) was found by CI timing: SSH config import calls
