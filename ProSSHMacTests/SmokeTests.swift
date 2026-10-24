@@ -3,6 +3,6 @@ import XCTest
 
 final class SmokeTests: XCTestCase {
     func testModuleLoads() {
-        XCTAssertTrue(true)
+        XCTAssertTrue(false, "CI proof (throwaway branch): this test must fail")
     }
 }
