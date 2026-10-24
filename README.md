@@ -2,6 +2,7 @@
 
 A native macOS SSH client and terminal, built with SwiftUI and Metal. It combines a GPU-rendered terminal, split panes and tabs, an SFTP browser, SSH key and certificate management, and an AI copilot that works inside your sessions. Every file change it proposes is shown as a diff and waits for your approval.
 
+[![CI](https://github.com/khpbvo/ProSSHMac/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/khpbvo/ProSSHMac/actions/workflows/ci.yml)
 ![Version](https://img.shields.io/badge/version-0.9.0-blue)
 ![macOS](https://img.shields.io/badge/macOS-26.0%2B-blue)
 ![Swift](https://img.shields.io/badge/Swift-6-orange)

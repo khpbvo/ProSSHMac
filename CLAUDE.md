@@ -143,6 +143,13 @@ xcodebuild -project ProSSHMac.xcodeproj -scheme ProSSHMac -destination 'platform
 - **No full-suite baseline exists on Xcode 27.** Every suite touched since has been run targeted and
   green. Treat any red result in a suite you touched as yours, including
   `SessionManagerRenderingPathTests` (it has no expected failures).
+- **CI** (`.github/workflows/ci.yml`, F0 Phase 2) runs on GitHub's hosted `xcode-27` image (a preview),
+  with Xcode 27.1 selected explicitly. Steps run as `bash -eo pipefail` and pipe through xcbeautify.
+  It builds once, unsigned (`CODE_SIGNING_ALLOWED=NO`), so there are no entitlements and keychain
+  suites can't run there. Then it runs the suite list in the workflow from that build.
+  - A new test class doesn't run in CI until it's added to that list, and only add it after it
+    passes on the runner. `-only-testing` takes class names: list every class in a multi-class file.
+  - `testFullImportPreview` takes ~35 s on the runner (Bug 110): a slow hostname lookup, not a hang.
 - Tests must not depend on the developer's real `UserDefaults`. `OpenRouterModelStore` and
   `LegacyProviderKeyCleanup` accept an injected defaults suite; AI tests use isolated suites.
 - **Throughput baseline, Release** (state the configuration with every number — Release is ~20x
@@ -642,7 +649,7 @@ All paths relative to repo root, under `ProSSHMac/`. Line counts as of 2026-10-1
 |-----|---------|
 | `Docs/featurelist.md` | **Long-term memory** — dated work log, phase progress, loop-log entries |
 | `Docs/The big picture(October 2026).md` | **Planning input.** Code-verified ranked feature list (F0–F20: build order, value, size, spec name), competitor gap analysis re-checked 2026-10-23, source of Bugs 97–108. Start a new feature spec from its entry |
-| `Docs/ReleaseReadiness.md` | **F0, active.** Loopback-only forwards (Bug 97), forwards that carry data (Bug 109), a CI that can fail (Bug 105), `scripts/build-vendor.sh` for OpenSSL 3.5 LTS + libssh 0.12.2, Sparkle 2, a notarized 0.10.0. Phases 1 and 1b done; **Phase 2 next**. Its "Rules for every phase" cover outward-facing steps and secrets |
+| `Docs/ReleaseReadiness.md` | **F0, active.** Loopback-only forwards (Bug 97), forwards that carry data (Bug 109), a CI that can fail (Bug 105), `scripts/build-vendor.sh` for OpenSSL 3.5 LTS + libssh 0.12.2, Sparkle 2, a notarized 0.10.0. Phases 1, 1b and 2 done; **Phase 3 next**. Its "Rules for every phase" cover outward-facing steps and secrets |
 | `Docs/RenderCost.md` | What rendering actually costs — R0–R2b, R3a–R3c and R4 **COMPLETE**. R4b isolates output-rate nonce, scroll and shell text in `SessionLiveState`; **R3d next**. Read its "Measurement caveats" sections before any perf measurement |
 | `Docs/R3cBenchmarkResults.md` | R3c evidence: windowed baseline tables, Time Profiler breakdowns, stage budgets, commands |
 | `Docs/R4aBenchmarkResults.md` | R4a evidence: interleaved windowed A/B, Time Profiler shares, stage budgets, the settle timeout, commands |
@@ -684,10 +691,17 @@ and the session coordinators) has no spec file left; see `Docs/featurelist.md`.
 
 ## Next Session Plan
 
-**CONTINUE HERE: `Docs/ReleaseReadiness.md` (F0) Phase 2 — a CI job that can fail (Bug 105).**
-Start in plan mode: read the spec's Phase 2 checklist and its "Today" table, then
-`.github/workflows/ci.yml` (the job that can't fail today). Proving CI goes red means pushing a
-throwaway branch and opening a PR: both are outward-facing, so ask the user before each push.
+**CONTINUE HERE: `Docs/ReleaseReadiness.md` (F0) Phase 3 — `scripts/build-vendor.sh`
+(OpenSSL 3.5 LTS + libssh 0.12.2 from pinned sources; builds only, the app keeps today's
+binaries).** Start in plan mode: read the spec's Phase 3 checklist, its "Today" table and
+`~/Desktop/ProSSHV2/scripts/build-{openssl,libssh}-ios.sh`. Re-check the newest OpenSSL 3.5.x
+and libssh release and take SHA-256s from the projects' own sites. Downloading tarballs is fine;
+nothing in this phase is outward-facing.
+**Phase 2 is done (2026-10-24):** CI runs on `xcode-27`, unsigned, 42 targeted suites, proved red
+at Build and at Test on throwaway PR #30 (closed). If `git status -sb` shows `master` ahead of
+`origin`, the Phase 2 commit isn't pushed yet: ask the user before pushing, then check that the
+push run is green. CI must stay green through Phases 3–4; a suite added to `ci.yml` must pass on
+the runner first.
 Phases 1 and 1b are done (2026-10-24). Forwards listen on `127.0.0.1` and `::1` only (Bug 97),
 and they carry data at all (Bug 109: forwards had never worked with a shell open). Two
 forwarding results are still open: a live check in the relaunched app (`curl` through a real
@@ -704,8 +718,10 @@ GitHub is unsigned. The vendored binaries were built from `~/Desktop/ProSSHV2/sc
 which Phase 3 ports. The feed URL and whether 0.10.0 is a full release are decided at Phase 5.
 Nothing outward-facing (tag, release, appcast, repo settings) without the user's go-ahead.
 
-Bugs 98–106 are open and were found by reading only, so reproduce before fixing (Bug 98:
-`ssh-add -l` on the remote). The big picture doc's remaining "Open decisions" (AI gate default,
+Bugs 98–104 and 106 are open and were found by reading only, so reproduce before fixing (Bug 98:
+`ssh-add -l` on the remote). Bug 110 (open) was found by CI timing: SSH config import calls
+`ProcessInfo.processInfo.hostName` for every host (35 s on the runner); explain the fix to the
+user before making it. The big picture doc's remaining "Open decisions" (AI gate default,
 redaction default, App Store) need the user.
 
 **AI audit and optimization complete: `Docs/AIAgentOptimization.md`.** Primary plus three
@@ -808,7 +824,7 @@ of Metal view overlap because each split surface demanded at least 220 points of
 Split surfaces now fit their pane, with a geometry regression through terminal-only restore.
 The original four-session SSH setup was not rerun live. The debug-only branch
 `debug/terminal-jump` (`251e010`) remains unmerged; never merge it. The bug register now has
-109 entries: 100 fixed, 9 open (Bugs 98–106).
+110 entries: 101 fixed, 9 open (Bugs 98–104, 106, 110).
 
 **RenderCost R2b is validated and closed** (2026-10-23): 1.09-1.12x in every interleaved pair,
 windowless, active app. The "bimodality" was App Nap on inactive processes (~3.6x) plus CPU

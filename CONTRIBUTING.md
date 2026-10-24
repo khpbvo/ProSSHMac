@@ -94,6 +94,7 @@ A PR is ready when:
 
 - [ ] The build succeeds with no new warnings you introduced.
 - [ ] The test suites for the code you changed pass, and new behaviour has tests.
+- [ ] CI is green. It builds unsigned and runs the suites listed in `.github/workflows/ci.yml`; suites that need the keychain, a window or a real shell run only locally.
 - [ ] For a feature, every checkbox in its `Docs/<Feature>.md` is checked.
 - [ ] `CLAUDE.md` reflects any change to architecture, conventions or key files.
 - [ ] `Docs/featurelist.md` has a dated entry describing the change.

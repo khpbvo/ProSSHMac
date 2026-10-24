@@ -11,11 +11,11 @@ sequentially, and tagged by severity: **Critical**, **High**, **Medium**, or **L
 |----------|-------|-------|------|
 | Critical | 1     | 1     | 0    |
 | High     | 22    | 22    | 0    |
-| Medium   | 48    | 40    | 8    |
+| Medium   | 49    | 41    | 8    |
 | Low      | 38    | 37    | 1    |
-| **Total**| **109**| **100**| **9**|
+| **Total**| **110**| **101**| **9**|
 
-Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13, Bug 85 fixed and Bugs 86-87 added 2026-10-14, Bug 84 fixed and Bugs 88-90 added 2026-10-15, Bugs 91-93 added 2026-10-18, Bug 94 added 2026-10-20; Bugs 43, 44, 90 and 94 fixed and Bug 95 added 2026-10-20 (43 and 44 were found already fixed in the code); Bugs 87 and 88 fixed 2026-10-21; Bugs 97-108 added 2026-10-23 from the code cross-check in `Docs/The big picture(October 2026).md` (all open, found by reading the source, none reproduced yet); Bug 108 fixed 2026-10-23; Bugs 97 and 107 fixed and Bug 109 added and fixed 2026-10-24. The `**File:**` paths below predate the
+Counts recomputed 2026-10-11 from the bug headings; Bugs 80-83 added 2026-10-12, Bugs 84-85 added and Bug 82 fixed 2026-10-13, Bug 85 fixed and Bugs 86-87 added 2026-10-14, Bug 84 fixed and Bugs 88-90 added 2026-10-15, Bugs 91-93 added 2026-10-18, Bug 94 added 2026-10-20; Bugs 43, 44, 90 and 94 fixed and Bug 95 added 2026-10-20 (43 and 44 were found already fixed in the code); Bugs 87 and 88 fixed 2026-10-21; Bugs 97-108 added 2026-10-23 from the code cross-check in `Docs/The big picture(October 2026).md` (all open, found by reading the source, none reproduced yet); Bug 108 fixed 2026-10-23; Bugs 97 and 107 fixed and Bug 109 added and fixed 2026-10-24; Bug 105 fixed and Bug 110 added 2026-10-24. The `**File:**` paths below predate the
 refactors (`Views/` → `UI/`, `SSH/` → `Services/SSH/`, `Services/Security/` → `Services/`) and some
 files no longer exist — resolve by basename.
 
@@ -2024,7 +2024,7 @@ checks from Bug 3. This is a prerequisite for multi-device work (F8).
 
 ---
 
-### Bug 105 — CI Can Never Fail (Medium)
+### Bug 105 — ~~CI Can Never Fail~~ [FIXED] (Medium)
 
 **File:** `.github/workflows/ci.yml`
 
@@ -2036,6 +2036,17 @@ green.
 
 **Fix direction:** `set -o pipefail`, no `|| true`, and a runner that can execute macOS 26
 binaries (F0).
+
+**Fixed 2026-10-24 (F0 Phase 2):** confirmed first in the last green run before the fix
+(39935406172, 2026-10-23). It printed `** BUILD FAILED **`, then "Cannot test target
+“ProSSHMacTests” on “My Mac”: My Mac’s macOS 15.7.9 doesn’t match…", and still passed, in
+38 s. The job now runs on GitHub's `xcode-27` image with Xcode 27.1 selected
+explicitly. Steps run as `bash -eo pipefail`, output goes through xcbeautify, and there is no
+`|| true`. It builds once, unsigned (`CODE_SIGNING_ALLOWED=NO`), and runs 42 targeted suites
+(604 tests) from the same products. The xcresult bundles are uploaded on failure. Proved on a
+throwaway PR (#30): green run 40084571525; a type error went red at Build (exit 65, annotated
+in the PR) in run 40084929947; a failing `SmokeTests` assertion went red at Test (exit 65,
+xcresult uploaded) in run 40085032926. The README badge is back.
 
 ---
 
@@ -2145,6 +2156,29 @@ three connections in a row over 127.0.0.1 and ::1, two at once, 4 MB echoed byte
 a target that closes first. It failed on the old wrapper at every connection. Reverting only
 the write loop lost 425,984 of 4,194,304 bytes; reverting only the read order lost the last
 5,088 of 300,000 bytes in each of three runs.
+
+---
+
+### Bug 110 — SSH Config Import Looks Up the Mac's Hostname for Every Host (Medium)
+
+**Files:** `Services/SSHConfigTokenExpander.swift`, `Services/SSHConfigMapper.swift`,
+`ViewModels/HostListViewModel.swift`
+
+Found 2026-10-24 by CI timing (F0 Phase 2). `SSHConfigTokenExpander.Context.init` defaults
+`localHostname` to `ProcessInfo.processInfo.hostName`, and `SSHConfigMapper` builds a context
+for every mapped host without passing it, so the lookup runs whether or not a value uses `%l` or
+`%L`. `ProcessInfo.hostName` can do a reverse DNS lookup. `HostListViewModel` runs the import
+preview on the main actor.
+
+On GitHub's `xcode-27` runner, `testFullImportPreview` took 35.1 s in both full runs; it took
+0.067 s on this Mac.
+It is the first test in the run that maps a host, and every mapper test after it took
+milliseconds, which fits a slow first lookup that is then cached. Not reproduced in the app: on a
+network with slow reverse DNS, importing `~/.ssh/config` could freeze the UI for that long.
+
+**Fix direction:** look up the local hostname only when a value contains `%l` or `%L`, once per
+import, and prefer `gethostname()`, which makes no network query. Measure before and after on
+the runner.
 
 ---
 

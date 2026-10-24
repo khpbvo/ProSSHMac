@@ -19,7 +19,7 @@ later feature ships through this pipeline, so it comes first.
 | OpenSSL | **3.4.1** (11 Feb 2025), static, universal, minos 26.0, built against the 26.2 SDK | `opensslv.h:77`; `strings libcrypto.a` |
 | Vendor build | **No script in this repo.** The binaries were built in the sibling `~/Desktop/ProSSHV2` checkout by `scripts/build-openssl-ios.sh` and `scripts/build-libssh-ios.sh` from pre-downloaded sources, with no version pins or checksums. Only the macOS slice directories were copied here (no xcframework `Info.plist`); the project links them through `HEADER_SEARCH_PATHS`/`LIBRARY_SEARCH_PATHS` and `-lssh -lcrypto -lssl -lz` | `project.pbxproj:342-363`; ProSSHV2 scripts |
 | Port forwards | `NWListener(using: .tcp, on: port)` with no local endpoint or interface: listens on all interfaces (Bug 97, not yet reproduced). **Phase 1 fixed it**; Phase 1 also found that forwards never carry data (Bug 109, **fixed in Phase 1b**) | `Services/PortForwardingManager.swift:49-57` |
-| CI | `macos-15`, Xcode 26.2, both steps end in `\| xcpretty --color \|\| true` (Bug 105) | `.github/workflows/ci.yml` |
+| CI | `macos-15`, Xcode 26.2, both steps end in `\| xcpretty --color \|\| true` (Bug 105, **fixed in Phase 2**: `xcode-27`, Xcode 27.1, pipefail, unsigned build, 42 targeted suites) | `.github/workflows/ci.yml` |
 | Signing | Hardened runtime on, sandbox off, team `KPHHFS89HZ`. Entitlements: `keychain-access-groups`, user-selected files. **No "Developer ID Application" identity in this Mac's keychain**, only Apple Development | `project.pbxproj:331-338`; `security find-identity -v -p codesigning` |
 | Releases | One: v0.9.0, pre-release, 2026-02-26. Its DMG is **unsigned and not notarized** (`codesign -dv`: not signed; `spctl`: rejected; no stapled ticket) | `gh release view v0.9.0` |
 | Packaging | `scripts/create-dmg.sh` archives, and with `--sign` exports Developer ID, notarizes (`notarytool`), staples and signs the DMG. The signed path has never produced a release | `scripts/create-dmg.sh` |
@@ -38,7 +38,9 @@ later feature ships through this pipeline, so it comes first.
 - GitHub's hosted **`xcode-27`** image (preview) runs macOS 27.0.1 with **Xcode 27.1
   (27A9275) as default**, our exact toolchain, plus 27.0 and a 27.2 release candidate. It ships
   CMake, Ninja and Perl. The Metal Toolchain component is not listed in its readme. The plain
-  `macos-26` image has only Xcode 26.x.
+  `macos-26` image has only Xcode 26.x. **Phase 2 correction:** the image readme (20261012)
+  lists Xcode **27.0** as default, with 27.1 at `/Applications/Xcode_27.1.app`. The workflow
+  selects 27.1 explicitly, and the Metal Toolchain was already installed.
 
 **Decisions (the user, 2026-10-24):**
 
@@ -108,7 +110,8 @@ new `Vendor/VERSIONS.md`, `ProSSHMac.xcodeproj/project.pbxproj` (Sparkle package
   - Verify: Debug build, `PortForwardingManagerTests`, the new test, `LibSSHShellLifecycleTests`.
     Mark Bug 109 fixed.
 
-- [ ] **Phase 2: A CI job that can fail (Bug 105).**
+- [x] **Phase 2: A CI job that can fail (Bug 105).** Done 2026-10-24; results under
+  "Phase 2 results" below.
   - `runs-on: xcode-27`; select `/Applications/Xcode_27.1.app` explicitly and print
     `xcodebuild -version`. Check `xcodebuild -showComponent metalToolchain` and download it if
     missing. Never exclude the shader.
@@ -267,6 +270,53 @@ nobody accepts are dropped, not refused.
 - A live check in the relaunched app (`curl` or a browser through a real host's forward) is
   still open; it needs a user at the keyboard.
 
+## Phase 2 results (2026-10-24)
+
+- **Before:** the last green run on the old job (39935406172, 2026-10-23, `macos-15-arm64`,
+  macOS 15.7.9) printed `** BUILD FAILED **`, then "Cannot test target “ProSSHMacTests” on “My
+  Mac”: My Mac’s macOS 15.7.9 doesn’t match…", and passed in 38 s.
+- **Runner:** image `xcode-27-arm64` 20261022.0305.3. After `xcode-select`, `xcodebuild -version`
+  printed Xcode 27.1, build 27A9275 (ours). `-showComponent metalToolchain` already reported
+  "Status: installed", so nothing was downloaded. The download branch stays for future images.
+  Jobs started 2–3 s after the run was created.
+- **Signing:** `CODE_SIGNING_ALLOWED=NO` was enough, the smallest override. The linker ad-hoc
+  signs the binaries, with no entitlements, so `keychain-access-groups` never blocks the test
+  host's launch. No CI entitlements file and no project change were needed. Checked locally
+  first (`codesign -dv`: `adhoc,linker-signed`, no entitlements), then on the runner.
+- **Shape:** `build-for-testing` once, then `test-without-building` from the same DerivedData,
+  each through `xcbeautify --renderer github-actions`, which turns errors into PR annotations.
+  Steps run as `bash -eo pipefail` (job default `shell: bash`); with GitHub's default
+  `bash -e`, `false | cat` exits 0. On failure, `build/ci/*.xcresult` is uploaded for 7 days.
+- **Timing (runner):** checkout 3–4 s, Metal check 5–6 s, build 1m43s–1m54s, tests 1m19s–1m27s
+  (68–71 s in XCTest). The whole job takes about 3.5 min. Locally (10 cores): build 54 s,
+  tests 24 s.
+- **Suites (42 classes, 604 tests), all green on the first runner run:** `SmokeTests`,
+  `VTParserTests`, `TerminalGridTests`, `KeyEncoderTests`, `MouseEncoderTests`,
+  `InputModeStateTests`, `ZshStartupWarningFilterTests`, `TerminalHistoryIndexTests`,
+  `PortForwardingManagerTests`, the AI contract/agent/definitions/context and Anthropic
+  transcript suites, `CredentialPromptDetectorTests`, `DeviceCLITests`, the ApplyDiff (3),
+  UnifiedDiff (3), `PatchApprovalTrackerTests` and `RemotePatchCommandBuilderTests` classes, the
+  six SSHConfig classes, the seven TOTP classes, `RemotePathTests`, `SmoothScrollEngineTests`,
+  `LinkDetectorTests`, `TerminalSearchTests` and `GlyphIndexPackingTests`. None failed only on
+  the runner, `PortForwardingManagerTests` included (3/3). Whether its LAN-refusal branch ran
+  there, or was skipped for want of a non-loopback address, wasn't checked.
+- **Not in CI yet, by design:** keychain suites (`PersistentStoreTests`, the OpenRouter and
+  Anthropic settings suites), since the unsigned build has no entitlements; window and Metal
+  suites; real-shell suites (`ShellIntegrationEchoFilterTests`, `SessionManagerRenderingPathTests`,
+  `SessionAIToolCoordinatorTests`, `ShellIntegrationTests`); the loopback-`sshd` suites
+  (`LibSSHPortForwardingTests`, `LibSSHShellLifecycleTests`); and the rest not yet tried. Add
+  them one at a time, each proven on the runner.
+- **Proved red** on throwaway PR #30, closed and its branch deleted: green 40084571525. A type error in
+  `ContentView.swift` went red at Build, exit 65, annotated on the line, Test skipped,
+  `Build.xcresult` uploaded (40084929947). A false `SmokeTests` assertion went red at Test,
+  exit 65, annotated, 113 MB xcresult uploaded (40085032926).
+- **Found: Bug 110.** `SSHConfigImportServiceTests.testFullImportPreview` took 35.1 s on the
+  runner in both full runs (0.067 s locally): the SSH config mapper looks up
+  `ProcessInfo.processInfo.hostName` for every host. Registered, not fixed.
+- The proof branch was cut from local `master`, which was 12 commits ahead of `origin`, so
+  PR #30 published those commits (R2b through the Phase 2 marker) ahead of the master push. A
+  scan of that range found nothing sensitive.
+
 ## Release procedure
 
 Written in Phase 5 and Phase 6: version and build number, `create-dmg.sh --sign`, verification
@@ -275,6 +325,8 @@ commands, `sign_update`, appcast, GitHub release, post-release check.
 ## Open questions
 
 - Feed URL and whether 0.10.0 is a full release: decide at the start of Phase 5.
-- Whether the `xcode-27` image's preview status causes queueing or failures: Phase 2 records it.
+- ~~Whether the `xcode-27` image's preview status causes queueing or failures~~: in Phase 2's
+  three runs, jobs started 2–3 s after the run was created, and none failed for image reasons.
+  Watch it while the image is a preview.
 - Bug 104 (connect blocks the shared transport actor) is unmeasured and not part of F0. Phase 4's
   five-cycle check is not a measurement of it.
