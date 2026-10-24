@@ -5,38 +5,130 @@ on:
     branches: [master]
   pull_request:
     branches: [master]
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Build & Test
-    runs-on: macos-15
+    runs-on: xcode-27
     timeout-minutes: 30
+
+    defaults:
+      run:
+        # An explicit `bash` runs each step as `bash -eo pipefail`, so a failing xcodebuild
+        # fails the step even though its output is piped through xcbeautify.
+        shell: bash
+
+    env:
+      DERIVED_DATA: build/ci/DerivedData
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_26.2.app/Contents/Developer
+        run: |
+          sudo xcode-select -s /Applications/Xcode_27.1.app/Contents/Developer
+          xcodebuild -version
 
+      - name: Metal Toolchain
+        run: |
+          # Not piped into grep: with pipefail, grep -q exiting early can fail the pipeline.
+          status=$(xcodebuild -showComponent metalToolchain 2>&1 || true)
+          if [[ "$status" != *"Status: installed"* ]]; then
+            xcodebuild -downloadComponent metalToolchain
+          fi
+          xcodebuild -showComponent metalToolchain
+
+      # The runner has no signing certificate. With signing off, the linker still ad-hoc signs
+      # the binaries, but no entitlements are applied, so keychain suites can't run here.
       - name: Build
         run: |
-          xcodebuild -project ProSSHMac.xcodeproj \
+          xcodebuild build-for-testing \
+            -project ProSSHMac.xcodeproj \
             -scheme ProSSHMac \
             -destination 'platform=macOS' \
             -configuration Debug \
-            build \
-            | xcpretty --color || true
+            -derivedDataPath "$DERIVED_DATA" \
+            -resultBundlePath build/ci/Build.xcresult \
+            CODE_SIGNING_ALLOWED=NO \
+            | xcbeautify --renderer github-actions
 
       - name: Test
         run: |
-          xcodebuild -project ProSSHMac.xcodeproj \
+          # Targeted suites until a full-suite baseline exists on Xcode 27. Add a suite only
+          # after it passes on this runner (Docs/ReleaseReadiness.md, Phase 2).
+          suites=(
+            SmokeTests
+            VTParserTests
+            TerminalGridTests
+            KeyEncoderTests
+            MouseEncoderTests
+            InputModeStateTests
+            ZshStartupWarningFilterTests
+            TerminalHistoryIndexTests
+            PortForwardingManagerTests
+            AIToolContractTests
+            AIAgentServiceTests
+            AIToolDefinitionsTests
+            AIConversationContextTests
+            AnthropicTranscriptTests
+            CredentialPromptDetectorTests
+            DeviceCLITests
+            ApplyDiffCreateTests
+            ApplyDiffUpdateTests
+            ApplyDiffContaminationTests
+            UnifiedDiffParserTests
+            UnifiedDiffApplyTests
+            UnifiedDiffCreateTests
+            PatchApprovalTrackerTests
+            RemotePatchCommandBuilderTests
+            SSHConfigParserTests
+            SSHConfigTokenExpanderTests
+            SSHConfigMapperTests
+            SSHConfigExporterTests
+            SSHConfigImportServiceTests
+            SSHConfigRoundTripTests
+            TOTPGeneratorRFCTests
+            TOTPGeneratorTests
+            TOTPSmartCodeTests
+            TOTPValidationTests
+            Base32Tests
+            TOTPConfigurationParseTests
+            TOTPAutoFillDetectorTests
+            RemotePathTests
+            SmoothScrollEngineTests
+            LinkDetectorTests
+            TerminalSearchTests
+            GlyphIndexPackingTests
+          )
+          only=()
+          for suite in "${suites[@]}"; do
+            only+=("-only-testing:ProSSHMacTests/$suite")
+          done
+          xcodebuild test-without-building \
+            -project ProSSHMac.xcodeproj \
             -scheme ProSSHMac \
             -destination 'platform=macOS' \
             -configuration Debug \
-            test \
-            | xcpretty --color || true
+            -derivedDataPath "$DERIVED_DATA" \
+            -resultBundlePath build/ci/Test.xcresult \
+            CODE_SIGNING_ALLOWED=NO \
+            "${only[@]}" \
+            | xcbeautify --renderer github-actions
+
+      - name: Upload results
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: xcresult
+          path: build/ci/*.xcresult
+          if-no-files-found: ignore
+          retention-days: 7
